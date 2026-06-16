@@ -1,0 +1,34 @@
+fail_fast: true
+
+repos:
+  - repo: local
+    hooks:
+      - id: whitespace-check
+        name: whitespace check
+        entry: git diff --cached --check
+        language: system
+        pass_filenames: false
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --check
+        language: system
+        types_or: [python]
+
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check
+        language: system
+        types_or: [python]
+
+      - id: ty-check
+        name: ty check
+        entry: uv run ty check
+        language: system
+        pass_filenames: false
+
+      - id: clang-format
+        name: clang-format
+        entry: clang-format --dry-run --Werror
+        language: system
+        files: .*[.](cc|cpp|cxx|cu|cuh|h|hpp)$

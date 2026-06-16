@@ -1,0 +1,166 @@
+---
+name: git-commit
+description: >
+  Use as the final workflow step when preparing a commit. Stages
+  intentionally, normally spawns six review subagents plus one self-evolve
+  subagent, persists accepted lessons, commits with Codex trailers, and applies
+  the repository push policy.
+---
+
+# Git Commit
+
+Use this skill only as the final workflow step, after documentation,
+implementation, tests, and review-ready changes for the task are complete.
+
+## Workflow
+
+1. Inspect the working tree with `git status --short`.
+2. Stage only the intended files.
+3. Verify staging with `git status --short` and `git diff --cached --stat`.
+4. Identify the single accepted v3 design section, bootstrap/reset policy, or
+   workflow item covered by staged changes. The initial v3 reset commit may be
+   scoped to repository cleanup and workflow metadata because no active design
+   document exists yet. After a v3 design document exists, code/test commits
+   must map to one current design section. Pure mechanical formatting commits
+   may skip design-section mapping only when they are standalone, contain no
+   intended behavior change, and the commit message/final report label them
+   format-only.
+5. For non-format-only work after a v3 design document exists, confirm the
+   relevant section reflects the staged completion; update and restage it before
+   review if it is stale. For bootstrap/reset, docs-only, or pure mechanical
+   formatting commits, verify that no design-status update is needed.
+6. Spawn six independent `reviewer` subagents, one per axis below.
+7. Spawn one `reviewer` self-evolve subagent in parallel with the review subagents.
+8. Wait for all seven subagents, then synthesize their reports in the main session.
+9. Close completed subagents after their reports are consumed unless an immediate
+   same-task follow-up needs their existing context.
+10. Fix blocking findings, update staging, and rerun affected checks.
+11. Persist accepted self-evolve lessons to Codex memory and repo instructions as needed.
+12. Write a clear English commit message with required trailers and run
+    `git commit -F <message-file>`.
+13. Apply the push policy only when the user explicitly asks to push.
+
+If the user explicitly disables review for one profile/debug/reference branch
+commit, treat that as a one-off exception. Skip both the six-axis review and
+self-evolve subagent fan-out only for that requested commit, still run staging
+checks and required trailers, and explicitly restore the normal review workflow
+for the next commit. Do not infer that review should be skipped for later commits
+or for mainline.
+
+While `git commit -F <message-file>` is running hooks, use the wait time only for
+non-mutating exploration of the staged diff and future work. Inspect staged
+changes, the accepted v3 design document when present, adjacent risks, stale
+follow-up notes, and likely next commit scope, then keep concise next-work notes
+for use after the commit/push workflow finishes. Do not edit files, restage,
+amend, change git config, run formatters, run tests, run benchmarks, run
+profilers, or start GPU work while hooks are running. If a hook fails, revise or
+discard those notes as needed and address the hook failure first.
+
+Do not use `git commit --no-verify` unless the user explicitly requests it.
+Do not change global or local git `user.name` / `user.email`. Do not repair
+author attribution by changing git config.
+
+## Six Review Subagents
+
+Each review subagent uses the `reviewer` custom agent defined in
+`.codex/agents/reviewer.toml`. It runs `gpt-5.5` with high reasoning and
+read-only sandboxing. Each review subagent gets the staged diff and exactly one
+review axis:
+
+| Axis | Subagent focus |
+|------|----------------|
+| A - Code to Design | Code matches the accepted v3 design API, scope, ownership boundaries, and one-step commit scope. For reset/bootstrap commits, verify the staged repository shape matches AGENTS.md. |
+| B - Code to Docstrings | Docstrings match signatures, types, tensor shapes, returns, raises, preconditions, and postconditions. |
+| C - Code to Comments | Inline comments still describe real concurrency, ordering, shape, and hardware behavior. |
+| D - Stale References | Docs, tests, benchmarks, and readmes do not reference removed or renamed APIs, paths, commands, or phases. |
+| E - Environment Hardcoding | No hardcoded `/home/`, `/data/`, hostnames, ports, model paths, or cluster assumptions bypass config. Local reference paths may appear only as clearly labeled non-runtime evidence. |
+| F - Engineering Quality | Code follows KISS, DRY, cohesive ownership, appropriate OOP boundaries, clear naming, local style, and testable structure without over-abstraction. |
+
+Subagent reports are candidate evidence. The main Codex session must verify concrete
+findings before changing code or declaring the commit ready.
+
+Every review subagent prompt must be bounded and read-only. It must forbid file
+edits, staging, commits, pushes, amends, git config changes, memory writes,
+network/browser/image tools, and spawning other agents.
+
+For pure formatting commits, keep the same six-agent fan-out unless the one-off
+profile/debug/reference exception above or the quota/unavailability policy
+applies. In prompts, tell reviewers the commit is intended to be mechanical and
+ask them to focus on format-only purity, generated or unrelated changes,
+build/lint risk, and stale workflow references rather than feature semantics.
+
+## Self-Evolve Subagent
+
+The self-evolve subagent also uses `reviewer`. It reviews the staged diff, task
+history, repo instructions, and Codex session excerpts for durable lessons and
+instruction conflicts. Before spawning it, the main session should invoke the
+repo-local `self-evolve` skill and supply or cite its session excerpts. Keep the
+self-evolve procedure in that skill rather than duplicating it here.
+
+The self-evolve subagent does not write memory or modify files on its own. The
+main Codex session decides which lessons qualify. For each accepted lesson:
+
+- Append the lesson to `$CODEX_HOME/memories/xpool.md`.
+- If the lesson shows that user intent conflicts with `AGENTS.md`, the accepted
+  v3 design document, `.codex/skills/`, or `.codex/agents/`, update the
+  conflicting repo instruction in the same self-evolve phase.
+- Add one `Self-Evolved: <lesson>` line to the commit message.
+
+If no lesson is accepted and persisted, omit `Self-Evolved:` entirely.
+
+## Commit Message
+
+Use an English commit message:
+
+```text
+type(scope): imperative subject
+
+Explain what changed and why. Include quantitative data for benchmark results.
+
+Self-Evolved: <persisted lesson>
+
+Co-authored-by: Codex <codex@openai.com>
+```
+
+Include one `Self-Evolved:` line per persisted lesson. Omit the line entirely
+when no lesson is persisted. Always include the Codex co-author trailer.
+
+Allowed types: `feat`, `fix`, `refactor`, `perf`, `test`, `chore`, `docs`.
+
+## Push Policy
+
+Do not push unless the user explicitly asks. When asked to push, inspect the
+author with `git show -s --format='%an <%ae>' HEAD` and ask before pushing if
+the author is not the expected repository author, the branch has no upstream, or
+a force-with-lease push is required.
+
+Never use bare `--force`. Never change git config to make the author canonical.
+
+## Checks
+
+Run the checks that match the staged diff's blast radius. During the v3 reset
+and before language scaffolds exist, use pre-commit directly:
+
+- `uv run pre-commit run --all-files`
+
+Hooks are defined directly in `.pre-commit-config.yaml`; do not add a separate
+pre-commit wrapper script. After the Python scaffold exists, the pre-commit
+hooks should run:
+
+- `uv run ruff format --check ...`
+- `uv run ruff check ...`
+- `uv run ty check`
+
+The default uv environment is for checks and should stay lightweight. CUDA
+runtime dependencies such as SGLang, Torch, FlashInfer, and NVSHMEM belong to
+the `runtime-cu13` optional extra and should be synced explicitly only for
+runtime work:
+
+- `uv sync --extra runtime-cu13`
+
+After the native scaffold exists, pre-commit should run `clang-format` checks
+for C++/CUDA files and the CMake build/test commands defined by the accepted v3
+design. Hooks must use pre-commit's file list instead of recursively scanning
+the working tree. For docs-only or config-only changes, at minimum run
+`git diff --cached --check` and targeted search checks for stale policy
+references.
