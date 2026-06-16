@@ -156,9 +156,12 @@ changes, or hook-failure troubleshooting.
 Hooks are defined directly in `.pre-commit-config.yaml`; do not add a separate
 pre-commit wrapper script. The installed pre-commit hooks run:
 
+- `git diff --cached --check`
 - `uv run ruff format --check ...`
 - `uv run ruff check ...`
 - `uv run ty check`
+- `uv run pytest`
+- `clang-format --dry-run --Werror ...` for C++/CUDA files
 
 The default uv environment includes the SGLang-based runtime dependencies.
 CUDA 13 is the project baseline, not an optional-extra dimension. The NVSHMEM
@@ -169,8 +172,9 @@ requires them. Sync the full developer environment with:
 - `uv sync --group dev`
 
 After the native scaffold exists, pre-commit should run `clang-format` checks
-for C++/CUDA files and the CMake build/test commands defined by the accepted repository
-design. Hooks must use pre-commit's file list instead of recursively scanning
-the working tree. For docs-only or config-only changes, at minimum run
-`git diff --cached --check` and targeted search checks for stale policy
-references.
+for C++/CUDA files and the CMake build/test commands defined by the accepted
+repository design. File-scoped hooks must use pre-commit's file list instead of
+recursively scanning the working tree. Whole-project hooks such as type checks
+or pytest may use `pass_filenames: false`. For docs-only or config-only changes,
+at minimum run `git diff --cached --check` and targeted search checks for stale
+policy references.

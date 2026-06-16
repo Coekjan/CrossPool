@@ -75,8 +75,10 @@ explicitly asks, the hook configuration changed, or a hook failure needs
 troubleshooting.
 
 Hooks are defined directly in `.pre-commit-config.yaml`; do not add a separate
-pre-commit wrapper script. Hooks must operate on files passed by pre-commit and
-must not recursively scan ignored directories such as `.venv/`.
+pre-commit wrapper script. File-scoped hooks must operate on files passed by
+pre-commit. Whole-project hooks such as type checks or pytest may use
+`pass_filenames: false`, but must not recursively scan ignored directories such
+as `.venv/`.
 
 ## Workflow
 

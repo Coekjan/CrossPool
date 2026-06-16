@@ -10,6 +10,7 @@ __pycache__/
 .ruff_cache/
 .ty/
 .xpool-cache/
+.env
 
 build/
 dist/

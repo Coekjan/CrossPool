@@ -1,0 +1,16 @@
+[daemon]
+host = "127.0.0.1"
+port = 9810
+
+[scheduler]
+attention_concurrency = 1
+transport_concurrency = 1
+
+[devices]
+attention_cuda_devices = [0]
+ffn_cuda_devices = [1]
+
+[[models]]
+id = "deepseek-v2-lite-chat"
+path = "/absolute/path/to/deepseek-ai/DeepSeek-V2-Lite-Chat"
+tp = 1

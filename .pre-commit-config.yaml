@@ -27,6 +27,12 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        pass_filenames: false
+
       - id: clang-format
         name: clang-format
         entry: clang-format --dry-run --Werror
