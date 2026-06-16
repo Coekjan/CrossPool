@@ -147,14 +147,14 @@ Never use bare `--force`. Never change git config to make the author canonical.
 
 ## Checks
 
-Run the checks that match the staged diff's blast radius. During reset/bootstrap
-and before language scaffolds exist, use pre-commit directly:
-
-- `uv run pre-commit run --all-files`
+Run the non-hook checks that match the staged diff's blast radius. Do not run
+`uv run pre-commit run --all-files` as a routine pre-commit step; the installed
+pre-commit hooks run automatically during `git commit -F <message-file>`.
+Manual pre-commit runs are for explicit user requests, hook configuration
+changes, or hook-failure troubleshooting.
 
 Hooks are defined directly in `.pre-commit-config.yaml`; do not add a separate
-pre-commit wrapper script. After the Python scaffold exists, the pre-commit
-hooks should run:
+pre-commit wrapper script. The installed pre-commit hooks run:
 
 - `uv run ruff format --check ...`
 - `uv run ruff check ...`

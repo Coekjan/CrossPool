@@ -68,11 +68,11 @@ C++ and CUDA style:
 
 ## Pre-Commit
 
-Keep pre-commit hooks active. Run checks through pre-commit directly:
-
-```bash
-uv run pre-commit run --all-files
-```
+Keep pre-commit hooks active and installed. Routine commits should use normal
+`git commit`; the installed hooks run automatically during commit. Do not run
+`uv run pre-commit run --all-files` before every commit unless the user
+explicitly asks, the hook configuration changed, or a hook failure needs
+troubleshooting.
 
 Hooks are defined directly in `.pre-commit-config.yaml`; do not add a separate
 pre-commit wrapper script. Hooks must operate on files passed by pre-commit and
