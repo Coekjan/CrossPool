@@ -1,7 +1,7 @@
 ---
 name: git-commit
 description: >
-  Use as the final workflow step when preparing a commit. Stages
+  Use as the final workflow step when preparing a commit and push. Stages
   intentionally, normally spawns six review subagents plus one self-evolve
   subagent, persists accepted lessons, commits with Codex trailers, and applies
   the repository push policy.
@@ -39,7 +39,7 @@ implementation, tests, and review-ready changes for the task are complete.
     permitted, Codex memory according to the active memory policy.
 12. Write a clear English commit message with required trailers and run
     `git commit -F <message-file>`.
-13. Apply the push policy only when the user explicitly asks to push.
+13. After the commit succeeds, apply the push policy and push the current branch.
 
 If the user explicitly disables review for one profile/debug/reference branch
 commit, treat that as a one-off exception. Skip both the six-axis review and
@@ -135,10 +135,13 @@ Allowed types: `feat`, `fix`, `refactor`, `perf`, `test`, `chore`, `docs`.
 
 ## Push Policy
 
-Do not push unless the user explicitly asks. When asked to push, inspect the
-author with `git show -s --format='%an <%ae>' HEAD` and ask before pushing if
-the author is not the expected repository author, the branch has no upstream, or
-a force-with-lease push is required.
+Every successful commit should be followed by a push of the current branch.
+Inspect the author with `git show -s --format='%an <%ae>' HEAD`, then run
+`git push` to the current upstream when a normal fast-forward push is possible.
+
+If the branch has no upstream, stop and ask before publishing or setting one.
+If the commit was amended/rebased or a normal push is rejected as
+non-fast-forward, stop and ask before running `git push --force-with-lease`.
 
 Never use bare `--force`. Never change git config to make the author canonical.
 

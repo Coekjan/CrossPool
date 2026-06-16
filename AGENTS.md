@@ -84,7 +84,10 @@ must not recursively scan ignored directories such as `.venv/`.
 - Use `.codex/skills/git-commit/SKILL.md` for commit preparation.
 - Use repo-local reviewer agents only when the user explicitly asks for
   delegated review or when an invoked skill requires them.
-- Do not push branches unless the user explicitly asks.
+- After every successful commit, push the current branch according to the
+  repository push policy. If the branch has no upstream or a normal push is
+  rejected, stop and ask before publishing a new upstream or using
+  `--force-with-lease`.
 - Do not use `git commit --no-verify` unless explicitly requested.
 - Do not change global or local git `user.name` or `user.email`.
 - Do not apply or pop a stash unless explicitly requested.
