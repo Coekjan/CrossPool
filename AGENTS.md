@@ -35,13 +35,20 @@ Use `uv` for Python project management. `uv` owns the Python interpreter: keep
 "only-managed"`, and allow uv-managed Python downloads. Do not bind the project
 to a system Python or hand-maintained virtual environment.
 
-The default environment is intentionally light enough for repository checks.
-CUDA runtime dependencies such as SGLang, Torch, FlashInfer, and NVSHMEM belong
-under the `runtime-cu13` optional extra and should be installed explicitly only
-for runtime/device work:
+SGLang is the sole supported serving-engine dependency. Do not add vLLM
+integration or dependencies unless an accepted repository design explicitly
+changes that boundary.
+
+CUDA 13 is the project baseline, not an optional-dependency dimension. Keep
+SGLang, Torch, FlashInfer, CUDA Python, NVSHMEM runtime libraries, and
+control-plane libraries in the main project dependencies when xpool imports or
+relies on them directly. The NVSHMEM transport is implemented in C++/CUDA and
+uses the NVIDIA NVSHMEM runtime package; do not add `nvshmem4py-cu13` unless a
+new accepted design requires Python NVSHMEM bindings. Sync the full developer
+environment with:
 
 ```bash
-uv sync --extra runtime-cu13
+uv sync --group dev
 ```
 
 Python code style:

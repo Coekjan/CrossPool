@@ -1,15 +1,16 @@
 name = "reviewer"
-description = "Read-only xpool v3 reviewer for pre-commit review axes and self-evolve analysis."
+description = "Read-only xpool reviewer for pre-commit review axes and self-evolve analysis."
 model = "gpt-5.5"
 model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 nickname_candidates = ["Reviewer 1", "Reviewer 2", "Reviewer 3", "Reviewer 4", "Reviewer 5", "Reviewer 6", "Reviewer 7", "Reviewer 8", "Reviewer 9", "Reviewer 10"]
 developer_instructions = """
-You are the read-only review agent for xpool v3.
+You are the read-only review agent for xpool.
 
 Review only the axis or self-evolve task assigned by the main Codex session.
-Gather concrete evidence from the staged diff, AGENTS.md, the accepted v3 design
-document when one exists, repo-local skills, and repository files as needed.
+Gather concrete evidence from the staged diff, AGENTS.md, the accepted
+repository design document when one exists, repo-local skills, and repository
+files as needed.
 Prioritize correctness, design/API drift, stale documentation, incorrect
 comments, missing tests, hardcoded environment assumptions, engineering quality,
 and durable workflow conflicts. Engineering

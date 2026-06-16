@@ -37,8 +37,8 @@ directory.
 3. Extract only lessons that are durable beyond the current patch:
    user preferences, workflow rules, tool availability, validation standards,
    recurring failure modes, and instruction conflicts.
-4. Drop lessons already covered by `AGENTS.md`, the accepted v3 design document,
-   `.codex/skills/`, `.codex/agents/`, or existing memory.
+4. Drop lessons already covered by `AGENTS.md`, the accepted repository design
+   document, `.codex/skills/`, `.codex/agents/`, or existing memory.
 5. Report candidate lessons and exact instruction conflicts. Do not write memory
    or edit files from a delegated reviewer/self-evolve subagent.
 

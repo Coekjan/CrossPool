@@ -359,17 +359,6 @@ nvtx = [
 ]
 
 [[package]]
-name = "cython"
-version = "3.2.5"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3f/3b/ebd94c8b85f8e41b5015a9ed94ee3df866024d480d05cd08b774684fb81d/cython-3.2.5.tar.gz", hash = "sha256:3dd42e4cf36ad15f265bdfec2337cc00c688c8eb6d374ffd13bb19437c27bba1", size = 3286381, upload-time = "2026-05-23T19:34:08.439Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a1/aa/8a1d02eabe8bc1e5066fde920010a4a4a4c5f0bac3625d8e7c946f72ef98/cython-3.2.5-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4d00e2c976ee96da4deff50506c7882ccebb4a932fc178ef27eb42bfde959839", size = 3400054, upload-time = "2026-05-23T19:34:45.6Z" },
-    { url = "https://files.pythonhosted.org/packages/56/31/9c0024f2c772fc303f8cae2a204bcad2fedfaf921ba71cf13a878639432d/cython-3.2.5-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:382122de8d6b6024fc374fabc3a2b14ba5860ed981c25055ed14fe44278b9dc7", size = 3111004, upload-time = "2026-05-23T19:35:30.957Z" },
-    { url = "https://files.pythonhosted.org/packages/d4/5c/9cd909e6a8bb178e4e0f9a2a9227c8201a2be38abe45ada4a4c3e9154277/cython-3.2.5-py3-none-any.whl", hash = "sha256:dc1c8cebb7df5bce37f5f8dc1e5bf04313272a5973d50a55c0ec76c83812911b", size = 1257622, upload-time = "2026-05-23T19:34:05.163Z" },
-]
-
-[[package]]
 name = "datasets"
 version = "5.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1314,22 +1303,6 @@ version = "13.2.78"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e8/1f/930d63ccc8adcdf27bfc051a24e3e4da2cf6ef987848d6d1d642e29d704b/nvidia_nvvm-13.2.78-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:f5aa433631109bbdec81802c5b5f319bf10bc891fe2f212e4e445845211d6f77", size = 64279462, upload-time = "2026-04-13T10:02:25.719Z" },
-]
-
-[[package]]
-name = "nvshmem4py-cu13"
-version = "0.3.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cuda-core", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "cuda-pathfinder", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "cuda-python", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "cython", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-nvshmem-cu13", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/57/f02bf9dd6792e2e7853ceaef24f1fbc252cbe71da325cbd6d06f4807611a/nvshmem4py_cu13-0.3.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_34_x86_64.whl", hash = "sha256:51d38cae4ee0544815150f40005c0e71ea44aef2ad926f3b6492341063c64e73", size = 3118281, upload-time = "2026-06-11T17:21:03.941Z" },
 ]
 
 [[package]]
@@ -2491,20 +2464,18 @@ wheels = [
 name = "xpool"
 version = "0.1.0"
 source = { virtual = "." }
-
-[package.optional-dependencies]
-runtime-cu13 = [
+dependencies = [
+    { name = "cuda-python", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "fastapi", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "flash-attn-4", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "flashinfer-cubin", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "flashinfer-python", extra = ["cu13"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "httpx", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvshmem4py-cu13", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvshmem-cu13", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pydantic", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "safetensors", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "sglang", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "torchvision", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "transformers", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "uvicorn", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
@@ -2521,21 +2492,20 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", marker = "extra == 'runtime-cu13'", specifier = ">=0.137.1" },
-    { name = "flash-attn-4", marker = "extra == 'runtime-cu13'", specifier = "==4.0.0b17" },
-    { name = "flashinfer-cubin", marker = "extra == 'runtime-cu13'", specifier = "==0.6.12" },
-    { name = "flashinfer-python", extras = ["cu13"], marker = "extra == 'runtime-cu13'", specifier = "==0.6.12" },
-    { name = "httpx", marker = "extra == 'runtime-cu13'", specifier = ">=0.28.1" },
-    { name = "numpy", marker = "extra == 'runtime-cu13'", specifier = ">=2.3.5,<2.4" },
-    { name = "nvshmem4py-cu13", marker = "extra == 'runtime-cu13'", specifier = ">=0.3.1" },
-    { name = "pydantic", marker = "extra == 'runtime-cu13'", specifier = ">=2.13.4" },
-    { name = "safetensors", marker = "extra == 'runtime-cu13'", specifier = ">=0.8.0" },
-    { name = "sglang", marker = "extra == 'runtime-cu13'", specifier = "==0.5.13.post1" },
-    { name = "torchvision", marker = "extra == 'runtime-cu13'", specifier = "==0.26.0" },
-    { name = "transformers", marker = "extra == 'runtime-cu13'", specifier = "==5.8.1" },
-    { name = "uvicorn", marker = "extra == 'runtime-cu13'", specifier = ">=0.49.0" },
+    { name = "cuda-python", specifier = ">=13.0,<14.0" },
+    { name = "fastapi", specifier = ">=0.137.1" },
+    { name = "flashinfer-cubin", specifier = "==0.6.12" },
+    { name = "flashinfer-python", extras = ["cu13"], specifier = "==0.6.12" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "numpy", specifier = ">=2.3.5,<2.4" },
+    { name = "nvidia-nvshmem-cu13", specifier = "==3.4.5" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "safetensors", specifier = ">=0.8.0" },
+    { name = "sglang", specifier = "==0.5.13.post1" },
+    { name = "torch", specifier = "==2.11.0" },
+    { name = "transformers", specifier = "==5.8.1" },
+    { name = "uvicorn", specifier = ">=0.49.0" },
 ]
-provides-extras = ["runtime-cu13"]
 
 [package.metadata.requires-dev]
 dev = [

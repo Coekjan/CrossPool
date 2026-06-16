@@ -1,24 +1,21 @@
 [project]
 name = "xpool"
 version = "0.1.0"
-description = "xpool v3 runtime scaffold"
+description = "xpool system"
 requires-python = ">=3.12,<3.13"
-dependencies = []
-
-[project.optional-dependencies]
-runtime-cu13 = [
+dependencies = [
+    "cuda-python>=13.0,<14.0",
     "fastapi>=0.137.1",
-    "flash-attn-4==4.0.0b17",
     "flashinfer-cubin==0.6.12",
     "flashinfer-python[cu13]==0.6.12",
     "httpx>=0.28.1",
+    "nvidia-nvshmem-cu13==3.4.5",
     "numpy>=2.3.5,<2.4",
-    "nvshmem4py-cu13>=0.3.1",
     "pydantic>=2.13.4",
     "safetensors>=0.8.0",
     "sglang==0.5.13.post1",
+    "torch==2.11.0",
     "transformers==5.8.1",
-    "torchvision==0.26.0",
     "uvicorn>=0.49.0",
 ]
 
