@@ -88,6 +88,10 @@ must not recursively scan ignored directories such as `.venv/`.
 - Do not use `git commit --no-verify` unless explicitly requested.
 - Do not change global or local git `user.name` or `user.email`.
 - Do not apply or pop a stash unless explicitly requested.
+- Do not delete ignored or machine-local files such as `.venv/`, `.vscode/`,
+  `.ruff_cache/`, or `.codex/self-evolve-last.txt` unless the user explicitly
+  asks. These files may contain useful local state even when they are not
+  committed.
 
 ## Commit Messages
 

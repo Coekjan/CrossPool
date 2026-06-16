@@ -60,6 +60,9 @@ discard those notes as needed and address the hook failure first.
 Do not use `git commit --no-verify` unless the user explicitly requests it.
 Do not change global or local git `user.name` / `user.email`. Do not repair
 author attribution by changing git config.
+Do not delete ignored or machine-local files as commit cleanup unless the user
+explicitly asks; leave `.venv/`, `.vscode/`, `.ruff_cache/`, and similar local
+state alone.
 
 ## Six Review Subagents
 
