@@ -25,16 +25,16 @@ repos:
         name: ty check
         entry: uv run ty check
         language: system
-        pass_filenames: false
+        types_or: [python]
+
+      - id: clang-format
+        name: clang-format
+        entry: clang-format --dry-run --Werror
+        language: system
+        types_or: [c, c++, cuda]
 
       - id: pytest
         name: pytest
         entry: uv run pytest
         language: system
         pass_filenames: false
-
-      - id: clang-format
-        name: clang-format
-        entry: clang-format --dry-run --Werror
-        language: system
-        files: .*[.](cc|cpp|cxx|cu|cuh|h|hpp)$
