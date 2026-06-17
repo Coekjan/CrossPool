@@ -59,7 +59,7 @@ def _run_device_agent(args: argparse.Namespace) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="xpool", description="xpool v3 control tool")
+    parser = argparse.ArgumentParser(prog="xpool", description="xpool control tool")
     subparsers = parser.add_subparsers(dest="command")
 
     daemon = subparsers.add_parser("daemon", help="run or check the daemon control plane")

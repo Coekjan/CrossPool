@@ -1,12 +1,12 @@
-# xpool v3 Project Plan
+# xpool Project Plan
 
-This document is the canonical design for the xpool v3 rebuild. It is
+This document is the canonical design for the xpool rebuild. It is
 self-contained and replaces chat history or the v2 worktree as the source of
 truth for new implementation work.
 
 ## Mission
 
-xpool v3 implements intra-node colocated serving with the smallest practical
+xpool implements intra-node colocated serving with the smallest practical
 intrusion into SGLang. SGLang remains the attention-side serving program and
 request scheduler. xpool replaces FFN calls with a graph-safe shim, arbitrates
 shared GPU and communication-slot resources across multiple SGLang instances,
@@ -112,7 +112,7 @@ KV cache sharing is phase 2. The phase-2 design must audit:
 - kvcached's SGLang autopatch and virtual memory allocator pattern,
 - compatibility with xpool's per-device-agent worker ownership model.
 
-Until that audit is complete, xpool v3 must not claim cross-model KV sharing.
+Until that audit is complete, xpool must not claim cross-model KV sharing.
 
 ## Public Commands
 
