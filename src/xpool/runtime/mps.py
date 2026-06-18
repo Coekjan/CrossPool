@@ -141,6 +141,8 @@ class MpsHealthMonitor:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._generation = 0
+        self._stopping = False
         self._status = initial or self._detector()
 
     def refresh(self) -> MpsPreflight:
@@ -186,15 +188,27 @@ class MpsHealthMonitor:
         """Start background MPS health refreshes.
 
         Side Effects:
-            Creates and starts a daemon thread on the first call. Repeated calls
-            while running are no-ops.
+            Creates and starts a daemon thread when no live monitor thread
+            exists. Repeated calls while running or stopping are no-ops.
         """
 
-        if self._thread is not None:
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="xpool-mps-health", daemon=True)
-        self._thread.start()
+        with self._lock:
+            if self._stopping:
+                return
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._generation += 1
+            generation = self._generation
+            stop_event = threading.Event()
+            self._stop = stop_event
+            thread = threading.Thread(
+                target=self._run,
+                args=(generation, stop_event),
+                name="xpool-mps-health",
+                daemon=True,
+            )
+            self._thread = thread
+        thread.start()
 
     def stop(self) -> None:
         """Stop the background MPS health refresh thread.
@@ -204,19 +218,32 @@ class MpsHealthMonitor:
             thread does not stop in time.
         """
 
-        thread = self._thread
-        if thread is None:
-            return
-        self._stop.set()
+        with self._lock:
+            thread = self._thread
+            stop_event = self._stop
+            if thread is None:
+                return
+            self._stopping = True
+            self._generation += 1
+            self._thread = None
+        stop_event.set()
         thread.join(timeout=self._interval_s)
         if thread.is_alive():
             LOGGER.warning("MPS health monitor did not stop within %.1fs", self._interval_s)
+            with self._lock:
+                self._stopping = False
             return
-        self._thread = None
+        with self._lock:
+            self._stopping = False
 
-    def _run(self) -> None:
-        while not self._stop.wait(self._interval_s):
+    def _run(self, generation: int, stop_event: threading.Event) -> None:
+        while not stop_event.wait(self._interval_s):
             try:
-                self.refresh()
+                status = self._detector()
             except Exception:
                 LOGGER.exception("MPS health refresh failed")
+                continue
+            with self._lock:
+                if generation != self._generation:
+                    return
+                self._status = status

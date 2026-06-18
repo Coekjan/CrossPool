@@ -9,13 +9,15 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.plugins.hook_registry import HookType
 from sglang.srt.server_args import ServerArgs
 from sglang_fakes import server_args
 from transformers import PretrainedConfig
 
-from xpool.config import MissingRequiredConfig
+import xpool.config as config_module
+from xpool.config import AttentionKind, MissingRequiredConfig, SglangModelMetadata, TopologyError
 from xpool.integrations.sglang import plugin as sglang_plugin
 from xpool.integrations.sglang.adapter import (
     SglangHook,
@@ -23,7 +25,21 @@ from xpool.integrations.sglang.adapter import (
     SglangModelAdapter,
     XpoolModelBinding,
 )
-from xpool.integrations.sglang.server_args import SGLANG_SERVER_ARG_RULES, validate_sglang_server_args
+from xpool.integrations.sglang.server_args import (
+    SGLANG_SERVER_ARG_RULES,
+    validate_sglang_server_args,
+)
+
+UNSUPPORTED_FORWARD_MODE_RULE_LABEL_BY_NAME = {
+    "MIXED": "Mixed Chunked Prefill",
+    "IDLE": "DP Attention",
+    "TARGET_VERIFY": "Speculative Decoding",
+    "DRAFT_EXTEND": "Speculative Decoding",
+    "DRAFT_EXTEND_V2": "Speculative Decoding",
+    "PREBUILT": "PD Disaggregation",
+    "SPLIT_PREFILL": "PD Multiplexing",
+    "DLLM_EXTEND": "Diffusion LLM",
+}
 
 
 def test_sglang_discovers_xpool_entry_point() -> None:
@@ -101,6 +117,82 @@ def test_model_runner_hook_delegates_to_matching_adapters(tmp_path: Path, monkey
     assert binding.sglang_dp_size == 1
 
 
+def test_model_runner_hook_resolves_only_the_matching_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    adapter = _FakeAdapter(matches=True, events=events)
+    model_path = (tmp_path / "served-model").resolve()
+    unrelated_model_path = (tmp_path / "broken-unrelated-model").resolve()
+    model_path.mkdir()
+    (model_path / "config.json").write_text(
+        """
+{
+  "model_type": "deepseek_v2",
+  "hidden_size": 2048,
+  "num_attention_heads": 16,
+  "num_key_value_heads": 2,
+  "intermediate_size": 8192,
+  "moe_intermediate_size": 8192
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "xpool.toml"
+    config_path.write_text(
+        f"""
+[daemon]
+host = "127.0.0.1"
+port = 9810
+
+[scheduler]
+attention_concurrency = 1
+transport_concurrency = 1
+
+[devices]
+attention_cuda_devices = [0]
+ffn_cuda_devices = [1]
+
+[[models]]
+id = "deepseek-v2-lite-chat"
+path = "{model_path}"
+
+[[models]]
+id = "broken-unrelated-model"
+path = "{unrelated_model_path}"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
+
+    def fake_sglang_metadata(config_path: Path, *, model_id: str) -> SglangModelMetadata:
+        assert config_path == model_path / "config.json"
+        assert model_id == "deepseek-v2-lite-chat"
+        return SglangModelMetadata(
+            family=model_id,
+            hidden_size=2048,
+            num_attention_heads=16,
+            num_key_value_heads=2,
+            attention_kind=AttentionKind.GQA,
+            physical_kv_lanes=2,
+        )
+
+    monkeypatch.setattr(config_module, "_load_sglang_model_metadata", fake_sglang_metadata)
+    runner = _FakeModelRunner(model_config=_FakeModelConfig(model_path=str(model_path)))
+
+    def original(_model_runner: ModelRunner) -> str:
+        events.append("original")
+        return "loaded"
+
+    result = sglang_plugin.around_model_runner_load_model((adapter,), original, as_model_runner(runner))
+
+    assert result == "loaded"
+    assert events == ["validate_before_load", "bind_runtime", "original", "validate_after_load"]
+    assert runner.xpool_model_binding is not None
+    assert runner.xpool_model_binding.instance_id == "deepseek-v2-lite-chat"
+
+
 def test_model_runner_hook_rejects_configured_model_without_matching_adapter(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -118,6 +210,7 @@ def test_model_runner_hook_rejects_configured_model_without_matching_adapter(
         sglang_plugin.around_model_runner_load_model((adapter,), original, as_model_runner(runner))
 
     assert events == []
+    assert runner.xpool_model_binding is None
 
 
 def test_model_runner_hook_rejects_model_path_missing_from_config(
@@ -144,6 +237,18 @@ def test_model_runner_hook_requires_xpool_config(monkeypatch: pytest.MonkeyPatch
         return "loaded"
 
     with pytest.raises(MissingRequiredConfig, match="XPOOL_CONFIG"):
+        sglang_plugin.around_model_runner_load_model((adapter,), original, as_model_runner(runner))
+
+
+def test_model_runner_hook_rejects_server_args_before_xpool_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _FakeAdapter(matches=True)
+    runner = _FakeModelRunner(server_args=server_args(enable_dp_attention=True))
+    monkeypatch.delenv("XPOOL_CONFIG", raising=False)
+
+    def original(_model_runner: ModelRunner) -> str:
+        return "loaded"
+
+    with pytest.raises(RuntimeError, match="DP Attention"):
         sglang_plugin.around_model_runner_load_model((adapter,), original, as_model_runner(runner))
 
 
@@ -204,6 +309,31 @@ def test_model_runner_hook_rejects_sglang_dp_mismatch(
         sglang_plugin.around_model_runner_load_model((adapter,), original, as_model_runner(runner))
 
 
+def test_model_runner_hook_rejects_ffn_tp_divisibility_before_load(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    adapter = _FakeAdapter(matches=True, events=events)
+    runner = _FakeModelRunner(model_config=_FakeModelConfig(model_path=str(tmp_path / "fake-model")))
+    configure_xpool_model(
+        tmp_path,
+        monkeypatch,
+        runner.model_config.model_path,
+        ffn_cuda_devices=(2, 3, 4),
+    )
+
+    def original(_model_runner: ModelRunner) -> str:
+        events.append("original")
+        return "loaded"
+
+    with pytest.raises(TopologyError, match="FFN TP 3"):
+        sglang_plugin.around_model_runner_load_model((adapter,), original, as_model_runner(runner))
+
+    assert events == []
+    assert runner.xpool_model_binding is None
+
+
 def test_global_server_arg_gate_rejects_unsupported_sglang_features() -> None:
     args = server_args(enable_two_batch_overlap=True, cpu_offload_gb=1)
 
@@ -226,6 +356,21 @@ def test_every_server_arg_rule_evaluates_without_attribute_error() -> None:
 
     for rule in SGLANG_SERVER_ARG_RULES:
         rule.supported(args)
+
+
+def test_every_unsupported_sglang_forward_mode_has_server_arg_gate_label() -> None:
+    labels = {rule.label for rule in SGLANG_SERVER_ARG_RULES}
+    unsupported_modes = set(ForwardMode.__members__) - {"DECODE", "EXTEND"}
+
+    assert set(UNSUPPORTED_FORWARD_MODE_RULE_LABEL_BY_NAME) == unsupported_modes
+    assert set(UNSUPPORTED_FORWARD_MODE_RULE_LABEL_BY_NAME.values()).issubset(labels)
+
+
+def test_global_server_arg_gate_rejects_dp_attention() -> None:
+    args = server_args(tp_size=2, dp_size=2, enable_dp_attention=True)
+
+    with pytest.raises(RuntimeError, match="DP Attention"):
+        validate_sglang_server_args(args)
 
 
 def test_global_server_arg_gate_rejects_lora_when_enabled() -> None:
@@ -277,9 +422,25 @@ def configure_xpool_model(
     *,
     attention_cuda_devices: tuple[int, ...] = (0,),
     ffn_cuda_devices: tuple[int, ...] = (1,),
+    attention_kind: AttentionKind = AttentionKind.GQA,
+    num_key_value_heads: int = 2,
+    physical_kv_lanes: int = 2,
 ) -> None:
     resolved_model_path = Path(model_path).expanduser().resolve()
     resolved_model_path.mkdir(parents=True, exist_ok=True)
+    (resolved_model_path / "config.json").write_text(
+        """
+{
+  "model_type": "deepseek_v2",
+  "hidden_size": 2048,
+  "num_attention_heads": 16,
+  "num_key_value_heads": 2,
+  "intermediate_size": 8192,
+  "moe_intermediate_size": 8192
+}
+""".strip(),
+        encoding="utf-8",
+    )
     config_path = tmp_path / "xpool.toml"
     attention_devices = ", ".join(str(device) for device in attention_cuda_devices)
     ffn_devices = ", ".join(str(device) for device in ffn_cuda_devices)
@@ -304,6 +465,18 @@ path = "{resolved_model_path}"
         encoding="utf-8",
     )
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
+
+    def fake_sglang_metadata(_config_path: Path, *, model_id: str) -> SglangModelMetadata:
+        return SglangModelMetadata(
+            family=model_id,
+            hidden_size=2048,
+            num_attention_heads=16,
+            num_key_value_heads=num_key_value_heads,
+            attention_kind=attention_kind,
+            physical_kv_lanes=physical_kv_lanes,
+        )
+
+    monkeypatch.setattr(config_module, "_load_sglang_model_metadata", fake_sglang_metadata)
 
 
 class _FakeHookRegistry:

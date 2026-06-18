@@ -16,14 +16,14 @@
 namespace xpool {
 
 /// Version stamped into every descriptor so incompatible producers fail closed.
-inline constexpr std::uint32_t kAbiVersion = 1;
+inline constexpr std::uint32_t kAbiVersion = 2;
 
 /// SGLang forward mode values accepted by the first xpool FFN shim ABI.
 enum class ForwardMode : std::uint32_t {
-  /// Decode-mode FFN request for one scheduler decode step.
-  kDecode = 1,
   /// Extend/prefill-mode FFN request for a contiguous prompt-token batch.
-  kExtend = 2,
+  kExtend = 1,
+  /// Decode-mode FFN request for one scheduler decode step.
+  kDecode = 2,
 };
 
 /// Element dtype of the hidden-state tensor referenced by an FFN request.

@@ -191,29 +191,37 @@ def assert_ffn_shim_coverage(
 
 
 def inject_shim_identity(model_runner: ModelRunner, binding: XpoolModelBinding) -> None:
-    """Stamp the integer instance/model identity onto every FFN shim after load.
+    """Stamp the model metadata and integer identity onto every FFN shim after load.
 
     Args:
         model_runner: Loaded SGLang model runner whose module tree may contain shims.
         binding: xpool identity resolved for this SGLang instance.
 
     Side Effects:
-        Mutates each discovered FFN shim by setting its integer instance/model identity.
+        Mutates each discovered FFN shim by setting its diagnostic architecture
+        and integer instance/model identity.
 
     Shims are constructed by SGLang before the binding is known, so the identity is
-    injected post-load; each shim then forwards it to the native FFN op so the device
-    agent can route results back to the right instance/model.
+    injected post-load from the actual model runner config; each shim then forwards
+    it to the native FFN op so the device agent can route results back to the right
+    instance/model.
     """
 
     model = getattr(model_runner, "model", None)
     if model is None:
         return
+    architectures = getattr(model_runner.model_config.hf_config, "architectures", None)
+    model_architecture = ",".join(str(architecture) for architecture in architectures) if architectures else "unknown"
     for shim in iter_ffn_shims(model):
-        shim.bind_identity(binding.instance_index, binding.model_index)
+        shim.bind_identity(
+            binding.instance_index,
+            binding.model_index,
+            model_architecture=model_architecture,
+        )
 
 
-def bind_model_instance(model_runner: ModelRunner) -> XpoolModelBinding:
-    """Bind a SGLang model runner to the matching xpool config model entry.
+def resolve_model_binding(model_runner: ModelRunner) -> XpoolModelBinding:
+    """Resolve the xpool binding for a SGLang model runner without mutating it.
 
     Args:
         model_runner: SGLang model runner whose model path must appear in xpool config.
@@ -222,12 +230,18 @@ def bind_model_instance(model_runner: ModelRunner) -> XpoolModelBinding:
         Runtime identity binding for the matched configured model.
 
     Raises:
-        ConfigError: If xpool config loading fails.
-        OSError: If the xpool config file cannot be opened.
+        ConfigError: If xpool config loading, model metadata loading, or
+            parallel-policy derivation fails.
+        OSError: If the xpool config file or matched model ``config.json``
+            cannot be opened.
+        TopologyError: If the matched model metadata is incompatible with the
+            configured attention/FFN device topology.
         RuntimeError: If xpool config has no model entry for the SGLang model path.
 
     Side Effects:
-        Loads xpool config and attaches ``xpool_model_binding`` to ``model_runner``.
+        Loads xpool config and resolves only the matched model's metadata
+        through SGLang so the plugin path performs topology validation without
+        coupling this instance to unrelated configured models.
 
     The xpool plugin is fail-closed: once installed in an SGLang process, the loaded
     model must be declared in ``XPOOL_CONFIG`` so every FFN shim receives a stable
@@ -235,7 +249,7 @@ def bind_model_instance(model_runner: ModelRunner) -> XpoolModelBinding:
     error.
     """
 
-    from xpool.config import load_config
+    from xpool.config import derive_parallel_policy, load_config, load_model_spec
 
     model_path = Path(model_runner.model_config.model_path).expanduser().resolve()
     config = load_config()
@@ -244,13 +258,59 @@ def bind_model_instance(model_runner: ModelRunner) -> XpoolModelBinding:
         raise RuntimeError(f"xpool config has no model entry for SGLang model path {model_path}")
 
     model = config.models[index]
-    binding = XpoolModelBinding(
-        instance_id=model.id,
-        model_path=model_path,
-        instance_index=index,
-        model_index=index,
-        sglang_tp_size=len(config.devices.attention_cuda_devices),
-        sglang_dp_size=1,
+    instance = config.sglang_instances[index]
+    spec = load_model_spec(model.path, model_id=model.id)
+    policy = derive_parallel_policy(
+        spec,
+        attention_device_count=len(config.devices.attention_cuda_devices),
+        ffn_tp_size=len(config.devices.ffn_cuda_devices),
     )
-    setattr(model_runner, "xpool_model_binding", binding)
-    return binding
+    return XpoolModelBinding(
+        instance_id=instance.id,
+        model_path=model_path,
+        instance_index=instance.instance_index,
+        model_index=instance.model_index,
+        sglang_tp_size=policy.sglang_tp_size,
+        sglang_dp_size=policy.sglang_dp_size,
+    )
+
+
+def bind_model_instance(model_runner: ModelRunner, binding: XpoolModelBinding | None = None) -> XpoolModelBinding:
+    """Attach a resolved xpool binding to a SGLang model runner.
+
+    Args:
+        model_runner: SGLang model runner to mutate.
+        binding: Optional binding already resolved by :func:`resolve_model_binding`.
+            When omitted, the binding is resolved before attachment.
+
+    Returns:
+        Attached runtime identity binding.
+
+    Raises:
+        ConfigError: If xpool config loading or runtime resolution fails.
+        OSError: If the xpool config file cannot be opened.
+        RuntimeError: If the SGLang model path is not declared in xpool config.
+
+    Side Effects:
+        Sets ``model_runner.xpool_model_binding``.
+    """
+
+    resolved = resolve_model_binding(model_runner) if binding is None else binding
+    setattr(model_runner, "xpool_model_binding", resolved)
+    return resolved
+
+
+def clear_model_binding(model_runner: ModelRunner, binding: XpoolModelBinding) -> None:
+    """Remove a previously attached xpool binding after a rejected load.
+
+    Args:
+        model_runner: SGLang model runner that may carry ``xpool_model_binding``.
+        binding: Binding instance that should be removed only if it is still current.
+
+    Side Effects:
+        Sets ``model_runner.xpool_model_binding`` to ``None`` when it still
+        refers to ``binding``.
+    """
+
+    if getattr(model_runner, "xpool_model_binding", None) == binding:
+        setattr(model_runner, "xpool_model_binding", None)

@@ -32,7 +32,10 @@ xpool has three runtime placements:
 1. `xpool daemon` is a single global host control plane. It owns registration,
    policy configuration, readiness, health reporting, and global state for
    attention-side SGLang instance arbitration. It must not participate in
-   request-time FFN progress or captured CUDA graph execution.
+   request-time FFN progress or captured CUDA graph execution. Registration
+   readiness is process-liveness aware: stale SGLang instance or device-agent
+   pids do not satisfy `/ready`, and a restarted participant may replace a dead
+   registration without restarting the daemon.
 2. `xpool device-agent` is launched once per participating GPU. Each device
    agent owns one NVSHMEM rank, symmetric memory, CUDA IPC surfaces, and the
    resident persistent kernels on that GPU.
@@ -93,10 +96,14 @@ LoRA, quantized first-stage loading, expert parallelism, EPLB, DeepEP, expert
 distribution recording, two-batch overlap, context parallel prefill, all-reduce
 fusion, SGLang CPU/layer offload, hierarchical cache offload, decode KV offload,
 mixed chunked prefill, PD disaggregation, diffusion LLM inference,
-PD multiplexing, and reduce-scatter FFN output. Ordinary continuous batching
-and ordinary chunked prefill remain allowed when SGLang presents shim calls as
-exact `DECODE` or exact `EXTEND`; xpool rejects modes that can surface composite
-forward modes such as `MIXED`, `SPLIT_PREFILL`, `DLLM_EXTEND`, or `PREBUILT`.
+PD multiplexing, DP Attention, and reduce-scatter FFN output. Ordinary
+continuous batching and ordinary chunked prefill remain allowed when SGLang
+presents shim calls as exact `DECODE` or exact `EXTEND`; xpool rejects modes
+that can surface composite forward modes such as `MIXED`, `IDLE`,
+`TARGET_VERIFY`, `DRAFT_EXTEND`, `DRAFT_EXTEND_V2`, `SPLIT_PREFILL`,
+`DLLM_EXTEND`, or `PREBUILT`. SGLang server-argument rules intentionally
+reference SGLang's resolved fields directly; an SGLang upgrade that renames or
+changes those fields is an explicit adapter maintenance point.
 Model adapters may add model-construction checks, but they do not own global
 SGLang runtime policy. Server-argument rules remain part of the SGLang plugin
 layer because they describe global plugin ABI support, not model architecture.
@@ -107,7 +114,10 @@ The SGLang shim frontend uses a single concrete `FfnShimModule` base class,
 not a mixin/protocol pair. Model-specific classes inherit
 `FfnShimModule, OriginalSGLangClass`, and `FfnShimModule.__init__` directly
 initializes `nn.Module` to avoid running original FFN constructors. Shim layer
-kinds use symmetric names: `DENSE` and `SPARSE`.
+kinds use symmetric names: `DENSE` and `SPARSE`. The shim's model architecture
+string is diagnostic metadata injected from the actual SGLang/Hugging Face
+model config after load; native routing uses the integer model index, not a
+hard-coded architecture string.
 
 ## Resource Policy
 
@@ -169,11 +179,21 @@ plugin loads a model adapter registry, installs adapter hooks, and installs a
 generic `ModelRunner.load_model` lifecycle hook. The registry auto-discovers all
 zero-argument concrete `SglangModelAdapter` subclasses owned by modules under
 `xpool.integrations.sglang.models`; new model support is added by adding a model
-module, not by editing a global adapter list. The lifecycle hook validates
-model-neutral SGLang server arguments once, binds the matching SGLang model path
-to exactly one `models[]` entry from `XPOOL_CONFIG`, then lets the owning
-adapter run model-specific checks. There is no `XPOOL_INSTANCE_ID`; the
-instance id is derived from the one-model-one-SGLang-instance mapping in TOML.
+module, not by editing a global adapter list. One broken model-adapter module is
+reported and skipped without preventing unrelated adapters from loading. The
+lifecycle hook validates SGLang server arguments, resolves xpool runtime policy
+only for the currently loading model, checks SGLang TP/DP against that policy,
+and only then attaches the model binding to the runner. This ordering keeps
+rejected loads from leaving a half-bound model runner and keeps one bad
+unrelated model config from blocking another configured SGLang instance. There is no
+`XPOOL_INSTANCE_ID`; the instance id is derived from the
+one-model-one-SGLang-instance mapping in TOML.
+
+The daemon `/config` endpoint is a control-plane runtime view, not just the raw
+TOML schema: it returns the validated config plus derived device-agent and
+SGLang-instance launch views. It must not perform expensive model metadata
+resolution or read model `config.json`; full model-derived parallel policy
+remains owned by explicit config checks and plugin load-time validation.
 
 The first DeepSeek adapter directly replaces SGLang's DeepSeek FFN classes with
 xpool shim classes and hooks DeepSeek weight loading to skip
@@ -279,10 +299,11 @@ for compressed-cache layout and uses `attention_tp = 1`. When SGLang reports a
 regular attention layout, xpool derives MHA/GQA/MQA from SGLang's total
 attention heads and KV heads, then uses
 `attention_tp = min(num_key_value_heads, attention_device_count)`. The first
-shim ABI does not support SGLang DP attention, so xpool requires
-`attention_device_count == attention_tp` and SGLang `--dp-size = 1`. Future
-DP-aware shim support must update the config policy, SGLang server-argument
-gate, and native descriptor semantics together.
+shim ABI does not support SGLang DP Attention or reduce-scatter FFN output, so
+xpool requires `attention_device_count == attention_tp` and SGLang `--dp-size =
+1`. Future DP-aware shim support must let SGLang server args decide
+`enable_dp_attention`, then validate the resolved attention TP/DP layout against
+an explicit reduce-scatter ABI.
 
 All TOML fields and CLI overrides for registered settings are declared in the
 config registry and resolve in this order:
@@ -347,14 +368,18 @@ guarantees.
 3. Add device-agent launcher and MPS/runtime preflight checks.
 4. Add model-neutral SGLang plugin registration and DeepSeek FFN class adapter.
 5. Add shared ABI headers and Python packing tests.
-6. Prove single-GPU eager shim publish/wait with a test-only loopback executor.
-7. Prove CUDA graph capture/replay over the same shim ABI.
-8. Prove one NVSHMEM rank per device agent transport with device-side progress.
-9. Attach DeepSeek-V2-Lite FFN executor and correctness oracle tests.
-10. Run SGLang E2E with multiple instances on the same attention GPU.
-11. Start phase-2 KV sharing design and implementation.
+6. Close review-gate correctness gaps in SGLang plugin policy, model binding,
+   daemon readiness/config snapshots, and MPS health monitoring before adding
+   native runtime state.
+7. Prove single-GPU eager shim publish/wait with a devkit loopback executor
+   that performs a non-identity pairwise hidden-state 45-degree rotation.
+8. Prove CUDA graph capture/replay over the same shim ABI.
+9. Prove one NVSHMEM rank per device agent transport with device-side progress.
+10. Attach DeepSeek-V2-Lite FFN executor and correctness oracle tests.
+11. Run SGLang E2E with multiple instances on the same attention GPU.
+12. Start phase-2 KV sharing design and implementation.
 
-The loopback executor in step 6 is only an ABI and CUDA graph validation tool.
+The loopback executor in step 7 is only an ABI and CUDA graph validation tool.
 It must not be used as serving evidence; SGLang E2E readiness requires the real
 DeepSeek-V2-Lite FFN executor.
 

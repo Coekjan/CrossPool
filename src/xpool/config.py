@@ -704,6 +704,9 @@ def parse_model_config(raw: Mapping[str, object], *, model_id: str, config_path:
     sglang = _validate_sglang_model_metadata(
         _load_sglang_model_metadata(config_path, model_id=model_id), model_id=model_id
     )
+    num_experts = _optional_int(raw, "num_experts")
+    if num_experts is None:
+        num_experts = _optional_int(raw, "n_routed_experts")
     return ModelSpec(
         model_id=model_id,
         family=sglang.family,
@@ -714,7 +717,7 @@ def parse_model_config(raw: Mapping[str, object], *, model_id: str, config_path:
         physical_kv_lanes=sglang.physical_kv_lanes,
         dense_intermediate_size=_optional_int(raw, "intermediate_size"),
         moe_intermediate_size=_optional_int(raw, "moe_intermediate_size"),
-        num_experts=_optional_int(raw, "num_experts") or _optional_int(raw, "n_routed_experts"),
+        num_experts=num_experts,
         raw_config_path=config_path,
     )
 

@@ -257,7 +257,7 @@ def test_ffn_tp_is_derived_from_full_ffn_device_pool(tmp_path: Path, monkeypatch
     assert model.ffn_agent_ids == ["cuda2", "cuda3", "cuda4"]
 
 
-def test_attention_dp_is_rejected_until_shim_abi_supports_it(
+def test_mla_attention_policy_rejects_implicit_attention_dp(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -322,6 +322,7 @@ def test_gqa_attention_policy_is_derived_from_sglang_metadata(
     assert policy.sglang_dp_size == 1
     assert policy.attention_tp_size == 2
     assert policy.attention_dp_size == 1
+    assert policy.enable_dp_attention is False
 
 
 def test_regular_mqa_when_sglang_reports_non_mla(
@@ -431,6 +432,29 @@ def test_ffn_tp_divisibility_is_checked_during_runtime_resolution(
 
     with pytest.raises(TopologyError, match="does not divide dense intermediate size"):
         config.resolve_runtime()
+
+
+def test_model_config_preserves_explicit_zero_num_experts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_sglang_metadata(
+        monkeypatch,
+        family="dense",
+        hidden_size=2048,
+        attention_heads=16,
+        kv_heads=16,
+        attention_kind=AttentionKind.MHA,
+        physical_kv_lanes=16,
+    )
+
+    spec = config_module.parse_model_config(
+        {"num_experts": 0, "n_routed_experts": 64},
+        model_id="dense-model",
+        config_path=tmp_path / "config.json",
+    )
+
+    assert spec.num_experts == 0
 
 
 def _write_minimal_config(

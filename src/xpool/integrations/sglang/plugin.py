@@ -14,8 +14,10 @@ from xpool.integrations.sglang.adapter import (
     SglangModelAdapter,
     XpoolModelBinding,
     bind_model_instance,
+    clear_model_binding,
     inject_shim_identity,
     model_runner_architectures,
+    resolve_model_binding,
 )
 from xpool.integrations.sglang.registry import sglang_model_adapters
 from xpool.integrations.sglang.server_args import validate_sglang_server_args
@@ -35,7 +37,7 @@ def install() -> None:
         ``ModelRunner.load_model`` for plugin lifecycle validation.
 
     Raises:
-        ImportError: If adapter discovery cannot import a model adapter module.
+        ImportError: If adapter discovery cannot import the adapter package.
         RuntimeError: If adapter discovery or hook registration fails.
     """
 
@@ -81,8 +83,11 @@ def around_model_runner_load_model(
         every FFN shim with identity, and runs adapter postconditions.
     """
 
+    server_args = model_runner_server_args(model_runner)
+    validate_sglang_server_args(server_args)
+
     matching_adapters = tuple(adapter for adapter in adapters if adapter.matches(model_runner))
-    binding = bind_model_instance(model_runner)
+    binding = resolve_model_binding(model_runner)
     if not matching_adapters:
         architectures = ", ".join(sorted(model_runner_architectures(model_runner))) or "<unknown>"
         raise RuntimeError(
@@ -90,18 +95,23 @@ def around_model_runner_load_model(
             f"matches its architecture ({architectures}); add a model adapter under "
             "xpool.integrations.sglang.models or remove the [[models]] entry from XPOOL_CONFIG."
         )
-    server_args = model_runner_server_args(model_runner)
-    validate_sglang_server_args(server_args)
     validate_sglang_parallel_args(server_args, binding)
     for adapter in matching_adapters:
         adapter.validate_before_load(model_runner)
-        adapter.bind_runtime(model_runner)
 
-    result = original_fn(model_runner, *args, **kwargs)
+    bind_model_instance(model_runner, binding)
+    try:
+        for adapter in matching_adapters:
+            adapter.bind_runtime(model_runner)
 
-    inject_shim_identity(model_runner, binding)
-    for adapter in matching_adapters:
-        adapter.validate_after_load(model_runner)
+        result = original_fn(model_runner, *args, **kwargs)
+
+        inject_shim_identity(model_runner, binding)
+        for adapter in matching_adapters:
+            adapter.validate_after_load(model_runner)
+    except Exception:
+        clear_model_binding(model_runner, binding)
+        raise
     return result
 
 

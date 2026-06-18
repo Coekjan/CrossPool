@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import logging
 import pkgutil
 from collections.abc import Iterable, Sequence
 from types import ModuleType
@@ -12,6 +13,7 @@ from typing import cast
 from xpool.integrations.sglang.adapter import SglangModelAdapter
 
 MODELS_PACKAGE = "xpool.integrations.sglang.models"
+LOGGER = logging.getLogger(__name__)
 
 
 def sglang_model_adapters() -> tuple[SglangModelAdapter, ...]:
@@ -30,7 +32,7 @@ def discover_sglang_model_adapters(package_name: str) -> tuple[SglangModelAdapte
         Stable, name-validated adapter instances.
 
     Raises:
-        ImportError: If the package or one of its modules cannot be imported.
+        ImportError: If the package itself cannot be imported.
         RuntimeError: If an adapter cannot be constructed or duplicates a name.
     """
 
@@ -42,27 +44,52 @@ def discover_sglang_model_adapters(package_name: str) -> tuple[SglangModelAdapte
 
 
 def iter_model_modules(package_name: str) -> tuple[ModuleType, ...]:
-    """Import non-private model adapter modules from a package.
+    """Import non-private model adapter modules from a package tree.
 
     Args:
-        package_name: Importable package whose direct child modules should be scanned.
+        package_name: Importable package whose children should be scanned recursively.
 
     Returns:
-        Imported module objects for direct, non-package, non-private children.
+        Imported module objects for non-private children and subpackages.
 
     Raises:
-        ImportError: If the package or a child module cannot be imported.
+        ImportError: If the package itself cannot be imported.
     """
 
     package = importlib.import_module(package_name)
     package_path = cast(Iterable[str], getattr(package, "__path__"))
     modules: list[ModuleType] = []
-    for module_info in pkgutil.iter_modules(package_path, package.__name__ + "."):
-        module_basename = module_info.name.rsplit(".", 1)[-1]
-        if module_info.ispkg or module_basename.startswith("_"):
+    for module_info in pkgutil.walk_packages(
+        package_path,
+        package.__name__ + ".",
+        onerror=log_package_walk_import_error,
+    ):
+        module_parts = module_info.name.removeprefix(package.__name__ + ".").split(".")
+        if any(part.startswith("_") for part in module_parts):
             continue
-        modules.append(importlib.import_module(module_info.name))
+        try:
+            modules.append(importlib.import_module(module_info.name))
+        except Exception as exc:
+            LOGGER.warning(
+                "Skipping SGLang adapter module %s after import failure: %s",
+                module_info.name,
+                exc,
+                exc_info=True,
+            )
     return tuple(modules)
+
+
+def log_package_walk_import_error(package_name: str) -> None:
+    """Log a package import failure raised while scanning adapter modules.
+
+    Args:
+        package_name: Package name reported by ``pkgutil.walk_packages``.
+
+    Side Effects:
+        Emits a warning and lets discovery continue with other modules.
+    """
+
+    LOGGER.warning("Skipping SGLang adapter package %s after import failure", package_name)
 
 
 def adapter_classes_in_module(module: ModuleType) -> tuple[type[SglangModelAdapter], ...]:

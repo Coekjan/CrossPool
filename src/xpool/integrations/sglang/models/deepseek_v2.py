@@ -27,13 +27,7 @@ from xpool.integrations.sglang.adapter import (
 )
 from xpool.integrations.sglang.shim import FfnLayerKind, FfnShimModule, ShimUnavailableError
 
-LAYER_PREFIX_PATTERN = re.compile(r"(?:^|\.)layers\.(?P<layer_id>\d+)\.mlp$")
-
-# Architecture name stamped onto every shim of a matched model. The adapter matches by
-# membership ("DeepseekV2ForCausalLM" in architectures), so a config whose architectures
-# list it non-first still maps to this single, consistent identity; dense and MoE shims
-# of one model must not carry different model_architecture values.
-DEEPSEEK_V2_ARCHITECTURE = "DeepseekV2ForCausalLM"
+LAYER_PREFIX_PATTERN = re.compile(r"^model\.layers\.(?P<layer_id>\d+)\.mlp$")
 
 P = ParamSpec("P")
 ReturnT = TypeVar("ReturnT")
@@ -110,7 +104,6 @@ class XpoolDeepseekV2MLP(FfnShimModule, DeepseekV2MLP):
             raise ShimUnavailableError(f"xpool DeepSeek dense MLP shim cannot derive layer id from prefix {prefix!r}")
         FfnShimModule.__init__(
             self,
-            model_architecture=DEEPSEEK_V2_ARCHITECTURE,
             layer_id=int(match.group("layer_id")),
             hidden_size=hidden_size,
             layer_kind=FfnLayerKind.DENSE,
@@ -172,7 +165,6 @@ class XpoolDeepseekV2MoE(FfnShimModule, DeepseekV2MoE):
             raise ShimUnavailableError("xpool DeepSeek shim requires integer config field hidden_size")
         FfnShimModule.__init__(
             self,
-            model_architecture=DEEPSEEK_V2_ARCHITECTURE,
             layer_id=layer_id,
             hidden_size=hidden_size,
             layer_kind=FfnLayerKind.SPARSE,
@@ -243,8 +235,8 @@ class DeepseekV2Adapter(SglangModelAdapter):
             model_runner: SGLang model runner before or after model construction.
 
         Returns:
-            ``True`` when the runner's Hugging Face architectures include
-            ``DeepseekV2ForCausalLM``.
+            ``True`` when the runner's Hugging Face architectures name a
+            DeepSeek-V2 model.
         """
 
         return "DeepseekV2ForCausalLM" in model_runner_architectures(model_runner)

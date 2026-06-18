@@ -41,7 +41,6 @@ class FfnShimModule(nn.Module):
     def __init__(
         self,
         *,
-        model_architecture: str,
         layer_id: int,
         hidden_size: int,
         layer_kind: FfnLayerKind,
@@ -49,7 +48,6 @@ class FfnShimModule(nn.Module):
         """Initialize a parameter-free FFN shim.
 
         Args:
-            model_architecture: Stable SGLang architecture name used for diagnostics.
             layer_id: Decoder layer id routed to the native FFN executor.
             hidden_size: Expected hidden-state width for every shim call.
             layer_kind: Dense or sparse FFN category.
@@ -64,7 +62,7 @@ class FfnShimModule(nn.Module):
         """
 
         nn.Module.__init__(self)
-        self.model_architecture = model_architecture
+        self.model_architecture = "unknown"
         self.layer_id = layer_id
         self.hidden_size = hidden_size
         self.layer_kind = layer_kind
@@ -73,19 +71,23 @@ class FfnShimModule(nn.Module):
         self.instance_index = -1
         self.model_index = -1
 
-    def bind_identity(self, instance_index: int, model_index: int) -> None:
-        """Stamp the integer identity used by the native FFN op after load.
+    def bind_identity(self, instance_index: int, model_index: int, *, model_architecture: str) -> None:
+        """Stamp diagnostic metadata and integer identity after load.
 
         Args:
             instance_index: Integer SGLang instance id from xpool config order.
             model_index: Integer model id selecting the FFN executor weight set.
+            model_architecture: SGLang/Hugging Face architecture string read
+                from the loaded model runner config.
 
         Side Effects:
-            Mutates the shim identity fields used by later ``forward`` calls.
+            Mutates the shim diagnostic and identity fields used by later
+            ``forward`` calls.
         """
 
         self.instance_index = instance_index
         self.model_index = model_index
+        self.model_architecture = model_architecture
 
     def forward(
         self,
@@ -129,17 +131,17 @@ class FfnShimModule(nn.Module):
             raise ShimUnavailableError("xpool FFN shim does not yet support SGLang reduce-scatter FFN output")
         if gemm_output_zero_allocator is not None:
             raise ShimUnavailableError("xpool FFN shim does not yet support SGLang GEMM zero allocator output")
-        validate_hidden_states(hidden_states, expected_hidden_size=self.hidden_size)
+        if forward_batch is None:
+            raise ShimUnavailableError("xpool FFN shim requires a ForwardBatch to determine the forward mode")
         if self.instance_index < 0 or self.model_index < 0:
             raise ShimUnavailableError(
                 f"xpool FFN shim for {self.model_architecture} layer {self.layer_id} has no bound "
                 "instance/model identity; the xpool plugin must inject it after load"
             )
-        if forward_batch is None:
-            raise ShimUnavailableError("xpool FFN shim requires a ForwardBatch to determine the forward mode")
-        # Match by exact SGLang ForwardMode value, not by is_decode()/is_extend(): those
-        # predicates fold MIXED/SPLIT_PREFILL/DLLM_EXTEND/TARGET_VERIFY/DRAFT_EXTEND into
-        # "extend", but the xpool shim ABI only supports plain DECODE and EXTEND.
+        # Match by exact SGLang ForwardMode value, not by is_decode()/is_extend():
+        # those predicates fold MIXED/SPLIT_PREFILL/DLLM_EXTEND/TARGET_VERIFY/
+        # DRAFT_EXTEND into "extend", but the current xpool shim ABI only publishes
+        # plain DECODE and EXTEND descriptors.
         sglang_mode = forward_batch.forward_mode
         if sglang_mode is SglangForwardMode.DECODE:
             forward_mode = ForwardMode.DECODE
@@ -150,6 +152,7 @@ class FfnShimModule(nn.Module):
                 f"xpool FFN shim does not support SGLang forward mode {sglang_mode!r} "
                 "(only DECODE and EXTEND are supported)"
             )
+        validate_hidden_states(hidden_states, expected_hidden_size=self.hidden_size)
         return call_native_ffn_shim(self, hidden_states, forward_mode)
 
     def extra_repr(self) -> str:
@@ -232,7 +235,7 @@ def call_native_ffn_shim(
 
     try:
         native_op = torch.ops.xpool.ffn_shim
-    except (AttributeError, RuntimeError) as exc:
+    except (AttributeError, ImportError, OSError, RuntimeError) as exc:
         raise ShimUnavailableError(
             f"xpool native FFN shim op is not loaded for {shim.model_architecture} layer {shim.layer_id}"
         ) from exc

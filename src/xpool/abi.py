@@ -12,19 +12,19 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import ClassVar
 
-ABI_VERSION = 1
+ABI_VERSION = 2
 
 
 class ForwardMode(IntEnum):
     """SGLang forward modes accepted by the xpool FFN descriptor ABI.
 
     Attributes:
-        DECODE: Decode-mode FFN request for one scheduler decode step.
         EXTEND: Extend/prefill-mode FFN request for a contiguous prompt-token batch.
+        DECODE: Decode-mode FFN request for one scheduler decode step.
     """
 
-    DECODE = 1
-    EXTEND = 2
+    EXTEND = 1
+    DECODE = 2
 
 
 class TensorDType(IntEnum):

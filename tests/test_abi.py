@@ -5,8 +5,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from sglang.srt.model_executor.forward_batch_info import ForwardMode as SglangForwardMode
 
-from xpool.abi import DescriptorStatus, FfnRequestDescriptor, FfnResultDescriptor, ForwardMode, TensorDType
+from xpool.abi import ABI_VERSION, DescriptorStatus, FfnRequestDescriptor, FfnResultDescriptor, ForwardMode, TensorDType
 
 
 def test_ffn_request_descriptor_round_trip() -> None:
@@ -130,13 +131,13 @@ def test_ffn_result_descriptor_rejects_reserved_bits() -> None:
 def test_forward_mode_values_match_native_contract() -> None:
     """ForwardMode integers are the on-wire ABI values fed to the native op.
 
-    The SGLang shim forwards these ints straight to ``torch.ops.xpool.ffn_shim``,
-    so they must equal the C++ ``xpool::ForwardMode`` enum in ``abi.hpp`` and
-    never drift to a separate source of truth.
+    The SGLang shim forwards these ints straight to ``torch.ops.xpool.ffn_shim``.
+    They must equal the C++ ``xpool::ForwardMode`` enum in ``abi.hpp`` and the
+    corresponding SGLang values for the two modes represented in the xpool ABI.
     """
 
-    assert int(ForwardMode.DECODE) == 1
-    assert int(ForwardMode.EXTEND) == 2
+    assert int(ForwardMode.EXTEND) == int(SglangForwardMode.EXTEND) == 1
+    assert int(ForwardMode.DECODE) == int(SglangForwardMode.DECODE) == 2
 
 
 def test_native_header_size_parity(tmp_path: Path) -> None:
@@ -144,6 +145,7 @@ def test_native_header_size_parity(tmp_path: Path) -> None:
     if compiler is None:
         pytest.skip("c++ compiler is not available")
 
+    repo_root = Path(__file__).resolve().parents[1]
     source = tmp_path / "abi_size.cc"
     binary = tmp_path / "abi_size"
     source.write_text(
@@ -154,6 +156,7 @@ def test_native_header_size_parity(tmp_path: Path) -> None:
 int main() {
   std::cout << xpool::kFfnRequestDescriptorBytes << " "
             << xpool::kFfnResultDescriptorBytes << " "
+            << xpool::kAbiVersion << " "
             << static_cast<unsigned>(xpool::ForwardMode::kDecode) << " "
             << static_cast<unsigned>(xpool::ForwardMode::kExtend) << "\\n";
   return 0;
@@ -161,14 +164,17 @@ int main() {
 """.strip()
     )
     subprocess.run(
-        [compiler, "-std=c++20", "-Isrc/cext/include", str(source), "-o", str(binary)],
+        [compiler, "-std=c++20", f"-I{repo_root / 'src/cext/include'}", str(source), "-o", str(binary)],
         check=True,
+        capture_output=True,
         text=True,
+        timeout=10,
     )
 
-    output = subprocess.check_output([str(binary)], text=True).strip()
-    request_bytes, result_bytes, decode, extend = output.split()
+    output = subprocess.check_output([str(binary)], text=True, timeout=10).strip()
+    request_bytes, result_bytes, abi_version, decode, extend = output.split()
     assert int(request_bytes) == FfnRequestDescriptor.byte_size()
     assert int(result_bytes) == FfnResultDescriptor.byte_size()
+    assert int(abi_version) == ABI_VERSION
     assert int(decode) == int(ForwardMode.DECODE)
     assert int(extend) == int(ForwardMode.EXTEND)

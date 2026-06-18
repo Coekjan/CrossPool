@@ -103,25 +103,35 @@ def test_mps_health_monitor_survives_detector_exception() -> None:
     assert monitor.snapshot().healthy is False
 
 
-def test_mps_health_monitor_keeps_thread_reference_when_stop_times_out(caplog) -> None:
-    entered = threading.Event()
-    release = threading.Event()
+def test_mps_health_monitor_can_restart_after_stop_timeout(caplog) -> None:
+    first_entered = threading.Event()
+    first_release = threading.Event()
+    second_refreshed = threading.Event()
+    calls = 0
 
     def detector() -> MpsPreflight:
-        entered.set()
-        release.wait(timeout=1.0)
-        return _mps_status(healthy=True, checked_at=2.0)
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_entered.set()
+            first_release.wait(timeout=1.0)
+            return _mps_status(healthy=False, checked_at=2.0)
+        second_refreshed.set()
+        return _mps_status(healthy=True, checked_at=3.0)
 
     monitor = MpsHealthMonitor(interval_s=0.01, detector=detector, initial=_mps_status(healthy=True, checked_at=1.0))
 
     monitor.start()
-    assert entered.wait(timeout=1.0)
+    assert first_entered.wait(timeout=1.0)
     with caplog.at_level(logging.WARNING, logger="xpool.runtime.mps"):
         monitor.stop()
 
     assert "did not stop" in caplog.text
-    release.set()
+    monitor.start()
+    assert second_refreshed.wait(timeout=1.0)
+    first_release.set()
     monitor.stop()
+    assert monitor.snapshot().checked_at_unix_s == 3.0
 
 
 def _mps_status(*, healthy: bool, checked_at: float) -> MpsPreflight:

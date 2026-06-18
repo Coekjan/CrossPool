@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 import torch
+from sglang.srt.model_executor.forward_batch_info import ForwardMode as SglangForwardMode
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.models.deepseek_v2 import DeepseekV2MLP, DeepseekV2MoE
 from sglang.srt.plugins.hook_registry import HookType
@@ -16,6 +17,8 @@ from sglang_fakes import server_args as make_server_args
 from torch import nn
 from transformers import PretrainedConfig
 
+import xpool.config as config_module
+from xpool.config import AttentionKind, SglangModelMetadata
 from xpool.integrations.sglang.adapter import XpoolModelBinding, bind_model_instance, inject_shim_identity
 from xpool.integrations.sglang.models.deepseek_v2 import (
     DeepseekV2Adapter,
@@ -28,7 +31,6 @@ from xpool.integrations.sglang.shim import FfnLayerKind, FfnShimModule, ShimUnav
 
 def test_ffn_shim_module_has_no_parameters() -> None:
     shim = FfnShimModule(
-        model_architecture="DeepseekV2ForCausalLM",
         layer_id=3,
         hidden_size=2048,
         layer_kind=FfnLayerKind.SPARSE,
@@ -60,6 +62,16 @@ def test_deepseek_dense_shim_requires_layer_prefix() -> None:
             intermediate_size=8192,
             hidden_act="silu",
             prefix="model.decoder.mlp",
+        )
+
+
+def test_deepseek_dense_shim_rejects_auxiliary_layer_prefix() -> None:
+    with pytest.raises(ShimUnavailableError, match="cannot derive layer id"):
+        XpoolDeepseekV2MLP(
+            hidden_size=2048,
+            intermediate_size=8192,
+            hidden_act="silu",
+            prefix="model.draft.layers.0.mlp",
         )
 
 
@@ -123,6 +135,21 @@ def test_shim_forward_rejects_unsupported_sglang_fusion_paths() -> None:
         shim(hidden_states, should_allreduce_fusion=True)
     with pytest.raises(ShimUnavailableError, match="reduce-scatter"):
         shim(hidden_states, use_reduce_scatter=True)
+
+
+def test_shim_forward_rejects_idle_forward_mode() -> None:
+    shim = XpoolDeepseekV2MLP(
+        hidden_size=2048,
+        intermediate_size=8192,
+        hidden_act="silu",
+        prefix="model.layers.0.mlp",
+    )
+    shim.bind_identity(instance_index=0, model_index=0, model_architecture="DeepseekV2ForCausalLM")
+    hidden_states = torch.empty((0, 2048), dtype=torch.bfloat16)
+    forward_batch = type("FakeForwardBatch", (), {"forward_mode": SglangForwardMode.IDLE})()
+
+    with pytest.raises(ShimUnavailableError, match="forward mode"):
+        shim(hidden_states, forward_batch)
 
 
 def test_deepseek_adapter_declares_its_sglang_hooks() -> None:
@@ -232,6 +259,19 @@ def test_deepseek_model_binding_resolves_instance_from_config(
 ) -> None:
     model_path = tmp_path / "DeepSeek-V2-Lite-Chat"
     model_path.mkdir()
+    (model_path / "config.json").write_text(
+        """
+{
+  "model_type": "deepseek_v2",
+  "hidden_size": 2048,
+  "num_attention_heads": 16,
+  "num_key_value_heads": 2,
+  "intermediate_size": 8192,
+  "moe_intermediate_size": 8192
+}
+""".strip(),
+        encoding="utf-8",
+    )
     config_path = tmp_path / "xpool.toml"
     config_path.write_text(
         f"""
@@ -254,6 +294,18 @@ path = "{model_path}"
         encoding="utf-8",
     )
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
+    monkeypatch.setattr(
+        config_module,
+        "_load_sglang_model_metadata",
+        lambda _config_path, *, model_id: SglangModelMetadata(
+            family=model_id,
+            hidden_size=2048,
+            num_attention_heads=16,
+            num_key_value_heads=2,
+            attention_kind=AttentionKind.GQA,
+            physical_kv_lanes=2,
+        ),
+    )
     runner = runner_with_architecture("DeepseekV2ForCausalLM")
     runner.model_config.model_path = str(model_path)
 
@@ -294,6 +346,10 @@ def test_inject_shim_identity_binds_loaded_deepseek_shims() -> None:
     inject_shim_identity(as_model_runner(runner), binding)
 
     assert [(shim.instance_index, shim.model_index) for shim in iter_ffn_shims(model)] == [(2, 3), (2, 3)]
+    assert [shim.model_architecture for shim in iter_ffn_shims(model)] == [
+        "DeepseekV2ForCausalLM",
+        "DeepseekV2ForCausalLM",
+    ]
 
 
 def runner_with_architecture(
