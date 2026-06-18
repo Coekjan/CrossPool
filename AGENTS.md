@@ -24,9 +24,19 @@ Revise canonical sections in place as decisions change; do not keep competing
 old and new designs.
 
 Documentation, comments, identifiers, tests, and commit messages must use
-English. Use docstrings and inline comments only where they clarify ownership,
-device placement, synchronization, CUDA graph capture, NVSHMEM ordering, IPC,
-or failure behavior that is not obvious from the code.
+English. Public APIs must be well documented at the declaration site. For
+Python, public modules, classes, functions, methods, dataclass fields, Pydantic
+fields, and enum members need useful docstrings or field descriptions. Use
+Google-style docstrings with `Args`, `Returns`, `Raises`, preconditions,
+postconditions, and side effects where those sections apply. For C++ and CUDA,
+public namespaces, classes, structs, enum values, constants, functions, and
+fields need Doxygen-style `///` or `/** ... */` documentation. Public field
+documentation must explain meaning, units, ownership, lifecycle, and why the
+field exists.
+
+Use inline comments only where they clarify ownership, device placement,
+synchronization, CUDA graph capture, NVSHMEM ordering, IPC, or failure behavior
+that is not obvious from the code.
 
 ## Build Style
 
@@ -57,12 +67,15 @@ Python code style:
 - Lint with `uv run ruff check`.
 - Type-check with Astral ty using `uv run ty check`.
 - Prefer typed, explicit APIs and avoid broad `Any` or unexplained ignores.
+- Keep public Python documentation passing Ruff's public docstring checks.
 
 C++ and CUDA style:
 
 - Manage native builds with `CMakeLists.txt`; do not reintroduce `setup.py` as
   the primary native build system.
 - Format C++, CUDA, and headers with `clang-format`.
+- Keep public C++/CUDA documentation passing `doxygen Doxyfile`; Doxygen is a
+  repository development prerequisite.
 - Keep CUDA/NVSHMEM synchronization assumptions close to the code that depends
   on them.
 

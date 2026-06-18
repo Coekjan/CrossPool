@@ -8,7 +8,6 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 MARKERS = (
     "agents.md",
@@ -64,6 +63,11 @@ def main() -> int:
         help="Timestamp file used when --since is omitted.",
     )
     parser.add_argument("--limit", type=int, default=200, help="Maximum excerpts to print.")
+    parser.add_argument(
+        "--no-update-last",
+        action="store_true",
+        help="Print excerpts without updating the repo-level last timestamp file.",
+    )
     args = parser.parse_args()
 
     run_started = dt.datetime.now(dt.UTC)
@@ -99,6 +103,9 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    if args.no_update_last:
+        print(f"self-evolve last file not updated due to --no-update-last: {last_file}", file=sys.stderr)
+        return 0
     _write_last_file(last_file, run_started)
     print(f"updated self-evolve last file: {last_file}", file=sys.stderr)
     return 0
@@ -183,7 +190,7 @@ def _session_excerpt(line: str, since: dt.datetime) -> str | None:
     return text[:2000]
 
 
-def _record_time(record: dict[str, Any]) -> dt.datetime | None:
+def _record_time(record: dict[str, object]) -> dt.datetime | None:
     raw = record.get("timestamp")
     if not isinstance(raw, str):
         return None
@@ -194,7 +201,7 @@ def _record_time(record: dict[str, Any]) -> dt.datetime | None:
     return _to_utc(parsed)
 
 
-def _extract_text(record: dict[str, Any]) -> str | None:
+def _extract_text(record: dict[str, object]) -> str | None:
     record_type = record.get("type")
     payload = record.get("payload")
     if not isinstance(payload, dict):
@@ -219,10 +226,10 @@ def _extract_text(record: dict[str, Any]) -> str | None:
     return None
 
 
-def _collect_text(value: Any) -> str:
+def _collect_text(value: object) -> str:
     parts: list[str] = []
 
-    def visit(node: Any) -> None:
+    def visit(node: object) -> None:
         if isinstance(node, dict):
             for key in ("text", "input_text", "output_text", "message"):
                 value = node.get(key)

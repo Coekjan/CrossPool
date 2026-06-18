@@ -13,4 +13,3 @@ ffn_cuda_devices = [1]
 [[models]]
 id = "deepseek-v2-lite-chat"
 path = "/absolute/path/to/deepseek-ai/DeepSeek-V2-Lite-Chat"
-tp = 1

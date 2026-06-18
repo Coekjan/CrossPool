@@ -14,7 +14,12 @@ directory.
 
 1. Inspect the staged diff and current repo instructions that may be affected:
    `AGENTS.md`, `.codex/skills/`, and `.codex/agents/`.
-2. Read recent Codex session excerpts. The first run needs an explicit cutoff:
+2. Read recent Codex session excerpts. The main session may run the bundled
+   script because it owns repo-local state updates. A read-only delegated
+   reviewer should consume excerpts supplied by the main session, or run the
+   script only with `--no-update-last`.
+
+   The first main-session run needs an explicit cutoff:
 
    ```bash
    python3 scripts/summarize_sessions.py --since 2026-06-01
@@ -33,6 +38,12 @@ directory.
    records by their JSON `timestamp`. If the output limit is reached, the script
    exits without updating the last timestamp so unreviewed excerpts are not
    skipped.
+
+   Read-only review mode:
+
+   ```bash
+   python3 scripts/summarize_sessions.py --no-update-last
+   ```
 
 3. Extract only lessons that are durable beyond the current patch:
    user preferences, workflow rules, tool availability, validation standards,

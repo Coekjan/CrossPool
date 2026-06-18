@@ -27,7 +27,7 @@ dependencies = [
 xpool = "xpool.cli:main"
 
 [project.entry-points."sglang.srt.plugins"]
-xpool = "xpool.sglang_plugin:install"
+xpool = "xpool.integrations.sglang.plugin:install"
 
 [dependency-groups]
 dev = [
@@ -54,7 +54,14 @@ where = ["src"]
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+select = ["E", "F", "I", "ANN401", "D101", "D102", "D103", "D107", "D417"]
+
+[tool.ruff.lint.per-file-ignores]
+".codex/skills/**" = ["D101", "D102", "D103", "D107", "D417"]
+"tests/**" = ["D101", "D102", "D103", "D107", "D417"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.format]
 docstring-code-format = true

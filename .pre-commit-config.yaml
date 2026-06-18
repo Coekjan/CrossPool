@@ -33,6 +33,13 @@ repos:
         language: system
         types_or: [c, c++, cuda]
 
+      - id: doxygen
+        name: doxygen
+        entry: doxygen Doxyfile
+        language: system
+        files: ^(Doxyfile|src/cext/.*\.(c|cc|cpp|cu|cuh|h|hh|hpp))$
+        pass_filenames: false
+
       - id: pytest
         name: pytest
         entry: uv run pytest

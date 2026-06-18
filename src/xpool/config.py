@@ -16,6 +16,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ConfigSource(StrEnum):
+    """Configuration value source used by the xpool setting registry.
+
+    Attributes:
+        CLI: Value came from an explicit xpool CLI override.
+        CONFIG: Value came from the TOML config file.
+        DEFAULT: Value came from a registry default.
+    """
+
     CLI = "cli"
     CONFIG = "config"
     DEFAULT = "default"
@@ -37,11 +45,27 @@ class TopologyError(ConfigError):
 
 
 class DeviceRole(StrEnum):
+    """Exclusive role assigned to one CUDA device agent.
+
+    Attributes:
+        ATTENTION: Device hosts SGLang attention and the attention-side shim agent.
+        FFN: Device hosts xpool FFN execution.
+    """
+
     ATTENTION = "attention"
     FFN = "ffn"
 
 
 class AttentionKind(StrEnum):
+    """Attention topology kind derived from SGLang model metadata.
+
+    Attributes:
+        MLA: Multi-head latent attention, represented as one physical KV lane.
+        GQA: Grouped-query attention with fewer KV heads than query heads.
+        MHA: Multi-head attention with equal query and KV head counts.
+        MQA: Multi-query attention with one KV head.
+    """
+
     MLA = "mla"
     GQA = "gqa"
     MHA = "mha"
@@ -50,7 +74,16 @@ class AttentionKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class SglangModelMetadata:
-    """Model shape facts derived through SGLang's config resolution path."""
+    """Model shape facts derived through SGLang's config resolution path.
+
+    Attributes:
+        family: Hugging Face or SGLang model type used for diagnostics.
+        hidden_size: Hidden-state width consumed by each FFN shim.
+        num_attention_heads: Total query-head count before attention-side TP.
+        num_key_value_heads: Total KV-head count reported by SGLang.
+        attention_kind: Derived attention topology family.
+        physical_kv_lanes: Physical KV lanes used for xpool attention policy.
+    """
 
     family: str
     hidden_size: int
@@ -62,7 +95,18 @@ class SglangModelMetadata:
 
 @dataclass(frozen=True, slots=True)
 class ConfigSetting:
-    """Registry entry for one TOML, CLI, or defaulted setting."""
+    """Registry entry for one TOML, CLI, or defaulted setting.
+
+    Attributes:
+        name: Stable registry key used by CLI overrides and diagnostics.
+        config_path: TOML path for config-backed settings, or ``None`` for virtual settings.
+        parser: Parser name used to normalize raw source values.
+        allowed_sources: Sources allowed to provide this setting.
+        description: Human-readable setting purpose for generated registry output.
+        default: Default value used when ``DEFAULT`` is an allowed source.
+        required: Whether missing values are configuration errors.
+        cli: CLI flag name when the setting is overrideable from the command line.
+    """
 
     name: str
     config_path: tuple[str, ...] | None
@@ -75,26 +119,75 @@ class ConfigSetting:
 
     @property
     def has_default(self) -> bool:
+        """Return whether this setting may use its registry default.
+
+        Returns:
+            ``True`` when ``ConfigSource.DEFAULT`` is allowed for this setting.
+        """
+
         return ConfigSource.DEFAULT in self.allowed_sources
 
     @property
     def is_config_field(self) -> bool:
+        """Return whether this setting maps to a concrete TOML field.
+
+        Returns:
+            ``True`` when the setting has a non-wildcard config path that can be
+            populated into the resolved TOML payload.
+        """
+
         return self.config_path is not None and "*" not in self.config_path
 
     @property
     def is_required_config_path(self) -> bool:
+        """Return whether the setting's TOML path must be present.
+
+        Returns:
+            ``True`` when this setting is required and has a config path.
+        """
+
         return self.config_path is not None and self.required
 
 
 def parse_int(value: object) -> int:
+    """Parse a registry value as an integer.
+
+    Args:
+        value: Raw value from CLI, TOML, or the registry default.
+
+    Returns:
+        Parsed integer value.
+
+    Raises:
+        ValueError: If the value cannot be parsed by ``int``.
+    """
+
     return int(str(value).strip())
 
 
 def parse_str(value: object) -> str:
+    """Parse a registry value as a string.
+
+    Args:
+        value: Raw value from CLI, TOML, or the registry default.
+
+    Returns:
+        String representation of the value.
+    """
+
     return str(value)
 
 
 def parse_raw(value: object) -> object:
+    """Return a registry value without coercion.
+
+    Args:
+        value: Raw value from CLI, TOML, or the registry default.
+
+    Returns:
+        The original value object.
+    """
+
     return value
 
 
@@ -190,39 +283,58 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         required=True,
         description="Absolute local model path containing config.json.",
     ),
-    ConfigSetting(
-        name="model_tp",
-        config_path=("models", "*", "tp"),
-        parser="int",
-        allowed_sources=CONFIG_REQUIRED,
-        required=True,
-        description="FFN tensor-parallel degree requested by the model.",
-    ),
 )
 
 
 class DaemonConfig(BaseModel):
+    """Daemon control-plane bind settings from config, CLI, or defaults."""
+
     model_config = ConfigDict(extra="forbid")
 
-    host: str
-    port: int = Field(ge=1, le=65535)
+    host: str = Field(description="Host or interface address used by the daemon HTTP control plane.")
+    port: int = Field(ge=1, le=65535, description="TCP port used by the daemon HTTP control plane.")
 
 
 class SchedulerConfig(BaseModel):
+    """Conservative resource-concurrency limits enforced by device agents."""
+
     model_config = ConfigDict(extra="forbid")
 
-    attention_concurrency: int = Field(ge=1)
-    transport_concurrency: int = Field(ge=1)
+    attention_concurrency: int = Field(
+        ge=1,
+        description="Maximum number of concurrent attention owners per attention CUDA device.",
+    )
+    transport_concurrency: int = Field(
+        ge=1,
+        description="Maximum number of concurrent communication-slot owners per attention CUDA device.",
+    )
 
 
 class DevicesConfig(BaseModel):
+    """Role-local CUDA device lists supplied by TOML config."""
+
     model_config = ConfigDict(extra="forbid")
 
-    attention_cuda_devices: list[int] = Field(min_length=1)
-    ffn_cuda_devices: list[int] = Field(min_length=1)
+    attention_cuda_devices: list[int] = Field(
+        min_length=1,
+        description="CUDA device indices that host SGLang attention and attention-side xpool agents.",
+    )
+    ffn_cuda_devices: list[int] = Field(
+        min_length=1,
+        description="CUDA device indices that host xpool FFN execution agents.",
+    )
 
     @model_validator(mode="after")
     def validate_devices(self) -> "DevicesConfig":
+        """Reject duplicate or role-overlapping CUDA device lists.
+
+        Returns:
+            The validated device config.
+
+        Raises:
+            ValueError: If a CUDA device is duplicated or assigned to both roles.
+        """
+
         _validate_cuda_device_list(self.attention_cuda_devices, "devices.attention_cuda_devices")
         _validate_cuda_device_list(self.ffn_cuda_devices, "devices.ffn_cuda_devices")
         overlap = sorted(set(self.attention_cuda_devices) & set(self.ffn_cuda_devices))
@@ -232,14 +344,24 @@ class DevicesConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
+    """User-declared model served by one xpool-managed SGLang instance."""
+
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(min_length=1)
-    path: Path
-    tp: int = Field(ge=1)
+    id: str = Field(min_length=1, description="Full model instance id, for example deepseek-v2-lite-chat.")
+    path: Path = Field(description="Absolute local model path containing config.json.")
 
     @model_validator(mode="after")
     def validate_model_path(self) -> "ModelConfig":
+        """Normalize and validate the configured model path.
+
+        Returns:
+            The validated model config with ``~`` expanded.
+
+        Raises:
+            ValueError: If the configured path is not absolute.
+        """
+
         path = self.path.expanduser()
         if not path.is_absolute():
             raise ValueError(f"models[{self.id}].path must be absolute: {self.path}")
@@ -256,13 +378,19 @@ class DeviceAgentConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
-    cuda_device: int = Field(ge=0)
-    nvshmem_rank: int = Field(ge=0)
-    role: DeviceRole
+    id: str = Field(description="Stable device-agent id derived from the CUDA device index.")
+    cuda_device: int = Field(ge=0, description="CUDA device index owned by this device agent.")
+    nvshmem_rank: int = Field(ge=0, description="NVSHMEM rank assigned by role-local device declaration order.")
+    role: DeviceRole = Field(description="Exclusive runtime role hosted by this CUDA device.")
 
     @property
     def roles(self) -> list[DeviceRole]:
+        """Return this agent's role as a list for launch-plan compatibility.
+
+        Returns:
+            Single-item role list; one CUDA device may host only one xpool role.
+        """
+
         return [self.role]
 
 
@@ -271,12 +399,17 @@ class ModelInstanceConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
-    model_id: str
-    attention_cuda_devices: list[int] = Field(min_length=1)
-    ffn_agent_ids: list[str] = Field(min_length=1)
-    ffn_tp_size: int = Field(ge=1)
-    sglang_tp_size: int = Field(ge=1)
+    id: str = Field(description="SGLang instance id, equal to the configured model id in the first topology.")
+    model_id: str = Field(description="Configured model id served by this SGLang instance.")
+    attention_cuda_devices: list[int] = Field(
+        min_length=1,
+        description="Attention CUDA devices assigned to this SGLang instance.",
+    )
+    ffn_agent_ids: list[str] = Field(min_length=1, description="FFN device-agent ids used by this model.")
+    ffn_tp_size: int = Field(ge=1, description="FFN tensor-parallel degree derived from FFN device count.")
+    sglang_tp_size: int = Field(ge=1, description="SGLang attention tensor-parallel degree.")
+    instance_index: int = Field(ge=0, description="Integer SGLang instance index fed to the native shim ABI.")
+    model_index: int = Field(ge=0, description="Integer model index fed to the native shim ABI.")
 
 
 class ModelSpec(BaseModel):
@@ -284,17 +417,23 @@ class ModelSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    model_id: str
-    family: str
-    hidden_size: int = Field(ge=1)
-    num_attention_heads: int = Field(ge=1)
-    num_key_value_heads: int = Field(ge=1)
-    attention_kind: AttentionKind
-    physical_kv_lanes: int = Field(ge=1)
-    dense_intermediate_size: int | None = None
-    moe_intermediate_size: int | None = None
-    num_experts: int | None = None
-    raw_config_path: Path
+    model_id: str = Field(description="Configured model id whose config.json produced this metadata.")
+    family: str = Field(description="SGLang/Hugging Face model family string used for diagnostics.")
+    hidden_size: int = Field(ge=1, description="Hidden-state width consumed by each FFN shim call.")
+    num_attention_heads: int = Field(ge=1, description="Total query-head count reported by SGLang.")
+    num_key_value_heads: int = Field(ge=1, description="Total KV-head count reported by SGLang.")
+    attention_kind: AttentionKind = Field(description="Attention topology derived from SGLang metadata.")
+    physical_kv_lanes: int = Field(ge=1, description="Physical KV lanes used for attention policy derivation.")
+    dense_intermediate_size: int | None = Field(
+        default=None,
+        description="Dense FFN intermediate width from config.json, when present.",
+    )
+    moe_intermediate_size: int | None = Field(
+        default=None,
+        description="MoE expert intermediate width from config.json, when present.",
+    )
+    num_experts: int | None = Field(default=None, description="MoE routed expert count from config.json, if present.")
+    raw_config_path: Path = Field(description="Resolved config.json path used to derive this metadata.")
 
 
 class ParallelPolicy(BaseModel):
@@ -302,15 +441,15 @@ class ParallelPolicy(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    model_id: str
-    attention_kind: AttentionKind
-    sglang_tp_size: int = Field(ge=1)
-    sglang_dp_size: int = Field(ge=1)
-    attention_tp_size: int = Field(ge=1)
-    attention_dp_size: int = Field(ge=1)
-    ffn_tp_size: int = Field(ge=1)
-    physical_kv_lanes: int = Field(ge=1)
-    enable_dp_attention: bool
+    model_id: str = Field(description="Configured model id this policy applies to.")
+    attention_kind: AttentionKind = Field(description="Attention topology used by this policy.")
+    sglang_tp_size: int = Field(ge=1, description="SGLang attention tensor-parallel degree.")
+    sglang_dp_size: int = Field(ge=1, description="SGLang attention data-parallel degree.")
+    attention_tp_size: int = Field(ge=1, description="xpool attention tensor-parallel degree.")
+    attention_dp_size: int = Field(ge=1, description="xpool attention data-parallel degree.")
+    ffn_tp_size: int = Field(ge=1, description="FFN tensor-parallel degree derived from FFN devices.")
+    physical_kv_lanes: int = Field(ge=1, description="Physical KV lanes used to validate attention TP.")
+    enable_dp_attention: bool = Field(description="Whether attention data parallelism is active.")
 
 
 class ResolvedModelConfig(BaseModel):
@@ -318,11 +457,11 @@ class ResolvedModelConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
-    path: Path
-    ffn_agent_ids: list[str]
-    spec: ModelSpec
-    parallel_policy: ParallelPolicy
+    id: str = Field(description="Configured model id.")
+    path: Path = Field(description="Absolute local model path.")
+    ffn_agent_ids: list[str] = Field(description="FFN device-agent ids assigned to this model.")
+    spec: ModelSpec = Field(description="SGLang-derived model metadata.")
+    parallel_policy: ParallelPolicy = Field(description="Derived attention and FFN parallelism policy.")
 
 
 class ResolvedRuntimeConfig(BaseModel):
@@ -330,20 +469,22 @@ class ResolvedRuntimeConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    daemon: DaemonConfig
-    scheduler: SchedulerConfig
-    device_agents: list[DeviceAgentConfig]
-    sglang_instances: list[ModelInstanceConfig]
-    models: list[ResolvedModelConfig]
+    daemon: DaemonConfig = Field(description="Resolved daemon control-plane settings.")
+    scheduler: SchedulerConfig = Field(description="Resolved scheduler resource policy.")
+    device_agents: list[DeviceAgentConfig] = Field(description="Derived one-agent-per-CUDA-device launch view.")
+    sglang_instances: list[ModelInstanceConfig] = Field(description="Derived one-instance-per-model SGLang view.")
+    models: list[ResolvedModelConfig] = Field(description="Resolved models with metadata and parallel policy.")
 
 
 class XpoolConfig(BaseModel):
+    """Validated xpool TOML config plus derived runtime views."""
+
     model_config = ConfigDict(extra="forbid")
 
-    daemon: DaemonConfig
-    scheduler: SchedulerConfig
-    devices: DevicesConfig
-    models: list[ModelConfig] = Field(min_length=1)
+    daemon: DaemonConfig = Field(description="Daemon control-plane config.")
+    scheduler: SchedulerConfig = Field(description="Scheduler resource-concurrency config.")
+    devices: DevicesConfig = Field(description="Role-local CUDA device config.")
+    models: list[ModelConfig] = Field(min_length=1, description="Configured served model list.")
 
     @classmethod
     def from_file(
@@ -352,6 +493,23 @@ class XpoolConfig(BaseModel):
         *,
         cli_overrides: Mapping[str, object] | None = None,
     ) -> "XpoolConfig":
+        """Load and validate an xpool TOML file.
+
+        Args:
+            path: Path to the TOML config file.
+            cli_overrides: Optional CLI-derived setting overrides that take
+                precedence over TOML values.
+
+        Returns:
+            Validated config object with defaults and CLI overrides resolved.
+
+        Raises:
+            OSError: If the file cannot be opened.
+            tomllib.TOMLDecodeError: If the file is not valid TOML.
+            ConfigError: If registry resolution fails.
+            pydantic.ValidationError: If schema validation fails.
+        """
+
         config_path = Path(path)
         with config_path.open("rb") as config_file:
             payload = tomllib.load(config_file)
@@ -364,29 +522,84 @@ class XpoolConfig(BaseModel):
         *,
         cli_overrides: Mapping[str, object] | None = None,
     ) -> "XpoolConfig":
+        """Validate an in-memory config mapping.
+
+        Args:
+            payload: TOML-like mapping to validate. The mapping is deep-copied
+                before defaults or overrides are applied.
+            cli_overrides: Optional CLI-derived setting overrides that take
+                precedence over mapping values.
+
+        Returns:
+            Validated config object.
+
+        Raises:
+            ConfigError: If registry resolution fails.
+            pydantic.ValidationError: If schema validation fails.
+
+        Side Effects:
+            Does not mutate ``payload``.
+        """
+
         resolved = resolve_config_payload(payload, cli_overrides=cli_overrides)
         return cls.model_validate(resolved)
 
     @property
     def device_agents(self) -> list[DeviceAgentConfig]:
+        """Derive one device agent for every configured CUDA device.
+
+        Returns:
+            Device-agent placement list ordered by NVSHMEM rank.
+        """
+
         return derive_device_agents(self.devices)
 
     @property
     def sglang_instances(self) -> list[ModelInstanceConfig]:
+        """Derive one SGLang instance for every configured model.
+
+        Returns:
+            Instance placement list in model declaration order.
+        """
+
         return derive_model_instances(self)
+
+    @property
+    def model_index_by_path(self) -> dict[Path, int]:
+        """Map each model's resolved absolute path to its declaration-order index."""
+
+        return {model.path.resolve(): index for index, model in enumerate(self.models)}
 
     @model_validator(mode="after")
     def validate_references(self) -> "XpoolConfig":
+        """Reject duplicate model identities and paths.
+
+        Returns:
+            The validated config object.
+
+        Raises:
+            ValueError: If model ids or resolved model paths are duplicated.
+        """
+
         _require_unique([model.id for model in self.models], "model ids")
-        ffn_device_count = len(self.devices.ffn_cuda_devices)
-        for model in self.models:
-            if model.tp > ffn_device_count:
-                raise ValueError(
-                    f"model {model.id} requests tp={model.tp}, but only {ffn_device_count} FFN devices are configured"
-                )
+        _require_unique([model.path.resolve() for model in self.models], "model paths")
         return self
 
     def resolve_runtime(self) -> ResolvedRuntimeConfig:
+        """Build the full runtime view, including SGLang-derived model metadata.
+
+        Returns:
+            Runtime config with device agents, SGLang instances, model specs, and
+            derived parallel policies.
+
+        Raises:
+            ConfigError: If SGLang cannot resolve model metadata.
+            TopologyError: If derived attention or FFN parallelism is invalid.
+
+        Side Effects:
+            Reads each model's local ``config.json`` through SGLang's config path.
+        """
+
         device_agents = self.device_agents
         instances = self.sglang_instances
         models: list[ResolvedModelConfig] = []
@@ -395,7 +608,7 @@ class XpoolConfig(BaseModel):
             policy = derive_parallel_policy(
                 spec,
                 attention_device_count=len(self.devices.attention_cuda_devices),
-                ffn_tp_size=model.tp,
+                ffn_tp_size=len(self.devices.ffn_cuda_devices),
             )
             models.append(
                 ResolvedModelConfig(
@@ -421,14 +634,51 @@ def load_config(
     env: Mapping[str, str] | None = None,
     cli_overrides: Mapping[str, object] | None = None,
 ) -> XpoolConfig:
+    """Load xpool config from an explicit path or ``XPOOL_CONFIG``.
+
+    Args:
+        config_path: Explicit TOML config path. When provided, it takes
+            precedence over ``env["XPOOL_CONFIG"]``.
+        env: Environment mapping used to read ``XPOOL_CONFIG``. Defaults to
+            ``os.environ``.
+        cli_overrides: Optional CLI-derived setting overrides.
+
+    Returns:
+        Validated xpool config.
+
+    Raises:
+        MissingRequiredConfig: If no config path is provided by argument or env.
+        ConfigError: If registry resolution fails.
+        OSError: If the config file cannot be opened.
+    """
+
     effective_env = os.environ if env is None else env
     effective_path = config_path or effective_env.get("XPOOL_CONFIG")
     if effective_path is None:
-        raise MissingRequiredConfig("missing required config setting: config_path")
+        raise MissingRequiredConfig(
+            "xpool config path is required: set the XPOOL_CONFIG environment variable "
+            "(or pass --config). The SGLang plugin resolves its instance id from the "
+            "one-model-one-SGLang-instance mapping in this config."
+        )
     return XpoolConfig.from_file(effective_path, cli_overrides=cli_overrides)
 
 
 def load_model_spec(model_path: str | Path, *, model_id: str) -> ModelSpec:
+    """Load and derive model metadata for one configured model.
+
+    Args:
+        model_path: Absolute model directory or direct ``config.json`` path.
+        model_id: Configured model id used in diagnostics.
+
+    Returns:
+        Model metadata resolved through SGLang plus FFN shape hints from
+        ``config.json``.
+
+    Raises:
+        OSError: If ``config.json`` cannot be opened.
+        ConfigError: If model metadata cannot be derived safely.
+    """
+
     path = Path(model_path).expanduser()
     config_path = path if path.is_file() else path / "config.json"
     with config_path.open("r", encoding="utf-8") as config_file:
@@ -437,6 +687,20 @@ def load_model_spec(model_path: str | Path, *, model_id: str) -> ModelSpec:
 
 
 def parse_model_config(raw: Mapping[str, object], *, model_id: str, config_path: Path) -> ModelSpec:
+    """Derive xpool model metadata from raw config.json content.
+
+    Args:
+        raw: Parsed JSON mapping from a model ``config.json``.
+        model_id: Configured model id used in diagnostics.
+        config_path: Resolved path to the JSON file that produced ``raw``.
+
+    Returns:
+        xpool model metadata and FFN width hints.
+
+    Raises:
+        ConfigError: If SGLang metadata or raw integer fields are invalid.
+    """
+
     sglang = _validate_sglang_model_metadata(
         _load_sglang_model_metadata(config_path, model_id=model_id), model_id=model_id
     )
@@ -461,6 +725,20 @@ def derive_parallel_policy(
     attention_device_count: int,
     ffn_tp_size: int,
 ) -> ParallelPolicy:
+    """Derive attention and FFN parallelism policy for one model.
+
+    Args:
+        spec: SGLang-derived model metadata.
+        attention_device_count: Number of attention CUDA devices in config.
+        ffn_tp_size: FFN tensor-parallel degree derived from FFN device count.
+
+    Returns:
+        Derived role-local parallelism policy.
+
+    Raises:
+        TopologyError: If attention or FFN topology cannot be divided safely.
+    """
+
     if attention_device_count <= 0:
         raise TopologyError("attention_device_count must be positive")
     if ffn_tp_size <= 0:
@@ -487,6 +765,11 @@ def derive_parallel_policy(
         )
     _validate_ffn_tp_divisibility(spec, ffn_tp_size)
     attention_dp_size = attention_device_count // attention_tp_size
+    if attention_dp_size > 1:
+        raise TopologyError(
+            f"{spec.model_id}: attention data parallelism is not supported by the first xpool shim ABI; "
+            f"reduce attention CUDA devices to {attention_tp_size} or add DP-aware shim support"
+        )
     return ParallelPolicy(
         model_id=spec.model_id,
         attention_kind=spec.attention_kind,
@@ -496,11 +779,20 @@ def derive_parallel_policy(
         attention_dp_size=attention_dp_size,
         ffn_tp_size=ffn_tp_size,
         physical_kv_lanes=spec.physical_kv_lanes,
-        enable_dp_attention=attention_dp_size > 1,
+        enable_dp_attention=False,
     )
 
 
 def derive_device_agents(devices: DevicesConfig) -> list[DeviceAgentConfig]:
+    """Derive one xpool device agent for every configured CUDA device.
+
+    Args:
+        devices: Role-local CUDA device config.
+
+    Returns:
+        Device agents ordered by NVSHMEM rank, with all attention devices first.
+    """
+
     agents: list[DeviceAgentConfig] = []
     for nvshmem_rank, cuda_device in enumerate(devices.attention_cuda_devices + devices.ffn_cuda_devices):
         role = DeviceRole.ATTENTION if nvshmem_rank < len(devices.attention_cuda_devices) else DeviceRole.FFN
@@ -516,17 +808,42 @@ def derive_device_agents(devices: DevicesConfig) -> list[DeviceAgentConfig]:
 
 
 def derive_model_instances(config: XpoolConfig) -> list[ModelInstanceConfig]:
+    """Derive one SGLang instance per configured model.
+
+    Args:
+        config: Validated xpool config whose models and device lists should be
+            converted into launch-time SGLang instance metadata.
+
+    Returns:
+        SGLang instance placement list in model declaration order.
+
+    Preconditions:
+        ``config`` has already passed xpool schema validation, including
+        non-empty model and FFN device lists.
+
+    FFN device assignment is intentionally shared across models: every instance uses
+    the full FFN device-agent pool, so the FFN TP degree is derived from
+    ``devices.ffn_cuda_devices`` rather than from per-model placement knobs. FFN device
+    multiplexing is arbitrated at runtime by the device-agent scheduler, not by static
+    partitioning here. ``instance_index``/``model_index`` are the integer identities
+    (model declaration order) fed to the xpool FFN shim ABI; under the
+    one-model-one-SGLang-instance mapping they are equal, but kept distinct so a future
+    one-model-multi-instance topology can renumber instances independently.
+    """
+
     ffn_agents = [agent for agent in config.device_agents if agent.role is DeviceRole.FFN]
     return [
         ModelInstanceConfig(
             id=model.id,
             model_id=model.id,
             attention_cuda_devices=list(config.devices.attention_cuda_devices),
-            ffn_agent_ids=[agent.id for agent in ffn_agents[: model.tp]],
-            ffn_tp_size=model.tp,
+            ffn_agent_ids=[agent.id for agent in ffn_agents],
+            ffn_tp_size=len(ffn_agents),
             sglang_tp_size=len(config.devices.attention_cuda_devices),
+            instance_index=index,
+            model_index=index,
         )
-        for model in config.models
+        for index, model in enumerate(config.models)
     ]
 
 
@@ -535,6 +852,23 @@ def resolve_config_payload(
     *,
     cli_overrides: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
+    """Apply registry defaults and CLI overrides to a TOML-like payload.
+
+    Args:
+        payload: Config mapping parsed from TOML.
+        cli_overrides: Optional CLI-derived setting overrides.
+
+    Returns:
+        Deep-copied resolved payload ready for Pydantic validation.
+
+    Raises:
+        ConfigError: If a setting cannot be parsed or a nested override is invalid.
+        MissingRequiredConfig: If a required config path is absent or empty.
+
+    Side Effects:
+        Does not mutate ``payload``.
+    """
+
     resolved: dict[str, object] = deepcopy(dict(payload))
     effective_cli = cli_overrides or {}
     for setting in CONFIG_REGISTRY:
@@ -549,6 +883,12 @@ def resolve_config_payload(
 
 
 def config_registry_as_dict() -> list[dict[str, object]]:
+    """Render the config registry as JSON-serializable dictionaries.
+
+    Returns:
+        Registry entries with source, default, CLI, and description metadata.
+    """
+
     return [
         {
             "name": setting.name,

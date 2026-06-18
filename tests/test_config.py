@@ -65,7 +65,7 @@ def test_old_explicit_topology_fields_are_rejected() -> None:
             {
                 "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
                 "device_agents": [{"id": "gpu0", "cuda_device": 0, "nvshmem_rank": 0, "roles": ["attention"]}],
-                "models": [{"id": "m", "path": "/models/m", "tp": 1}],
+                "models": [{"id": "m", "path": "/models/m"}],
                 "sglang_instances": [{"id": "m", "model": "m"}],
             },
             cli_overrides={},
@@ -77,7 +77,7 @@ def test_model_metadata_fields_are_rejected_from_toml() -> None:
         XpoolConfig.from_mapping(
             {
                 "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
-                "models": [{"id": "m", "path": "/models/m", "tp": 1, "family": "dense", "hidden_size": 1}],
+                "models": [{"id": "m", "path": "/models/m", "family": "dense", "hidden_size": 1}],
             },
             cli_overrides={},
         )
@@ -88,7 +88,7 @@ def test_duplicate_and_overlapping_devices_are_rejected() -> None:
         XpoolConfig.from_mapping(
             {
                 "devices": {"attention_cuda_devices": [0, 0], "ffn_cuda_devices": [1]},
-                "models": [{"id": "m", "path": "/models/m", "tp": 1}],
+                "models": [{"id": "m", "path": "/models/m"}],
             },
             cli_overrides={},
         )
@@ -97,7 +97,21 @@ def test_duplicate_and_overlapping_devices_are_rejected() -> None:
         XpoolConfig.from_mapping(
             {
                 "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [0]},
-                "models": [{"id": "m", "path": "/models/m", "tp": 1}],
+                "models": [{"id": "m", "path": "/models/m"}],
+            },
+            cli_overrides={},
+        )
+
+
+def test_duplicate_model_paths_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="model paths must be unique"):
+        XpoolConfig.from_mapping(
+            {
+                "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "models": [
+                    {"id": "m0", "path": "/models/m"},
+                    {"id": "m1", "path": "/models/m"},
+                ],
             },
             cli_overrides={},
         )
@@ -131,7 +145,7 @@ def test_defaults_fill_missing_optional_sections() -> None:
     config = XpoolConfig.from_mapping(
         {
             "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
-            "models": [{"id": "m", "path": "/models/m", "tp": 1}],
+            "models": [{"id": "m", "path": "/models/m"}],
         },
         cli_overrides={},
     )
@@ -145,7 +159,7 @@ def test_defaults_fill_missing_optional_sections() -> None:
 def test_config_resolution_does_not_mutate_caller_mapping() -> None:
     payload: dict[str, object] = {
         "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
-        "models": [{"id": "m", "path": "/models/m", "tp": 1}],
+        "models": [{"id": "m", "path": "/models/m"}],
     }
     original = deepcopy(payload)
 
@@ -165,7 +179,7 @@ def test_missing_required_nested_field_fails() -> None:
         XpoolConfig.from_mapping(
             {
                 "devices": {"attention_cuda_devices": [0]},
-                "models": [{"id": "m", "path": "/models/m", "tp": 1}],
+                "models": [{"id": "m", "path": "/models/m"}],
             },
             cli_overrides={},
         )
@@ -181,7 +195,7 @@ def test_config_path_precedence_uses_cli_before_env(tmp_path: Path) -> None:
 
 
 def test_missing_config_path_fails() -> None:
-    with pytest.raises(MissingRequiredConfig, match="config_path"):
+    with pytest.raises(MissingRequiredConfig, match="XPOOL_CONFIG"):
         load_config(env={})
 
 
@@ -199,13 +213,54 @@ def test_model_path_must_be_absolute() -> None:
         XpoolConfig.from_mapping(
             {
                 "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
-                "models": [{"id": "m", "path": "relative/model", "tp": 1}],
+                "models": [{"id": "m", "path": "relative/model"}],
             },
             cli_overrides={},
         )
 
 
-def test_model_tp_may_select_ffn_agent_subset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ffn_tp_is_derived_from_full_ffn_device_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_sglang_metadata(
+        monkeypatch,
+        family="qwen2",
+        hidden_size=2048,
+        attention_heads=16,
+        kv_heads=2,
+        attention_kind=AttentionKind.GQA,
+        physical_kv_lanes=2,
+    )
+    model_dir = _write_model_config(
+        tmp_path / "qwen2",
+        {
+            "model_type": "qwen2",
+            "hidden_size": 2048,
+            "num_attention_heads": 16,
+            "num_key_value_heads": 2,
+            "intermediate_size": 11010,
+            "moe_intermediate_size": 1410,
+        },
+    )
+    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir))
+
+    runtime = config.resolve_runtime()
+    model = runtime.models[0]
+
+    assert [agent.id for agent in runtime.device_agents] == ["cuda0", "cuda1", "cuda2", "cuda3", "cuda4"]
+    assert model.spec.family == "qwen2"
+    assert model.spec.hidden_size == 2048
+    assert model.spec.attention_kind is AttentionKind.GQA
+    assert model.parallel_policy.sglang_tp_size == 2
+    assert model.parallel_policy.attention_tp_size == 2
+    assert model.parallel_policy.attention_dp_size == 1
+    assert model.parallel_policy.enable_dp_attention is False
+    assert model.parallel_policy.ffn_tp_size == 3
+    assert model.ffn_agent_ids == ["cuda2", "cuda3", "cuda4"]
+
+
+def test_attention_dp_is_rejected_until_shim_abi_supports_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _patch_sglang_metadata(
         monkeypatch,
         family="deepseek_v2",
@@ -225,25 +280,14 @@ def test_model_tp_may_select_ffn_agent_subset(tmp_path: Path, monkeypatch: pytes
             "qk_nope_head_dim": 128,
             "qk_rope_head_dim": 64,
             "v_head_dim": 128,
-            "intermediate_size": 11008,
-            "moe_intermediate_size": 1408,
+            "intermediate_size": 11010,
+            "moe_intermediate_size": 1410,
         },
     )
-    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir, tp=2))
+    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir))
 
-    runtime = config.resolve_runtime()
-    model = runtime.models[0]
-
-    assert [agent.id for agent in runtime.device_agents] == ["cuda0", "cuda1", "cuda2", "cuda3", "cuda4"]
-    assert model.spec.family == "deepseek_v2"
-    assert model.spec.hidden_size == 2048
-    assert model.spec.attention_kind is AttentionKind.MLA
-    assert model.parallel_policy.sglang_tp_size == 2
-    assert model.parallel_policy.attention_tp_size == 1
-    assert model.parallel_policy.attention_dp_size == 2
-    assert model.parallel_policy.enable_dp_attention is True
-    assert model.parallel_policy.ffn_tp_size == 2
-    assert model.ffn_agent_ids == ["cuda2", "cuda3"]
+    with pytest.raises(TopologyError, match="attention data parallelism is not supported"):
+        config.resolve_runtime()
 
 
 def test_gqa_attention_policy_is_derived_from_sglang_metadata(
@@ -266,10 +310,10 @@ def test_gqa_attention_policy_is_derived_from_sglang_metadata(
             "hidden_size": 4096,
             "num_attention_heads": 32,
             "num_key_value_heads": 4,
-            "intermediate_size": 11008,
+            "intermediate_size": 11010,
         },
     )
-    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir, tp=1))
+    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir))
 
     policy = config.resolve_runtime().models[0].parallel_policy
 
@@ -280,13 +324,13 @@ def test_gqa_attention_policy_is_derived_from_sglang_metadata(
     assert policy.attention_dp_size == 1
 
 
-def test_deepseek_v4_is_regular_mqa_when_sglang_reports_non_mla(
+def test_regular_mqa_when_sglang_reports_non_mla(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_sglang_metadata(
         monkeypatch,
-        family="deepseek_v4",
+        family="synthetic_mqa",
         hidden_size=4096,
         attention_heads=32,
         kv_heads=1,
@@ -294,17 +338,24 @@ def test_deepseek_v4_is_regular_mqa_when_sglang_reports_non_mla(
         physical_kv_lanes=1,
     )
     model_dir = _write_model_config(
-        tmp_path / "deepseek-v4",
+        tmp_path / "synthetic-mqa",
         {
-            "model_type": "deepseek_v4",
+            "model_type": "synthetic_mqa",
             "hidden_size": 4096,
             "num_attention_heads": 32,
             "num_key_value_heads": 1,
             "qk_rope_head_dim": 64,
-            "intermediate_size": 11008,
+            "intermediate_size": 11010,
         },
     )
-    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir, tp=1))
+    config = XpoolConfig.from_file(
+        _write_minimal_config(
+            tmp_path / "config",
+            model_path=model_dir,
+            attention_cuda_devices=(0,),
+            ffn_cuda_devices=(1, 2, 3),
+        )
+    )
 
     model = config.resolve_runtime().models[0]
 
@@ -333,17 +384,17 @@ def test_zero_kv_heads_from_sglang_metadata_fail_fast(
             "hidden_size": 4096,
             "num_attention_heads": 32,
             "num_key_value_heads": 0,
-            "intermediate_size": 11008,
+            "intermediate_size": 11010,
         },
     )
-    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir, tp=1))
+    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir))
 
     with pytest.raises(ConfigError, match="num_key_value_heads"):
         config.resolve_runtime()
 
 
-def test_model_tp_must_fit_configured_ffn_devices() -> None:
-    with pytest.raises(ValidationError, match="requests tp=4"):
+def test_model_tp_field_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="tp"):
         XpoolConfig.from_mapping(
             {
                 "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1, 2]},
@@ -373,10 +424,10 @@ def test_ffn_tp_divisibility_is_checked_during_runtime_resolution(
             "hidden_size": 4096,
             "num_attention_heads": 32,
             "num_key_value_heads": 4,
-            "intermediate_size": 3,
+            "intermediate_size": 4,
         },
     )
-    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir, tp=2))
+    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir))
 
     with pytest.raises(TopologyError, match="does not divide dense intermediate size"):
         config.resolve_runtime()
@@ -390,7 +441,8 @@ def _write_minimal_config(
     attention_concurrency: int = 1,
     transport_concurrency: int = 1,
     model_path: Path | None = None,
-    tp: int = 1,
+    attention_cuda_devices: tuple[int, ...] = (0, 1),
+    ffn_cuda_devices: tuple[int, ...] = (2, 3, 4),
 ) -> Path:
     if path.suffix != ".toml":
         path.mkdir(parents=True, exist_ok=True)
@@ -398,6 +450,8 @@ def _write_minimal_config(
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
     resolved_model_path = model_path or Path("/models/deepseek-v2-lite-chat")
+    attention_devices = ", ".join(str(device) for device in attention_cuda_devices)
+    ffn_devices = ", ".join(str(device) for device in ffn_cuda_devices)
     path.write_text(
         f"""
 [daemon]
@@ -409,13 +463,12 @@ attention_concurrency = {attention_concurrency}
 transport_concurrency = {transport_concurrency}
 
 [devices]
-attention_cuda_devices = [0, 1]
-ffn_cuda_devices = [2, 3, 4]
+attention_cuda_devices = [{attention_devices}]
+ffn_cuda_devices = [{ffn_devices}]
 
 [[models]]
 id = "deepseek-v2-lite-chat"
 path = "{resolved_model_path}"
-tp = {tp}
 """.strip(),
         encoding="utf-8",
     )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import subprocess
+import threading
 from types import SimpleNamespace
 
 from xpool.runtime import mps
@@ -78,6 +80,48 @@ def test_mps_health_monitor_refreshes_with_detector() -> None:
     assert monitor.snapshot().healthy is True
     assert monitor.refresh().healthy is False
     assert monitor.snapshot().checked_at_unix_s == 2.0
+
+
+def test_mps_health_monitor_survives_detector_exception() -> None:
+    calls = 0
+    refreshed = threading.Event()
+
+    def detector() -> MpsPreflight:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("temporary detector failure")
+        refreshed.set()
+        return _mps_status(healthy=False, checked_at=2.0)
+
+    monitor = MpsHealthMonitor(interval_s=0.01, detector=detector, initial=_mps_status(healthy=True, checked_at=1.0))
+
+    monitor.start()
+    assert refreshed.wait(timeout=1.0)
+    monitor.stop()
+
+    assert monitor.snapshot().healthy is False
+
+
+def test_mps_health_monitor_keeps_thread_reference_when_stop_times_out(caplog) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    def detector() -> MpsPreflight:
+        entered.set()
+        release.wait(timeout=1.0)
+        return _mps_status(healthy=True, checked_at=2.0)
+
+    monitor = MpsHealthMonitor(interval_s=0.01, detector=detector, initial=_mps_status(healthy=True, checked_at=1.0))
+
+    monitor.start()
+    assert entered.wait(timeout=1.0)
+    with caplog.at_level(logging.WARNING, logger="xpool.runtime.mps"):
+        monitor.stop()
+
+    assert "did not stop" in caplog.text
+    release.set()
+    monitor.stop()
 
 
 def _mps_status(*, healthy: bool, checked_at: float) -> MpsPreflight:

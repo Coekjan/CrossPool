@@ -4,24 +4,45 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Sequence
 
 import uvicorn
+from pydantic import ValidationError
 
-from xpool.config import load_config
+from xpool.config import ConfigError, load_config
 from xpool.daemon import create_app
 from xpool.device_agent import DeviceAgentLaunchPlan
 from xpool.runtime.mps import MpsHealthMonitor, MpsPreflight
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the xpool command-line entry point.
+
+    Args:
+        argv: Optional argument vector excluding the executable name. When
+            omitted, ``argparse`` reads process arguments from ``sys.argv``.
+
+    Returns:
+        Process-style exit code: ``0`` for success, ``1`` for unhealthy check
+        results, and ``2`` for CLI/config validation errors.
+
+    Side Effects:
+        May print JSON or validation errors, start a uvicorn daemon, or run MPS
+        preflight depending on the selected subcommand.
+    """
+
     parser = _parser()
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
         return 2
-    return args.handler(args)
+    try:
+        return args.handler(args)
+    except (ConfigError, ValidationError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
 
 def _run_daemon(args: argparse.Namespace) -> int:
@@ -38,7 +59,7 @@ def _run_daemon(args: argparse.Namespace) -> int:
                 sort_keys=True,
             )
         )
-        return 0
+        return 0 if mps.healthy else 1
 
     if not mps.healthy:
         raise SystemExit(f"MPS preflight failed: {mps.message}")
@@ -52,8 +73,9 @@ def _run_device_agent(args: argparse.Namespace) -> int:
     config = load_config(config_path=args.config, cli_overrides=_config_overrides(args))
     plan = DeviceAgentLaunchPlan.from_config(config)
     if args.check:
-        print(json.dumps(plan.model_dump(mode="json"), indent=2, sort_keys=True))
-        return 0
+        payload = plan.model_dump(mode="json")
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if plan.mps.healthy else 1
 
     raise SystemExit("xpool device-agent resident runtime is not implemented in the skeleton yet")
 

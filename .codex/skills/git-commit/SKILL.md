@@ -101,8 +101,11 @@ instruction conflicts. Before spawning it, the main session should invoke the
 repo-local `self-evolve` skill and supply or cite its session excerpts. Keep the
 self-evolve procedure in that skill rather than duplicating it here.
 
-The self-evolve subagent does not write memory or modify files on its own. The
-main Codex session decides which lessons qualify. For each accepted lesson:
+The self-evolve subagent does not write memory or modify files on its own. It
+should consume excerpts supplied by the main session; if it needs to run the
+bundled self-evolve scanner directly, it must use the scanner's non-mutating
+mode. The main Codex session decides which lessons qualify. For each accepted
+lesson:
 
 - If the lesson shows that user intent conflicts with `AGENTS.md`, the accepted
   repository design document, `.codex/skills/`, or `.codex/agents/`, update the
