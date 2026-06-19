@@ -260,7 +260,7 @@ def resolve_model_binding(model_runner: ModelRunner) -> XpoolModelBinding:
 
     model = config.models[index]
     instance = config.serving_instances[index]
-    spec = load_model_spec(model.path, model_id=model.id)
+    spec = load_model_spec(config.model_path_of(model.id), model_id=model.id)
     policy = derive_parallel_policy(
         spec,
         attention_device_count=len(config.devices.attention_cuda_devices),

@@ -66,7 +66,7 @@ def test_mla_attention_policy_rejects_implicit_attention_dp(
         physical_kv_lanes=1,
     )
     model_dir = write_model_config(
-        tmp_path / "deepseek-v2-lite-chat",
+        tmp_path / "deepseek-ai" / "DeepSeek-V2-Lite-Chat",
         {
             "model_type": "deepseek_v2",
             "hidden_size": 2048,
@@ -79,7 +79,7 @@ def test_mla_attention_policy_rejects_implicit_attention_dp(
             "moe_intermediate_size": 1410,
         },
     )
-    spec = load_model_spec(model_dir, model_id="deepseek-v2-lite-chat")
+    spec = load_model_spec(model_dir, model_id="deepseek-ai/DeepSeek-V2-Lite-Chat")
 
     with pytest.raises(TopologyError, match="attention data parallelism is not supported"):
         derive_parallel_policy(spec, attention_device_count=2, ffn_tp_size=1)

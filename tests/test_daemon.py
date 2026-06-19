@@ -23,11 +23,13 @@ def test_daemon_registration_flow() -> None:
     assert ready["ready"] is False
     assert ready["mps_healthy"] is True
     assert ready["missing_device_agents"] == ["cuda0", "cuda1"]
-    assert ready["missing_instances"] == ["deepseek-v2-lite-chat"]
+    assert ready["missing_instances"] == ["deepseek-ai/DeepSeek-V2-Lite-Chat"]
 
     config_view = _request(app, "GET", "/config").json()
     assert [agent["id"] for agent in config_view["derived"]["device_agents"]] == ["cuda0", "cuda1"]
-    assert [instance["id"] for instance in config_view["derived"]["serving_instances"]] == ["deepseek-v2-lite-chat"]
+    assert [instance["id"] for instance in config_view["derived"]["serving_instances"]] == [
+        "deepseek-ai/DeepSeek-V2-Lite-Chat"
+    ]
 
     agent_response = _request(
         app,
@@ -49,15 +51,15 @@ def test_daemon_registration_flow() -> None:
     assert ready["registered_device_agents"] == ["cuda0", "cuda1"]
     assert ready["registered_instances"] == []
     assert ready["missing_device_agents"] == []
-    assert ready["missing_instances"] == ["deepseek-v2-lite-chat"]
+    assert ready["missing_instances"] == ["deepseek-ai/DeepSeek-V2-Lite-Chat"]
 
     instance_response = _request(
         app,
         "PUT",
         "/instances/register",
         json={
-            "instance_id": "deepseek-v2-lite-chat",
-            "model_id": "deepseek-v2-lite-chat",
+            "instance_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
+            "model_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
             "attention_cuda_devices": [0],
             "pid": 2345,
         },
@@ -67,7 +69,7 @@ def test_daemon_registration_flow() -> None:
     ready = _request(app, "GET", "/ready").json()
     assert ready["ready"] is True
     assert ready["registered_device_agents"] == ["cuda0", "cuda1"]
-    assert ready["registered_instances"] == ["deepseek-v2-lite-chat"]
+    assert ready["registered_instances"] == ["deepseek-ai/DeepSeek-V2-Lite-Chat"]
     assert ready["missing_device_agents"] == []
     assert ready["missing_instances"] == []
 
@@ -76,8 +78,8 @@ def test_daemon_registration_flow() -> None:
         "PUT",
         "/instances/register",
         json={
-            "instance_id": "deepseek-v2-lite-chat",
-            "model_id": "deepseek-v2-lite-chat",
+            "instance_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
+            "model_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
             "attention_cuda_devices": [0],
             "pid": 9999,
         },
@@ -99,8 +101,8 @@ def test_daemon_replaces_stale_instance_registration() -> None:
         "PUT",
         "/instances/register",
         json={
-            "instance_id": "deepseek-v2-lite-chat",
-            "model_id": "deepseek-v2-lite-chat",
+            "instance_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
+            "model_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
             "attention_cuda_devices": [0],
             "pid": 1234,
         },
@@ -112,8 +114,8 @@ def test_daemon_replaces_stale_instance_registration() -> None:
         "PUT",
         "/instances/register",
         json={
-            "instance_id": "deepseek-v2-lite-chat",
-            "model_id": "deepseek-v2-lite-chat",
+            "instance_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
+            "model_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
             "attention_cuda_devices": [0],
             "pid": 9999,
         },
@@ -127,8 +129,8 @@ def test_daemon_replaces_stale_instance_registration() -> None:
         "PUT",
         "/instances/register",
         json={
-            "instance_id": "deepseek-v2-lite-chat",
-            "model_id": "deepseek-v2-lite-chat",
+            "instance_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
+            "model_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
             "attention_cuda_devices": [0],
             "pid": 9999,
         },
@@ -156,8 +158,8 @@ def test_daemon_ready_prunes_stale_registrations() -> None:
         "PUT",
         "/instances/register",
         json={
-            "instance_id": "deepseek-v2-lite-chat",
-            "model_id": "deepseek-v2-lite-chat",
+            "instance_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
+            "model_id": "deepseek-ai/DeepSeek-V2-Lite-Chat",
             "attention_cuda_devices": [0],
             "pid": 2345,
         },
@@ -170,8 +172,8 @@ def test_daemon_ready_prunes_stale_registrations() -> None:
 
     assert ready["ready"] is False
     assert ready["registered_instances"] == []
-    assert ready["stale_instances"] == ["deepseek-v2-lite-chat"]
-    assert ready["missing_instances"] == ["deepseek-v2-lite-chat"]
+    assert ready["stale_instances"] == ["deepseek-ai/DeepSeek-V2-Lite-Chat"]
+    assert ready["missing_instances"] == ["deepseek-ai/DeepSeek-V2-Lite-Chat"]
 
 
 def test_daemon_health_fails_when_mps_is_unhealthy() -> None:

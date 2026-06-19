@@ -207,7 +207,7 @@ adapter coverage and validation.
 ```bash
 uv run xpool daemon --config configs/xpool.example.toml --check
 uv run xpool device-agent --config configs/xpool.example.toml --check
-SGLANG_PLUGINS=xpool XPOOL_CONFIG=configs/xpool.example.toml uv run sglang serve ...
+UV_ENV_FILE=/path/to/xpool/.env uv run sglang serve ...
 ```
 
 The `--check` mode validates configuration without starting resident GPU work.
@@ -225,7 +225,8 @@ The repository configuration is TOML. It defines:
 - scheduler concurrency limits,
 - attention-side CUDA devices,
 - FFN-side CUDA devices,
-- target model id and absolute model path.
+- optional vendor model-base URI,
+- target model ids and optional absolute model-path overrides.
 
 It does not configure device agents, NVSHMEM ranks, serving instances, model
 family, hidden size, or attention topology directly. These are derived:
@@ -277,13 +278,35 @@ ffn_cuda_devices = [1]
 The two device lists must be non-empty, unique, and disjoint. A CUDA device may
 host only one xpool role.
 
-Each model entry uses a full model instance id and an absolute local path:
+The vendor section may define the shared local model-cache root:
+
+```toml
+[vendor]
+model_base_uri = "/absolute/path/to/models"
+```
+
+Each model entry uses a full `org/name` model id. When `models[].path` is
+omitted, xpool resolves the weight path as
+`vendor.model_base_uri / models[].id`:
 
 ```toml
 [[models]]
-id = "deepseek-v2-lite-chat"
-path = "/absolute/path/to/deepseek-ai/DeepSeek-V2-Lite-Chat"
+id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
 ```
+
+`models[].path` remains available as an explicit absolute local override for
+non-standard layouts or temporary experiments. A model entry must have either
+an explicit absolute `path` or a resolved `vendor.model_base_uri`.
+`vendor.model_base_uri` is config-file only; do not set it through `.env`.
+The config loader must not materialize a vendor-derived path back into
+`models[].path`; that field represents only the explicit model-entry override.
+`ModelConfig.path` remains the schema field, but direct `model.path` access is
+blocked so runtime code must call `XpoolConfig.model_path_of(model_id)`, which
+returns the explicit override first and otherwise derives
+`vendor.model_base_uri / model_id`. Local labs should point `.env` at an
+untracked `configs/dev.local.toml`, and `*.local.toml` files are ignored so
+host-specific device and model-cache paths do not leak into repository
+examples.
 
 Model entries do not carry tensor-parallel placement. `xpool.config` derives
 only static serving placement: the attention world size is
@@ -319,14 +342,18 @@ in this order:
 3. TOML config,
 4. registry defaults.
 
-Settings without a default must fail fast when none of their allowed sources
-provides a value. xpool deployment policy must not be controlled by arbitrary
-environment variables: every accepted `XPOOL_*` variable must appear in the
-registry with `ENV` in its allowed sources, and startup/config helpers warn when
-they see an unknown `XPOOL_*` variable. `XPOOL_CONFIG` is an env-backed
-bootstrap registry setting used before TOML can be loaded, not a runtime
-`XpoolConfig` field. `SGLANG_PLUGINS` belongs to SGLang's plugin loader and is
-documented in `.env.example`, not in xpool's config registry.
+Required settings without a default must fail fast when none of their allowed
+sources provides a value. Optional paired settings may be absent individually
+when their owning validator can prove the combined contract, such as
+`models[].path` and `vendor.model_base_uri`: each model must resolve to exactly
+one absolute local path, but either the model-specific override or the vendor
+model-cache root may provide it. xpool deployment policy must not be controlled
+by arbitrary environment variables: every accepted `XPOOL_*` variable must
+appear in the registry with `ENV` in its allowed sources, and startup/config
+helpers warn when they see an unknown `XPOOL_*` variable. `XPOOL_CONFIG` is an
+env-backed bootstrap registry setting used before TOML can be loaded, not a
+runtime `XpoolConfig` field. `SGLANG_PLUGINS` belongs to SGLang's plugin loader
+and is documented in `.env.example`, not in xpool's config registry.
 `XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK=1` is a development-only env source for
 `debug.enable_shim_loopback`; that field currently allows only `ENV` and
 `DEFAULT`, so TOML attempts to set it fail closed. It routes the Python FFN shim
@@ -394,8 +421,9 @@ guarantees.
 7. Prove single-GPU eager shim dispatch with a devkit loopback executor that
    performs a non-identity pairwise hidden-state 45-degree rotation through
    build-time `libxpool_cext.so` Torch ops.
-8. Prove CUDA graph capture/replay and SGLang piecewise CUDA graph compile-path
-   compatibility over the same debug loopback op.
+8. Prove the same debug loopback op under direct eager execution, direct CUDA
+   graph capture/replay, and isolated SGLang offline inference for eager,
+   decode full CUDA graph, and prefill piecewise CUDA graph modes.
 9. Implement the production `ffn_shim` publish/wait path with communication-slot
    ownership and replay-safe descriptor side effects.
 10. Prove one NVSHMEM rank per device agent transport with device-side progress.
@@ -437,10 +465,22 @@ until XPool defines a compiler contract for request publication,
 communication-slot ownership, stream/event ordering, device-agent progress, and
 replay-safe descriptor side effects.
 
-Current loopback validation covers true CUDA eager execution, true decode CUDA
-graph capture/replay, and SGLang piecewise CUDA graph prefill traceability via
-Meta tensors. A true CUDA piecewise CUDA graph prefill capture/replay test is a
-separate acceptance item before claiming production prefill graph support.
+Current loopback validation must cover three compatibility surfaces that SGLang
+uses together in normal high-performance serving:
+
+- eager execution,
+- decode full CUDA graph capture/replay,
+- prefill piecewise CUDA graph capture/replay.
+
+The debug loopback op should implement a non-identity pairwise 45-degree
+hidden-state rotation so tests can assert that the shim output is computed by
+the native op rather than accidentally returning the input. Unit tests may
+exercise the custom op directly, but SGLang readiness evidence must also include
+an isolated offline SGLang run that compares token ids from eager serving and
+the combined graph configuration on the same prompt and model weights. That E2E
+test must not add another SGLang plugin; if it needs to instrument SGLang for
+test observability, use process-local test patching such as a temporary
+`sitecustomize.py` or equivalent harness outside the production entry point.
 
 Daemon registration currently treats process ids as the liveness identity.
 Using `os.kill(pid, 0)` cannot distinguish PID reuse after a registered process

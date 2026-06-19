@@ -390,7 +390,7 @@ attention_cuda_devices = [0]
 ffn_cuda_devices = [1]
 
 [[models]]
-id = "deepseek-v2-lite-chat"
+id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
 path = "{model_path}"
 """,
         encoding="utf-8",
@@ -414,7 +414,7 @@ path = "{model_path}"
 
     binding = bind_model_instance(runner.as_model_runner())
 
-    assert binding.instance_id == "deepseek-v2-lite-chat"
+    assert binding.instance_id == "deepseek-ai/DeepSeek-V2-Lite-Chat"
     assert runner.xpool_model_binding == binding
 
 
@@ -438,8 +438,8 @@ def test_inject_shim_identity_binds_loaded_deepseek_shims() -> None:
     runner = runner_with_architecture("DeepseekV2ForCausalLM")
     runner.model = model
     binding = XpoolModelBinding(
-        instance_id="deepseek-v2-lite-chat",
-        model_path=Path("/models/deepseek-v2-lite-chat"),
+        instance_id="deepseek-ai/DeepSeek-V2-Lite-Chat",
+        model_path=Path("/models/deepseek-ai/DeepSeek-V2-Lite-Chat"),
         instance_index=2,
         model_index=3,
         sglang_tp_size=1,

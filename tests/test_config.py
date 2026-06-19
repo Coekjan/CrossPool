@@ -36,15 +36,20 @@ def test_example_config_loads_schema_only() -> None:
     assert config.debug.enable_shim_loopback is False
     assert config.scheduler.attention_concurrency == 1
     assert config.scheduler.transport_concurrency == 1
+    assert config.vendor.model_base_uri == Path("/absolute/path/to/models")
     assert config.devices.attention_cuda_devices == [0]
     assert config.devices.ffn_cuda_devices == [1]
     assert [(agent.id, agent.cuda_device, agent.nvshmem_rank, agent.role) for agent in config.device_agents] == [
         ("cuda0", 0, 0, DeviceRole.ATTENTION),
         ("cuda1", 1, 1, DeviceRole.FFN),
     ]
-    assert config.models[0].id == "deepseek-v2-lite-chat"
-    assert config.models[0].path.is_absolute()
-    assert config.serving_instances[0].id == "deepseek-v2-lite-chat"
+    assert config.models[0].id == "deepseek-ai/DeepSeek-V2-Lite-Chat"
+    with pytest.raises(AttributeError):
+        _ = config.models[0].path
+    assert config.model_path_of("deepseek-ai/DeepSeek-V2-Lite-Chat") == Path(
+        "/absolute/path/to/models/deepseek-ai/DeepSeek-V2-Lite-Chat"
+    )
+    assert config.serving_instances[0].id == "deepseek-ai/DeepSeek-V2-Lite-Chat"
     assert config.serving_instances[0].ffn_agent_ids == ["cuda1"]
 
 
@@ -162,18 +167,21 @@ def test_defaults_fill_missing_optional_sections() -> None:
     assert config.daemon.port == 9810
     assert config.scheduler.attention_concurrency == 1
     assert config.scheduler.transport_concurrency == 1
+    assert config.vendor.model_base_uri is None
 
 
 def test_config_resolution_does_not_mutate_caller_mapping() -> None:
     payload: dict[str, object] = {
         "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "vendor": {"model_base_uri": "/models"},
+        "models": [{"id": "m"}],
     }
     original = deepcopy(payload)
 
     config = XpoolConfig.from_mapping(payload, cli_overrides={"daemon_host": "from-cli"})
 
     assert config.daemon.host == "from-cli"
+    assert config.model_path_of("m") == Path("/models/m")
     assert payload == original
 
 
@@ -249,6 +257,9 @@ def test_registry_declares_process_env_settings() -> None:
     assert registry["debug_enable_shim_loopback"].env_var == "XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK"
     assert registry["debug_enable_shim_loopback"].allowed_sources == (ConfigSource.ENV, ConfigSource.DEFAULT)
     assert registry["debug_enable_shim_loopback"].path == ("debug", "enable_shim_loopback")
+    assert registry["vendor_model_base_uri"].env_var is None
+    assert registry["vendor_model_base_uri"].allowed_sources == (ConfigSource.CONFIG,)
+    assert registry["vendor_model_base_uri"].path == ("vendor", "model_base_uri")
 
 
 def test_env_source_parses_debug_loopback_flag() -> None:
@@ -315,6 +326,87 @@ def test_unknown_xpool_env_warns(caplog: pytest.LogCaptureFixture) -> None:
     assert "XPOOL_UNKNOWN" in caplog.text
 
 
+def test_vendor_model_base_uri_from_config_derives_model_path() -> None:
+    config = XpoolConfig.from_mapping(
+        {
+            "vendor": {"model_base_uri": "/models"},
+            "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "models": [{"id": "deepseek-ai/DeepSeek-V2-Lite-Chat"}],
+        }
+    )
+
+    assert config.vendor.model_base_uri == Path("/models")
+    assert config.model_path_of("deepseek-ai/DeepSeek-V2-Lite-Chat") == Path(
+        "/models/deepseek-ai/DeepSeek-V2-Lite-Chat"
+    )
+
+
+def test_vendor_model_base_uri_is_config_only(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="xpool.config"):
+        config = XpoolConfig.from_mapping(
+            {
+                "vendor": {"model_base_uri": "/models-from-config"},
+                "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "models": [{"id": "deepseek-ai/DeepSeek-V2-Lite-Chat"}],
+            },
+            env={"XPOOL_VENDOR_MODEL_BASE_URI": "/models-from-env"},
+        )
+
+    assert "XPOOL_VENDOR_MODEL_BASE_URI" in caplog.text
+    assert config.vendor.model_base_uri == Path("/models-from-config")
+    assert config.model_path_of("deepseek-ai/DeepSeek-V2-Lite-Chat") == Path(
+        "/models-from-config/deepseek-ai/DeepSeek-V2-Lite-Chat"
+    )
+
+
+def test_explicit_model_path_overrides_vendor_model_base_uri() -> None:
+    config = XpoolConfig.from_mapping(
+        {
+            "vendor": {"model_base_uri": "/models"},
+            "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "models": [{"id": "deepseek-ai/DeepSeek-V2-Lite-Chat", "path": "/custom/deepseek"}],
+        }
+    )
+
+    with pytest.raises(AttributeError):
+        _ = config.models[0].path
+    assert config.model_path_of("deepseek-ai/DeepSeek-V2-Lite-Chat") == Path("/custom/deepseek")
+
+
+def test_model_path_lookup_rejects_unknown_model_id() -> None:
+    config = XpoolConfig.from_mapping(
+        {
+            "vendor": {"model_base_uri": "/models"},
+            "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "models": [{"id": "deepseek-ai/DeepSeek-V2-Lite-Chat"}],
+        }
+    )
+
+    with pytest.raises(MissingRequiredConfig, match="unknown configured model id"):
+        config.model_path_of("deepseek-ai/Unknown")
+
+
+def test_model_path_or_vendor_model_base_uri_is_required() -> None:
+    with pytest.raises(ValidationError, match="vendor.model_base_uri"):
+        XpoolConfig.from_mapping(
+            {
+                "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "models": [{"id": "deepseek-ai/DeepSeek-V2-Lite-Chat"}],
+            }
+        )
+
+
+def test_vendor_model_base_uri_must_be_absolute() -> None:
+    with pytest.raises(ValidationError, match="vendor.model_base_uri must be absolute"):
+        XpoolConfig.from_mapping(
+            {
+                "vendor": {"model_base_uri": "relative/models"},
+                "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "models": [{"id": "deepseek-ai/DeepSeek-V2-Lite-Chat"}],
+            }
+        )
+
+
 def test_init_global_config_warns_once_for_unknown_xpool_env(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -372,7 +464,7 @@ def _write_minimal_config(
         path = path / "xpool.toml"
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
-    resolved_model_path = model_path or Path("/models/deepseek-v2-lite-chat")
+    resolved_model_path = model_path or Path("/models/deepseek-ai/DeepSeek-V2-Lite-Chat")
     attention_devices = ", ".join(str(device) for device in attention_cuda_devices)
     ffn_devices = ", ".join(str(device) for device in ffn_cuda_devices)
     path.write_text(
@@ -390,7 +482,7 @@ attention_cuda_devices = [{attention_devices}]
 ffn_cuda_devices = [{ffn_devices}]
 
 [[models]]
-id = "deepseek-v2-lite-chat"
+id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
 path = "{resolved_model_path}"
 """.strip(),
         encoding="utf-8",

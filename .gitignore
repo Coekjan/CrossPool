@@ -22,3 +22,5 @@ dist/
 .agents/
 
 .codex/self-evolve-last.txt
+
+*.local.toml

@@ -115,6 +115,13 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Development-only switch that routes FFN shim calls to the debug loopback op.",
     ),
     ConfigSetting(
+        name="vendor_model_base_uri",
+        path=("vendor", "model_base_uri"),
+        parser="str",
+        allowed_sources=(ConfigSource.CONFIG,),
+        description="Absolute local model-cache root used to resolve model ids such as org/name into weight paths.",
+    ),
+    ConfigSetting(
         name="daemon_host",
         path=("daemon", "host"),
         parser="str",
@@ -190,15 +197,14 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="str",
         allowed_sources=CONFIG_REQUIRED,
         required=True,
-        description="Full model instance id, for example deepseek-v2-lite-chat.",
+        description="Full model id, for example deepseek-ai/DeepSeek-V2-Lite-Chat.",
     ),
     ConfigSetting(
         name="model_path",
         path=("models", "*", "path"),
         parser="str",
         allowed_sources=CONFIG_REQUIRED,
-        required=True,
-        description="Absolute local model path containing config.json.",
+        description="Optional absolute local model path override containing config.json.",
     ),
 )
 
@@ -270,12 +276,32 @@ class ModelConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(min_length=1, description="Full model instance id, for example deepseek-v2-lite-chat.")
-    path: Path = Field(description="Absolute local model path containing config.json.")
+    id: str = Field(min_length=1, description="Full model id, for example deepseek-ai/DeepSeek-V2-Lite-Chat.")
+    path: Path | None = Field(
+        default=None,
+        description="Optional absolute local model path override containing config.json.",
+    )
+
+    def __getattribute__(self, name: str) -> object:
+        """Reject direct access to the model path override.
+
+        Args:
+            name: Attribute name requested by the caller.
+
+        Returns:
+            Non-path attribute value.
+
+        Raises:
+            AttributeError: If a caller tries to read ``path`` directly.
+        """
+
+        if name == "path":
+            raise AttributeError("model paths must be resolved through XpoolConfig.model_path_of(model_id)")
+        return super().__getattribute__(name)
 
     @model_validator(mode="after")
     def validate_model_path(self) -> "ModelConfig":
-        """Normalize and validate the configured model path.
+        """Normalize and validate the optional configured model path.
 
         Returns:
             The validated model config with ``~`` expanded.
@@ -284,9 +310,12 @@ class ModelConfig(BaseModel):
             ValueError: If the configured path is not absolute.
         """
 
-        path = self.path.expanduser()
+        model_path = object.__getattribute__(self, "path")
+        if model_path is None:
+            return self
+        path = model_path.expanduser()
         if not path.is_absolute():
-            raise ValueError(f"models[{self.id}].path must be absolute: {self.path}")
+            raise ValueError(f"models[{self.id}].path must be absolute: {model_path}")
         self.path = path
         return self
 
@@ -345,6 +374,36 @@ class DebugConfig(BaseModel):
     )
 
 
+class VendorConfig(BaseModel):
+    """Vendor model-root settings used to resolve configured model ids."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_base_uri: Path | None = Field(
+        default=None,
+        description="Absolute local model-cache root prepended to model ids when models[].path is omitted.",
+    )
+
+    @model_validator(mode="after")
+    def validate_model_base_uri(self) -> "VendorConfig":
+        """Normalize and validate the optional vendor model-cache root.
+
+        Returns:
+            The validated vendor config.
+
+        Raises:
+            ValueError: If the configured model-cache root is a relative local path.
+        """
+
+        if self.model_base_uri is None:
+            return self
+        model_base_uri = self.model_base_uri.expanduser()
+        if not model_base_uri.is_absolute():
+            raise ValueError(f"vendor.model_base_uri must be absolute: {self.model_base_uri}")
+        self.model_base_uri = model_base_uri
+        return self
+
+
 class XpoolConfig(BaseModel):
     """Validated xpool TOML config plus derived runtime views."""
 
@@ -353,6 +412,7 @@ class XpoolConfig(BaseModel):
     daemon: DaemonConfig = Field(description="Daemon control-plane config.")
     scheduler: SchedulerConfig = Field(description="Scheduler resource-concurrency config.")
     debug: DebugConfig = Field(description="Debug-only runtime switches.")
+    vendor: VendorConfig = Field(default_factory=VendorConfig, description="Vendor model-root settings.")
     devices: DevicesConfig = Field(description="Role-local CUDA device config.")
     models: list[ModelConfig] = Field(min_length=1, description="Configured served model list.")
 
@@ -440,7 +500,6 @@ class XpoolConfig(BaseModel):
             if source is not None:
                 _set_nested(resolved, setting.path, value)
 
-        _validate_required_config_paths(resolved)
         return cls.model_validate(resolved)
 
     @property
@@ -492,7 +551,36 @@ class XpoolConfig(BaseModel):
     def model_index_by_path(self) -> dict[Path, int]:
         """Map each model's resolved absolute path to its declaration-order index."""
 
-        return {model.path.resolve(): index for index, model in enumerate(self.models)}
+        return {self.model_path_of(model.id).resolve(): index for index, model in enumerate(self.models)}
+
+    def model_path_of(self, model_id: str) -> Path:
+        """Return the resolved absolute local path for a configured model.
+
+        Args:
+            model_id: Full configured model id, for example
+                ``deepseek-ai/DeepSeek-V2-Lite-Chat``.
+
+        Returns:
+            Explicit ``models[].path`` when present; otherwise
+            ``vendor.model_base_uri / model_id``.
+
+        Raises:
+            MissingRequiredConfig: If ``model_id`` is not configured, or if the
+                model has no explicit path and no vendor model base URI.
+        """
+
+        for model in self.models:
+            if model.id != model_id:
+                continue
+            model_path = object.__getattribute__(model, "path")
+            if model_path is not None:
+                return model_path
+            if self.vendor.model_base_uri is None:
+                raise MissingRequiredConfig(
+                    f"missing required model path for {model_id}: set models[].path or vendor.model_base_uri"
+                )
+            return self.vendor.model_base_uri / model.id
+        raise MissingRequiredConfig(f"unknown configured model id: {model_id}")
 
     @model_validator(mode="after")
     def validate_references(self) -> "XpoolConfig":
@@ -506,7 +594,7 @@ class XpoolConfig(BaseModel):
         """
 
         _require_unique([model.id for model in self.models], "model ids")
-        _require_unique([model.path.resolve() for model in self.models], "model paths")
+        _require_unique([self.model_path_of(model.id).resolve() for model in self.models], "model paths")
         return self
 
 
@@ -638,37 +726,6 @@ def _parse_setting(setting: ConfigSetting, value: object) -> object:
             return str(value)
         case _:
             raise ConfigError(f"unknown parser for {setting.name}: {setting.parser}")
-
-
-def _validate_required_config_paths(payload: Mapping[str, object]) -> None:
-    for setting in CONFIG_REGISTRY:
-        if setting.path is None or not setting.required:
-            continue
-        path = setting.path
-        if "*" in path:
-            _validate_required_wildcard_path(payload, setting)
-            continue
-        found, value = _get_nested(payload, path)
-        if not found or value is None or value == "" or value == []:
-            raise MissingRequiredConfig(f"missing required config setting: {setting.name}")
-
-
-def _validate_required_wildcard_path(payload: Mapping[str, object], setting: ConfigSetting) -> None:
-    path = setting.path or ()
-    wildcard_index = path.index("*")
-    collection_path = path[:wildcard_index]
-    item_path = path[wildcard_index + 1 :]
-    found, collection = _get_nested(payload, collection_path)
-    if not found or not isinstance(collection, list):
-        raise MissingRequiredConfig(f"missing required config setting: {'.'.join(collection_path)}")
-    for index, item in enumerate(collection):
-        if not isinstance(item, Mapping):
-            raise MissingRequiredConfig(f"missing required config setting: {'.'.join(collection_path)}[{index}]")
-        found, value = _get_nested(cast(Mapping[str, object], item), item_path)
-        if not found or value is None or value == "" or value == []:
-            raise MissingRequiredConfig(
-                f"missing required config setting: {'.'.join(collection_path)}[{index}].{'.'.join(item_path)}"
-            )
 
 
 def _get_nested(payload: Mapping[str, object], path: tuple[str, ...]) -> tuple[bool, object]:

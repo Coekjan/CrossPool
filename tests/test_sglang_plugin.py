@@ -189,7 +189,7 @@ def test_model_runner_hook_delegates_to_matching_adapters(tmp_path: Path, monkey
     assert events == ["validate_before_load", "bind_runtime", "original", "validate_after_load"]
     binding = runner.xpool_model_binding
     assert binding is not None
-    assert binding.instance_id == "deepseek-v2-lite-chat"
+    assert binding.instance_id == "deepseek-ai/DeepSeek-V2-Lite-Chat"
     assert binding.sglang_tp_size == 1
     assert binding.sglang_dp_size == 1
 
@@ -232,11 +232,11 @@ attention_cuda_devices = [0]
 ffn_cuda_devices = [1]
 
 [[models]]
-id = "deepseek-v2-lite-chat"
+id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
 path = "{model_path}"
 
 [[models]]
-id = "broken-unrelated-model"
+id = "deepseek-ai/Broken-Unrelated-Model"
 path = "{unrelated_model_path}"
 """.strip(),
         encoding="utf-8",
@@ -245,7 +245,7 @@ path = "{unrelated_model_path}"
 
     def fake_sglang_metadata(config_path: Path, *, model_id: str) -> SglangModelMetadata:
         assert config_path == model_path / "config.json"
-        assert model_id == "deepseek-v2-lite-chat"
+        assert model_id == "deepseek-ai/DeepSeek-V2-Lite-Chat"
         return SglangModelMetadata(
             family=model_id,
             hidden_size=2048,
@@ -268,7 +268,7 @@ path = "{unrelated_model_path}"
     assert result == "loaded"
     assert events == ["validate_before_load", "bind_runtime", "original", "validate_after_load"]
     assert runner.xpool_model_binding is not None
-    assert runner.xpool_model_binding.instance_id == "deepseek-v2-lite-chat"
+    assert runner.xpool_model_binding.instance_id == "deepseek-ai/DeepSeek-V2-Lite-Chat"
 
 
 def test_model_runner_hook_rejects_configured_model_without_matching_adapter(
@@ -543,7 +543,7 @@ attention_cuda_devices = [{attention_devices}]
 ffn_cuda_devices = [{ffn_devices}]
 
 [[models]]
-id = "deepseek-v2-lite-chat"
+id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
 path = "{resolved_model_path}"
 """.strip(),
         encoding="utf-8",
