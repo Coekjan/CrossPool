@@ -13,6 +13,7 @@ from pydantic import BaseModel
 PUBLIC_MODULE_NAMES = (
     "xpool.abi",
     "xpool.config",
+    "xpool.cext",
     "xpool.daemon",
     "xpool.device_agent",
     "xpool.runtime.mps",
@@ -22,6 +23,7 @@ PUBLIC_MODULE_NAMES = (
     "xpool.integrations.sglang.registry",
     "xpool.integrations.sglang.server_args",
     "xpool.integrations.sglang.shim",
+    "xpool.integrations.sglang.topology",
 )
 
 

@@ -11,6 +11,7 @@ from sglang.srt.model_executor.forward_batch_info import ForwardMode as SglangFo
 from torch import nn
 
 from xpool.abi import ForwardMode
+from xpool.config import get_global_config
 
 
 class ShimUnavailableError(RuntimeError):
@@ -97,11 +98,13 @@ class FfnShimModule(nn.Module):
         use_reduce_scatter: bool = False,
         gemm_output_zero_allocator: object | None = None,
     ) -> torch.Tensor:
-        """Forward hidden states through the native xpool FFN shim op.
+        """Forward hidden states through the configured xpool FFN shim op.
 
         Args:
-            hidden_states: Contiguous CUDA tensor with shape
-                ``[num_tokens, hidden_size]``.
+            hidden_states: Tensor with shape ``[num_tokens, hidden_size]``. The
+                selected Torch dispatcher op validates backend, contiguity, and
+                dtype. Debug loopback supports CUDA tensors for execution and
+                Meta tensors for dispatcher tracing.
             forward_batch: SGLang forward-batch metadata used to derive the
                 exact xpool forward mode.
             should_allreduce_fusion: SGLang all-reduce fusion flag. Must be
@@ -112,17 +115,28 @@ class FfnShimModule(nn.Module):
                 absent because the shim owns native output placement.
 
         Returns:
-            Output CUDA tensor with the same shape and dtype as ``hidden_states``.
+            Output tensor returned by the selected Torch dispatcher op. The
+            debug loopback op returns a tensor with the same shape, dtype, and
+            device as ``hidden_states``; the production op currently fails
+            closed because descriptor publication is not implemented yet.
 
         Raises:
-            ShimUnavailableError: If the shim is unbound, receives unsupported
-                SGLang runtime modes, or cannot call the native op.
+            ShimUnavailableError: If the shim is unbound or receives unsupported
+                SGLang runtime modes before dispatcher invocation.
+            AttributeError: If the expected ``torch.ops.xpool`` operator is not
+                registered in the current process.
+            RuntimeError: Propagated from the selected native dispatcher op,
+                including the intentionally unimplemented production
+                ``ffn_shim`` route and loopback contract violations.
 
         Side Effects:
-            Dispatches to a separately registered ``torch.ops.xpool.ffn_shim``
-            implementation when one is loaded. This Python skeleton does not
-            implement descriptor publication itself; the eventual native op must
-            own that work and remain CUDA graph safe.
+            Dispatches directly through ``torch.ops.xpool.ffn_shim`` by default
+            or ``torch.ops.xpool.ffn_shim_loopback`` when the process-global
+            xpool config has ``debug.enable_shim_loopback`` enabled. The xpool
+            SGLang plugin loads and preflights the C extension and global config
+            during startup. This Python layer intentionally avoids native-loader
+            locks, package-resource lookup, and exception translation so SGLang
+            piecewise CUDA graph can trace the shim as a custom Torch op.
         """
 
         if should_allreduce_fusion:
@@ -143,17 +157,28 @@ class FfnShimModule(nn.Module):
         # DRAFT_EXTEND into "extend", but the current xpool shim ABI only publishes
         # plain DECODE and EXTEND descriptors.
         sglang_mode = forward_batch.forward_mode
-        if sglang_mode is SglangForwardMode.DECODE:
-            forward_mode = ForwardMode.DECODE
-        elif sglang_mode is SglangForwardMode.EXTEND:
-            forward_mode = ForwardMode.EXTEND
-        else:
-            raise ShimUnavailableError(
-                f"xpool FFN shim does not support SGLang forward mode {sglang_mode!r} "
-                "(only DECODE and EXTEND are supported)"
-            )
+        match sglang_mode:
+            case _ if sglang_mode is SglangForwardMode.DECODE:
+                forward_mode = ForwardMode.DECODE
+            case _ if sglang_mode is SglangForwardMode.EXTEND:
+                forward_mode = ForwardMode.EXTEND
+            case _:
+                raise ShimUnavailableError(
+                    f"xpool FFN shim does not support SGLang forward mode {sglang_mode!r} "
+                    "(only DECODE and EXTEND are supported)"
+                )
         validate_hidden_states(hidden_states, expected_hidden_size=self.hidden_size)
-        return call_native_ffn_shim(self, hidden_states, forward_mode)
+        if get_global_config().debug.enable_shim_loopback:
+            native_ffn_shim = torch.ops.xpool.ffn_shim_loopback
+        else:
+            native_ffn_shim = torch.ops.xpool.ffn_shim
+        return native_ffn_shim(
+            hidden_states,
+            int(self.instance_index),
+            int(self.model_index),
+            int(self.layer_id),
+            int(forward_mode),
+        )
 
     def extra_repr(self) -> str:
         """Return a concise module representation for SGLang model dumps.
@@ -184,15 +209,15 @@ def iter_ffn_shims(module: nn.Module) -> Iterator[FfnShimModule]:
 
 
 def validate_hidden_states(hidden_states: torch.Tensor, *, expected_hidden_size: int) -> None:
-    """Validate the tensor contract required by the native FFN shim.
+    """Validate the tensor contract known only to the Python model adapter.
 
     Args:
         hidden_states: Candidate hidden-state tensor passed by SGLang.
         expected_hidden_size: Hidden dimension declared by the model adapter.
 
     Raises:
-        ShimUnavailableError: If the tensor is not 2D, CUDA-backed, contiguous,
-            supported dtype, or the hidden dimension does not match.
+        ShimUnavailableError: If the tensor is not 2D or the hidden dimension
+            does not match the model adapter.
     """
 
     if hidden_states.dim() != 2:
@@ -201,49 +226,3 @@ def validate_hidden_states(hidden_states: torch.Tensor, *, expected_hidden_size:
         raise ShimUnavailableError(
             f"xpool FFN shim expected hidden size {expected_hidden_size}, got {hidden_states.shape[1]}"
         )
-    if not hidden_states.is_cuda:
-        raise ShimUnavailableError("xpool FFN shim expects a CUDA tensor")
-    if not hidden_states.is_contiguous():
-        raise ShimUnavailableError("xpool FFN shim expects a contiguous hidden-state tensor")
-    if hidden_states.dtype not in (torch.bfloat16, torch.float16, torch.float32):
-        raise ShimUnavailableError(f"xpool FFN shim does not support dtype {hidden_states.dtype}")
-
-
-def call_native_ffn_shim(
-    shim: FfnShimModule,
-    hidden_states: torch.Tensor,
-    forward_mode: ForwardMode,
-) -> torch.Tensor:
-    """Call the registered native FFN shim op.
-
-    Args:
-        shim: Bound FFN shim module carrying instance, model, and layer identity.
-        hidden_states: Validated CUDA hidden-state tensor.
-        forward_mode: xpool ABI forward mode derived from SGLang metadata.
-
-    Returns:
-        Native op output tensor.
-
-    Raises:
-        ShimUnavailableError: If ``torch.ops.xpool.ffn_shim`` is not registered.
-
-    Side Effects:
-        Enters the registered native extension op. In the completed runtime that
-        op is responsible for publishing descriptors and waiting in eager or CUDA
-        graph replay contexts; this Python layer only validates and forwards the call.
-    """
-
-    try:
-        native_op = torch.ops.xpool.ffn_shim
-    except (AttributeError, ImportError, OSError, RuntimeError) as exc:
-        raise ShimUnavailableError(
-            f"xpool native FFN shim op is not loaded for {shim.model_architecture} layer {shim.layer_id}"
-        ) from exc
-
-    return native_op(
-        hidden_states,
-        int(shim.instance_index),
-        int(shim.model_index),
-        int(shim.layer_id),
-        int(forward_mode),
-    )

@@ -8,17 +8,17 @@
 /// every field below documents its producer, consumer, unit, and stability
 /// expectation. Cross-process tensor references are arena offsets, not raw CUDA
 /// virtual addresses, because CUDA IPC mappings may use different addresses in
-/// the SGLang instance and in the local device agent.
+/// the producer process and in the local device agent.
 
 #include <cstdint>
 
-/// Native xpool ABI symbols shared by the SGLang shim and device-agent runtime.
+/// Native xpool ABI symbols shared by shim frontends and device-agent runtime.
 namespace xpool {
 
 /// Version stamped into every descriptor so incompatible producers fail closed.
-inline constexpr std::uint32_t kAbiVersion = 2;
+inline constexpr std::uint32_t kAbiVersion = 3;
 
-/// SGLang forward mode values accepted by the first xpool FFN shim ABI.
+/// Runtime forward mode values accepted by the first xpool FFN shim ABI.
 enum class ForwardMode : std::uint32_t {
   /// Extend/prefill-mode FFN request for a contiguous prompt-token batch.
   kExtend = 1,
@@ -58,7 +58,7 @@ struct alignas(8) FfnRequestDescriptor {
   std::uint32_t descriptor_bytes;
   /// Monotonic lane sequence used to distinguish graph replays and stale slots.
   std::uint64_t sequence;
-  /// Integer SGLang instance index from xpool config declaration order.
+  /// Integer runtime instance index from xpool config declaration order.
   std::uint32_t instance_id;
   /// Integer model index selecting the FFN weight set on the executor side.
   std::uint32_t model_id;

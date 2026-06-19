@@ -230,18 +230,18 @@ def resolve_model_binding(model_runner: ModelRunner) -> XpoolModelBinding:
         Runtime identity binding for the matched configured model.
 
     Raises:
-        ConfigError: If xpool config loading, model metadata loading, or
+        ConfigError: If the process-global xpool config is not initialized or
             parallel-policy derivation fails.
-        OSError: If the xpool config file or matched model ``config.json``
-            cannot be opened.
+        OSError: If the matched model ``config.json`` cannot be opened.
         TopologyError: If the matched model metadata is incompatible with the
             configured attention/FFN device topology.
         RuntimeError: If xpool config has no model entry for the SGLang model path.
 
     Side Effects:
-        Loads xpool config and resolves only the matched model's metadata
-        through SGLang so the plugin path performs topology validation without
-        coupling this instance to unrelated configured models.
+        Reads the process-global xpool config and resolves only the matched
+        model's metadata through SGLang so the plugin path performs topology
+        validation without coupling this instance to unrelated configured
+        models.
 
     The xpool plugin is fail-closed: once installed in an SGLang process, the loaded
     model must be declared in ``XPOOL_CONFIG`` so every FFN shim receives a stable
@@ -249,16 +249,17 @@ def resolve_model_binding(model_runner: ModelRunner) -> XpoolModelBinding:
     error.
     """
 
-    from xpool.config import derive_parallel_policy, load_config, load_model_spec
+    from xpool.config import get_global_config
+    from xpool.integrations.sglang.topology import derive_parallel_policy, load_model_spec
 
     model_path = Path(model_runner.model_config.model_path).expanduser().resolve()
-    config = load_config()
+    config = get_global_config()
     index = config.model_index_by_path.get(model_path)
     if index is None:
         raise RuntimeError(f"xpool config has no model entry for SGLang model path {model_path}")
 
     model = config.models[index]
-    instance = config.sglang_instances[index]
+    instance = config.serving_instances[index]
     spec = load_model_spec(model.path, model_id=model.id)
     policy = derive_parallel_policy(
         spec,
@@ -287,8 +288,9 @@ def bind_model_instance(model_runner: ModelRunner, binding: XpoolModelBinding | 
         Attached runtime identity binding.
 
     Raises:
-        ConfigError: If xpool config loading or runtime resolution fails.
-        OSError: If the xpool config file cannot be opened.
+        ConfigError: If the process-global xpool config is not initialized or
+            runtime resolution fails.
+        OSError: If the matched model ``config.json`` cannot be opened.
         RuntimeError: If the SGLang model path is not declared in xpool config.
 
     Side Effects:

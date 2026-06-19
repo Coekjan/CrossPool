@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 from xpool.runtime import mps
@@ -132,6 +133,30 @@ def test_mps_health_monitor_can_restart_after_stop_timeout(caplog) -> None:
     first_release.set()
     monitor.stop()
     assert monitor.snapshot().checked_at_unix_s == 3.0
+
+
+def test_mps_health_monitor_tolerates_overlapping_start_stop() -> None:
+    errors: list[BaseException] = []
+    monitor = MpsHealthMonitor(
+        interval_s=0.001,
+        detector=lambda: _mps_status(healthy=True, checked_at=2.0),
+        initial=_mps_status(healthy=True, checked_at=1.0),
+    )
+
+    def cycle_monitor() -> None:
+        for _index in range(20):
+            try:
+                monitor.start()
+                monitor.stop()
+            except BaseException as exc:
+                errors.append(exc)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        tuple(executor.map(lambda _index: cycle_monitor(), range(4)))
+
+    monitor.start()
+    monitor.stop()
+    assert errors == []
 
 
 def _mps_status(*, healthy: bool, checked_at: float) -> MpsPreflight:

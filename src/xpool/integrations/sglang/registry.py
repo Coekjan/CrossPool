@@ -22,38 +22,42 @@ def sglang_model_adapters() -> tuple[SglangModelAdapter, ...]:
     return discover_sglang_model_adapters(MODELS_PACKAGE)
 
 
-def discover_sglang_model_adapters(package_name: str) -> tuple[SglangModelAdapter, ...]:
+def discover_sglang_model_adapters(package_name: str, *, strict: bool = True) -> tuple[SglangModelAdapter, ...]:
     """Discover and instantiate SGLang model adapters from a package.
 
     Args:
         package_name: Importable package containing model adapter modules.
+        strict: Whether child module import failures should abort discovery.
 
     Returns:
         Stable, name-validated adapter instances.
 
     Raises:
         ImportError: If the package itself cannot be imported.
-        RuntimeError: If an adapter cannot be constructed or duplicates a name.
+        RuntimeError: If an adapter module cannot be imported in strict mode,
+            or if an adapter cannot be constructed or duplicates a name.
     """
 
     adapters: list[SglangModelAdapter] = []
-    for module in iter_model_modules(package_name):
+    for module in iter_model_modules(package_name, strict=strict):
         for adapter_class in adapter_classes_in_module(module):
             adapters.append(instantiate_adapter(adapter_class))
     return sort_and_validate_adapters(adapters)
 
 
-def iter_model_modules(package_name: str) -> tuple[ModuleType, ...]:
+def iter_model_modules(package_name: str, *, strict: bool = True) -> tuple[ModuleType, ...]:
     """Import non-private model adapter modules from a package tree.
 
     Args:
         package_name: Importable package whose children should be scanned recursively.
+        strict: Whether child import failures should abort discovery.
 
     Returns:
         Imported module objects for non-private children and subpackages.
 
     Raises:
         ImportError: If the package itself cannot be imported.
+        RuntimeError: If a child module cannot be imported in strict mode.
     """
 
     package = importlib.import_module(package_name)
@@ -70,6 +74,8 @@ def iter_model_modules(package_name: str) -> tuple[ModuleType, ...]:
         try:
             modules.append(importlib.import_module(module_info.name))
         except Exception as exc:
+            if strict:
+                raise RuntimeError(f"failed to import SGLang adapter module {module_info.name}: {exc}") from exc
             LOGGER.warning(
                 "Skipping SGLang adapter module %s after import failure: %s",
                 module_info.name,

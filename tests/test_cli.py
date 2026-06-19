@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 
 import pytest
 
+import xpool.config as config_module
 from xpool.cli import main
 from xpool.runtime.mps import MpsPreflight
+
+
+@pytest.fixture(autouse=True)
+def reset_global_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(config_module, "_global_config", None)
+    yield
+    monkeypatch.setattr(config_module, "_global_config", None)
 
 
 def test_daemon_check_uses_cli_override(monkeypatch, capsys) -> None:
@@ -84,6 +93,28 @@ path = "/models/m"
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "overlapping devices" in captured.err
+
+
+def test_missing_config_file_returns_cli_error(tmp_path, capsys) -> None:
+    missing_path = tmp_path / "missing.toml"
+
+    assert main(["daemon", "--config", str(missing_path), "--check"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "No such file" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_malformed_config_file_returns_cli_error(tmp_path, capsys) -> None:
+    config_path = tmp_path / "malformed.toml"
+    config_path.write_text("[daemon\n", encoding="utf-8")
+
+    assert main(["daemon", "--config", str(config_path), "--check"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
 
 
 def test_config_registry_is_not_public_cli(capsys) -> None:

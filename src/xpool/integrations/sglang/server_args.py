@@ -58,6 +58,8 @@ SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (
     ServerArgRule("Expert Distribution Recorder", lambda args: args.expert_distribution_recorder_mode is None),
     ServerArgRule("Two-Batch Overlap", lambda args: not args.enable_two_batch_overlap),
     ServerArgRule("Single-Batch Overlap", lambda args: not args.enable_single_batch_overlap),
+    ServerArgRule("Torch Compile", lambda args: not args.enable_torch_compile),
+    ServerArgRule("Piecewise CUDA Graph Compiler", lambda args: args.piecewise_cuda_graph_compiler == "eager"),
     ServerArgRule("Mixed Chunked Prefill", lambda args: not args.enable_mixed_chunk),
     ServerArgRule("DP Attention", lambda args: not args.enable_dp_attention),
     ServerArgRule("Attention TP Input Scattering", lambda args: not args.enable_attn_tp_input_scattered),

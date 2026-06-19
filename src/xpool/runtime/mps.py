@@ -208,7 +208,7 @@ class MpsHealthMonitor:
                 daemon=True,
             )
             self._thread = thread
-        thread.start()
+            thread.start()
 
     def stop(self) -> None:
         """Stop the background MPS health refresh thread.

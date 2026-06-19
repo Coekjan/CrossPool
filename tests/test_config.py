@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
+import logging
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import cast
@@ -13,22 +13,27 @@ from pydantic import ValidationError
 import xpool.config as config_module
 from xpool.config import (
     CONFIG_REGISTRY,
-    AttentionKind,
     ConfigError,
     ConfigSource,
     DeviceRole,
     MissingRequiredConfig,
-    SglangModelMetadata,
-    TopologyError,
     XpoolConfig,
-    config_registry_as_dict,
-    load_config,
+    get_global_config,
+    init_global_config,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_global_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(config_module, "_global_config", None)
+    yield
+    monkeypatch.setattr(config_module, "_global_config", None)
 
 
 def test_example_config_loads_schema_only() -> None:
     config = XpoolConfig.from_file(Path("configs/xpool.example.toml"))
 
+    assert config.debug.enable_shim_loopback is False
     assert config.scheduler.attention_concurrency == 1
     assert config.scheduler.transport_concurrency == 1
     assert config.devices.attention_cuda_devices == [0]
@@ -39,8 +44,8 @@ def test_example_config_loads_schema_only() -> None:
     ]
     assert config.models[0].id == "deepseek-v2-lite-chat"
     assert config.models[0].path.is_absolute()
-    assert config.sglang_instances[0].id == "deepseek-v2-lite-chat"
-    assert config.sglang_instances[0].ffn_agent_ids == ["cuda1"]
+    assert config.serving_instances[0].id == "deepseek-v2-lite-chat"
+    assert config.serving_instances[0].ffn_agent_ids == ["cuda1"]
 
 
 def test_example_config_covers_required_schema_paths() -> None:
@@ -52,8 +57,8 @@ def test_example_config_covers_required_schema_paths() -> None:
         for setting in CONFIG_REGISTRY
         if setting.required
         and ConfigSource.CONFIG in setting.allowed_sources
-        and setting.config_path is not None
-        and not _has_required_path(payload, setting.config_path)
+        and setting.path is not None
+        and not _has_required_path(payload, setting.path)
     ]
 
     assert missing == []
@@ -117,7 +122,9 @@ def test_duplicate_model_paths_are_rejected() -> None:
         )
 
 
-def test_cli_config_default_precedence_without_config_field_env(tmp_path: Path) -> None:
+def test_cli_config_default_precedence_without_config_field_env(
+    tmp_path: Path,
+) -> None:
     config_path = _write_minimal_config(
         tmp_path,
         daemon_host="from-config",
@@ -126,7 +133,7 @@ def test_cli_config_default_precedence_without_config_field_env(tmp_path: Path) 
         transport_concurrency=1,
     )
 
-    config = load_config(
+    config = init_global_config(
         config_path=config_path,
         env={"XPOOL_CONFIG": "ignored-when-config-path-is-explicit"},
         cli_overrides={
@@ -150,6 +157,7 @@ def test_defaults_fill_missing_optional_sections() -> None:
         cli_overrides={},
     )
 
+    assert config.debug.enable_shim_loopback is False
     assert config.daemon.host == "127.0.0.1"
     assert config.daemon.port == 9810
     assert config.scheduler.attention_concurrency == 1
@@ -185,27 +193,145 @@ def test_missing_required_nested_field_fails() -> None:
         )
 
 
-def test_config_path_precedence_uses_cli_before_env(tmp_path: Path) -> None:
+def test_config_path_precedence_uses_cli_before_env(
+    tmp_path: Path,
+) -> None:
     env_config = _write_minimal_config(tmp_path / "env", daemon_host="from-env-config")
     cli_config = _write_minimal_config(tmp_path / "cli", daemon_host="from-cli-config")
 
-    config = load_config(config_path=cli_config, env={"XPOOL_CONFIG": str(env_config)})
+    config = init_global_config(config_path=cli_config, env={"XPOOL_CONFIG": str(env_config)})
 
     assert config.daemon.host == "from-cli-config"
 
 
 def test_missing_config_path_fails() -> None:
     with pytest.raises(MissingRequiredConfig, match="XPOOL_CONFIG"):
-        load_config(env={})
+        init_global_config(env={})
 
 
-def test_registry_has_no_env_only_settings() -> None:
-    registry = {item["name"]: item for item in config_registry_as_dict()}
+def test_global_config_access_is_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config_module, "_global_config", None)
+    with pytest.raises(MissingRequiredConfig, match="global config"):
+        get_global_config()
 
-    assert "config_path" not in registry
+    config = XpoolConfig.from_mapping(
+        {
+            "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "models": [{"id": "m", "path": "/models/m"}],
+        }
+    )
+
+    assert init_global_config(config=config) is config
+    assert get_global_config() is config
+
+
+def test_init_global_config_rejects_mixed_injection_inputs() -> None:
+    config = XpoolConfig.from_mapping(
+        {
+            "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "models": [{"id": "m", "path": "/models/m"}],
+        }
+    )
+
+    with pytest.raises(ConfigError, match="cannot be combined"):
+        init_global_config(config=config, env={})
+
+
+def test_registry_declares_process_env_settings() -> None:
+    registry = {setting.name: setting for setting in CONFIG_REGISTRY}
+
     assert "sglang_plugins" not in registry
     assert "preflight_require_mps" not in registry
     assert "capture_decode_buckets" not in registry
+    assert registry["config_path"].env_var == "XPOOL_CONFIG"
+    assert registry["config_path"].allowed_sources == (ConfigSource.CLI, ConfigSource.ENV)
+    assert registry["config_path"].path is None
+    assert registry["debug_enable_shim_loopback"].env_var == "XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK"
+    assert registry["debug_enable_shim_loopback"].allowed_sources == (ConfigSource.ENV, ConfigSource.DEFAULT)
+    assert registry["debug_enable_shim_loopback"].path == ("debug", "enable_shim_loopback")
+
+
+def test_env_source_parses_debug_loopback_flag() -> None:
+    payload = {
+        "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "models": [{"id": "m", "path": "/models/m"}],
+    }
+    enabled = XpoolConfig.from_mapping(payload, env={"XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK": "1"})
+    disabled = XpoolConfig.from_mapping(payload, env={})
+    explicitly_disabled = XpoolConfig.from_mapping(payload, env={"XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK": "0"})
+
+    assert enabled.debug.enable_shim_loopback is True
+    assert disabled.debug.enable_shim_loopback is False
+    assert explicitly_disabled.debug.enable_shim_loopback is False
+
+
+def test_env_source_rejects_invalid_debug_loopback_flag() -> None:
+    with pytest.raises(ConfigError, match="boolean flag"):
+        XpoolConfig.from_mapping(
+            {
+                "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "models": [{"id": "m", "path": "/models/m"}],
+            },
+            env={"XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK": "true"},
+        )
+
+
+def test_int_source_rejects_invalid_integer() -> None:
+    with pytest.raises(ConfigError, match="expected integer config value for daemon_port"):
+        XpoolConfig.from_mapping(
+            {
+                "daemon": {"port": "not-an-int"},
+                "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "models": [{"id": "m", "path": "/models/m"}],
+            },
+        )
+
+
+def test_debug_loopback_cannot_be_set_from_toml() -> None:
+    with pytest.raises(ConfigError, match="debug_enable_shim_loopback"):
+        XpoolConfig.from_mapping(
+            {
+                "debug": {"enable_shim_loopback": True},
+                "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "models": [{"id": "m", "path": "/models/m"}],
+            },
+        )
+
+
+def test_unknown_xpool_env_warns(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="xpool.config"):
+        config = XpoolConfig.from_mapping(
+            {
+                "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "models": [{"id": "m", "path": "/models/m"}],
+            },
+            env={
+                "XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK": "0",
+                "XPOOL_UNKNOWN": "1",
+            },
+        )
+
+    assert config.debug.enable_shim_loopback is False
+    assert "XPOOL_UNKNOWN" in caplog.text
+
+
+def test_init_global_config_warns_once_for_unknown_xpool_env(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config_path = _write_minimal_config(tmp_path)
+
+    with caplog.at_level(logging.WARNING, logger="xpool.config"):
+        init_global_config(
+            config_path=config_path,
+            env={
+                "XPOOL_CONFIG": str(config_path),
+                "XPOOL_UNKNOWN": "1",
+            },
+        )
+
+    messages = [record.message for record in caplog.records if "XPOOL_UNKNOWN" in record.message]
+    assert messages == ["Ignoring unknown xpool environment variables: XPOOL_UNKNOWN"]
 
 
 def test_model_path_must_be_absolute() -> None:
@@ -219,181 +345,6 @@ def test_model_path_must_be_absolute() -> None:
         )
 
 
-def test_ffn_tp_is_derived_from_full_ffn_device_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_sglang_metadata(
-        monkeypatch,
-        family="qwen2",
-        hidden_size=2048,
-        attention_heads=16,
-        kv_heads=2,
-        attention_kind=AttentionKind.GQA,
-        physical_kv_lanes=2,
-    )
-    model_dir = _write_model_config(
-        tmp_path / "qwen2",
-        {
-            "model_type": "qwen2",
-            "hidden_size": 2048,
-            "num_attention_heads": 16,
-            "num_key_value_heads": 2,
-            "intermediate_size": 11010,
-            "moe_intermediate_size": 1410,
-        },
-    )
-    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir))
-
-    runtime = config.resolve_runtime()
-    model = runtime.models[0]
-
-    assert [agent.id for agent in runtime.device_agents] == ["cuda0", "cuda1", "cuda2", "cuda3", "cuda4"]
-    assert model.spec.family == "qwen2"
-    assert model.spec.hidden_size == 2048
-    assert model.spec.attention_kind is AttentionKind.GQA
-    assert model.parallel_policy.sglang_tp_size == 2
-    assert model.parallel_policy.attention_tp_size == 2
-    assert model.parallel_policy.attention_dp_size == 1
-    assert model.parallel_policy.enable_dp_attention is False
-    assert model.parallel_policy.ffn_tp_size == 3
-    assert model.ffn_agent_ids == ["cuda2", "cuda3", "cuda4"]
-
-
-def test_mla_attention_policy_rejects_implicit_attention_dp(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_sglang_metadata(
-        monkeypatch,
-        family="deepseek_v2",
-        hidden_size=2048,
-        attention_heads=16,
-        kv_heads=16,
-        attention_kind=AttentionKind.MLA,
-        physical_kv_lanes=1,
-    )
-    model_dir = _write_model_config(
-        tmp_path / "deepseek-v2-lite-chat",
-        {
-            "model_type": "deepseek_v2",
-            "hidden_size": 2048,
-            "num_attention_heads": 16,
-            "kv_lora_rank": 512,
-            "qk_nope_head_dim": 128,
-            "qk_rope_head_dim": 64,
-            "v_head_dim": 128,
-            "intermediate_size": 11010,
-            "moe_intermediate_size": 1410,
-        },
-    )
-    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir))
-
-    with pytest.raises(TopologyError, match="attention data parallelism is not supported"):
-        config.resolve_runtime()
-
-
-def test_gqa_attention_policy_is_derived_from_sglang_metadata(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_sglang_metadata(
-        monkeypatch,
-        family="qwen2",
-        hidden_size=4096,
-        attention_heads=32,
-        kv_heads=4,
-        attention_kind=AttentionKind.GQA,
-        physical_kv_lanes=4,
-    )
-    model_dir = _write_model_config(
-        tmp_path / "qwen",
-        {
-            "model_type": "qwen2",
-            "hidden_size": 4096,
-            "num_attention_heads": 32,
-            "num_key_value_heads": 4,
-            "intermediate_size": 11010,
-        },
-    )
-    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir))
-
-    policy = config.resolve_runtime().models[0].parallel_policy
-
-    assert policy.attention_kind is AttentionKind.GQA
-    assert policy.sglang_tp_size == 2
-    assert policy.sglang_dp_size == 1
-    assert policy.attention_tp_size == 2
-    assert policy.attention_dp_size == 1
-    assert policy.enable_dp_attention is False
-
-
-def test_regular_mqa_when_sglang_reports_non_mla(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_sglang_metadata(
-        monkeypatch,
-        family="synthetic_mqa",
-        hidden_size=4096,
-        attention_heads=32,
-        kv_heads=1,
-        attention_kind=AttentionKind.MQA,
-        physical_kv_lanes=1,
-    )
-    model_dir = _write_model_config(
-        tmp_path / "synthetic-mqa",
-        {
-            "model_type": "synthetic_mqa",
-            "hidden_size": 4096,
-            "num_attention_heads": 32,
-            "num_key_value_heads": 1,
-            "qk_rope_head_dim": 64,
-            "intermediate_size": 11010,
-        },
-    )
-    config = XpoolConfig.from_file(
-        _write_minimal_config(
-            tmp_path / "config",
-            model_path=model_dir,
-            attention_cuda_devices=(0,),
-            ffn_cuda_devices=(1, 2, 3),
-        )
-    )
-
-    model = config.resolve_runtime().models[0]
-
-    assert model.spec.attention_kind is AttentionKind.MQA
-    assert model.spec.physical_kv_lanes == 1
-    assert model.parallel_policy.attention_tp_size == 1
-
-
-def test_zero_kv_heads_from_sglang_metadata_fail_fast(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_sglang_metadata(
-        monkeypatch,
-        family="bad",
-        hidden_size=4096,
-        attention_heads=32,
-        kv_heads=0,
-        attention_kind=AttentionKind.GQA,
-        physical_kv_lanes=0,
-    )
-    model_dir = _write_model_config(
-        tmp_path / "bad",
-        {
-            "model_type": "bad",
-            "hidden_size": 4096,
-            "num_attention_heads": 32,
-            "num_key_value_heads": 0,
-            "intermediate_size": 11010,
-        },
-    )
-    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir))
-
-    with pytest.raises(ConfigError, match="num_key_value_heads"):
-        config.resolve_runtime()
-
-
 def test_model_tp_field_is_rejected() -> None:
     with pytest.raises(ValidationError, match="tp"):
         XpoolConfig.from_mapping(
@@ -403,58 +354,6 @@ def test_model_tp_field_is_rejected() -> None:
             },
             cli_overrides={},
         )
-
-
-def test_ffn_tp_divisibility_is_checked_during_runtime_resolution(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_sglang_metadata(
-        monkeypatch,
-        family="qwen2",
-        hidden_size=4096,
-        attention_heads=32,
-        kv_heads=4,
-        attention_kind=AttentionKind.GQA,
-        physical_kv_lanes=4,
-    )
-    model_dir = _write_model_config(
-        tmp_path / "bad-ffn",
-        {
-            "model_type": "qwen2",
-            "hidden_size": 4096,
-            "num_attention_heads": 32,
-            "num_key_value_heads": 4,
-            "intermediate_size": 4,
-        },
-    )
-    config = XpoolConfig.from_file(_write_minimal_config(tmp_path / "config", model_path=model_dir))
-
-    with pytest.raises(TopologyError, match="does not divide dense intermediate size"):
-        config.resolve_runtime()
-
-
-def test_model_config_preserves_explicit_zero_num_experts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_sglang_metadata(
-        monkeypatch,
-        family="dense",
-        hidden_size=2048,
-        attention_heads=16,
-        kv_heads=16,
-        attention_kind=AttentionKind.MHA,
-        physical_kv_lanes=16,
-    )
-
-    spec = config_module.parse_model_config(
-        {"num_experts": 0, "n_routed_experts": 64},
-        model_id="dense-model",
-        config_path=tmp_path / "config.json",
-    )
-
-    assert spec.num_experts == 0
 
 
 def _write_minimal_config(
@@ -497,35 +396,6 @@ path = "{resolved_model_path}"
         encoding="utf-8",
     )
     return path
-
-
-def _write_model_config(path: Path, payload: Mapping[str, object]) -> Path:
-    path.mkdir(parents=True, exist_ok=True)
-    (path / "config.json").write_text(json.dumps(payload), encoding="utf-8")
-    return path
-
-
-def _patch_sglang_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    family: str,
-    hidden_size: int,
-    attention_heads: int,
-    kv_heads: int,
-    attention_kind: AttentionKind,
-    physical_kv_lanes: int,
-) -> None:
-    def load_metadata(_config_path: Path, *, model_id: str) -> SglangModelMetadata:
-        return SglangModelMetadata(
-            family=family or model_id,
-            hidden_size=hidden_size,
-            num_attention_heads=attention_heads,
-            num_key_value_heads=kv_heads,
-            attention_kind=attention_kind,
-            physical_kv_lanes=physical_kv_lanes,
-        )
-
-    monkeypatch.setattr(config_module, "_load_sglang_model_metadata", load_metadata)
 
 
 def _has_required_path(payload: Mapping[str, object], path: tuple[str, ...]) -> bool:

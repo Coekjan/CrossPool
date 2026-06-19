@@ -5,7 +5,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from sglang.srt.model_executor.forward_batch_info import ForwardMode as SglangForwardMode
 
 from xpool.abi import ABI_VERSION, DescriptorStatus, FfnRequestDescriptor, FfnResultDescriptor, ForwardMode, TensorDType
 
@@ -131,13 +130,12 @@ def test_ffn_result_descriptor_rejects_reserved_bits() -> None:
 def test_forward_mode_values_match_native_contract() -> None:
     """ForwardMode integers are the on-wire ABI values fed to the native op.
 
-    The SGLang shim forwards these ints straight to ``torch.ops.xpool.ffn_shim``.
-    They must equal the C++ ``xpool::ForwardMode`` enum in ``abi.hpp`` and the
-    corresponding SGLang values for the two modes represented in the xpool ABI.
+    The runtime integration layer translates producer-specific modes into these
+    generic xpool values before calling ``torch.ops.xpool.ffn_shim``.
     """
 
-    assert int(ForwardMode.EXTEND) == int(SglangForwardMode.EXTEND) == 1
-    assert int(ForwardMode.DECODE) == int(SglangForwardMode.DECODE) == 2
+    assert int(ForwardMode.EXTEND) == 1
+    assert int(ForwardMode.DECODE) == 2
 
 
 def test_native_header_size_parity(tmp_path: Path) -> None:

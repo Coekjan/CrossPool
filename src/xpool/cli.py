@@ -5,16 +5,26 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
+import tomllib
 from typing import Sequence
 
 import uvicorn
 from pydantic import ValidationError
 
-from xpool.config import ConfigError, load_config
+from xpool.config import (
+    CONFIG_REGISTRY,
+    ConfigError,
+    ConfigSetting,
+    ConfigSource,
+    init_global_config,
+)
 from xpool.daemon import create_app
 from xpool.device_agent import DeviceAgentLaunchPlan
 from xpool.runtime.mps import MpsHealthMonitor, MpsPreflight
+
+CLI_CONFIG_SETTINGS: tuple[ConfigSetting, ...] = tuple(
+    setting for setting in CONFIG_REGISTRY if setting.cli is not None and ConfigSource.CLI in setting.allowed_sources
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -40,13 +50,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         return args.handler(args)
-    except (ConfigError, ValidationError) as exc:
+    except (ConfigError, OSError, tomllib.TOMLDecodeError, ValidationError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
 
 def _run_daemon(args: argparse.Namespace) -> int:
-    config = load_config(config_path=args.config, cli_overrides=_config_overrides(args))
+    arg_values = vars(args)
+    config = init_global_config(
+        cli_overrides={
+            setting.name: arg_values[setting.name]
+            for setting in CLI_CONFIG_SETTINGS
+            if arg_values.get(setting.name) is not None
+        }
+    )
     mps = MpsPreflight.detect()
     if args.check:
         print(
@@ -70,7 +87,14 @@ def _run_daemon(args: argparse.Namespace) -> int:
 
 
 def _run_device_agent(args: argparse.Namespace) -> int:
-    config = load_config(config_path=args.config, cli_overrides=_config_overrides(args))
+    arg_values = vars(args)
+    config = init_global_config(
+        cli_overrides={
+            setting.name: arg_values[setting.name]
+            for setting in CLI_CONFIG_SETTINGS
+            if arg_values.get(setting.name) is not None
+        }
+    )
     plan = DeviceAgentLaunchPlan.from_config(config)
     if args.check:
         payload = plan.model_dump(mode="json")
@@ -98,18 +122,10 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _add_config_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--config", type=Path, help="Path to xpool TOML config")
-    parser.add_argument("--daemon-host", dest="daemon_host")
-    parser.add_argument("--daemon-port", dest="daemon_port", type=int)
-    parser.add_argument("--attention-concurrency", dest="scheduler_attention_concurrency", type=int)
-    parser.add_argument("--transport-concurrency", dest="scheduler_transport_concurrency", type=int)
-
-
-def _config_overrides(args: argparse.Namespace) -> dict[str, object]:
-    override_names = {
-        "daemon_host",
-        "daemon_port",
-        "scheduler_attention_concurrency",
-        "scheduler_transport_concurrency",
-    }
-    return {name: value for name, value in vars(args).items() if name in override_names and value is not None}
+    for setting in CLI_CONFIG_SETTINGS:
+        parser.add_argument(
+            setting.cli or "",
+            dest=setting.name,
+            type=int if setting.parser == "int" else str,
+            help=setting.description,
+        )

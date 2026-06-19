@@ -27,7 +27,7 @@ def test_daemon_registration_flow() -> None:
 
     config_view = _request(app, "GET", "/config").json()
     assert [agent["id"] for agent in config_view["derived"]["device_agents"]] == ["cuda0", "cuda1"]
-    assert [instance["id"] for instance in config_view["derived"]["sglang_instances"]] == ["deepseek-v2-lite-chat"]
+    assert [instance["id"] for instance in config_view["derived"]["serving_instances"]] == ["deepseek-v2-lite-chat"]
 
     agent_response = _request(
         app,

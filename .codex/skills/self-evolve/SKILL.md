@@ -45,12 +45,18 @@ directory.
    python3 scripts/summarize_sessions.py --no-update-last
    ```
 
-3. Extract only lessons that are durable beyond the current patch:
+3. Treat the script as an index, not as the self-evolve decision. For long or
+   emotionally corrective sessions, also review the current conversation and run
+   a targeted read-only search over recent session files for repeated user
+   corrections, preferences, and workflow complaints. Do not conclude "no
+   lesson" merely because the marker-filtered script returned sparse excerpts or
+   because a delegated reviewer did not see a direct instruction conflict.
+4. Extract only lessons that are durable beyond the current patch:
    user preferences, workflow rules, tool availability, validation standards,
    recurring failure modes, and instruction conflicts.
-4. Drop lessons already covered by `AGENTS.md`, the accepted repository design
+5. Drop lessons already covered by `AGENTS.md`, the accepted repository design
    document, `.codex/skills/`, `.codex/agents/`, or existing memory.
-5. Report candidate lessons and exact instruction conflicts. Do not write memory
+6. Report candidate lessons and exact instruction conflicts. Do not write memory
    or edit files from a delegated reviewer/self-evolve subagent.
 
 ## Persistence Rules

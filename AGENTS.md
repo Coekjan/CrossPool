@@ -38,6 +38,21 @@ Use inline comments only where they clarify ownership, device placement,
 synchronization, CUDA graph capture, NVSHMEM ordering, IPC, or failure behavior
 that is not obvious from the code.
 
+## Engineering Quality
+
+Keep implementation structure deliberate. Model-specific code belongs under the
+model adapter that owns it; global integration layers should expose only generic
+registration, discovery, binding, and shim contracts.
+
+Prefer behavior tests over source-string or implementation-text assertions.
+Repository tests may inspect source text only for explicit quality gates such as
+public documentation coverage or allowlisted environment-variable references.
+
+Avoid boilerplate helper functions, especially private helpers used only once or
+twice, when inlining keeps the calling code clearer. Add an abstraction only
+when it carries a real ownership boundary, repeated behavior, or a typed
+contract that improves local reasoning.
+
 ## Build Style
 
 Use `uv` for Python project management. `uv` owns the Python interpreter: keep
@@ -72,7 +87,12 @@ Python code style:
 C++ and CUDA style:
 
 - Manage native builds with `CMakeLists.txt`; do not reintroduce `setup.py` as
-  the primary native build system.
+  the primary native build system. Developers should build the extension through
+  uv/scikit-build, for example
+  `CMAKE_BUILD_PARALLEL_LEVEL=<jobs> uv sync --group dev --reinstall-package xpool`,
+  instead of invoking CMake directly as the normal install path.
+- Use `CMAKE_BUILD_PARALLEL_LEVEL=<jobs>` for native build concurrency; do not
+  hard-code a repository-wide job count.
 - Format C++, CUDA, and headers with `clang-format`.
 - Keep public C++/CUDA documentation passing `doxygen Doxyfile`; Doxygen is a
   repository development prerequisite.

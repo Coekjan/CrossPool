@@ -109,7 +109,7 @@ class DaemonState:
         config: Validated xpool config that defines expected registrations.
         mps_monitor: Periodic CUDA MPS health monitor used by health and readiness checks.
         started_at: Unix timestamp recorded when the daemon state was created.
-        instances: Registered SGLang instances keyed by instance id.
+        instances: Registered serving instances keyed by instance id.
         device_agents: Registered device agents keyed by device-agent id.
         process_alive: Liveness probe used to ignore stale registrations.
         _lock: Thread lock protecting registration dictionaries.
@@ -139,7 +139,7 @@ class DaemonState:
 
         mps = self.mps_monitor.snapshot()
         configured_agents = {agent.id for agent in self.config.device_agents}
-        configured_instances = {instance.id for instance in self.config.sglang_instances}
+        configured_instances = {instance.id for instance in self.config.serving_instances}
         with self._lock:
             registered_agents: set[str] = set()
             stale_agents: list[str] = []
@@ -175,7 +175,7 @@ class DaemonState:
         """Return the daemon's lightweight runtime config view.
 
         Returns:
-            Validated raw config plus derived device-agent and SGLang-instance
+            Validated raw config plus derived device-agent and serving-instance
             launch views.
 
         Side Effects:
@@ -186,7 +186,7 @@ class DaemonState:
             "config": self.config.model_dump(mode="json"),
             "derived": {
                 "device_agents": [agent.model_dump(mode="json") for agent in self.config.device_agents],
-                "sglang_instances": [instance.model_dump(mode="json") for instance in self.config.sglang_instances],
+                "serving_instances": [instance.model_dump(mode="json") for instance in self.config.serving_instances],
             },
         }
 
@@ -265,10 +265,10 @@ def create_app(
 
     @app.put("/instances/register")
     def register_instance(registration: InstanceRegistration) -> dict[str, str]:
-        configured = {instance.id: instance for instance in state.config.sglang_instances}
+        configured = {instance.id: instance for instance in state.config.serving_instances}
         instance = configured.get(registration.instance_id)
         if instance is None:
-            raise HTTPException(status_code=404, detail="unknown SGLang instance")
+            raise HTTPException(status_code=404, detail="unknown serving instance")
         if (
             instance.model_id != registration.model_id
             or instance.attention_cuda_devices != registration.attention_cuda_devices

@@ -12,11 +12,11 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import ClassVar
 
-ABI_VERSION = 2
+ABI_VERSION = 3
 
 
 class ForwardMode(IntEnum):
-    """SGLang forward modes accepted by the xpool FFN descriptor ABI.
+    """Runtime forward modes accepted by the xpool FFN descriptor ABI.
 
     Attributes:
         EXTEND: Extend/prefill-mode FFN request for a contiguous prompt-token batch.
@@ -66,10 +66,10 @@ class FfnRequestDescriptor:
     Attributes:
         STRUCT: Little-endian struct packer that mirrors ``FfnRequestDescriptor`` in ``abi.hpp``.
         sequence: Monotonic lane sequence used to distinguish graph replays and stale slots.
-        instance_id: Integer SGLang instance index from xpool config declaration order.
+        instance_id: Integer runtime instance index from xpool config declaration order.
         model_id: Integer model index selecting the FFN weight set on the executor side.
         layer_id: Decoder layer id whose FFN implementation should consume this request.
-        forward_mode: Plain SGLang decode or extend mode represented in the native ABI.
+        forward_mode: Decode or extend mode represented in the native ABI.
         dtype: Hidden-state dtype used by both the request input and output tensor.
         status: Request-lane state machine value.
         input_offset: Byte offset of the input hidden-state tensor inside the shared arena.

@@ -179,21 +179,23 @@ plugin loads a model adapter registry, installs adapter hooks, and installs a
 generic `ModelRunner.load_model` lifecycle hook. The registry auto-discovers all
 zero-argument concrete `SglangModelAdapter` subclasses owned by modules under
 `xpool.integrations.sglang.models`; new model support is added by adding a model
-module, not by editing a global adapter list. One broken model-adapter module is
-reported and skipped without preventing unrelated adapters from loading. The
-lifecycle hook validates SGLang server arguments, resolves xpool runtime policy
-only for the currently loading model, checks SGLang TP/DP against that policy,
-and only then attaches the model binding to the runner. This ordering keeps
-rejected loads from leaving a half-bound model runner and keeps one bad
-unrelated model config from blocking another configured SGLang instance. There is no
-`XPOOL_INSTANCE_ID`; the instance id is derived from the
-one-model-one-SGLang-instance mapping in TOML.
+module, not by editing a global adapter list. Production plugin discovery fails
+closed if any adapter module cannot be imported, because a broken adapter tree
+means the installed SGLang integration is ambiguous. Best-effort skipping exists
+only for explicit non-production discovery calls such as tests. The lifecycle
+hook validates SGLang server arguments, resolves xpool runtime policy only for
+the currently loading model, checks SGLang TP/DP against that policy, and only
+then attaches the model binding to the runner. This ordering keeps rejected
+loads from leaving a half-bound model runner. There is no `XPOOL_INSTANCE_ID`;
+the instance id is derived from the
+one-model-one-serving-instance mapping in TOML.
 
 The daemon `/config` endpoint is a control-plane runtime view, not just the raw
 TOML schema: it returns the validated config plus derived device-agent and
-SGLang-instance launch views. It must not perform expensive model metadata
-resolution or read model `config.json`; full model-derived parallel policy
-remains owned by explicit config checks and plugin load-time validation.
+serving-instance launch views. It must not perform expensive model metadata
+resolution or read model `config.json`; SGLang model metadata and full
+model-derived parallel policy remain owned by
+`xpool.integrations.sglang.topology` and plugin load-time validation.
 
 The first DeepSeek adapter directly replaces SGLang's DeepSeek FFN classes with
 xpool shim classes and hooks DeepSeek weight loading to skip
@@ -225,15 +227,15 @@ The repository configuration is TOML. It defines:
 - FFN-side CUDA devices,
 - target model id and absolute model path.
 
-It does not configure device agents, NVSHMEM ranks, SGLang instances, model
+It does not configure device agents, NVSHMEM ranks, serving instances, model
 family, hidden size, or attention topology directly. These are derived:
 
 - one xpool device agent per configured CUDA device,
 - one role per CUDA device,
 - NVSHMEM ranks assigned in attention-device order followed by FFN-device order,
-- one SGLang instance per configured model,
-- model family, hidden size, KV heads, and attention layout through SGLang's
-  model config resolution.
+- one serving instance per configured model,
+- SGLang-specific model family, hidden size, KV heads, and attention layout in
+  `xpool.integrations.sglang.topology`, not in `xpool.config`.
 
 Runtime policy must be derived from configuration and model metadata, not from
 hard-coded planner decisions.
@@ -283,15 +285,16 @@ id = "deepseek-v2-lite-chat"
 path = "/absolute/path/to/deepseek-ai/DeepSeek-V2-Lite-Chat"
 ```
 
-Model entries do not carry tensor-parallel placement. The current topology uses
-the full role-local device pools for every configured model: SGLang attention TP
-is derived from `len(devices.attention_cuda_devices)`, and FFN TP is derived
-from `len(devices.ffn_cuda_devices)`. Multiple configured models share the same
-FFN device-agent pool; the runtime scheduler arbitrates ownership. If future
-work needs model-specific FFN subsets, that should be introduced as an explicit
+Model entries do not carry tensor-parallel placement. `xpool.config` derives
+only static serving placement: the attention world size is
+`len(devices.attention_cuda_devices)`, and FFN TP is
+`len(devices.ffn_cuda_devices)`. Multiple configured models share the same FFN
+device-agent pool; the runtime scheduler arbitrates ownership. If future work
+needs model-specific FFN subsets, that should be introduced as an explicit
 placement policy rather than a scalar `models[].tp` knob.
 
-SGLang's `--tp-size` is treated as the attention world size. SGLang's
+SGLang runtime policy is owned by `xpool.integrations.sglang.topology`. SGLang's
+`--tp-size` is treated as the attention world size. SGLang's
 `ModelConfig.attention_arch` is the authoritative MLA/non-MLA boundary; xpool
 does not infer MLA from model names or loose fields such as `kv_lora_rank`.
 When SGLang reports MLA, xpool validates the positive MLA dimensions it needs
@@ -305,21 +308,38 @@ xpool requires `attention_device_count == attention_tp` and SGLang `--dp-size =
 `enable_dp_attention`, then validate the resolved attention TP/DP layout against
 an explicit reduce-scatter ABI.
 
-All TOML fields and CLI overrides for registered settings are declared in the
-config registry and resolve in this order:
+All TOML fields, CLI overrides, and xpool process environment variables for
+registered settings are declared in the config registry. Every setting has one
+canonical `XpoolConfig` path; environment variables are only another source for
+that same logical field, never a separate environment subtree. Sources resolve
+in this order:
 
 1. CLI arguments,
-2. TOML config,
-3. registry defaults.
+2. allowlisted environment variables,
+3. TOML config,
+4. registry defaults.
 
 Settings without a default must fail fast when none of their allowed sources
-provides a value. xpool deployment policy must not be controlled by environment
-variables. `XPOOL_CONFIG` is a bootstrap path used before TOML can be loaded,
-not a registered config field. `SGLANG_PLUGINS` belongs to SGLang's plugin
-loader and is documented in `.env.example`, not in xpool's config registry.
+provides a value. xpool deployment policy must not be controlled by arbitrary
+environment variables: every accepted `XPOOL_*` variable must appear in the
+registry with `ENV` in its allowed sources, and startup/config helpers warn when
+they see an unknown `XPOOL_*` variable. `XPOOL_CONFIG` is an env-backed
+bootstrap registry setting used before TOML can be loaded, not a runtime
+`XpoolConfig` field. `SGLANG_PLUGINS` belongs to SGLang's plugin loader and is
+documented in `.env.example`, not in xpool's config registry.
+`XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK=1` is a development-only env source for
+`debug.enable_shim_loopback`; that field currently allows only `ENV` and
+`DEFAULT`, so TOML attempts to set it fail closed. It routes the Python FFN shim
+to the loopback debug op and must not be used as a deployment policy or
+production fallback.
+Runtime code must not copy or cache config values outside `xpool.config`; entry
+points install one process-global resolved config through `init_global_config()`,
+and business code reads it through `get_global_config()` when needed. The only
+global config write API is `init_global_config`; test injection uses
+`init_global_config(config=...)` rather than a separate setter.
 Loading the xpool SGLang plugin enables the shim; there is no separate xpool
 enable flag or manually configured instance id. The instance id is derived from
-the one-model-one-SGLang-instance mapping.
+the one-model-one-serving-instance mapping.
 
 ## ABI Surfaces
 
@@ -371,17 +391,62 @@ guarantees.
 6. Close review-gate correctness gaps in SGLang plugin policy, model binding,
    daemon readiness/config snapshots, and MPS health monitoring before adding
    native runtime state.
-7. Prove single-GPU eager shim publish/wait with a devkit loopback executor
-   that performs a non-identity pairwise hidden-state 45-degree rotation.
-8. Prove CUDA graph capture/replay over the same shim ABI.
-9. Prove one NVSHMEM rank per device agent transport with device-side progress.
-10. Attach DeepSeek-V2-Lite FFN executor and correctness oracle tests.
-11. Run SGLang E2E with multiple instances on the same attention GPU.
-12. Start phase-2 KV sharing design and implementation.
+7. Prove single-GPU eager shim dispatch with a devkit loopback executor that
+   performs a non-identity pairwise hidden-state 45-degree rotation through
+   build-time `libxpool_cext.so` Torch ops.
+8. Prove CUDA graph capture/replay and SGLang piecewise CUDA graph compile-path
+   compatibility over the same debug loopback op.
+9. Implement the production `ffn_shim` publish/wait path with communication-slot
+   ownership and replay-safe descriptor side effects.
+10. Prove one NVSHMEM rank per device agent transport with device-side progress.
+11. Attach DeepSeek-V2-Lite FFN executor and correctness oracle tests.
+12. Run SGLang E2E with multiple instances on the same attention GPU.
+13. Start phase-2 KV sharing design and implementation.
 
 The loopback executor in step 7 is only an ABI and CUDA graph validation tool.
 It must not be used as serving evidence; SGLang E2E readiness requires the real
 DeepSeek-V2-Lite FFN executor.
+
+Native Torch ops are produced during package build/install as Linux-only
+`libxpool_cext.so` and loaded from the installed xpool package by `xpool.cext`
+through an idempotent startup preflight that checks only the native
+`torch.ops.xpool.abi_version()` result against Python's `xpool.abi.ABI_VERSION`.
+Runtime shim code calls `torch.ops.xpool.ffn_shim` directly by default so decode
+CUDA graph capture and SGLang piecewise CUDA graph prefill can trace the
+production FFN shim as a custom Torch op without crossing Python loader locks,
+package-resource lookup, or exception translation. Runtime JIT extension builds
+are not part of the XPool serving design.
+
+The current production `torch.ops.xpool.ffn_shim` is intentionally
+unimplemented and fails closed until descriptor publication, communication-slot
+ownership, transport, and device-agent wait semantics land. Because
+`debug.enable_shim_loopback` defaults to false, the default shim route is not a
+serving-capable configuration yet; it should fail at the first FFN shim call
+until production `ffn_shim` is implemented. The debug
+`torch.ops.xpool.ffn_shim_loopback` op supports eager execution, CUDA graph
+capture/replay, and a Meta implementation for dispatcher shape/dtype inference.
+When the resolved global config has `debug.enable_shim_loopback=true`, the
+Python shim routes to the loopback op so tests can cover SGLang's current
+eager-compiler piecewise CUDA graph prefill path and decode full-graph capture
+mechanics. This is not a
+serving readiness claim and not a blanket torch.compile/Inductor support claim:
+SGLang's explicit global `enable_torch_compile=True` remains rejected while
+SGLang piecewise CUDA graph prefill with the default eager compiler remains
+accepted. Non-eager piecewise CUDA graph compiler modes also remain rejected
+until XPool defines a compiler contract for request publication,
+communication-slot ownership, stream/event ordering, device-agent progress, and
+replay-safe descriptor side effects.
+
+Current loopback validation covers true CUDA eager execution, true decode CUDA
+graph capture/replay, and SGLang piecewise CUDA graph prefill traceability via
+Meta tensors. A true CUDA piecewise CUDA graph prefill capture/replay test is a
+separate acceptance item before claiming production prefill graph support.
+
+Daemon registration currently treats process ids as the liveness identity.
+Using `os.kill(pid, 0)` cannot distinguish PID reuse after a registered process
+dies. A later daemon protocol revision must extend registrations with a stable
+process start-time or equivalent generation token before this can be considered
+fully reliable under PID reuse.
 
 ## Validation
 
@@ -391,13 +456,18 @@ Repository validation uses:
 uv run ruff format
 uv run ruff check
 uv run ty check
+CMAKE_BUILD_PARALLEL_LEVEL=<jobs> uv sync --group dev --reinstall-package xpool
 uv run pytest
-clang-format --dry-run --Werror src/cext/include/abi.hpp
+clang-format --dry-run --Werror src/cext/include/*.hpp src/cext/*.cpp src/cext/*.cu
 doxygen Doxyfile
 ```
 
-C++ and CUDA code is managed by `CMakeLists.txt` and formatted with
-`clang-format`.
+C++ and CUDA code is managed by `CMakeLists.txt`, which discovers extension
+sources under `src/cext` and public headers under `src/cext/include`.
+The normal native build entrypoint is uv/scikit-build; use
+`CMAKE_BUILD_PARALLEL_LEVEL=<jobs> uv sync --group dev --reinstall-package xpool`
+to rebuild `libxpool_cext.so` with parallel compilation before running native-op
+tests. Native code is formatted with `clang-format`.
 
 Performance work must use Nsight Systems before hot-path optimization. TBT and
 TPOT must be measured at generated-token boundaries, not derived from
