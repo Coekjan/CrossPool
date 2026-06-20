@@ -10,7 +10,10 @@ Repo-local skills live under `.codex/skills/<name>/SKILL.md` and own reusable
 task workflows. `AGENTS.md` may require that a skill be used, but must not
 duplicate that skill's internal procedure. Keep repo-local skills self-contained:
 use skill-relative paths for bundled resources, and put reusable scripts under
-the relevant skill's `scripts/` directory.
+the relevant skill's `scripts/` directory. Repo-local skills must follow the
+`skill-creator` structure: required `SKILL.md`, recommended
+`agents/openai.yaml` UI metadata, and only task-relevant optional
+`scripts/`, `references/`, or `assets/` resources.
 
 ## Design And Documentation
 
@@ -21,7 +24,8 @@ or host-specific paths.
 For implementation work, update or create the canonical design document before
 editing source code when the design is missing, stale, or materially changed.
 Revise canonical sections in place as decisions change; do not keep competing
-old and new designs.
+old and new designs. The canonical xpool design document is `PLAN.md`; do not
+refer to removed paths such as `docs/plan.md` as current design truth.
 
 Documentation, comments, identifiers, tests, and commit messages must use
 English. Public APIs must be well documented at the declaration site. For
@@ -44,6 +48,10 @@ Keep implementation structure deliberate. Model-specific code belongs under the
 model adapter that owns it; global integration layers should expose only generic
 registration, discovery, binding, and shim contracts.
 
+Use repository terminology consistently. In xpool code and documentation, prefer
+`device agent` for xpool-owned runtime roles. Use `PE` only when directly
+describing NVSHMEM APIs or behavior.
+
 Prefer behavior tests over source-string or implementation-text assertions.
 Repository tests may inspect source text only for explicit quality gates such as
 public documentation coverage or allowlisted environment-variable references.
@@ -52,6 +60,82 @@ Avoid boilerplate helper functions, especially private helpers used only once or
 twice, when inlining keeps the calling code clearer. Add an abstraction only
 when it carries a real ownership boundary, repeated behavior, or a typed
 contract that improves local reasoning.
+
+Do not add one-line wrappers, renamed constants, or pass-through functions that
+only obscure the real API. Examples include `call_native_*` wrappers,
+single-use `*_to_outdir` helpers, or constants that merely rename one local
+literal. Inline the call unless the wrapper owns validation, synchronization,
+lifetime, or a stable typed boundary.
+
+Prefer explicit concrete types. Avoid broad `Any` or `object` unless they are
+required for a dynamic third-party surface and the reason is documented close to
+the annotation. In SGLang integration code, import pinned SGLang concrete types
+directly instead of inventing local `*Like` protocols. Do not use
+`TYPE_CHECKING` blocks or local imports to hide ordinary dependency cycles;
+fix the ownership boundary instead.
+
+Prefer `match` statements when dispatching over a closed set of enum-like
+states; avoid long `if`/`elif` ladders when a closed dispatch table or `match`
+would make exhaustiveness clearer.
+
+## Configuration
+
+xpool runtime configuration must flow through `xpool.config`. Entry points
+install one process-global config with `init_global_config()`, and business
+logic reads it with `get_global_config()`. Do not copy or cache config values in
+module globals, registries, plugins, or adapters.
+
+Config sources resolve in this order: CLI arguments, allowlisted environment
+variables, TOML config, then registry defaults. Required settings without a
+default must fail fast. Most xpool settings are config-file only; `.env` is
+primarily for SGLang/bootstrap settings such as `XPOOL_CONFIG` and
+`SGLANG_PLUGINS`.
+
+Model paths must be resolved with `XpoolConfig.model_path_of(model_id)`.
+`ModelConfig.path` is the TOML schema field for explicit overrides, not a
+runtime access pattern. Local development paths belong in ignored
+`*.local.toml` files.
+
+Every accepted `XPOOL_*` variable must be declared in the config registry. The
+config layer should warn on unknown `XPOOL_*` variables instead of silently
+turning them into policy. Debug settings use nested names such as
+`debug.shim_loopback.enable` and `debug.graph_observer.outdir`.
+
+## Testing
+
+Tests should prove behavior visible at public boundaries. Do not write tests
+that mirror registry internals, config table structure, source strings, or
+implementation text unless the test is an explicit quality gate for that text.
+If a test would still pass when the user-visible behavior is broken, replace it
+with a behavior test.
+
+Put reusable test helpers under `tests/helpers/`. SGLang-facing tests should use
+SGLang's concrete types such as `ServerArgs` rather than handwritten protocol
+or mock replacements when those concrete types are available.
+
+Shim graph-mode coverage must distinguish eager execution, decode full CUDA
+graph replay, and prefill piecewise CUDA graph replay. SGLang integration
+evidence should compare token ids across the relevant modes and use devkit
+graph-observer evidence when it needs to prove SGLang entered graph paths.
+
+## Native Extension And Shim
+
+The native extension is the Linux build-time `libxpool_cext.so` loaded through
+`xpool.cext`. Native loading should use a single locked `NativeLibrary` path,
+check only `torch.ops.xpool.abi_version()` against the Python ABI version, and
+prewarm `xpool.ops` so Python custom-op wrappers are registered early. Runtime
+code should call `xpool.ops.*` wrappers directly.
+
+Build native code through uv/scikit-build with `CMAKE_BUILD_PARALLEL_LEVEL`;
+do not make direct CMake or `setup.py build_ext` commands the normal developer
+path. The NVSHMEM transport is C++/CUDA-owned and must not introduce Python
+NVSHMEM bindings without an accepted design change.
+
+The production `ffn_shim` path must support eager execution, decode full CUDA
+graph replay, and prefill piecewise CUDA graph replay before serving readiness
+is claimed. `ffn_shim_loopback` is only a development/debug substitute selected
+by `debug.shim_loopback.enable`; loopback evidence is not real FFN or serving
+evidence.
 
 ## Build Style
 
@@ -117,6 +201,8 @@ as `.venv/`.
 
 - Keep changes small and scoped to the accepted design.
 - Use `.codex/skills/git-commit/SKILL.md` for commit preparation.
+- Use `.codex/skills/deep-review/SKILL.md` for the standard six-axis staged
+  review, whether invoked directly or from git-commit.
 - Use repo-local reviewer agents only when the user explicitly asks for
   delegated review or when an invoked skill requires them.
 - After every successful commit, push the current branch according to the

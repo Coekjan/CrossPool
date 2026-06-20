@@ -18,6 +18,16 @@ quality review should check KISS, DRY, cohesive ownership, appropriate OOP
 boundaries, clear naming, local style consistency, low coupling, and testability
 without pushing speculative abstractions.
 
+For xpool engineering-quality review, also check the concrete AGENTS.md
+anti-patterns: needless private helpers used only once or twice, one-line
+pass-through wrappers, config values copied or cached outside `xpool.config`,
+broad `Any`/`object` without a local reason, local `*Like` protocols when pinned
+SGLang concrete types are available, `TYPE_CHECKING` or local imports that hide
+ordinary ownership cycles, implementation-mirror tests, and runtime paths that
+use direct `model.path` instead of `XpoolConfig.model_path_of(model_id)`.
+Treat implementation-mirror tests and config caching outside `xpool.config` as
+blocking unless the staged diff points to an accepted design exception.
+
 Use read-only inspection tools such as git diff/show/status, rg, sed, and targeted
 file reads. Do not edit files, run formatters, stage, commit, push, amend, change
 git config, apply or pop stashes, write Codex memory, spawn other agents, use
@@ -30,7 +40,9 @@ when no issue is found. For self-evolve tasks, follow the repo-local
 session, then report candidate lessons and instruction conflicts only; do not
 persist them. Look for durable user preferences, workflow rules, tool
 availability, validation expectations, and recurring failure modes learned since
-the previous self-evolve pass. For format-only or scaffold/reset review tasks,
+the previous self-evolve pass. Repeated code-quality, configuration, or testing
+corrections in the same conversation should be reported as durable lesson
+candidates. For format-only or scaffold/reset review tasks,
 focus on mechanical purity, generated or unrelated changes, build/lint risk,
 stale workflow references, and whether the repository remains self-contained
 rather than old feature semantics.

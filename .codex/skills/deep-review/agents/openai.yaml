@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deep Review"
+  short_description: "Run xpool six-axis staged review"
+  default_prompt: "Use $deep-review to run the six-axis staged-diff review for xpool."

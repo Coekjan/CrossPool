@@ -11,6 +11,7 @@ from pathlib import Path
 
 MARKERS = (
     "agents.md",
+    "architecture",
     "blocked",
     "commit",
     "conflict",
@@ -29,12 +30,59 @@ MARKERS = (
     "tool",
     "validation",
     "workflow",
+    "wrapper",
     "不要",
+    "内联",
     "偏好",
+    "屎山",
+    "单例",
+    "架构",
     "工具",
     "应该",
-    "约定",
+    "行为测试",
+    "降智",
+    "配置",
+    "测试",
+    "质量",
+    "重构",
     "规则",
+)
+
+PREFERENCE_MARKERS = (
+    "architecture",
+    "behavior test",
+    "cache",
+    "config",
+    "helper",
+    "inline",
+    "mirror",
+    "mock",
+    "object",
+    "preference",
+    "protocol",
+    "rule",
+    "should",
+    "test",
+    "wrapper",
+    "不",
+    "不要",
+    "偏好",
+    "内联",
+    "单例",
+    "实现",
+    "应该",
+    "架构",
+    "测试",
+    "没必要",
+    "直接",
+    "行为测试",
+    "规则",
+    "配置",
+    "降智",
+    "镜像",
+    "约定",
+    "质量",
+    "屎山",
 )
 
 
@@ -55,12 +103,21 @@ def main() -> int:
     )
     parser.add_argument(
         "--since",
-        help="UTC or local date/time, for example 2026-06-01. Required only for the first run.",
+        help=(
+            "UTC or local date/time, for example 2026-06-01. If omitted, use "
+            "the last-file timestamp or scan all sessions when no timestamp exists."
+        ),
     )
     parser.add_argument(
         "--last-file",
         default=str(_default_last_file()),
         help="Timestamp file used when --since is omitted.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("markers", "preferences"),
+        default="markers",
+        help="Excerpt mode: marker scan across roles or user-correction preference scan.",
     )
     parser.add_argument("--limit", type=int, default=200, help="Maximum excerpts to print.")
     parser.add_argument(
@@ -79,6 +136,7 @@ def main() -> int:
 
     printed = 0
     limit_reached = False
+    seen_preference_keys: set[str] = set()
     for session_file in _index_session_files(sessions_root):
         if session_file.date is not None and session_file.date < since.date():
             continue
@@ -86,9 +144,14 @@ def main() -> int:
             session_file.path.read_text(encoding="utf-8", errors="replace").splitlines(),
             1,
         ):
-            excerpt = _session_excerpt(line, since)
+            excerpt = _session_excerpt(line, since, args.mode)
             if excerpt is None:
                 continue
+            if args.mode == "preferences":
+                key = _dedup_key(excerpt)
+                if key in seen_preference_keys:
+                    continue
+                seen_preference_keys.add(key)
             print(f"\n## {session_file.path}:{line_number}")
             print(excerpt)
             printed += 1
@@ -125,9 +188,11 @@ def _load_since(value: str | None, last_file: Path) -> dt.datetime:
         last_value = last_file.read_text(encoding="utf-8").strip()
         if last_value:
             return _parse_since(last_value)
-    raise SystemExit(
-        f"no previous self-evolve timestamp found at {last_file}; run once with --since YYYY-MM-DD to initialize it"
+    print(
+        f"no previous self-evolve timestamp found at {last_file}; scanning all sessions",
+        file=sys.stderr,
     )
+    return dt.datetime.min.replace(tzinfo=dt.UTC)
 
 
 def _write_last_file(path: Path, timestamp: dt.datetime) -> None:
@@ -173,7 +238,7 @@ def _session_date_from_path(path: Path) -> dt.date | None:
     return None
 
 
-def _session_excerpt(line: str, since: dt.datetime) -> str | None:
+def _session_excerpt(line: str, since: dt.datetime, mode: str) -> str | None:
     try:
         record = json.loads(line)
     except json.JSONDecodeError:
@@ -184,10 +249,20 @@ def _session_excerpt(line: str, since: dt.datetime) -> str | None:
     text = _extract_text(record)
     if not text:
         return None
+    if mode == "preferences":
+        if not text.startswith("user\n"):
+            return None
+        body = text.removeprefix("user\n")
+        if _looks_like_review_task(body):
+            return None
+        lowered_body = body.lower()
+        if not any(marker in lowered_body for marker in PREFERENCE_MARKERS):
+            return None
+        return _truncate(f"user-preference\n{body}", 4000)
     lowered = text.lower()
     if not any(marker in lowered for marker in MARKERS):
         return None
-    return text[:2000]
+    return _truncate(text, 2000)
 
 
 def _record_time(record: dict[str, object]) -> dt.datetime | None:
@@ -248,6 +323,33 @@ def _collect_text(value: object) -> str:
 
 def _normalize(text: str) -> str:
     return " ".join(text.split())
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    print(
+        f"self-evolve excerpt truncated from {len(text)} to {limit} characters",
+        file=sys.stderr,
+    )
+    return text[:limit]
+
+
+def _dedup_key(text: str) -> str:
+    return re.sub(r"\W+", " ", text.lower()).strip()[:240]
+
+
+def _looks_like_review_task(text: str) -> bool:
+    return text.startswith(
+        (
+            "Pre-commit review for ",
+            "Review the current code changes",
+            "Self-evolve review for ",
+            "<turn_aborted>",
+            "You are Axis ",
+            "You are the self-evolve reviewer",
+        )
+    )
 
 
 def _tool_output_interesting(text: str) -> bool:

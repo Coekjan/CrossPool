@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Commit"
+  short_description: "Prepare and push xpool commits"
+  default_prompt: "Use $git-commit to stage intended xpool changes, commit them, and push."

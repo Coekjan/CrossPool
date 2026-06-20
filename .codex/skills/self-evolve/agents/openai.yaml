@@ -1,0 +1,4 @@
+interface:
+  display_name: "Self Evolve"
+  short_description: "Extract durable xpool workflow lessons"
+  default_prompt: "Use $self-evolve to review recent xpool session history for durable lessons."
