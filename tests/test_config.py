@@ -76,7 +76,7 @@ def test_model_metadata_fields_are_rejected_from_toml() -> None:
 
 
 def test_duplicate_and_overlapping_devices_are_rejected() -> None:
-    with pytest.raises(ValidationError, match="devices.attention_cuda_devices must be unique"):
+    with pytest.raises(ValidationError, match=r"devices\.attention_cuda_devices must be unique"):
         XpoolConfig.from_mapping(
             {
                 "devices": {"attention_cuda_devices": [0, 0], "ffn_cuda_devices": [1]},
@@ -443,7 +443,7 @@ def test_model_path_lookup_rejects_unknown_model_id() -> None:
 
 
 def test_model_path_or_vendor_model_base_uri_is_required() -> None:
-    with pytest.raises(ValidationError, match="vendor.model_base_uri"):
+    with pytest.raises(ValidationError, match=r"vendor\.model_base_uri"):
         XpoolConfig.from_mapping(
             {
                 "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
@@ -453,7 +453,7 @@ def test_model_path_or_vendor_model_base_uri_is_required() -> None:
 
 
 def test_vendor_model_base_uri_must_be_absolute() -> None:
-    with pytest.raises(ValidationError, match="vendor.model_base_uri must be absolute"):
+    with pytest.raises(ValidationError, match=r"vendor\.model_base_uri must be absolute"):
         XpoolConfig.from_mapping(
             {
                 "vendor": {"model_base_uri": "relative/models"},

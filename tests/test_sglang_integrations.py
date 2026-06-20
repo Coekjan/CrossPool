@@ -21,9 +21,9 @@ from xpool.config import MissingRequiredConfig, XpoolConfig
 from xpool.integrations.sglang.topology import derive_parallel_policy, load_model_spec
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-JsonValue = str | int | float | bool | list[int] | None
-GraphEvent = dict[str, JsonValue]
-GraphSettings = tuple[bool, bool]
+type JsonValue = str | int | float | bool | list[int] | None
+type GraphEvent = dict[str, JsonValue]
+type GraphSettings = tuple[bool, bool]
 
 # SGLang model load and long decode can take several minutes; only cleanup paths
 # use shorter bounded waits after the main probe has already timed out.

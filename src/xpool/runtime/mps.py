@@ -33,7 +33,7 @@ class MpsPreflight(BaseModel):
     message: str = Field(description="Human-readable health summary or failure reason.")
 
     @classmethod
-    def detect(cls, *, timeout_s: float = MPS_CONTROL_TIMEOUT_S) -> "MpsPreflight":
+    def detect(cls, *, timeout_s: float = MPS_CONTROL_TIMEOUT_S) -> MpsPreflight:
         """Probe CUDA MPS control-daemon health.
 
         Args:

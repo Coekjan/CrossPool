@@ -30,7 +30,7 @@ class DeviceAgentLaunchPlan(BaseModel):
     device_agents: list[DeviceAgentLaunch] = Field(description="Device agents ordered by derived NVSHMEM rank.")
 
     @classmethod
-    def from_config(cls, config: XpoolConfig) -> "DeviceAgentLaunchPlan":
+    def from_config(cls, config: XpoolConfig) -> DeviceAgentLaunchPlan:
         """Derive a launch plan from validated xpool config.
 
         Args:

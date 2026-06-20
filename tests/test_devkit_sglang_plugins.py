@@ -103,7 +103,7 @@ def test_devkit_sglang_plugins_strict_discovery_rejects_broken_enabled_plugins(
     monkeypatch.syspath_prepend(str(tmp_path))
     init_global_config(config=graph_observer_enabled_config(tmp_path / "events"))
 
-    with pytest.raises(RuntimeError, match="xpool_devkit_plugin_strict_probe.graph_observer"):
+    with pytest.raises(RuntimeError, match=r"xpool_devkit_plugin_strict_probe\.graph_observer"):
         devkit_plugins.discover_sglang_devkit_plugins("xpool_devkit_plugin_strict_probe")
 
 

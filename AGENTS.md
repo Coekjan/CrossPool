@@ -74,6 +74,10 @@ directly instead of inventing local `*Like` protocols. Do not use
 `TYPE_CHECKING` blocks or local imports to hide ordinary dependency cycles;
 fix the ownership boundary instead.
 
+For PEP 695 generic functions, prefer short local type parameter names such as
+`R` and `W` when the scope is obvious. Avoid legacy-style verbose names such as
+`ReturnT` or `WeightT` for local generic function parameters.
+
 Prefer `match` statements when dispatching over a closed set of enum-like
 states; avoid long `if`/`elif` ladders when a closed dispatch table or `match`
 would make exhaustiveness clearer.
@@ -162,6 +166,8 @@ uv sync --group dev
 
 Python code style:
 
+- Run Python project tools through `uv run`; do not invoke `.venv/bin/...`
+  commands directly.
 - Format with `uv run ruff format`.
 - Lint with `uv run ruff check`.
 - Type-check with Astral ty using `uv run ty check`.

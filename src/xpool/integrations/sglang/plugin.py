@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from functools import partial
-from typing import Concatenate, ParamSpec, TypeVar, cast
+from typing import Concatenate, cast
 
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.plugins.hook_registry import HookRegistry, HookType
@@ -24,9 +24,6 @@ from xpool.integrations.sglang.adapter import (
 )
 from xpool.integrations.sglang.registry import sglang_model_adapters
 from xpool.integrations.sglang.server_args import validate_sglang_server_args
-
-P = ParamSpec("P")
-ReturnT = TypeVar("ReturnT")
 
 MODEL_RUNNER_LOAD_MODEL = "sglang.srt.model_executor.model_runner.ModelRunner.load_model"
 XPOOL_REQUIRED_HOOK_TARGETS: set[str] = set()
@@ -113,13 +110,13 @@ def verify_required_hooks_applied() -> None:
         raise SystemExit(f"xpool SGLang plugin failed to apply required hooks: {joined}")
 
 
-def around_model_runner_load_model(
+def around_model_runner_load_model[**P, R](
     adapters: Sequence[SglangModelAdapter],
-    original_fn: Callable[Concatenate[ModelRunner, P], ReturnT],
+    original_fn: Callable[Concatenate[ModelRunner, P], R],
     model_runner: ModelRunner,
     *args: P.args,
     **kwargs: P.kwargs,
-) -> ReturnT:
+) -> R:
     """Run adapter lifecycle checks around SGLang model loading.
 
     Args:

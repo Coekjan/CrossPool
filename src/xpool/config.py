@@ -34,7 +34,7 @@ class ConfigSource(StrEnum):
     DEFAULT = "default"
 
 
-ParserName = Literal["bool", "int", "raw", "str"]
+type ParserName = Literal["bool", "int", "raw", "str"]
 
 
 class ConfigError(ValueError):
@@ -266,7 +266,7 @@ class DevicesConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_devices(self) -> "DevicesConfig":
+    def validate_devices(self) -> DevicesConfig:
         """Reject duplicate or role-overlapping CUDA device lists.
 
         Returns:
@@ -318,7 +318,7 @@ class ModelConfig(BaseModel):
         return super().__getattribute__(name)
 
     @model_validator(mode="after")
-    def validate_model_path(self) -> "ModelConfig":
+    def validate_model_path(self) -> ModelConfig:
         """Normalize and validate the optional configured model path.
 
         Returns:
@@ -407,7 +407,7 @@ class GraphObserverDebugConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_graph_observer(self) -> "GraphObserverDebugConfig":
+    def validate_graph_observer(self) -> GraphObserverDebugConfig:
         """Normalize and validate debug graph observer output settings.
 
         Returns:
@@ -455,7 +455,7 @@ class VendorConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_model_base_uri(self) -> "VendorConfig":
+    def validate_model_base_uri(self) -> VendorConfig:
         """Normalize and validate the optional vendor model-cache root.
 
         Returns:
@@ -493,7 +493,7 @@ class XpoolConfig(BaseModel):
         *,
         cli_overrides: Mapping[str, object] | None = None,
         env: Mapping[str, str] | None = None,
-    ) -> "XpoolConfig":
+    ) -> XpoolConfig:
         """Load and validate an xpool TOML file.
 
         Args:
@@ -525,7 +525,7 @@ class XpoolConfig(BaseModel):
         *,
         cli_overrides: Mapping[str, object] | None = None,
         env: Mapping[str, str] | None = None,
-    ) -> "XpoolConfig":
+    ) -> XpoolConfig:
         """Validate an in-memory config mapping.
 
         Args:
@@ -653,7 +653,7 @@ class XpoolConfig(BaseModel):
         raise MissingRequiredConfig(f"unknown configured model id: {model_id}")
 
     @model_validator(mode="after")
-    def validate_references(self) -> "XpoolConfig":
+    def validate_references(self) -> XpoolConfig:
         """Reject duplicate model identities and paths.
 
         Returns:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Concatenate, ParamSpec, TypeVar
+from typing import Concatenate
 
 import torch
 from sglang.srt.model_executor.model_runner import ModelRunner
@@ -28,10 +28,6 @@ from xpool.integrations.sglang.adapter import (
 from xpool.integrations.sglang.shim import FfnLayerKind, FfnShimModule, ShimUnavailableError
 
 LAYER_PREFIX_PATTERN = re.compile(r"^model\.layers\.(?P<layer_id>\d+)\.mlp$")
-
-P = ParamSpec("P")
-ReturnT = TypeVar("ReturnT")
-WeightT = TypeVar("WeightT")
 
 
 @dataclass(slots=True)
@@ -277,13 +273,13 @@ class DeepseekV2Adapter(SglangModelAdapter):
         setattr(model_runner, "xpool_ffn_shim_count", len(shims))
 
 
-def around_load_weights(
-    original_fn: Callable[Concatenate[DeepseekV2ForCausalLM, Iterable[tuple[str, torch.Tensor]], P], ReturnT],
+def around_load_weights[**P, R](
+    original_fn: Callable[Concatenate[DeepseekV2ForCausalLM, Iterable[tuple[str, torch.Tensor]], P], R],
     model: DeepseekV2ForCausalLM,
     weights: Iterable[tuple[str, torch.Tensor]],
     *args: P.args,
     **kwargs: P.kwargs,
-) -> ReturnT:
+) -> R:
     """Filter DeepSeek FFN weights before invoking SGLang's weight loader.
 
     Args:
@@ -304,7 +300,7 @@ def around_load_weights(
     return original_fn(model, filter_ffn_weights(weights), *args, **kwargs)
 
 
-def filter_ffn_weights(weights: Iterable[tuple[str, WeightT]]) -> Iterable[tuple[str, WeightT]]:
+def filter_ffn_weights[W](weights: Iterable[tuple[str, W]]) -> Iterable[tuple[str, W]]:
     """Drop FFN weight tensors before SGLang's DeepSeek weight loader sees them.
 
     Args:

@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 import tomllib
-from typing import Sequence
+from collections.abc import Sequence
 
 import uvicorn
 from pydantic import ValidationError

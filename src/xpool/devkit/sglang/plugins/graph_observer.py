@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
-from typing import Literal, TypeVar
+from typing import Literal
 
 from sglang.srt.model_executor.cuda_graph_runner import CudaGraphRunner
 from sglang.srt.model_executor.piecewise_cuda_graph_runner import PiecewiseCudaGraphRunner
@@ -18,12 +18,11 @@ from sglang.srt.model_executor.piecewise_cuda_graph_runner import PiecewiseCudaG
 from xpool.config import get_global_config
 
 LOGGER = logging.getLogger(__name__)
-ReturnT = TypeVar("ReturnT")
 
-GraphRunner = CudaGraphRunner | PiecewiseCudaGraphRunner
-GraphKind = Literal["full_cuda_graph", "piecewise_cuda_graph"]
-JsonValue = str | int | float | bool | list[int] | None
-GraphEvent = dict[str, JsonValue]
+type GraphRunner = CudaGraphRunner | PiecewiseCudaGraphRunner
+type GraphKind = Literal["full_cuda_graph", "piecewise_cuda_graph"]
+type JsonValue = str | int | float | bool | list[int] | None
+type GraphEvent = dict[str, JsonValue]
 
 _event_file: Path | None = None
 _install_lock = Lock()
@@ -88,13 +87,13 @@ def install() -> None:
         _installed = True
 
 
-def _wrap_graph_method(
+def _wrap_graph_method[R](
     kind: GraphKind,
     method_name: str,
-    original: Callable[..., ReturnT],
-) -> Callable[..., ReturnT]:
+    original: Callable[..., R],
+) -> Callable[..., R]:
     @functools.wraps(original)
-    def wrapped(runner: GraphRunner, *args: object, **kwargs: object) -> ReturnT:
+    def wrapped(runner: GraphRunner, *args: object, **kwargs: object) -> R:
         _write_event(kind, f"{method_name}_begin", method_name, runner)
         try:
             result = original(runner, *args, **kwargs)

@@ -12,7 +12,7 @@ from xpool.config import get_global_config
 
 PLUGINS_PACKAGE = "xpool.devkit.sglang.plugins"
 LOGGER = logging.getLogger(__name__)
-PluginInstaller = Callable[[], None]
+type PluginInstaller = Callable[[], None]
 
 
 def install() -> None:

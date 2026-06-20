@@ -139,7 +139,7 @@ class FfnRequestDescriptor:
         )
 
     @classmethod
-    def unpack(cls, payload: bytes) -> "FfnRequestDescriptor":
+    def unpack(cls, payload: bytes) -> FfnRequestDescriptor:
         """Decode and validate a native request descriptor payload.
 
         Args:
@@ -239,7 +239,7 @@ class FfnResultDescriptor:
         )
 
     @classmethod
-    def unpack(cls, payload: bytes) -> "FfnResultDescriptor":
+    def unpack(cls, payload: bytes) -> FfnResultDescriptor:
         """Decode and validate a native result descriptor payload.
 
         Args:

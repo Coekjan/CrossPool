@@ -118,7 +118,7 @@ def test_registry_strict_discovery_rejects_broken_adapter_modules(
     (package / "broken.py").write_text("raise ImportError('missing core adapter dependency')\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
 
-    with pytest.raises(RuntimeError, match="xpool_registry_strict_fault_probe.broken"):
+    with pytest.raises(RuntimeError, match=r"xpool_registry_strict_fault_probe\.broken"):
         discover_sglang_model_adapters("xpool_registry_strict_fault_probe")
 
 

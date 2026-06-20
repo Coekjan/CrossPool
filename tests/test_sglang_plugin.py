@@ -5,6 +5,7 @@ import sys
 from collections.abc import Iterator, Sequence
 from importlib.metadata import entry_points
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from helpers.sglang import FakeModelConfig, FakeModelRunner, server_args
@@ -126,8 +127,8 @@ def test_plugin_apply_hooks_guard_fails_closed_when_required_target_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class GuardedHookRegistry:
-        calls: list[tuple[str, SglangHookHandler, HookType]] = []
-        _patched: set[str] = {sglang_plugin.MODEL_RUNNER_LOAD_MODEL}
+        calls: ClassVar[list[tuple[str, SglangHookHandler, HookType]]] = []
+        _patched: ClassVar[set[str]] = {sglang_plugin.MODEL_RUNNER_LOAD_MODEL}
 
         @classmethod
         def register(cls, target: str, handler: SglangHookHandler, hook_type: HookType) -> None:
@@ -146,14 +147,14 @@ def test_plugin_apply_hooks_guard_fails_closed_when_required_target_is_missing(
 
     sglang_plugin.install()
 
-    with pytest.raises(SystemExit, match="xpool.fake.Target"):
+    with pytest.raises(SystemExit, match=r"xpool\.fake\.Target"):
         GuardedHookRegistry.apply_hooks()
 
 
 def test_plugin_apply_hooks_guard_allows_all_required_targets(monkeypatch: pytest.MonkeyPatch) -> None:
     class GuardedHookRegistry:
-        calls: list[tuple[str, SglangHookHandler, HookType]] = []
-        _patched: set[str] = {"xpool.fake.Target", sglang_plugin.MODEL_RUNNER_LOAD_MODEL}
+        calls: ClassVar[list[tuple[str, SglangHookHandler, HookType]]] = []
+        _patched: ClassVar[set[str]] = {"xpool.fake.Target", sglang_plugin.MODEL_RUNNER_LOAD_MODEL}
 
         @classmethod
         def register(cls, target: str, handler: SglangHookHandler, hook_type: HookType) -> None:
@@ -356,7 +357,7 @@ def test_model_runner_hook_requires_server_args(tmp_path: Path, monkeypatch: pyt
     def original(_model_runner: ModelRunner) -> str:
         return "loaded"
 
-    with pytest.raises(RuntimeError, match="requires ModelRunner.server_args"):
+    with pytest.raises(RuntimeError, match=r"requires ModelRunner\.server_args"):
         sglang_plugin.around_model_runner_load_model((adapter,), original, runner.as_model_runner())
 
 
@@ -580,7 +581,7 @@ path = "{resolved_model_path}"
 
 
 class _FakeHookRegistry:
-    calls: list[tuple[str, SglangHookHandler, HookType]] = []
+    calls: ClassVar[list[tuple[str, SglangHookHandler, HookType]]] = []
 
     @classmethod
     def register(cls, target: str, handler: SglangHookHandler, hook_type: HookType) -> None:

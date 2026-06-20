@@ -244,15 +244,15 @@ hard-coded planner decisions.
 ## Code Quality
 
 Python checks use Ruff formatting, Ruff linting, Astral ty, and pytest through
-the installed pre-commit hooks. Ruff enables `ANN401` so explicit `Any` in
-function arguments is rejected. Ruff also enforces public Python docstrings for
-classes, functions, methods, constructors, and documented Google-style
-parameters. Field-level public API documentation is guarded by tests for
-Pydantic fields, dataclass fields, enum members, and native ABI fields. Broad
-`object` annotations are not banned with a custom AST test. The SGLang
-integration layer is allowed and expected to import SGLang concrete types
-directly; use local runtime guards or casts only around SGLang attributes that
-are assigned dynamically and are not visible to the type checker.
+the installed pre-commit hooks. Ruff enables `E`, `F`, `I`, `FAST`, `RUF`, `UP`,
+`W`, and `ANN401`, plus public Python docstring checks for classes, functions,
+methods, constructors, and documented Google-style parameters. Field-level
+public API documentation is guarded by tests for Pydantic fields, dataclass
+fields, enum members, and native ABI fields. Broad `object` annotations are not
+banned with a custom AST test. The SGLang integration layer is allowed and
+expected to import SGLang concrete types directly; use local runtime guards or
+casts only around SGLang attributes that are assigned dynamically and are not
+visible to the type checker.
 
 C++ and CUDA public APIs use Doxygen comments. The root `Doxyfile` is a
 warning-as-error gate for native headers and sources under `src/cext`, including
