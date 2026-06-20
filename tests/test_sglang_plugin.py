@@ -15,7 +15,7 @@ from sglang.srt.server_args import ServerArgs
 
 import xpool.config as config_module
 from xpool.cext import NativeLoadError
-from xpool.config import MissingRequiredConfig, TopologyError
+from xpool.config import MissingRequiredConfig, TopologyError, XpoolConfig
 from xpool.integrations.sglang import plugin as sglang_plugin
 from xpool.integrations.sglang import topology as sglang_topology
 from xpool.integrations.sglang.adapter import (
@@ -97,13 +97,14 @@ def test_plugin_registers_adapter_owned_hooks(monkeypatch: pytest.MonkeyPatch) -
         return (adapter,)
 
     monkeypatch.setattr(sglang_plugin, "ensure_xpool_ops_loaded", lambda: events.append("load_cext"))
-    monkeypatch.setattr(sglang_plugin, "init_global_config", lambda: events.append("init_config"))
+    monkeypatch.setattr(sglang_plugin, "init_global_config", lambda: events.append("init_config") or minimal_config())
+    monkeypatch.setattr(sglang_plugin.devkit_sglang_plugins, "install", lambda: events.append("devkit_plugins"))
     monkeypatch.setattr(sglang_plugin, "sglang_model_adapters", fake_adapters)
     monkeypatch.setattr(sglang_plugin, "HookRegistry", _FakeHookRegistry)
 
     sglang_plugin.install()
 
-    assert events == ["load_cext", "init_config", "discover_adapters"]
+    assert events == ["load_cext", "init_config", "devkit_plugins", "discover_adapters"]
     assert ("xpool.fake.Target", fake_hook, HookType.REPLACE) in _FakeHookRegistry.calls
     assert any(
         target == sglang_plugin.MODEL_RUNNER_LOAD_MODEL and registered_type is HookType.AROUND
@@ -138,7 +139,8 @@ def test_plugin_apply_hooks_guard_fails_closed_when_required_target_is_missing(
 
     adapter = _FakeAdapter(hooks=(SglangHook("xpool.fake.Target", lambda: None, HookType.REPLACE),))
     monkeypatch.setattr(sglang_plugin, "ensure_xpool_ops_loaded", lambda: None)
-    monkeypatch.setattr(sglang_plugin, "init_global_config", lambda: None)
+    monkeypatch.setattr(sglang_plugin, "init_global_config", minimal_config)
+    monkeypatch.setattr(sglang_plugin.devkit_sglang_plugins, "install", lambda: None)
     monkeypatch.setattr(sglang_plugin, "sglang_model_adapters", lambda: (adapter,))
     monkeypatch.setattr(sglang_plugin, "HookRegistry", GuardedHookRegistry)
 
@@ -163,13 +165,26 @@ def test_plugin_apply_hooks_guard_allows_all_required_targets(monkeypatch: pytes
 
     adapter = _FakeAdapter(hooks=(SglangHook("xpool.fake.Target", lambda: None, HookType.REPLACE),))
     monkeypatch.setattr(sglang_plugin, "ensure_xpool_ops_loaded", lambda: None)
-    monkeypatch.setattr(sglang_plugin, "init_global_config", lambda: None)
+    monkeypatch.setattr(sglang_plugin, "init_global_config", minimal_config)
+    monkeypatch.setattr(sglang_plugin.devkit_sglang_plugins, "install", lambda: None)
     monkeypatch.setattr(sglang_plugin, "sglang_model_adapters", lambda: (adapter,))
     monkeypatch.setattr(sglang_plugin, "HookRegistry", GuardedHookRegistry)
 
     sglang_plugin.install()
 
     GuardedHookRegistry.apply_hooks()
+
+
+def test_plugin_fails_closed_when_devkit_plugin_manager_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_devkit_plugins() -> None:
+        raise RuntimeError("devkit failed")
+
+    monkeypatch.setattr(sglang_plugin, "ensure_xpool_ops_loaded", lambda: None)
+    monkeypatch.setattr(sglang_plugin, "init_global_config", minimal_config)
+    monkeypatch.setattr(sglang_plugin.devkit_sglang_plugins, "install", fail_devkit_plugins)
+
+    with pytest.raises(SystemExit, match="devkit failed"):
+        sglang_plugin.install()
 
 
 def test_model_runner_hook_delegates_to_matching_adapters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -570,6 +585,17 @@ class _FakeHookRegistry:
     @classmethod
     def register(cls, target: str, handler: SglangHookHandler, hook_type: HookType) -> None:
         cls.calls.append((target, handler, hook_type))
+
+
+def minimal_config() -> XpoolConfig:
+    """Return a minimal xpool config for plugin install tests."""
+
+    return XpoolConfig.from_mapping(
+        {
+            "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "models": [{"id": "m", "path": "/models/m"}],
+        }
+    )
 
 
 class _FakeAdapter(SglangModelAdapter):

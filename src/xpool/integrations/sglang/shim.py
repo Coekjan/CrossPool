@@ -10,6 +10,7 @@ from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_executor.forward_batch_info import ForwardMode as SglangForwardMode
 from torch import nn
 
+import xpool.ops
 from xpool.abi import ForwardMode
 from xpool.config import get_global_config
 
@@ -130,13 +131,13 @@ class FfnShimModule(nn.Module):
                 ``ffn_shim`` route and loopback contract violations.
 
         Side Effects:
-            Dispatches directly through ``torch.ops.xpool.ffn_shim`` by default
-            or ``torch.ops.xpool.ffn_shim_loopback`` when the process-global
-            xpool config has ``debug.enable_shim_loopback`` enabled. The xpool
-            SGLang plugin loads and preflights the C extension and global config
-            during startup. This Python layer intentionally avoids native-loader
-            locks, package-resource lookup, and exception translation so SGLang
-            piecewise CUDA graph can trace the shim as a custom Torch op.
+            Dispatches through compile-friendly graph wrapper ops, which call
+            ``torch.ops.xpool.ffn_shim`` by default or
+            ``torch.ops.xpool.ffn_shim_loopback`` when the process-global xpool
+            config has ``debug.shim_loopback.enable`` enabled. The xpool SGLang
+            plugin loads and preflights the C extension and global config during
+            startup. The wrapper fake implementations preserve symbolic token
+            dimensions for SGLang piecewise CUDA graph warmup.
         """
 
         if should_allreduce_fusion:
@@ -168,11 +169,11 @@ class FfnShimModule(nn.Module):
                     "(only DECODE and EXTEND are supported)"
                 )
         validate_hidden_states(hidden_states, expected_hidden_size=self.hidden_size)
-        if get_global_config().debug.enable_shim_loopback:
-            native_ffn_shim = torch.ops.xpool.ffn_shim_loopback
+        if get_global_config().debug.shim_loopback.enable:
+            ffn_shim_fn = xpool.ops.ffn_shim_loopback
         else:
-            native_ffn_shim = torch.ops.xpool.ffn_shim
-        return native_ffn_shim(
+            ffn_shim_fn = xpool.ops.ffn_shim
+        return ffn_shim_fn(
             hidden_states,
             int(self.instance_index),
             int(self.model_index),

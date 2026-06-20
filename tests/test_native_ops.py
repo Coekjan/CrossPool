@@ -102,6 +102,38 @@ def test_ffn_shim_loopback_matches_sglang_piecewise_compile_context() -> None:
     assert output.device.type == "meta"
 
 
+def test_ffn_shim_loopback_piecewise_compile_reuses_dynamic_token_dimension() -> None:
+    install_global_config(debug_loopback=True)
+    shim = FfnShimModule(layer_id=7, hidden_size=4, layer_kind=FfnLayerKind.DENSE)
+    shim.bind_identity(instance_index=1, model_index=2, model_architecture="pcg-dynamic")
+    forward_batch = type("FakeForwardBatch", (), {"forward_mode": SglangForwardMode.EXTEND})()
+    wrapper = ShimWrapper(shim=shim, forward_batch=forward_batch)
+    compile_count = 0
+
+    def backend_factory(
+        graph_module: torch.fx.GraphModule,
+        _example_inputs: list[object],
+    ) -> Callable[..., object]:
+        nonlocal compile_count
+        compile_count += 1
+        return graph_module.forward
+
+    with enable_piecewise_cuda_graph():
+        install_torch_compiled(
+            wrapper,
+            dynamic_arg_dims={"hidden_states": 0},
+            backend_factory=backend_factory,
+            fullgraph=True,
+        )
+        with enable_piecewise_cuda_graph_compile():
+            first_output = wrapper(torch.empty((4, 4), device="meta", dtype=torch.float32))
+            second_output = wrapper(torch.empty((8, 4), device="meta", dtype=torch.float32))
+
+    assert first_output.shape == (4, 4)
+    assert second_output.shape == (8, 4)
+    assert compile_count == 1
+
+
 class ShimWrapper(nn.Module):
     """Minimal module matching SGLang PCG's install_torch_compiled entry point."""
 
@@ -143,7 +175,7 @@ def install_global_config(*, debug_loopback: bool) -> None:
         Replaces the process-global xpool config.
     """
 
-    env = {"XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK": "1"} if debug_loopback else {}
+    env = {"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "1"} if debug_loopback else {}
     init_global_config(
         config=XpoolConfig.from_mapping(
             {

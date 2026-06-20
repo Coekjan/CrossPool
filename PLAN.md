@@ -354,11 +354,18 @@ helpers warn when they see an unknown `XPOOL_*` variable. `XPOOL_CONFIG` is an
 env-backed bootstrap registry setting used before TOML can be loaded, not a
 runtime `XpoolConfig` field. `SGLANG_PLUGINS` belongs to SGLang's plugin loader
 and is documented in `.env.example`, not in xpool's config registry.
-`XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK=1` is a development-only env source for
-`debug.enable_shim_loopback`; that field currently allows only `ENV` and
+`XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE=1` is a development-only env source for
+`debug.shim_loopback.enable`; that field currently allows only `ENV` and
 `DEFAULT`, so TOML attempts to set it fail closed. It routes the Python FFN shim
 to the loopback debug op and must not be used as a deployment policy or
-production fallback.
+production fallback. `XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE` and
+`XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR` are paired development-only env sources for
+`debug.graph_observer.enable` and `debug.graph_observer.outdir`: they must be
+enabled/present together or disabled/absent together. The output directory is
+where the devkit SGLang graph observer writes per-process JSONL capture/replay
+events, and relative paths are resolved against the process working directory
+during config validation. Both graph observer settings are env-only debug
+settings, so TOML attempts to set them fail closed.
 Runtime code must not copy or cache config values outside `xpool.config`; entry
 points install one process-global resolved config through `init_global_config()`,
 and business code reads it through `get_global_config()` when needed. The only
@@ -438,25 +445,35 @@ DeepSeek-V2-Lite FFN executor.
 Native Torch ops are produced during package build/install as Linux-only
 `libxpool_cext.so` and loaded from the installed xpool package by `xpool.cext`
 through an idempotent startup preflight that checks only the native
-`torch.ops.xpool.abi_version()` result against Python's `xpool.abi.ABI_VERSION`.
-Runtime shim code calls `torch.ops.xpool.ffn_shim` directly by default so decode
-CUDA graph capture and SGLang piecewise CUDA graph prefill can trace the
-production FFN shim as a custom Torch op without crossing Python loader locks,
-package-resource lookup, or exception translation. Runtime JIT extension builds
-are not part of the XPool serving design.
+`torch.ops.xpool.abi_version()` result against Python's `xpool.abi.ABI_VERSION`
+and then imports `xpool.ops` so Python graph wrappers are registered before
+serving code calls them.
+Runtime shim code calls compile-friendly Python custom-op wrappers in
+`xpool.ops` by default: `ffn_shim()` for the production path and
+`ffn_shim_loopback()` for the debug loopback path. These wrappers register
+`torch.ops.xpool.ffn_shim_graph` and
+`torch.ops.xpool.ffn_shim_loopback_graph` with fake implementations that
+preserve SGLang's symbolic token dimension during piecewise CUDA graph
+compilation, then dispatch at runtime to the native C++ ops
+`torch.ops.xpool.ffn_shim` and `torch.ops.xpool.ffn_shim_loopback`. This
+two-layer shape contract avoids per-capture-bucket whole-model recompilation
+while keeping decode CUDA graph capture and SGLang piecewise CUDA graph prefill
+on the same native execution ABI. Runtime JIT extension builds are not part of
+the XPool serving design.
 
 The current production `torch.ops.xpool.ffn_shim` is intentionally
 unimplemented and fails closed until descriptor publication, communication-slot
 ownership, transport, and device-agent wait semantics land. Because
-`debug.enable_shim_loopback` defaults to false, the default shim route is not a
+`debug.shim_loopback.enable` defaults to false, the default shim route is not a
 serving-capable configuration yet; it should fail at the first FFN shim call
 until production `ffn_shim` is implemented. The debug
-`torch.ops.xpool.ffn_shim_loopback` op supports eager execution, CUDA graph
-capture/replay, and a Meta implementation for dispatcher shape/dtype inference.
-When the resolved global config has `debug.enable_shim_loopback=true`, the
-Python shim routes to the loopback op so tests can cover SGLang's current
-eager-compiler piecewise CUDA graph prefill path and decode full-graph capture
-mechanics. This is not a
+`torch.ops.xpool.ffn_shim_loopback` op supports eager execution and CUDA graph
+capture/replay, while the graph wrapper fake implementation provides the
+torch.compile shape contract used by SGLang piecewise CUDA graph warmup. When
+the resolved global config has `debug.shim_loopback.enable=true`, the Python
+shim routes through the loopback graph wrapper so tests can cover SGLang's
+current eager-compiler piecewise CUDA graph prefill path and decode full-graph
+capture mechanics. This is not a
 serving readiness claim and not a blanket torch.compile/Inductor support claim:
 SGLang's explicit global `enable_torch_compile=True` remains rejected while
 SGLang piecewise CUDA graph prefill with the default eager compiler remains
@@ -472,15 +489,56 @@ uses together in normal high-performance serving:
 - decode full CUDA graph capture/replay,
 - prefill piecewise CUDA graph capture/replay.
 
+SGLang graph-mode tests should use the `xpool.devkit.sglang.plugins`
+management layer when they need proof that SGLang actually entered
+capture/replay paths. The normal `xpool` SGLang plugin calls
+`xpool.devkit.sglang.plugins.install()` after loading config; that manager
+auto-discovers plugin modules with the same stable non-private package scan
+style used by the SGLang model-adapter registry, and enables `graph_observer`
+only when `debug.graph_observer.enable=true`. Each devkit plugin exposes a
+zero-argument `install()` entry point and reads the process-global xpool config.
+The graph observer wraps SGLang full CUDA graph and piecewise CUDA graph runner
+methods for recording only and must not change runner arguments, tensors,
+return values, or exception behavior. It records event kinds as
+`full_cuda_graph` and `piecewise_cuda_graph`. Event output is synchronous and
+deliberately simple: first install creates/truncates
+`xpool.graph-observer.<pid>.jsonl` in the configured output directory with
+write mode so stale data is cleared and output-path errors fail early. A repeat
+install updates the target event file without truncating existing events. Each
+runtime event is appended to that file and flushed immediately under a
+process-local lock. Runtime event-recording failures are warnings and must not
+change SGLang graph runner return values or exception behavior. The observer
+belongs to devkit, not the production runtime or model-adapter layer.
+
 The debug loopback op should implement a non-identity pairwise 45-degree
 hidden-state rotation so tests can assert that the shim output is computed by
 the native op rather than accidentally returning the input. Unit tests may
 exercise the custom op directly, but SGLang readiness evidence must also include
-an isolated offline SGLang run that compares token ids from eager serving and
-the combined graph configuration on the same prompt and model weights. That E2E
-test must not add another SGLang plugin; if it needs to instrument SGLang for
-test observability, use process-local test patching such as a temporary
-`sitecustomize.py` or equivalent harness outside the production entry point.
+isolated offline SGLang runs that compare token ids across all four
+`(cuda graph, piecewise CUDA graph)` switch combinations on the same prompt and
+model weights: `(off, off)`, `(off, on)`, `(on, off)`, and `(on, on)`. The
+`(off, off)` combination is eager mode. Each mode runs in its own process so
+SGLang's plugin loader, HookRegistry, process-global xpool config, and CUDA
+graph state cannot leak across modes. The test must not add another SGLang
+entry point; it starts SGLang through the normal offline `Engine` API with
+`SGLANG_PLUGINS=xpool` and injects the env-only debug loopback and
+graph-observer settings into the child process. The test must not override
+SGLang's CUDA graph batch list, chunked prefill size, or piecewise CUDA graph
+token list; those remain SGLang defaults. The pytest command must not require a
+`CUDA_VISIBLE_DEVICES` prefix for normal execution. The test derives parallelism
+from the number of graph-mode cases and `torch.cuda.device_count()`, runs each
+mode in an isolated child process, and assigns each live child a distinct
+SGLang `base_gpu_id` range sized by the derived SGLang TP/DP policy. Each child
+uses one long comma-separated prompt built from integers `0..4095`, generates
+exactly 4096 new tokens, and writes its structured result to a per-case
+`result.json` file; stdout and stderr remain diagnostic only. The main probe
+timeout must stay minutes-scale so SGLang model loading and long decode are not
+killed early, while cleanup, kill, and output-drain waits after a timeout remain
+short and bounded. The graph observer is the path proof:
+`(off, off)` should record no graph events, `(off, on)` should record only
+piecewise prefill capture, `(on, off)` should record only full CUDA graph
+capture/replay, and `(on, on)` should record both piecewise prefill capture and
+decode full-graph capture/replay.
 
 Daemon registration currently treats process ids as the liveness identity.
 Using `os.kill(pid, 0)` cannot distinguish PID reuse after a registered process

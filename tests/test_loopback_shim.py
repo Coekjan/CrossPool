@@ -35,7 +35,7 @@ def enable_loopback(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
                 "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
-            env={"XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK": "1"},
+            env={"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "1"},
         )
     )
     yield

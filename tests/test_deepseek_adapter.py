@@ -241,7 +241,7 @@ def test_shim_forward_uses_loopback_op_when_debug_env_enabled(monkeypatch: pytes
                 "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
-            env={"XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK": "1"},
+            env={"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "1"},
         )
     )
     shim = bound_shim(layer_id=4, instance_index=2, model_index=3)

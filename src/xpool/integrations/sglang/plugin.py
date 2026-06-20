@@ -12,6 +12,7 @@ from sglang.srt.server_args import ServerArgs
 
 from xpool.cext import ensure_xpool_ops_loaded
 from xpool.config import init_global_config
+from xpool.devkit.sglang import plugins as devkit_sglang_plugins
 from xpool.integrations.sglang.adapter import (
     SglangModelAdapter,
     XpoolModelBinding,
@@ -48,6 +49,7 @@ def install() -> None:
     try:
         ensure_xpool_ops_loaded()
         init_global_config()
+        devkit_sglang_plugins.install()
         adapters = sglang_model_adapters()
         required_targets: set[str] = set()
         for adapter in adapters:

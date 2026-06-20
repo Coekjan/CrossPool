@@ -106,13 +106,31 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Bootstrap TOML config path used before repository config can be loaded.",
     ),
     ConfigSetting(
-        name="debug_enable_shim_loopback",
-        path=("debug", "enable_shim_loopback"),
+        name="debug_shim_loopback_enable",
+        path=("debug", "shim_loopback", "enable"),
         parser="bool",
         allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
         default=False,
-        env_var="XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK",
+        env_var="XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE",
         description="Development-only switch that routes FFN shim calls to the debug loopback op.",
+    ),
+    ConfigSetting(
+        name="debug_graph_observer_enable",
+        path=("debug", "graph_observer", "enable"),
+        parser="bool",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=False,
+        env_var="XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE",
+        description="Development-only switch that records SGLang CUDA graph capture/replay events.",
+    ),
+    ConfigSetting(
+        name="debug_graph_observer_outdir",
+        path=("debug", "graph_observer", "outdir"),
+        parser="raw",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=None,
+        env_var="XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR",
+        description="Directory used by the debug graph observer for JSONL event files.",
     ),
     ConfigSetting(
         name="vendor_model_base_uri",
@@ -363,14 +381,66 @@ class ServingInstanceConfig(BaseModel):
     model_index: int = Field(ge=0, description="Integer model index fed to the native shim ABI.")
 
 
+class ShimLoopbackDebugConfig(BaseModel):
+    """Debug-only FFN shim loopback switch resolved through the config registry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enable: bool = Field(
+        default=False,
+        description="Whether FFN shim modules should call the debug loopback native op instead of production shim.",
+    )
+
+
+class GraphObserverDebugConfig(BaseModel):
+    """Debug-only SGLang CUDA graph observer settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enable: bool = Field(
+        default=False,
+        description="Whether the SGLang plugin should install devkit CUDA graph capture/replay observers.",
+    )
+    outdir: Path | None = Field(
+        default=None,
+        description="Directory where the devkit graph observer writes per-process JSONL event files.",
+    )
+
+    @model_validator(mode="after")
+    def validate_graph_observer(self) -> "GraphObserverDebugConfig":
+        """Normalize and validate debug graph observer output settings.
+
+        Returns:
+            The validated debug config.
+
+        Raises:
+            ValueError: If graph observation enablement and output directory
+                presence are not configured together.
+        """
+
+        if self.enable != (self.outdir is not None):
+            raise ValueError(
+                "debug.graph_observer.enable and debug.graph_observer.outdir must be set or unset together"
+            )
+        if self.outdir is None:
+            return self
+        outdir = self.outdir.expanduser()
+        self.outdir = outdir.resolve() if outdir.is_absolute() else (Path.cwd() / outdir).resolve()
+        return self
+
+
 class DebugConfig(BaseModel):
     """Debug-only runtime switches resolved through the config registry."""
 
     model_config = ConfigDict(extra="forbid")
 
-    enable_shim_loopback: bool = Field(
-        default=False,
-        description="Whether FFN shim modules should call the debug loopback native op instead of production shim.",
+    shim_loopback: ShimLoopbackDebugConfig = Field(
+        default_factory=ShimLoopbackDebugConfig,
+        description="FFN shim loopback debug switch.",
+    )
+    graph_observer: GraphObserverDebugConfig = Field(
+        default_factory=GraphObserverDebugConfig,
+        description="SGLang CUDA graph observer debug settings.",
     )
 
 

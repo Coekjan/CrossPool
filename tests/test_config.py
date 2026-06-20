@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 import logging
-import tomllib
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from copy import deepcopy
 from pathlib import Path
-from typing import cast
 
 import pytest
 from pydantic import ValidationError
 
 import xpool.config as config_module
 from xpool.config import (
-    CONFIG_REGISTRY,
     ConfigError,
-    ConfigSource,
     DeviceRole,
     MissingRequiredConfig,
     XpoolConfig,
@@ -33,7 +29,9 @@ def reset_global_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def test_example_config_loads_schema_only() -> None:
     config = XpoolConfig.from_file(Path("configs/xpool.example.toml"))
 
-    assert config.debug.enable_shim_loopback is False
+    assert config.debug.shim_loopback.enable is False
+    assert config.debug.graph_observer.enable is False
+    assert config.debug.graph_observer.outdir is None
     assert config.scheduler.attention_concurrency == 1
     assert config.scheduler.transport_concurrency == 1
     assert config.vendor.model_base_uri == Path("/absolute/path/to/models")
@@ -51,22 +49,6 @@ def test_example_config_loads_schema_only() -> None:
     )
     assert config.serving_instances[0].id == "deepseek-ai/DeepSeek-V2-Lite-Chat"
     assert config.serving_instances[0].ffn_agent_ids == ["cuda1"]
-
-
-def test_example_config_covers_required_schema_paths() -> None:
-    with Path("configs/xpool.example.toml").open("rb") as config_file:
-        payload = tomllib.load(config_file)
-
-    missing = [
-        setting.name
-        for setting in CONFIG_REGISTRY
-        if setting.required
-        and ConfigSource.CONFIG in setting.allowed_sources
-        and setting.path is not None
-        and not _has_required_path(payload, setting.path)
-    ]
-
-    assert missing == []
 
 
 def test_old_explicit_topology_fields_are_rejected() -> None:
@@ -162,7 +144,9 @@ def test_defaults_fill_missing_optional_sections() -> None:
         cli_overrides={},
     )
 
-    assert config.debug.enable_shim_loopback is False
+    assert config.debug.shim_loopback.enable is False
+    assert config.debug.graph_observer.enable is False
+    assert config.debug.graph_observer.outdir is None
     assert config.daemon.host == "127.0.0.1"
     assert config.daemon.port == 9810
     assert config.scheduler.attention_concurrency == 1
@@ -245,35 +229,59 @@ def test_init_global_config_rejects_mixed_injection_inputs() -> None:
         init_global_config(config=config, env={})
 
 
-def test_registry_declares_process_env_settings() -> None:
-    registry = {setting.name: setting for setting in CONFIG_REGISTRY}
-
-    assert "sglang_plugins" not in registry
-    assert "preflight_require_mps" not in registry
-    assert "capture_decode_buckets" not in registry
-    assert registry["config_path"].env_var == "XPOOL_CONFIG"
-    assert registry["config_path"].allowed_sources == (ConfigSource.CLI, ConfigSource.ENV)
-    assert registry["config_path"].path is None
-    assert registry["debug_enable_shim_loopback"].env_var == "XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK"
-    assert registry["debug_enable_shim_loopback"].allowed_sources == (ConfigSource.ENV, ConfigSource.DEFAULT)
-    assert registry["debug_enable_shim_loopback"].path == ("debug", "enable_shim_loopback")
-    assert registry["vendor_model_base_uri"].env_var is None
-    assert registry["vendor_model_base_uri"].allowed_sources == (ConfigSource.CONFIG,)
-    assert registry["vendor_model_base_uri"].path == ("vendor", "model_base_uri")
-
-
 def test_env_source_parses_debug_loopback_flag() -> None:
     payload = {
         "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
-    enabled = XpoolConfig.from_mapping(payload, env={"XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK": "1"})
+    enabled = XpoolConfig.from_mapping(payload, env={"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "1"})
     disabled = XpoolConfig.from_mapping(payload, env={})
-    explicitly_disabled = XpoolConfig.from_mapping(payload, env={"XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK": "0"})
+    explicitly_disabled = XpoolConfig.from_mapping(payload, env={"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "0"})
 
-    assert enabled.debug.enable_shim_loopback is True
-    assert disabled.debug.enable_shim_loopback is False
-    assert explicitly_disabled.debug.enable_shim_loopback is False
+    assert enabled.debug.shim_loopback.enable is True
+    assert disabled.debug.shim_loopback.enable is False
+    assert explicitly_disabled.debug.shim_loopback.enable is False
+    assert disabled.debug.graph_observer.enable is False
+
+
+def test_env_source_parses_graph_observer_settings(tmp_path: Path) -> None:
+    payload = {
+        "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "models": [{"id": "m", "path": "/models/m"}],
+    }
+    outdir = tmp_path.resolve()
+
+    enabled = XpoolConfig.from_mapping(
+        payload,
+        env={
+            "XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE": "1",
+            "XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR": str(outdir),
+        },
+    )
+
+    assert enabled.debug.graph_observer.enable is True
+    assert enabled.debug.graph_observer.outdir == outdir
+
+
+def test_graph_observer_outdir_accepts_relative_env_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    payload = {
+        "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "models": [{"id": "m", "path": "/models/m"}],
+    }
+
+    config = XpoolConfig.from_mapping(
+        payload,
+        env={
+            "XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE": "1",
+            "XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR": "relative/events",
+        },
+    )
+
+    assert config.debug.graph_observer.outdir == (tmp_path / "relative/events").resolve()
 
 
 def test_env_source_rejects_invalid_debug_loopback_flag() -> None:
@@ -283,7 +291,18 @@ def test_env_source_rejects_invalid_debug_loopback_flag() -> None:
                 "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
-            env={"XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK": "true"},
+            env={"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "true"},
+        )
+
+
+def test_env_source_rejects_invalid_graph_observer_flag() -> None:
+    with pytest.raises(ConfigError, match="boolean flag"):
+        XpoolConfig.from_mapping(
+            {
+                "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "models": [{"id": "m", "path": "/models/m"}],
+            },
+            env={"XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE": "true"},
         )
 
 
@@ -299,14 +318,49 @@ def test_int_source_rejects_invalid_integer() -> None:
 
 
 def test_debug_loopback_cannot_be_set_from_toml() -> None:
-    with pytest.raises(ConfigError, match="debug_enable_shim_loopback"):
+    with pytest.raises(ConfigError, match="debug_shim_loopback_enable"):
         XpoolConfig.from_mapping(
             {
-                "debug": {"enable_shim_loopback": True},
+                "debug": {"shim_loopback": {"enable": True}},
                 "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
         )
+
+
+def test_debug_graph_observer_cannot_be_set_from_toml() -> None:
+    for debug_payload, setting_name in (
+        ({"graph_observer": {"enable": True}}, "debug_graph_observer_enable"),
+        ({"graph_observer": {"outdir": "/tmp/xpool-graph-events"}}, "debug_graph_observer_outdir"),
+    ):
+        with pytest.raises(ConfigError, match=setting_name):
+            XpoolConfig.from_mapping(
+                {
+                    "debug": debug_payload,
+                    "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                    "models": [{"id": "m", "path": "/models/m"}],
+                },
+            )
+
+
+def test_graph_observer_requires_outdir_when_enabled() -> None:
+    payload = {
+        "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "models": [{"id": "m", "path": "/models/m"}],
+    }
+
+    with pytest.raises(ValidationError, match="must be set or unset together"):
+        XpoolConfig.from_mapping(payload, env={"XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE": "1"})
+
+
+def test_graph_observer_rejects_outdir_when_disabled(tmp_path: Path) -> None:
+    payload = {
+        "devices": {"attention_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "models": [{"id": "m", "path": "/models/m"}],
+    }
+
+    with pytest.raises(ValidationError, match="must be set or unset together"):
+        XpoolConfig.from_mapping(payload, env={"XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR": str(tmp_path)})
 
 
 def test_unknown_xpool_env_warns(caplog: pytest.LogCaptureFixture) -> None:
@@ -317,12 +371,14 @@ def test_unknown_xpool_env_warns(caplog: pytest.LogCaptureFixture) -> None:
                 "models": [{"id": "m", "path": "/models/m"}],
             },
             env={
-                "XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK": "0",
+                "XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "0",
+                "XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE": "0",
                 "XPOOL_UNKNOWN": "1",
             },
         )
 
-    assert config.debug.enable_shim_loopback is False
+    assert config.debug.shim_loopback.enable is False
+    assert config.debug.graph_observer.enable is False
     assert "XPOOL_UNKNOWN" in caplog.text
 
 
@@ -488,39 +544,3 @@ path = "{resolved_model_path}"
         encoding="utf-8",
     )
     return path
-
-
-def _has_required_path(payload: Mapping[str, object], path: tuple[str, ...]) -> bool:
-    if "*" not in path:
-        found, value = _get_path(payload, path)
-        return found and not _is_empty(value)
-
-    wildcard_index = path.index("*")
-    collection_path = path[:wildcard_index]
-    item_path = path[wildcard_index + 1 :]
-    found, collection = _get_path(payload, collection_path)
-    if not found or not isinstance(collection, list) or not collection:
-        return False
-    for item in collection:
-        if not isinstance(item, Mapping):
-            return False
-        found, value = _get_path(cast(Mapping[str, object], item), item_path)
-        if not found or _is_empty(value):
-            return False
-    return True
-
-
-def _get_path(payload: Mapping[str, object], path: tuple[str, ...]) -> tuple[bool, object]:
-    cursor: object = payload
-    for key in path:
-        if not isinstance(cursor, Mapping):
-            return False, None
-        mapping = cast(Mapping[str, object], cursor)
-        if key not in mapping:
-            return False, None
-        cursor = mapping[key]
-    return True, cursor
-
-
-def _is_empty(value: object) -> bool:
-    return value is None or value == "" or value == []

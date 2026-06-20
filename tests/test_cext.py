@@ -17,6 +17,7 @@ from xpool.cext import NativeLoadError, ensure_xpool_ops_loaded
 @pytest.fixture(autouse=True)
 def reset_cext_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cext_module, "_loaded", False)
+    monkeypatch.setattr(cext_module, "import_module", lambda _name: None)
 
 
 def test_native_loader_is_serialized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -54,6 +55,48 @@ def test_native_loader_checks_native_abi_version(tmp_path: Path, monkeypatch: py
     ensure_xpool_ops_loaded()
 
     assert events == ["load", "preflight"]
+
+
+def test_native_loader_prewarms_python_graph_ops_after_native_abi(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    library_path = tmp_path / "libxpool_cext.so"
+    library_path.write_bytes(b"")
+    events: list[str] = []
+
+    monkeypatch.setattr(cext_module, "files", lambda package: _FakeFiles(package))
+    monkeypatch.setattr(cext_module, "as_file", lambda _resource: _FakeAsFileContext(library_path))
+    monkeypatch.setattr(torch.ops, "load_library", lambda _path: events.append("load"))
+    monkeypatch.setattr(torch.ops, "xpool", _FakeOpNamespace(events, abi_version=ABI_VERSION), raising=False)
+    monkeypatch.setattr(cext_module, "import_module", lambda name: events.append(f"import:{name}"))
+
+    ensure_xpool_ops_loaded()
+    ensure_xpool_ops_loaded()
+
+    assert events == ["load", "preflight", "import:xpool.ops"]
+
+
+def test_native_loader_rejects_python_graph_wrapper_import_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    library_path = tmp_path / "libxpool_cext.so"
+    library_path.write_bytes(b"")
+
+    def fail_import(_name: str) -> object:
+        raise RuntimeError("graph wrapper import failed")
+
+    monkeypatch.setattr(cext_module, "files", lambda package: _FakeFiles(package))
+    monkeypatch.setattr(cext_module, "as_file", lambda _resource: _FakeAsFileContext(library_path))
+    monkeypatch.setattr(torch.ops, "load_library", lambda _path: None)
+    monkeypatch.setattr(torch.ops, "xpool", SimpleNamespace(abi_version=lambda: ABI_VERSION), raising=False)
+    monkeypatch.setattr(cext_module, "import_module", fail_import)
+
+    with pytest.raises(NativeLoadError, match="Python graph wrapper ops"):
+        ensure_xpool_ops_loaded()
+
+    assert cext_module._loaded is False
 
 
 def test_native_loader_loads_package_resource_while_as_file_context_is_active(

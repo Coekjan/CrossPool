@@ -1,1 +1,1 @@
-"""Runtime helpers for xpool."""
+"""Runtime environment preflight and health helpers for xpool."""

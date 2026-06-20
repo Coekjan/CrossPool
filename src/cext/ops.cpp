@@ -41,7 +41,7 @@ bool is_supported_hidden_dtype(at::ScalarType scalar_type) {
   TORCH_CHECK(
       false,
       "xpool ffn_shim is not implemented yet; set "
-      "XPOOL_DEBUG_ENABLE_SHIM_LOOPBACK=1 to validate the debug loopback op");
+      "XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE=1 to validate the debug loopback op");
 }
 
 void validate_loopback_ffn_contract(const at::Tensor &hidden_states,
