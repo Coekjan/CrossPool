@@ -565,7 +565,13 @@ sources under `src/cext` and public headers under `src/cext/include`.
 The normal native build entrypoint is uv/scikit-build; use
 `CMAKE_BUILD_PARALLEL_LEVEL=<jobs> uv sync --group dev --reinstall-package xpool`
 to rebuild `libxpool_cext.so` with parallel compilation before running native-op
-tests. Native code is formatted with `clang-format`.
+tests. CMake enables `ccache` by default when it is found and a C++ or CUDA
+compiler launcher is not already configured; disable it with
+`--config-settings-package xpool:cmake.define.XPOOL_ENABLE_CCACHE=OFF`. To
+measure or benefit from warm-cache rebuilds, use
+`CMAKE_BUILD_PARALLEL_LEVEL=<jobs> uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool`
+so uv's build backend and dependency paths remain stable. Native code is
+formatted with `clang-format`.
 
 Performance work must use Nsight Systems before hot-path optimization. TBT and
 TPOT must be measured at generated-token boundaries, not derived from

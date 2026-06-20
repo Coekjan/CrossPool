@@ -181,6 +181,11 @@ C++ and CUDA style:
   uv/scikit-build, for example
   `CMAKE_BUILD_PARALLEL_LEVEL=<jobs> uv sync --group dev --reinstall-package xpool`,
   instead of invoking CMake directly as the normal install path.
+- For ccache-friendly rebuild timing, keep the dev build backend installed and
+  use `CMAKE_BUILD_PARALLEL_LEVEL=<jobs> uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool`
+  so compiler input paths stay stable across rebuilds. CMake enables ccache by
+  default when it is found and a compiler launcher is not already configured;
+  disable it with `--config-settings-package xpool:cmake.define.XPOOL_ENABLE_CCACHE=OFF`.
 - Use `CMAKE_BUILD_PARALLEL_LEVEL=<jobs>` for native build concurrency; do not
   hard-code a repository-wide job count.
 - Format C++, CUDA, and headers with `clang-format`.
