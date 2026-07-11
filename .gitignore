@@ -9,12 +9,15 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .ty/
+.coverage
+.coverage.*
 .xpool-cache/
 .env
 
 build/
 dist/
 *.egg-info/
+compile_commands.json
 
 .vscode/
 .idea/

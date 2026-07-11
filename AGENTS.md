@@ -49,7 +49,7 @@ model adapter that owns it; global integration layers should expose only generic
 registration, discovery, binding, and shim contracts.
 
 Use repository terminology consistently. In xpool code and documentation, prefer
-`device agent` for xpool-owned runtime roles. Use `PE` only when directly
+`devagent` for xpool-owned runtime roles. Use `PE` only when directly
 describing NVSHMEM APIs or behavior.
 
 Prefer behavior tests over source-string or implementation-text assertions.
@@ -73,6 +73,14 @@ the annotation. In SGLang integration code, import pinned SGLang concrete types
 directly instead of inventing local `*Like` protocols. Do not use
 `TYPE_CHECKING` blocks or local imports to hide ordinary dependency cycles;
 fix the ownership boundary instead.
+
+Do not define xpool-owned Python variables, parameters, constants, functions,
+methods, attributes, classes, or type aliases with a single leading underscore.
+Use descriptive names, remove bindings that are not needed, and keep
+framework-mandated unused parameters under their protocol names instead of
+prefixing or deleting them. Python double-underscore protocols and unavoidable
+private names owned by standard-library or third-party APIs are exempt. Do not
+add compatibility aliases for renamed private implementation details.
 
 For PEP 695 generic functions, prefer short local type parameter names such as
 `R` and `W` when the scope is obvious. Avoid legacy-style verbose names such as
@@ -113,9 +121,28 @@ implementation text unless the test is an explicit quality gate for that text.
 If a test would still pass when the user-visible behavior is broken, replace it
 with a behavior test.
 
-Put reusable test helpers under `tests/helpers/`. SGLang-facing tests should use
-SGLang's concrete types such as `ServerArgs` rather than handwritten protocol
-or mock replacements when those concrete types are available.
+Put reusable test harnesses and process-management tools under
+`tests/harness/`. Keep Python tests in three explicit layers: `tests/unit/`
+mirrors xpool modules and must not exercise native behavior, launch subprocesses,
+or load model weights; `tests/integration/` covers cross-module, pinned SGLang,
+Python/native, and component-scoped CUDA subprocess contracts; `tests/e2e/`
+owns full SGLang Engine, multi-process service, and model-weight workflows.
+SGLang-facing tests should use SGLang's concrete
+types such as `ServerArgs` rather than handwritten protocol or mock replacements
+when those concrete types are available.
+
+Every pytest session must preflight `xpool.ops`; a missing or ABI-incompatible
+native extension is a suite failure, never a skip. E2E files use
+`test_e2e_*.py` names. Resource requirements use
+`requires_cuda`, `requires_config`, and `requires_model_weights`; unavailable
+resources skip by default and fail under `--strict-requirements`, while invalid
+explicit configuration always fails. E2E configuration comes only from the
+`XPOOL_CONFIG` environment variable. Default collection includes unit,
+integration, and E2E tests. E2E tests run without strict mode whenever every
+declared and derived requirement is available. Before canonical pytest commands,
+conditionally run `if [ -f .env ]; then export UV_ENV_FILE="$PWD/.env"; fi` so
+uv supplies optional local test configuration without making pytest parse
+dotenv files.
 
 Shim graph-mode coverage must distinguish eager execution, decode full CUDA
 graph replay, and prefill piecewise CUDA graph replay. SGLang integration
@@ -161,8 +188,27 @@ new accepted design requires Python NVSHMEM bindings. Sync the full developer
 environment with:
 
 ```bash
-uv sync --group dev
+uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool
 ```
+
+CUDA MPS is required for daemon readiness and transport execution. Configure
+host-unique `CUDA_MPS_PIPE_DIRECTORY` and `CUDA_MPS_LOG_DIRECTORY` values in
+the ignored `.env`, create those directories, and start the controller before
+xpool. The controller must see every GPU that PyTorch clients enumerate; use
+GPU UUIDs to avoid ordinal remapping:
+
+```bash
+mkdir -p /tmp/xpool-mps-38373/{pipe,log}
+export UV_ENV_FILE="$PWD/.env"
+CUDA_VISIBLE_DEVICES="$(nvidia-smi --query-gpu=uuid --format=csv,noheader | paste -sd, -)" \
+  uv run nvidia-cuda-mps-control -d
+printf 'get_default_active_thread_percentage\n' | uv run nvidia-cuda-mps-control
+```
+
+MPS starts its server lazily when the first CUDA client connects. Stop SGLang
+and devagents cleanly before stopping the controller with
+`printf 'quit\n' | uv run nvidia-cuda-mps-control`. The daemon observes MPS
+readiness but does not own the controller lifecycle or change GPU compute mode.
 
 Python code style:
 
@@ -177,15 +223,14 @@ Python code style:
 C++ and CUDA style:
 
 - Manage native builds with `CMakeLists.txt`; do not reintroduce `setup.py` as
-  the primary native build system. Developers should build the extension through
-  uv/scikit-build, for example
-  `CMAKE_BUILD_PARALLEL_LEVEL=<jobs> uv sync --group dev --reinstall-package xpool`,
-  instead of invoking CMake directly as the normal install path.
-- For ccache-friendly rebuild timing, keep the dev build backend installed and
-  use `CMAKE_BUILD_PARALLEL_LEVEL=<jobs> uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool`
-  so compiler input paths stay stable across rebuilds. CMake enables ccache by
-  default when it is found and a compiler launcher is not already configured;
-  disable it with `--config-settings-package xpool:cmake.define.XPOOL_ENABLE_CCACHE=OFF`.
+  the primary native build system. Build and reinstall the extension through
+  the canonical uv/scikit-build command above instead of invoking CMake
+  directly. Prefix it with `CMAKE_BUILD_PARALLEL_LEVEL=<jobs>` when explicit
+  native build concurrency is useful.
+- CMake enables ccache by default for C, C++, and CUDA when `ccache` is found
+  and the corresponding compiler launcher is not already configured. Disable
+  it explicitly with
+  `--config-settings-package xpool:cmake.define.XPOOL_ENABLE_CCACHE=OFF`.
 - Use `CMAKE_BUILD_PARALLEL_LEVEL=<jobs>` for native build concurrency; do not
   hard-code a repository-wide job count.
 - Format C++, CUDA, and headers with `clang-format`.
@@ -206,7 +251,9 @@ Hooks are defined directly in `.pre-commit-config.yaml`; do not add a separate
 pre-commit wrapper script. File-scoped hooks must operate on files passed by
 pre-commit. Whole-project hooks such as type checks or pytest may use
 `pass_filenames: false`, but must not recursively scan ignored directories such
-as `.venv/`.
+as `.venv/`. The pytest hook conditionally sets `UV_ENV_FILE` to the ignored
+repository-root `.env` when that file exists; shell-exported variables retain
+precedence over values loaded by uv.
 
 ## Workflow
 
