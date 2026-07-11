@@ -12,13 +12,15 @@ import torch
 
 from xpool.abi import ABI_VERSION
 
+__all__ = ["NativeLoadError", "ensure_xpool_ops_loaded"]
+
 
 class NativeLoadError(RuntimeError):
     """Raised when the xpool native library or ABI contract is unavailable."""
 
 
-_loaded = False
-_load_lock = Lock()
+native_ops_loaded = False
+native_load_lock = Lock()
 
 
 def ensure_xpool_ops_loaded() -> None:
@@ -36,26 +38,18 @@ def ensure_xpool_ops_loaded() -> None:
         success. Later calls return without touching the dispatcher.
     """
 
-    global _loaded
-    if _loaded:
+    global native_ops_loaded
+    if native_ops_loaded:
         return
-    with _load_lock:
-        if _loaded:
+    with native_load_lock:
+        if native_ops_loaded:
             return
-
-        def load_library_and_prewarm(path: Path) -> None:
-            try:
-                torch.ops.load_library(str(path))
-            except OSError as exc:
-                raise NativeLoadError(f"failed to load xpool C extension from {path}") from exc
-            _check_native_abi_version()
-            _prewarm_python_ops()
 
         resource = files("xpool").joinpath("libxpool_cext.so")
         with as_file(resource) as package_path:
             if package_path.is_file():
                 load_library_and_prewarm(package_path)
-                _loaded = True
+                native_ops_loaded = True
                 return
         try:
             distribution_path = Path(str(distribution("xpool").locate_file("xpool/libxpool_cext.so")))
@@ -63,7 +57,7 @@ def ensure_xpool_ops_loaded() -> None:
             raise NativeLoadError("xpool is not installed; cannot locate libxpool_cext.so") from exc
         if distribution_path.is_file():
             load_library_and_prewarm(distribution_path)
-            _loaded = True
+            native_ops_loaded = True
             return
         raise NativeLoadError(
             f"xpool C extension is not installed at {package_path} or {distribution_path}; "
@@ -71,7 +65,18 @@ def ensure_xpool_ops_loaded() -> None:
         )
 
 
-def _check_native_abi_version() -> None:
+def load_library_and_prewarm(path: Path) -> None:
+    """Load one native library candidate and preflight its Python bindings."""
+
+    try:
+        torch.ops.load_library(str(path))
+    except OSError as exc:
+        raise NativeLoadError(f"failed to load xpool C extension from {path}") from exc
+    check_native_abi_version()
+    prewarm_python_ops()
+
+
+def check_native_abi_version() -> None:
     """Verify that the loaded native extension matches python-side ABI version.
 
     Raises:
@@ -91,7 +96,7 @@ def _check_native_abi_version() -> None:
         raise NativeLoadError(f"xpool native ABI version {native_version} does not match python-side ABI {ABI_VERSION}")
 
 
-def _prewarm_python_ops() -> None:
+def prewarm_python_ops() -> None:
     """Import Python graph wrappers after native op preflight succeeds.
 
     Raises:

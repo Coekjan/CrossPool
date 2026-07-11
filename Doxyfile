@@ -1,11 +1,17 @@
 PROJECT_NAME           = xpool
-PROJECT_BRIEF          = "C++/CUDA public API documentation gate for xpool"
+PROJECT_BRIEF          = "C++/CUDA native header documentation gate for xpool"
 OUTPUT_DIRECTORY       = build/doxygen
 
-INPUT                  = src/cext
+INPUT                  = src/cext-include
 RECURSIVE              = YES
-FILE_PATTERNS          = *.h *.hpp *.hh *.cpp *.cc *.cu *.cuh
+FILE_PATTERNS          = *.h *.hpp *.hh *.cuh
 EXTENSION_MAPPING      = cu=C++ cuh=C++
+PREDEFINED             = __CUDACC__=1 \
+                         __device__= \
+                         __host__= \
+                         __global__= \
+                         __forceinline__= \
+                         __constant__=
 
 EXTRACT_ALL            = NO
 EXTRACT_PRIVATE        = NO

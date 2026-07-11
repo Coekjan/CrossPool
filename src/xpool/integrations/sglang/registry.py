@@ -13,13 +13,7 @@ from typing import cast
 from xpool.integrations.sglang.adapter import SglangModelAdapter
 
 MODELS_PACKAGE = "xpool.integrations.sglang.models"
-LOGGER = logging.getLogger(__name__)
-
-
-def sglang_model_adapters() -> tuple[SglangModelAdapter, ...]:
-    """Return model adapters installed by the xpool SGLang plugin."""
-
-    return discover_sglang_model_adapters(MODELS_PACKAGE)
+logger = logging.getLogger(__name__)
 
 
 def discover_sglang_model_adapters(package_name: str, *, strict: bool = True) -> tuple[SglangModelAdapter, ...]:
@@ -41,7 +35,12 @@ def discover_sglang_model_adapters(package_name: str, *, strict: bool = True) ->
     adapters: list[SglangModelAdapter] = []
     for module in iter_model_modules(package_name, strict=strict):
         for adapter_class in adapter_classes_in_module(module):
-            adapters.append(instantiate_adapter(adapter_class))
+            try:
+                adapters.append(adapter_class())
+            except TypeError as exc:
+                raise RuntimeError(
+                    f"SGLang adapter {adapter_class.__module__}.{adapter_class.__name__} must be zero-argument"
+                ) from exc
     return sort_and_validate_adapters(adapters)
 
 
@@ -66,7 +65,10 @@ def iter_model_modules(package_name: str, *, strict: bool = True) -> tuple[Modul
     for module_info in pkgutil.walk_packages(
         package_path,
         package.__name__ + ".",
-        onerror=log_package_walk_import_error,
+        onerror=lambda failed_package: logger.warning(
+            "Skipping SGLang adapter package %s after import failure",
+            failed_package,
+        ),
     ):
         module_parts = module_info.name.removeprefix(package.__name__ + ".").split(".")
         if any(part.startswith("_") for part in module_parts):
@@ -76,26 +78,13 @@ def iter_model_modules(package_name: str, *, strict: bool = True) -> tuple[Modul
         except Exception as exc:
             if strict:
                 raise RuntimeError(f"failed to import SGLang adapter module {module_info.name}: {exc}") from exc
-            LOGGER.warning(
+            logger.warning(
                 "Skipping SGLang adapter module %s after import failure: %s",
                 module_info.name,
                 exc,
                 exc_info=True,
             )
     return tuple(modules)
-
-
-def log_package_walk_import_error(package_name: str) -> None:
-    """Log a package import failure raised while scanning adapter modules.
-
-    Args:
-        package_name: Package name reported by ``pkgutil.walk_packages``.
-
-    Side Effects:
-        Emits a warning and lets discovery continue with other modules.
-    """
-
-    LOGGER.warning("Skipping SGLang adapter package %s after import failure", package_name)
 
 
 def adapter_classes_in_module(module: ModuleType) -> tuple[type[SglangModelAdapter], ...]:
@@ -110,7 +99,8 @@ def adapter_classes_in_module(module: ModuleType) -> tuple[type[SglangModelAdapt
     """
 
     classes: list[type[SglangModelAdapter]] = []
-    for _name, value in inspect.getmembers(module, inspect.isclass):
+    for member in inspect.getmembers(module, inspect.isclass):
+        value = member[1]
         if value is SglangModelAdapter:
             continue
         if value.__module__ != module.__name__:
@@ -121,27 +111,6 @@ def adapter_classes_in_module(module: ModuleType) -> tuple[type[SglangModelAdapt
             continue
         classes.append(cast(type[SglangModelAdapter], value))
     return tuple(classes)
-
-
-def instantiate_adapter(adapter_class: type[SglangModelAdapter]) -> SglangModelAdapter:
-    """Instantiate a concrete adapter class.
-
-    Args:
-        adapter_class: Zero-argument ``SglangModelAdapter`` subclass.
-
-    Returns:
-        Adapter instance.
-
-    Raises:
-        RuntimeError: If the adapter requires constructor arguments.
-    """
-
-    try:
-        return adapter_class()
-    except TypeError as exc:
-        raise RuntimeError(
-            f"SGLang adapter {adapter_class.__module__}.{adapter_class.__name__} must be zero-argument"
-        ) from exc
 
 
 def sort_and_validate_adapters(adapters: Sequence[SglangModelAdapter]) -> tuple[SglangModelAdapter, ...]:

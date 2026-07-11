@@ -61,7 +61,6 @@ SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (
     ServerArgRule("Torch Compile", lambda args: not args.enable_torch_compile),
     ServerArgRule("Piecewise CUDA Graph Compiler", lambda args: args.piecewise_cuda_graph_compiler == "eager"),
     ServerArgRule("Mixed Chunked Prefill", lambda args: not args.enable_mixed_chunk),
-    ServerArgRule("DP Attention", lambda args: not args.enable_dp_attention),
     ServerArgRule("Attention TP Input Scattering", lambda args: not args.enable_attn_tp_input_scattered),
     ServerArgRule("Prefill Context Parallelism", lambda args: not args.enable_prefill_context_parallel),
     ServerArgRule("DSA Prefill Context Parallelism", lambda args: not args.enable_dsa_prefill_context_parallel),

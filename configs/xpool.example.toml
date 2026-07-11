@@ -3,14 +3,14 @@ host = "127.0.0.1"
 port = 9810
 
 [scheduler]
-attention_concurrency = 1
-transport_concurrency = 1
+atn_concurrency = 1
+ffn_concurrency = 1
 
 [vendor]
 model_base_uri = "/absolute/path/to/models"
 
 [devices]
-attention_cuda_devices = [0]
+atn_cuda_devices = [0]
 ffn_cuda_devices = [1]
 
 [[models]]

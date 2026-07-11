@@ -6,13 +6,12 @@ from collections.abc import Iterator
 from enum import StrEnum
 
 import torch
-from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.model_executor.forward_batch_info import ForwardMode as SglangForwardMode
+from sglang.srt.layers.dp_attention import DpPaddingMode as SglangDpPaddingMode
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from torch import nn
 
 import xpool.ops
-from xpool.abi import ForwardMode
-from xpool.config import get_global_config
+from xpool.abi import DpPaddingMode, FfnCollectivePolicy, FfnRequestMetadata, XPoolForwardMode
 
 
 class ShimUnavailableError(RuntimeError):
@@ -68,19 +67,37 @@ class FfnShimModule(nn.Module):
         self.layer_id = layer_id
         self.hidden_size = hidden_size
         self.layer_kind = layer_kind
-        # Integer instance/model identity is injected post-load (see inject_shim_identity);
+        # Integer instance identity is injected post-load (see inject_shim_identity);
         # -1 marks an unbound shim so a forward before binding fails closed loudly.
         self.instance_index = -1
-        self.model_index = -1
+        self.sglang_rank = -1
+        self.atn_tp_rank = 0
+        self.atn_tp_size = 1
+        self.atn_dp_rank = 0
+        self.atn_dp_size = 1
 
-    def bind_identity(self, instance_index: int, model_index: int, *, model_architecture: str) -> None:
+    def bind_identity(
+        self,
+        instance_index: int,
+        sglang_rank: int,
+        *,
+        model_architecture: str,
+        atn_tp_rank: int = 0,
+        atn_tp_size: int = 1,
+        atn_dp_rank: int = 0,
+        atn_dp_size: int = 1,
+    ) -> None:
         """Stamp diagnostic metadata and integer identity after load.
 
         Args:
             instance_index: Integer SGLang instance id from xpool config order.
-            model_index: Integer model id selecting the FFN executor weight set.
+            sglang_rank: SGLang tensor-parallel rank that owns this shim.
             model_architecture: SGLang/Hugging Face architecture string read
                 from the loaded model runner config.
+            atn_tp_rank: Attention tensor-parallel rank for this SGLang rank.
+            atn_tp_size: Attention tensor-parallel world size for this SGLang rank.
+            atn_dp_rank: Attention data-parallel rank for this SGLang rank.
+            atn_dp_size: Attention data-parallel world size for this SGLang rank.
 
         Side Effects:
             Mutates the shim diagnostic and identity fields used by later
@@ -88,8 +105,12 @@ class FfnShimModule(nn.Module):
         """
 
         self.instance_index = instance_index
-        self.model_index = model_index
+        self.sglang_rank = sglang_rank
         self.model_architecture = model_architecture
+        self.atn_tp_rank = atn_tp_rank
+        self.atn_tp_size = atn_tp_size
+        self.atn_dp_rank = atn_dp_rank
+        self.atn_dp_size = atn_dp_size
 
     def forward(
         self,
@@ -111,74 +132,89 @@ class FfnShimModule(nn.Module):
             should_allreduce_fusion: SGLang all-reduce fusion flag. Must be
                 false because the current shim ABI has no fused all-reduce path.
             use_reduce_scatter: SGLang reduce-scatter output flag. Must be
-                false because the current shim ABI returns a full hidden-state tensor.
+                false until the transport path can return reduce-scattered FFN
+                output.
             gemm_output_zero_allocator: Optional SGLang allocator hook. Must be
                 absent because the shim owns native output placement.
 
         Returns:
             Output tensor returned by the selected Torch dispatcher op. The
             debug loopback op returns a tensor with the same shape, dtype, and
-            device as ``hidden_states``; the production op currently fails
-            closed because descriptor publication is not implemented yet.
+            device as ``hidden_states``; the production op fails closed until
+            daemon-brokered runtime metadata is registered in the native shim
+            registry.
 
         Raises:
             ShimUnavailableError: If the shim is unbound or receives unsupported
                 SGLang runtime modes before dispatcher invocation.
-            AttributeError: If the expected ``torch.ops.xpool`` operator is not
+            AttributeError: If the expected ``xpool.ops`` wrapper is not
                 registered in the current process.
             RuntimeError: Propagated from the selected native dispatcher op,
                 including the intentionally unimplemented production
                 ``ffn_shim`` route and loopback contract violations.
 
         Side Effects:
-            Dispatches through compile-friendly graph wrapper ops, which call
-            ``torch.ops.xpool.ffn_shim`` by default or
-            ``torch.ops.xpool.ffn_shim_loopback`` when the process-global xpool
-            config has ``debug.shim_loopback.enable`` enabled. The xpool SGLang
-            plugin loads and preflights the C extension and global config during
-            startup. The wrapper fake implementations preserve symbolic token
-            dimensions for SGLang piecewise CUDA graph warmup.
+            Dispatches through ``xpool.ops.instance.ffn_shim``. The xpool
+            SGLang plugin loads and preflights the C extension and global
+            config during startup. The wrapper fake implementation preserves
+            symbolic token dimensions for SGLang piecewise CUDA graph warmup.
         """
 
         if should_allreduce_fusion:
             raise ShimUnavailableError("xpool FFN shim does not yet support SGLang all-reduce fusion")
         if use_reduce_scatter:
-            raise ShimUnavailableError("xpool FFN shim does not yet support SGLang reduce-scatter FFN output")
+            raise ShimUnavailableError("xpool FFN shim does not yet support SGLang reduce-scatter output")
         if gemm_output_zero_allocator is not None:
             raise ShimUnavailableError("xpool FFN shim does not yet support SGLang GEMM zero allocator output")
         if forward_batch is None:
             raise ShimUnavailableError("xpool FFN shim requires a ForwardBatch to determine the forward mode")
-        if self.instance_index < 0 or self.model_index < 0:
+        if self.instance_index < 0 or self.sglang_rank < 0:
             raise ShimUnavailableError(
                 f"xpool FFN shim for {self.model_architecture} layer {self.layer_id} has no bound "
-                "instance/model identity; the xpool plugin must inject it after load"
+                "xpool identity; the xpool plugin must inject instance and rank identity after load"
             )
         # Match by exact SGLang ForwardMode value, not by is_decode()/is_extend():
         # those predicates fold MIXED/SPLIT_PREFILL/DLLM_EXTEND/TARGET_VERIFY/
         # DRAFT_EXTEND into "extend", but the current xpool shim ABI only publishes
-        # plain DECODE and EXTEND descriptors.
-        sglang_mode = forward_batch.forward_mode
-        match sglang_mode:
-            case _ if sglang_mode is SglangForwardMode.DECODE:
-                forward_mode = ForwardMode.DECODE
-            case _ if sglang_mode is SglangForwardMode.EXTEND:
-                forward_mode = ForwardMode.EXTEND
-            case _:
+        # plain DECODE, EXTEND, and IDLE descriptors.
+        match forward_batch.forward_mode:
+            case mode if mode is ForwardMode.DECODE:
+                forward_mode = XPoolForwardMode.DECODE
+            case mode if mode is ForwardMode.EXTEND:
+                forward_mode = XPoolForwardMode.EXTEND
+            case mode if mode is ForwardMode.IDLE:
+                forward_mode = XPoolForwardMode.IDLE
+            case unsupported_mode:
                 raise ShimUnavailableError(
-                    f"xpool FFN shim does not support SGLang forward mode {sglang_mode!r} "
-                    "(only DECODE and EXTEND are supported)"
+                    f"xpool FFN shim does not support SGLang forward mode {unsupported_mode!r} "
+                    "(only DECODE, EXTEND, and IDLE are supported)"
                 )
         validate_hidden_states(hidden_states, expected_hidden_size=self.hidden_size)
-        if get_global_config().debug.shim_loopback.enable:
-            ffn_shim_fn = xpool.ops.ffn_shim_loopback
+        if self.atn_dp_size == 1:
+            request_dp_padding_mode = DpPaddingMode.NONE
+            request_global_dp_buffer_len = int(hidden_states.shape[0])
+            request_global_num_tokens_gpu = None
         else:
-            ffn_shim_fn = xpool.ops.ffn_shim
-        return ffn_shim_fn(
+            request_dp_padding_mode = dp_padding_mode(forward_batch)
+            request_global_dp_buffer_len = global_dp_buffer_len(forward_batch, hidden_states)
+            request_global_num_tokens_gpu = global_num_tokens_gpu(forward_batch)
+        request_metadata = FfnRequestMetadata(
+            instance_index=self.instance_index,
+            layer_id=self.layer_id,
+            forward_mode=int(forward_mode),
+            collective_policy=int(FfnCollectivePolicy.FULL_REDUCED),
+            dp_padding_mode=int(request_dp_padding_mode),
+            global_dp_buffer_len=request_global_dp_buffer_len,
+            atn_tp_rank=self.atn_tp_rank,
+            atn_tp_size=self.atn_tp_size,
+            atn_dp_rank=self.atn_dp_rank,
+            atn_dp_size=self.atn_dp_size,
+        )
+        return xpool.ops.instance.ffn_shim(
             hidden_states,
-            int(self.instance_index),
-            int(self.model_index),
-            int(self.layer_id),
-            int(forward_mode),
+            request_global_num_tokens_gpu,
+            request_metadata,
+            self.sglang_rank,
         )
 
     def extra_repr(self) -> str:
@@ -189,7 +225,8 @@ class FfnShimModule(nn.Module):
         """
 
         return (
-            f"model_architecture={self.model_architecture!r}, layer_id={self.layer_id}, "
+            f"model_architecture={self.model_architecture!r}, instance_index={self.instance_index}, "
+            f"sglang_rank={self.sglang_rank}, layer_id={self.layer_id}, "
             f"hidden_size={self.hidden_size}, layer_kind={self.layer_kind.value}"
         )
 
@@ -227,3 +264,40 @@ def validate_hidden_states(hidden_states: torch.Tensor, *, expected_hidden_size:
         raise ShimUnavailableError(
             f"xpool FFN shim expected hidden size {expected_hidden_size}, got {hidden_states.shape[1]}"
         )
+
+
+def dp_padding_mode(forward_batch: ForwardBatch) -> DpPaddingMode:
+    """Return the xpool DP padding mode represented by a SGLang forward batch."""
+
+    value = getattr(forward_batch, "dp_padding_mode", None)
+    if value is None:
+        return DpPaddingMode.NONE
+    match value:
+        case SglangDpPaddingMode.MAX_LEN:
+            return DpPaddingMode.MAX_LEN
+        case SglangDpPaddingMode.SUM_LEN:
+            return DpPaddingMode.SUM_LEN
+        case _:
+            raise ShimUnavailableError(f"xpool FFN shim does not support SGLang DP padding mode {value!r}")
+
+
+def global_dp_buffer_len(forward_batch: ForwardBatch, hidden_states: torch.Tensor) -> int:
+    """Return the global DP buffer length for the current FFN request."""
+
+    value = getattr(forward_batch, "global_dp_buffer_len", None)
+    if value is None:
+        return int(hidden_states.shape[0])
+    if not isinstance(value, int) or value < 0:
+        raise ShimUnavailableError(f"xpool FFN shim expected non-negative global_dp_buffer_len, got {value!r}")
+    return value
+
+
+def global_num_tokens_gpu(forward_batch: ForwardBatch) -> torch.Tensor | None:
+    """Return optional per-DP-rank token counts for the current request."""
+
+    value = getattr(forward_batch, "global_num_tokens_gpu", None)
+    if value is None:
+        return None
+    if not isinstance(value, torch.Tensor):
+        raise ShimUnavailableError("xpool FFN shim expected global_num_tokens_gpu to be a tensor")
+    return value

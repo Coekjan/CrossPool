@@ -2,18 +2,47 @@
 
 from __future__ import annotations
 
+import argparse
+import ipaddress
 import logging
 import os
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import cached_property
 from pathlib import Path
 from threading import Lock
-from typing import Literal, cast
+from types import MappingProxyType
+from typing import Literal, TypedDict, cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+
+__all__ = [
+    "CONFIG_REGISTRY",
+    "ConfigError",
+    "ConfigSetting",
+    "ConfigSource",
+    "ConfigSourceRecord",
+    "DebugConfig",
+    "DevagentConfig",
+    "DeviceRole",
+    "DevicesConfig",
+    "GraphObserverDebugConfig",
+    "InstanceConfig",
+    "MissingRequiredConfig",
+    "ModelConfig",
+    "SchedulerConfig",
+    "ShimLoopbackDebugConfig",
+    "TopologyError",
+    "TransportLoopbackDebugConfig",
+    "VendorConfig",
+    "XpoolConfig",
+    "XpoolDaemonConfig",
+    "get_global_config",
+    "init_global_config",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +55,25 @@ class ConfigSource(StrEnum):
         ENV: Value came from an allowlisted process environment variable.
         CONFIG: Value came from the TOML config file.
         DEFAULT: Value came from a registry default.
+        UNSET: Optional value has no direct CLI, environment, TOML, or default source.
     """
 
     CLI = "cli"
     ENV = "env"
     CONFIG = "config"
     DEFAULT = "default"
+    UNSET = "unset"
 
 
 type ParserName = Literal["bool", "int", "raw", "str"]
+
+
+class ConfigSourceRecord(TypedDict):
+    """Resolved config value and source provenance."""
+
+    name: str
+    value: object
+    source: ConfigSource
 
 
 class ConfigError(ValueError):
@@ -50,14 +89,14 @@ class TopologyError(ConfigError):
 
 
 class DeviceRole(StrEnum):
-    """Exclusive role assigned to one CUDA device agent.
+    """Exclusive role assigned to one CUDA devagent.
 
     Attributes:
-        ATTENTION: Device hosts attention execution and the attention-side shim agent.
+        ATN: Device hosts attention execution and the attention-side shim devagent role.
         FFN: Device hosts xpool FFN execution.
     """
 
-    ATTENTION = "attention"
+    ATN = "atn"
     FFN = "ffn"
 
 
@@ -115,6 +154,15 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Development-only switch that routes FFN shim calls to the debug loopback op.",
     ),
     ConfigSetting(
+        name="debug_transport_loopback_enable",
+        path=("debug", "transport_loopback", "enable"),
+        parser="bool",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=False,
+        env_var="XPOOL_DEBUG_TRANSPORT_LOOPBACK_ENABLE",
+        description=("Development-only switch that routes production FFN shim calls through the transport checkpoint."),
+    ),
+    ConfigSetting(
         name="debug_graph_observer_enable",
         path=("debug", "graph_observer", "enable"),
         parser="bool",
@@ -131,6 +179,24 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         default=None,
         env_var="XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR",
         description="Directory used by the debug graph observer for JSONL event files.",
+    ),
+    ConfigSetting(
+        name="debug_transport_observer_enable",
+        path=("debug", "transport_observer", "enable"),
+        parser="bool",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=False,
+        env_var="XPOOL_DEBUG_TRANSPORT_OBSERVER_ENABLE",
+        description="Development-only switch that records native transport device-phase timings.",
+    ),
+    ConfigSetting(
+        name="debug_transport_observer_outdir",
+        path=("debug", "transport_observer", "outdir"),
+        parser="raw",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=None,
+        env_var="XPOOL_DEBUG_TRANSPORT_OBSERVER_OUTDIR",
+        description="Directory used by the native transport observer for JSON output.",
     ),
     ConfigSetting(
         name="vendor_model_base_uri",
@@ -158,22 +224,22 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Daemon control-plane bind port.",
     ),
     ConfigSetting(
-        name="scheduler_attention_concurrency",
-        path=("scheduler", "attention_concurrency"),
+        name="scheduler_atn_concurrency",
+        path=("scheduler", "atn_concurrency"),
         parser="int",
         allowed_sources=TOP_LEVEL_SOURCES,
         default=1,
-        cli="--attention-concurrency",
+        cli="--atn-concurrency",
         description="Maximum concurrent attention owners per attention CUDA device.",
     ),
     ConfigSetting(
-        name="scheduler_transport_concurrency",
-        path=("scheduler", "transport_concurrency"),
+        name="scheduler_ffn_concurrency",
+        path=("scheduler", "ffn_concurrency"),
         parser="int",
         allowed_sources=TOP_LEVEL_SOURCES,
         default=1,
-        cli="--transport-concurrency",
-        description="Maximum concurrent transport-slot owners per attention CUDA device.",
+        cli="--ffn-concurrency",
+        description="Maximum FFN-side execution concurrency budget.",
     ),
     ConfigSetting(
         name="devices",
@@ -181,17 +247,15 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="raw",
         allowed_sources=CONFIG_REQUIRED,
         required=True,
-        description=(
-            "Role-local CUDA device lists. Device agents and communication ranks are derived from this section."
-        ),
+        description=("Role-local CUDA device lists. Devagents and communication ranks are derived from this section."),
     ),
     ConfigSetting(
-        name="attention_cuda_devices",
-        path=("devices", "attention_cuda_devices"),
+        name="atn_cuda_devices",
+        path=("devices", "atn_cuda_devices"),
         parser="raw",
         allowed_sources=CONFIG_REQUIRED,
         required=True,
-        description="CUDA devices that host attention execution and attention-side xpool device agents.",
+        description="CUDA devices that host attention execution and attention-side xpool devagents.",
     ),
     ConfigSetting(
         name="ffn_cuda_devices",
@@ -199,7 +263,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="raw",
         allowed_sources=CONFIG_REQUIRED,
         required=True,
-        description="CUDA devices that host FFN-side xpool device agents.",
+        description="CUDA devices that host FFN-side xpool devagents.",
     ),
     ConfigSetting(
         name="models",
@@ -207,7 +271,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="raw",
         allowed_sources=CONFIG_REQUIRED,
         required=True,
-        description="Served model registry. Each model derives one serving instance.",
+        description="Model registry. Each model derives one instance.",
     ),
     ConfigSetting(
         name="model_id",
@@ -227,7 +291,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
 )
 
 
-class DaemonConfig(BaseModel):
+class XpoolDaemonConfig(BaseModel):
     """Daemon control-plane bind settings from config, CLI, or defaults."""
 
     model_config = ConfigDict(extra="forbid")
@@ -235,19 +299,33 @@ class DaemonConfig(BaseModel):
     host: str = Field(description="Host or interface address used by the daemon HTTP control plane.")
     port: int = Field(ge=1, le=65535, description="TCP port used by the daemon HTTP control plane.")
 
+    @model_validator(mode="after")
+    def validate_loopback_host(self) -> XpoolDaemonConfig:
+        """Require the unauthenticated daemon control plane to stay host-local."""
+
+        if self.host == "localhost":
+            return self
+        try:
+            address = ipaddress.ip_address(self.host)
+        except ValueError as exc:
+            raise ValueError("daemon.host must be localhost or a loopback IP address") from exc
+        if not address.is_loopback:
+            raise ValueError("daemon.host must be localhost or a loopback IP address")
+        return self
+
 
 class SchedulerConfig(BaseModel):
-    """Conservative resource-concurrency limits enforced by device agents."""
+    """Conservative resource-concurrency limits enforced by devagents."""
 
     model_config = ConfigDict(extra="forbid")
 
-    attention_concurrency: int = Field(
+    atn_concurrency: int = Field(
         ge=1,
         description="Maximum number of concurrent attention owners per attention CUDA device.",
     )
-    transport_concurrency: int = Field(
+    ffn_concurrency: int = Field(
         ge=1,
-        description="Maximum number of concurrent communication-slot owners per attention CUDA device.",
+        description="Maximum FFN-side execution concurrency budget.",
     )
 
 
@@ -256,13 +334,13 @@ class DevicesConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    attention_cuda_devices: list[int] = Field(
+    atn_cuda_devices: list[int] = Field(
         min_length=1,
-        description="CUDA device indices that host attention execution and attention-side xpool agents.",
+        description="CUDA device indices that host attention execution and attention-side xpool devagents.",
     )
     ffn_cuda_devices: list[int] = Field(
         min_length=1,
-        description="CUDA device indices that host xpool FFN execution agents.",
+        description="CUDA device indices that host xpool FFN execution devagents.",
     )
 
     @model_validator(mode="after")
@@ -277,20 +355,23 @@ class DevicesConfig(BaseModel):
         """
 
         for label, values in (
-            ("devices.attention_cuda_devices", self.attention_cuda_devices),
+            ("devices.atn_cuda_devices", self.atn_cuda_devices),
             ("devices.ffn_cuda_devices", self.ffn_cuda_devices),
         ):
             if any(value < 0 for value in values):
                 raise ValueError(f"{label} must contain non-negative CUDA device indices")
-            _require_unique(values, label)
-        overlap = sorted(set(self.attention_cuda_devices) & set(self.ffn_cuda_devices))
+            if len(values) != len(set(values)):
+                raise ValueError(f"{label} must be unique")
+            if values != sorted(values):
+                raise ValueError(f"{label} must be sorted in ascending order")
+        overlap = sorted(set(self.atn_cuda_devices) & set(self.ffn_cuda_devices))
         if overlap:
             raise ValueError(f"CUDA devices may host only one xpool role; overlapping devices: {overlap}")
         return self
 
 
 class ModelConfig(BaseModel):
-    """User-declared model served by one xpool-managed serving instance."""
+    """User-declared model served by one xpool-managed instance."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -299,23 +380,6 @@ class ModelConfig(BaseModel):
         default=None,
         description="Optional absolute local model path override containing config.json.",
     )
-
-    def __getattribute__(self, name: str) -> object:
-        """Reject direct access to the model path override.
-
-        Args:
-            name: Attribute name requested by the caller.
-
-        Returns:
-            Non-path attribute value.
-
-        Raises:
-            AttributeError: If a caller tries to read ``path`` directly.
-        """
-
-        if name == "path":
-            raise AttributeError("model paths must be resolved through XpoolConfig.model_path_of(model_id)")
-        return super().__getattribute__(name)
 
     @model_validator(mode="after")
     def validate_model_path(self) -> ModelConfig:
@@ -328,7 +392,7 @@ class ModelConfig(BaseModel):
             ValueError: If the configured path is not absolute.
         """
 
-        model_path = object.__getattribute__(self, "path")
+        model_path = self.path
         if model_path is None:
             return self
         path = model_path.expanduser()
@@ -338,47 +402,26 @@ class ModelConfig(BaseModel):
         return self
 
 
-class DeviceAgentConfig(BaseModel):
-    """Derived device-agent placement.
+class DevagentConfig(BaseModel):
+    """Derived devagent placement.
 
     This is not a TOML schema item. It is derived from the role-local CUDA
-    device lists, with one unique xpool agent per participating CUDA device.
+    device lists, with one unique xpool devagent per participating CUDA device.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(description="Stable device-agent id derived from the CUDA device index.")
-    cuda_device: int = Field(ge=0, description="CUDA device index owned by this device agent.")
-    nvshmem_rank: int = Field(ge=0, description="NVSHMEM rank assigned by role-local device declaration order.")
+    cuda_device: int = Field(ge=0, description="CUDA device index owned by this devagent.")
     role: DeviceRole = Field(description="Exclusive runtime role hosted by this CUDA device.")
 
-    @property
-    def roles(self) -> list[DeviceRole]:
-        """Return this agent's role as a list for launch-plan compatibility.
 
-        Returns:
-            Single-item role list; one CUDA device may host only one xpool role.
-        """
-
-        return [self.role]
-
-
-class ServingInstanceConfig(BaseModel):
-    """Derived serving-instance placement for one configured model."""
+class InstanceConfig(BaseModel):
+    """Derived instance placement for one configured model."""
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(description="Serving instance id, equal to the configured model id in the first topology.")
-    model_id: str = Field(description="Configured model id served by this instance.")
-    attention_cuda_devices: list[int] = Field(
-        min_length=1,
-        description="Attention CUDA devices assigned to this serving instance.",
-    )
-    ffn_agent_ids: list[str] = Field(min_length=1, description="FFN device-agent ids used by this model.")
-    ffn_tp_size: int = Field(ge=1, description="FFN tensor-parallel degree derived from FFN device count.")
-    attention_world_size: int = Field(ge=1, description="Attention-side world size derived from attention devices.")
-    instance_index: int = Field(ge=0, description="Integer serving-instance index fed to the native shim ABI.")
-    model_index: int = Field(ge=0, description="Integer model index fed to the native shim ABI.")
+    id: str = Field(description="Instance id, equal to the configured model id in the current topology.")
+    instance_index: int = Field(ge=0, description="Integer instance index fed to the native shim ABI.")
 
 
 class ShimLoopbackDebugConfig(BaseModel):
@@ -389,6 +432,17 @@ class ShimLoopbackDebugConfig(BaseModel):
     enable: bool = Field(
         default=False,
         description="Whether FFN shim modules should call the debug loopback native op instead of production shim.",
+    )
+
+
+class TransportLoopbackDebugConfig(BaseModel):
+    """Debug-only production-shim transport loopback switch resolved through the config registry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enable: bool = Field(
+        default=False,
+        description="Whether production FFN shim calls may use the daemon-brokered transport checkpoint.",
     )
 
 
@@ -429,6 +483,35 @@ class GraphObserverDebugConfig(BaseModel):
         return self
 
 
+class TransportObserverDebugConfig(BaseModel):
+    """Debug-only native transport device-phase observer settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enable: bool = Field(default=False, description="Whether native transport device-phase timing is enabled.")
+    outdir: Path | None = Field(default=None, description="Directory where transport timing snapshots are written.")
+
+    @model_validator(mode="after")
+    def validate_transport_observer(self) -> TransportObserverDebugConfig:
+        """Normalize and validate transport observer output settings.
+
+        Returns:
+            The validated debug config.
+
+        Raises:
+            ValueError: If enablement and output directory presence differ.
+        """
+
+        if self.enable != (self.outdir is not None):
+            raise ValueError(
+                "debug.transport_observer.enable and debug.transport_observer.outdir must be set or unset together"
+            )
+        if self.outdir is not None:
+            outdir = self.outdir.expanduser()
+            self.outdir = outdir.resolve() if outdir.is_absolute() else (Path.cwd() / outdir).resolve()
+        return self
+
+
 class DebugConfig(BaseModel):
     """Debug-only runtime switches resolved through the config registry."""
 
@@ -438,10 +521,33 @@ class DebugConfig(BaseModel):
         default_factory=ShimLoopbackDebugConfig,
         description="FFN shim loopback debug switch.",
     )
+    transport_loopback: TransportLoopbackDebugConfig = Field(
+        default_factory=TransportLoopbackDebugConfig,
+        description="Production FFN shim transport-loopback debug switch.",
+    )
     graph_observer: GraphObserverDebugConfig = Field(
         default_factory=GraphObserverDebugConfig,
         description="SGLang CUDA graph observer debug settings.",
     )
+    transport_observer: TransportObserverDebugConfig = Field(
+        default_factory=TransportObserverDebugConfig,
+        description="Native transport device-phase observer settings.",
+    )
+
+    @model_validator(mode="after")
+    def validate_debug_options(self) -> DebugConfig:
+        """Reject mutually exclusive debug FFN shim routes.
+
+        Returns:
+            The validated debug config.
+
+        Raises:
+            ValueError: If direct loopback and transport loopback are enabled together.
+        """
+
+        if self.shim_loopback.enable and self.transport_loopback.enable:
+            raise ValueError("debug.shim_loopback.enable and debug.transport_loopback.enable are mutually exclusive")
+        return self
 
 
 class VendorConfig(BaseModel):
@@ -478,27 +584,51 @@ class XpoolConfig(BaseModel):
     """Validated xpool TOML config plus derived runtime views."""
 
     model_config = ConfigDict(extra="forbid")
+    _sources: tuple[ConfigSourceRecord, ...] = PrivateAttr(default_factory=tuple)
 
-    daemon: DaemonConfig = Field(description="Daemon control-plane config.")
+    daemon: XpoolDaemonConfig = Field(description="Daemon control-plane config.")
     scheduler: SchedulerConfig = Field(description="Scheduler resource-concurrency config.")
     debug: DebugConfig = Field(description="Debug-only runtime switches.")
     vendor: VendorConfig = Field(default_factory=VendorConfig, description="Vendor model-root settings.")
     devices: DevicesConfig = Field(description="Role-local CUDA device config.")
-    models: list[ModelConfig] = Field(min_length=1, description="Configured served model list.")
+    models: list[ModelConfig] = Field(min_length=1, description="Configured model list.")
+
+    @staticmethod
+    def add_cli_args(parser: argparse.ArgumentParser) -> None:
+        """Add registry-declared config override flags to an argparse parser.
+
+        Args:
+            parser: Subcommand parser that should accept xpool config override
+                flags.
+
+        Side Effects:
+            Mutates ``parser`` by adding every setting whose registry entry
+            allows CLI input.
+        """
+
+        for setting in CONFIG_REGISTRY:
+            if setting.cli is None or ConfigSource.CLI not in setting.allowed_sources:
+                continue
+            parser.add_argument(
+                setting.cli,
+                dest=setting.name,
+                type=int if setting.parser == "int" else str,
+                help=setting.description,
+            )
 
     @classmethod
     def from_file(
         cls,
         path: str | Path,
         *,
-        cli_overrides: Mapping[str, object] | None = None,
+        cli: Mapping[str, object] | None = None,
         env: Mapping[str, str] | None = None,
     ) -> XpoolConfig:
         """Load and validate an xpool TOML file.
 
         Args:
             path: Path to the TOML config file.
-            cli_overrides: Optional CLI-derived setting overrides that take
+            cli: Optional CLI-derived setting overrides that take
                 precedence over TOML values.
             env: Optional allowlisted environment settings. Only registry
                 entries with ``ENV`` in ``allowed_sources`` may read it.
@@ -516,14 +646,14 @@ class XpoolConfig(BaseModel):
         config_path = Path(path)
         with config_path.open("rb") as config_file:
             payload = tomllib.load(config_file)
-        return cls.from_mapping(payload, cli_overrides=cli_overrides, env=env)
+        return cls.from_mapping(payload, cli=cli, env=env)
 
     @classmethod
     def from_mapping(
         cls,
         payload: Mapping[str, object],
         *,
-        cli_overrides: Mapping[str, object] | None = None,
+        cli: Mapping[str, object] | None = None,
         env: Mapping[str, str] | None = None,
     ) -> XpoolConfig:
         """Validate an in-memory config mapping.
@@ -531,7 +661,7 @@ class XpoolConfig(BaseModel):
         Args:
             payload: TOML-like mapping to validate. The mapping is deep-copied
                 before defaults or overrides are applied.
-            cli_overrides: Optional CLI-derived setting overrides that take
+            cli: Optional CLI-derived setting overrides that take
                 precedence over mapping values.
             env: Optional allowlisted environment settings. Only registry
                 entries with ``ENV`` in ``allowed_sources`` may read it.
@@ -547,8 +677,9 @@ class XpoolConfig(BaseModel):
             Does not mutate ``payload``.
         """
 
+        source_payload = deepcopy(dict(payload))
         resolved: dict[str, object] = deepcopy(dict(payload))
-        effective_cli = cli_overrides or {}
+        effective_cli = cli or {}
         effective_env = env or {}
         if env is not None:
             allowed_env_vars = frozenset(setting.env_var for setting in CONFIG_REGISTRY if setting.env_var is not None)
@@ -557,71 +688,91 @@ class XpoolConfig(BaseModel):
             )
             if unknown_env_vars:
                 logger.warning("Ignoring unknown xpool environment variables: %s", ", ".join(unknown_env_vars))
+
         for setting in CONFIG_REGISTRY:
             if setting.path is None or ConfigSource.CONFIG in setting.allowed_sources:
                 continue
-            found, _value = _get_nested(resolved, setting.path)
-            if found:
+            if get_nested(source_payload, setting.path)[0]:
                 raise ConfigError(f"config setting {setting.name} does not allow TOML source: {'.'.join(setting.path)}")
+
+        sources: list[ConfigSourceRecord] = []
         for setting in CONFIG_REGISTRY:
-            if setting.path is None or "*" in setting.path:
+            if setting.path is not None and "*" in setting.path:
+                sources.extend(wildcard_source_records(setting, source_payload))
                 continue
-            value, source = _resolve_setting(setting, resolved, effective_cli, effective_env)
-            if source is not None:
-                _set_nested(resolved, setting.path, value)
-
-        return cls.model_validate(resolved)
-
-    @property
-    def device_agents(self) -> list[DeviceAgentConfig]:
-        """Derive one device agent for every configured CUDA device.
-
-        Returns:
-            Device-agent placement list ordered by NVSHMEM rank.
-        """
-
-        agents: list[DeviceAgentConfig] = []
-        for nvshmem_rank, cuda_device in enumerate(self.devices.attention_cuda_devices + self.devices.ffn_cuda_devices):
-            role = DeviceRole.ATTENTION if nvshmem_rank < len(self.devices.attention_cuda_devices) else DeviceRole.FFN
-            agents.append(
-                DeviceAgentConfig(
-                    id=f"cuda{cuda_device}",
-                    cuda_device=cuda_device,
-                    nvshmem_rank=nvshmem_rank,
-                    role=role,
+            value, source = resolve_setting(setting, source_payload, effective_cli, effective_env)
+            if setting.path is not None and setting.name not in {"devices", "models"}:
+                sources.append(
+                    {
+                        "name": format_source_record_name(setting.path),
+                        "value": value,
+                        "source": ConfigSource.UNSET if source is None else source,
+                    }
                 )
-            )
-        return agents
+            if setting.path is not None and source is not None:
+                set_nested(resolved, setting.path, value)
+
+        config = cls.model_validate(resolved)
+        config._sources = tuple(sources)
+        return config
 
     @property
-    def serving_instances(self) -> list[ServingInstanceConfig]:
-        """Derive one serving instance for every configured model.
+    def sources(self) -> tuple[ConfigSourceRecord, ...]:
+        """Return immutable source records for resolved leaf config values."""
+
+        return self._sources
+
+    @cached_property
+    def cuda_devices(self) -> tuple[int, ...]:
+        """Return all CUDA devices managed by xpool, ordered by CUDA device index."""
+
+        return tuple(sorted({*self.devices.atn_cuda_devices, *self.devices.ffn_cuda_devices}))
+
+    @cached_property
+    def devagents(self) -> tuple[DevagentConfig, ...]:
+        """Derive one devagent for every configured CUDA device.
 
         Returns:
-            Instance placement list in model declaration order.
+            Immutable devagent placement tuple ordered by CUDA device. Runtime
+            role comes from the role-local source list.
         """
 
-        ffn_agent_ids = [f"cuda{cuda_device}" for cuda_device in self.devices.ffn_cuda_devices]
-        ffn_tp_size = len(ffn_agent_ids)
-        return [
-            ServingInstanceConfig(
-                id=model.id,
-                model_id=model.id,
-                attention_cuda_devices=list(self.devices.attention_cuda_devices),
-                ffn_agent_ids=ffn_agent_ids,
-                ffn_tp_size=ffn_tp_size,
-                attention_world_size=len(self.devices.attention_cuda_devices),
-                instance_index=index,
-                model_index=index,
-            )
-            for index, model in enumerate(self.models)
-        ]
+        role_by_cuda_device = {
+            **{cuda_device: DeviceRole.ATN for cuda_device in self.devices.atn_cuda_devices},
+            **{cuda_device: DeviceRole.FFN for cuda_device in self.devices.ffn_cuda_devices},
+        }
+        return tuple(
+            DevagentConfig(cuda_device=cuda_device, role=role_by_cuda_device[cuda_device])
+            for cuda_device in self.cuda_devices
+        )
+
+    @cached_property
+    def devagent_by_cuda_device(self) -> Mapping[int, DevagentConfig]:
+        """Return derived devagent placement keyed by CUDA device index."""
+
+        return MappingProxyType({devagent.cuda_device: devagent for devagent in self.devagents})
+
+    @cached_property
+    def instances(self) -> tuple[InstanceConfig, ...]:
+        """Derive one instance for every configured model.
+
+        Returns:
+            Immutable instance placement tuple in model declaration order.
+        """
+
+        return tuple(InstanceConfig(id=model.id, instance_index=index) for index, model in enumerate(self.models))
+
+    @cached_property
+    def instance_by_id(self) -> Mapping[str, InstanceConfig]:
+        """Return derived instance placement keyed by configured instance id."""
+
+        return MappingProxyType({instance.id: instance for instance in self.instances})
 
     @property
-    def model_index_by_path(self) -> dict[Path, int]:
-        """Map each model's resolved absolute path to its declaration-order index."""
+    def atn_world_size(self) -> int:
+        """Return the number of attention-side instance ranks per model."""
 
-        return {self.model_path_of(model.id).resolve(): index for index, model in enumerate(self.models)}
+        return len(self.devices.atn_cuda_devices)
 
     def model_path_of(self, model_id: str) -> Path:
         """Return the resolved absolute local path for a configured model.
@@ -642,14 +793,14 @@ class XpoolConfig(BaseModel):
         for model in self.models:
             if model.id != model_id:
                 continue
-            model_path = object.__getattribute__(model, "path")
-            if model_path is not None:
-                return model_path
-            if self.vendor.model_base_uri is None:
-                raise MissingRequiredConfig(
-                    f"missing required model path for {model_id}: set models[].path or vendor.model_base_uri"
-                )
-            return self.vendor.model_base_uri / model.id
+            model_path = model.path
+            if model_path is None:
+                if self.vendor.model_base_uri is None:
+                    raise MissingRequiredConfig(
+                        f"missing required model path for {model.id}: set models[].path or vendor.model_base_uri"
+                    )
+                model_path = self.vendor.model_base_uri / model.id
+            return model_path
         raise MissingRequiredConfig(f"unknown configured model id: {model_id}")
 
     @model_validator(mode="after")
@@ -663,13 +814,27 @@ class XpoolConfig(BaseModel):
             ValueError: If model ids or resolved model paths are duplicated.
         """
 
-        _require_unique([model.id for model in self.models], "model ids")
-        _require_unique([self.model_path_of(model.id).resolve() for model in self.models], "model paths")
+        model_path_by_id: dict[str, Path] = {}
+        for model in self.models:
+            if model.id in model_path_by_id:
+                raise ValueError("model ids must be unique")
+            model_path = model.path
+            if model_path is None:
+                if self.vendor.model_base_uri is None:
+                    raise MissingRequiredConfig(
+                        f"missing required model path for {model.id}: set models[].path or vendor.model_base_uri"
+                    )
+                model_path = self.vendor.model_base_uri / model.id
+            model_path_by_id[model.id] = model_path
+        model_paths = [model_path.resolve() for model_path in model_path_by_id.values()]
+        if len(model_paths) != len(set(model_paths)):
+            raise ValueError("model paths must be unique")
+
         return self
 
 
-_global_config: XpoolConfig | None = None
-_global_config_lock = Lock()
+global_config: XpoolConfig | None = None
+global_config_lock = Lock()
 
 
 def init_global_config(
@@ -677,7 +842,7 @@ def init_global_config(
     config: XpoolConfig | None = None,
     config_path: str | Path | None = None,
     env: Mapping[str, str] | None = None,
-    cli_overrides: Mapping[str, object] | None = None,
+    cli: Mapping[str, object] | None = None,
 ) -> XpoolConfig:
     """Initialize the process-global xpool config.
 
@@ -687,14 +852,15 @@ def init_global_config(
         config_path: Explicit TOML config path. When provided, it takes
             precedence over ``env["XPOOL_CONFIG"]``.
         env: Environment mapping used by the registry. Defaults to ``os.environ``.
-        cli_overrides: Optional CLI-derived setting overrides.
+        cli: Optional CLI-derived setting overrides.
 
     Returns:
         The config object now returned by :func:`get_global_config`.
 
     Raises:
         ConfigError: If direct ``config`` injection is mixed with file/env/CLI
-            inputs, or if registry resolution fails.
+            inputs, registry resolution fails, or a different effective config
+            was already installed in this process.
         MissingRequiredConfig: If no config path is available.
         OSError: If the config file cannot be opened.
         tomllib.TOMLDecodeError: If the config file is not valid TOML.
@@ -702,38 +868,39 @@ def init_global_config(
             configuration schema.
 
     Side Effects:
-        Replaces the process-global config held by this module.
+        Installs the process-global config once. Repeated initialization with
+        equal effective values returns the first installed object unchanged.
     """
 
-    if config is not None and (config_path is not None or env is not None or cli_overrides is not None):
+    if config is not None and (config_path is not None or env is not None or cli is not None):
         raise ConfigError("init_global_config(config=...) cannot be combined with config_path, env, or cli_overrides")
     if config is not None:
         resolved = config
     else:
         effective_env = os.environ if env is None else env
-        effective_cli: dict[str, object] = dict(cli_overrides or {})
+        effective_cli: dict[str, object] = dict(cli or {})
         if config_path is not None:
             effective_cli["config_path"] = str(config_path)
 
         config_path_setting = next(setting for setting in CONFIG_REGISTRY if setting.name == "config_path")
-        effective_path_value, effective_path_source = _resolve_setting(
+        effective_path_value, effective_path_source = resolve_setting(
             config_path_setting, {}, effective_cli, effective_env
         )
         if effective_path_source is None:
             raise MissingRequiredConfig(
                 "xpool config path is required: set the XPOOL_CONFIG environment variable "
-                "(or pass --config). Serving instance identity is derived from the "
-                "one-model-one-serving-instance mapping in this config."
+                "(or pass --config). Instance identity is derived from the "
+                "one-model-one-instance mapping in this config."
             )
-        resolved = XpoolConfig.from_file(
-            cast(str, effective_path_value),
-            cli_overrides=effective_cli,
-            env=effective_env,
-        )
+        resolved = XpoolConfig.from_file(cast(str, effective_path_value), cli=effective_cli, env=effective_env)
 
-    global _global_config
-    with _global_config_lock:
-        _global_config = resolved
+    global global_config
+    with global_config_lock:
+        if global_config is not None:
+            if global_config.model_dump(mode="json") != resolved.model_dump(mode="json"):
+                raise ConfigError("xpool global config is already initialized with different values")
+            return global_config
+        global_config = resolved
     return resolved
 
 
@@ -747,34 +914,145 @@ def get_global_config() -> XpoolConfig:
         MissingRequiredConfig: If no process-global config has been installed.
     """
 
-    config = _global_config
+    config = global_config
     if config is None:
         raise MissingRequiredConfig("xpool global config has not been loaded")
     return config
 
 
-def _resolve_setting(
+def format_source_record_name(path: tuple[str | int, ...]) -> str:
+    """Format a nested config path for source-report diagnostics.
+
+    Args:
+        path: Config path segments, including integer list indexes.
+
+    Returns:
+        Dot-and-bracket notation for the path.
+    """
+
+    return "".join(
+        f"[{segment}]" if isinstance(segment, int) else f"{'.' if index else ''}{segment}"
+        for index, segment in enumerate(path)
+    )
+
+
+def wildcard_source_records(
+    setting: ConfigSetting,
+    payload: Mapping[str, object],
+) -> list[ConfigSourceRecord]:
+    """Expand one wildcard config setting into concrete source records.
+
+    Args:
+        setting: Registry setting whose path may contain wildcard segments.
+        payload: Original config mapping before overrides are applied.
+
+    Returns:
+        Source records for every concrete wildcard path.
+
+    Raises:
+        ConfigError: If the payload shape does not match the wildcard path.
+    """
+
+    path = setting.path or ()
+    records: list[ConfigSourceRecord] = []
+
+    def append_unset(concrete_path: tuple[str | int, ...]) -> None:
+        records.append(
+            {
+                "name": format_source_record_name(concrete_path),
+                "value": None,
+                "source": ConfigSource.UNSET,
+            }
+        )
+
+    def walk(value: object, remaining_path: tuple[str, ...], concrete_path: tuple[str | int, ...]) -> None:
+        if not remaining_path:
+            records.append(
+                {
+                    "name": format_source_record_name(concrete_path),
+                    "value": value,
+                    "source": ConfigSource.CONFIG,
+                }
+            )
+            return
+
+        segment = remaining_path[0]
+        rest = remaining_path[1:]
+        if segment == "*":
+            if not isinstance(value, list):
+                raise ConfigError(
+                    f"expected list config value at {format_source_record_name(concrete_path)} "
+                    f"for wildcard setting {setting.name}"
+                )
+            for index, item in enumerate(value):
+                walk(item, rest, (*concrete_path, index))
+            return
+
+        if not isinstance(value, Mapping):
+            raise ConfigError(f"expected mapping config value at {format_source_record_name(concrete_path)}")
+        mapping = cast(Mapping[str, object], value)
+        if segment not in mapping:
+            if "*" in rest:
+                return
+            append_unset((*concrete_path, segment, *rest))
+            return
+        walk(mapping[segment], rest, (*concrete_path, segment))
+
+    walk(payload, path, ())
+    return records
+
+
+def resolve_setting(
     setting: ConfigSetting,
     payload: Mapping[str, object],
     cli_overrides: Mapping[str, object],
     env: Mapping[str, str],
 ) -> tuple[object, ConfigSource | None]:
+    """Resolve one setting according to xpool source precedence.
+
+    Args:
+        setting: Registry setting to resolve.
+        payload: Config-file payload.
+        cli_overrides: Explicit CLI values keyed by setting name.
+        env: Allowlisted environment values.
+
+    Returns:
+        Resolved value and its source, or ``(None, None)`` when optional and unset.
+
+    Raises:
+        MissingRequiredConfig: If a required setting has no value.
+        ConfigError: If the selected value cannot be parsed.
+    """
+
     if ConfigSource.CLI in setting.allowed_sources and setting.name in cli_overrides:
-        return _parse_setting(setting, cli_overrides[setting.name]), ConfigSource.CLI
+        return parse_setting(setting, cli_overrides[setting.name]), ConfigSource.CLI
     if ConfigSource.ENV in setting.allowed_sources and setting.env_var is not None and setting.env_var in env:
-        return _parse_setting(setting, env[setting.env_var]), ConfigSource.ENV
+        return parse_setting(setting, env[setting.env_var]), ConfigSource.ENV
     if ConfigSource.CONFIG in setting.allowed_sources:
-        found, config_value = _get_nested(payload, setting.path or ())
+        found, config_value = get_nested(payload, setting.path or ())
         if found:
-            return _parse_setting(setting, config_value), ConfigSource.CONFIG
+            return parse_setting(setting, config_value), ConfigSource.CONFIG
     if ConfigSource.DEFAULT in setting.allowed_sources:
-        return _parse_setting(setting, setting.default), ConfigSource.DEFAULT
+        return parse_setting(setting, setting.default), ConfigSource.DEFAULT
     if setting.required:
         raise MissingRequiredConfig(f"missing required config setting: {setting.name}")
     return None, None
 
 
-def _parse_setting(setting: ConfigSetting, value: object) -> object:
+def parse_setting(setting: ConfigSetting, value: object) -> object:
+    """Parse one raw config value using its registry parser.
+
+    Args:
+        setting: Registry setting that defines the parser.
+        value: Raw selected value.
+
+    Returns:
+        Parsed config value.
+
+    Raises:
+        ConfigError: If the parser rejects the value or is unknown.
+    """
+
     match setting.parser:
         case "bool":
             if isinstance(value, bool):
@@ -798,7 +1076,17 @@ def _parse_setting(setting: ConfigSetting, value: object) -> object:
             raise ConfigError(f"unknown parser for {setting.name}: {setting.parser}")
 
 
-def _get_nested(payload: Mapping[str, object], path: tuple[str, ...]) -> tuple[bool, object]:
+def get_nested(payload: Mapping[str, object], path: tuple[str, ...]) -> tuple[bool, object]:
+    """Read a nested mapping path without conflating missing and null values.
+
+    Args:
+        payload: Mapping to traverse.
+        path: String path segments.
+
+    Returns:
+        Whether the path exists and its value when present.
+    """
+
     cursor: object = payload
     for key in path:
         if not isinstance(cursor, Mapping):
@@ -810,7 +1098,21 @@ def _get_nested(payload: Mapping[str, object], path: tuple[str, ...]) -> tuple[b
     return True, cursor
 
 
-def _set_nested(payload: dict[str, object], path: tuple[str, ...], value: object) -> None:
+def set_nested(payload: dict[str, object], path: tuple[str, ...], value: object) -> None:
+    """Set a nested config path, creating missing mappings.
+
+    Args:
+        payload: Mutable config mapping.
+        path: Non-empty path to update.
+        value: Resolved value to install.
+
+    Raises:
+        ConfigError: If the path is empty or crosses a non-mapping value.
+
+    Side Effects:
+        Mutates ``payload`` in place.
+    """
+
     if not path:
         raise ConfigError("cannot set empty config path")
     cursor = payload
@@ -823,8 +1125,3 @@ def _set_nested(payload: dict[str, object], path: tuple[str, ...], value: object
             raise ConfigError(f"cannot override nested config path {'.'.join(path)}")
         cursor = cast(dict[str, object], child)
     cursor[path[-1]] = value
-
-
-def _require_unique(values: Sequence[object], label: str) -> None:
-    if len(values) != len(set(values)):
-        raise ValueError(f"{label} must be unique")
