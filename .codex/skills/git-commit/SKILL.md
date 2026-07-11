@@ -2,9 +2,8 @@
 name: git-commit
 description: >
   Use as the final workflow step when preparing a commit and push. Stages
-  intentionally, invokes the repo-local deep-review and self-evolve skills,
-  persists accepted lessons, commits with Codex trailers, and applies the
-  repository push policy.
+  intentionally, invokes the repo-local self-evolve skill, persists accepted
+  lessons, commits with Codex trailers, and applies the repository push policy.
 ---
 
 # Git Commit
@@ -28,31 +27,27 @@ implementation, tests, and review-ready changes for the task are complete.
    reflects the staged completion; update and restage it before review if it is
    stale. For bootstrap/reset, docs-only, or pure mechanical formatting commits,
    verify that no design-status update is needed.
-6. Invoke the repo-local `deep-review` skill to run the standard six-axis
-   staged-diff review. Keep the detailed review fan-out procedure in that skill.
-7. Invoke the repo-local `self-evolve` skill and spawn the self-evolve reviewer
-   in parallel with deep review when feasible. Keep the session-excerpt and
-   durable-lesson procedure in that skill.
-8. Synthesize deep-review and self-evolve reports in the main session.
-9. Fix blocking findings, update staging, and rerun affected checks.
-10. Persist accepted self-evolve lessons to repo instructions and, when
+6. Invoke the repo-local `self-evolve` skill and spawn its reviewer. Keep the
+   session-excerpt and durable-lesson procedure in that skill.
+7. Synthesize the self-evolve report in the main session.
+8. Fix blocking findings, update staging, and rerun affected checks.
+9. Persist accepted self-evolve lessons to repo instructions and, when
     permitted, Codex memory according to the active memory policy.
-11. Write a clear English commit message with required trailers and run
+10. Write a clear English commit message with required trailers and run
     `git commit -F <message-file>`.
-12. After the commit succeeds, apply the push policy and push the current branch.
+11. After the commit succeeds, apply the push policy and push the current branch.
 
-If the user explicitly disables review for one profile/debug/reference branch
-commit, treat that as a one-off exception. Skip both the six-axis review and
-self-evolve reviewer fan-out only for that requested commit, still run staging
-checks and required trailers, and explicitly restore the normal review workflow
-for the next commit. Do not infer that review should be skipped for later commits
-or for mainline.
+If the user explicitly disables self-evolve review for one
+profile/debug/reference branch commit, treat that as a one-off exception. Skip
+the self-evolve reviewer only for that requested commit, still run staging
+checks and required trailers, and explicitly restore the normal workflow for
+the next commit. Do not infer that self-evolve should be skipped for later
+commits or for mainline.
 
 If reviewer subagents cannot be spawned because of quota, tool unavailability,
-or agent infrastructure failure, follow the fallback policies in `deep-review`
-and `self-evolve`. Record the fallback in the final report and keep the same
-staging checks, accepted-lesson persistence rules, commit trailers, and push
-policy.
+or agent infrastructure failure, follow the fallback policy in `self-evolve`.
+Record the fallback in the final report and keep the same staging checks,
+accepted-lesson persistence rules, commit trailers, and push policy.
 
 While `git commit -F <message-file>` is running hooks, use the wait time only for
 non-mutating exploration of the staged diff and future work. Inspect staged
@@ -69,12 +64,6 @@ author attribution by changing git config.
 Do not delete ignored or machine-local files as commit cleanup unless the user
 explicitly asks; leave `.venv/`, `.vscode/`, `.ruff_cache/`, and similar local
 state alone.
-
-## Deep Review Skill
-
-The six-axis review procedure lives in `.codex/skills/deep-review/SKILL.md`.
-Use that skill for the staged-diff review and do not duplicate its axis table,
-subagent prompt rules, or fallback policy here.
 
 ## Self-Evolve Subagent
 

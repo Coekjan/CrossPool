@@ -260,7 +260,8 @@ precedence over values loaded by uv.
 - Keep changes small and scoped to the accepted design.
 - Use `.codex/skills/git-commit/SKILL.md` for commit preparation.
 - Use `.codex/skills/deep-review/SKILL.md` for the standard six-axis staged
-  review, whether invoked directly or from git-commit.
+  review only when the user explicitly requests delegated, deep, or pre-commit
+  review. The git-commit skill does not invoke deep-review automatically.
 - Use repo-local reviewer agents only when the user explicitly asks for
   delegated review or when an invoked skill requires them.
 - After every successful commit, push the current branch according to the
