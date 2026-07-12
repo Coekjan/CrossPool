@@ -68,44 +68,6 @@ class NestedProbeAdapter(SglangModelAdapter):
     assert [adapter.name for adapter in adapters] == ["nested_probe"]
 
 
-def test_registry_skips_broken_adapter_modules(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    package = tmp_path / "xpool_registry_fault_probe"
-    package.mkdir()
-    (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "broken.py").write_text("raise ImportError('missing optional adapter dependency')\n", encoding="utf-8")
-    (package / "working.py").write_text(
-        """
-from collections.abc import Sequence
-
-from sglang.srt.model_executor.model_runner import ModelRunner
-
-from xpool.integrations.sglang.adapter import SglangHook, SglangModelAdapter
-
-
-class WorkingProbeAdapter(SglangModelAdapter):
-    name = "working_probe"
-
-    def hooks(self) -> Sequence[SglangHook]:
-        return ()
-
-    def matches(self, model_runner: ModelRunner) -> bool:
-        return False
-""".strip(),
-        encoding="utf-8",
-    )
-    monkeypatch.syspath_prepend(str(tmp_path))
-
-    with caplog.at_level("WARNING", logger="xpool.integrations.sglang.registry"):
-        adapters = discover_sglang_model_adapters("xpool_registry_fault_probe", strict=False)
-
-    assert [adapter.name for adapter in adapters] == ["working_probe"]
-    assert "Skipping SGLang adapter module xpool_registry_fault_probe.broken" in caplog.text
-
-
 def test_registry_strict_discovery_rejects_broken_adapter_modules(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

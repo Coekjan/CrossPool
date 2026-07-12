@@ -5,7 +5,6 @@ import signal
 import subprocess
 from contextlib import suppress
 from pathlib import Path
-from typing import Literal
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -14,8 +13,6 @@ type JsonValue = str | int | float | bool | list[int] | None
 type GraphEvent = dict[str, JsonValue]
 
 type GraphSettings = tuple[bool, bool]
-
-type LoopbackMode = Literal["shim", "transport"]
 
 PROBE_TIMEOUT_SECONDS = 30 * 60
 

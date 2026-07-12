@@ -32,7 +32,7 @@ __all__ = [
 ]
 
 INSTANCE_HEARTBEAT_INTERVAL_S = 5.0
-STALE_DEVAGENT_RECOVERY_GRACE_S = 60.0
+STALE_ATNAGENT_RECOVERY_GRACE_S = 60.0
 TRANSPORT_METADATA_RECOVERY_DEADLINE_S = 60.0
 INSTANCE_TRANSPORT_ACQUIRE_INTERVAL_S = 0.5
 INSTANCE_HEARTBEAT_STOP_JOIN_TIMEOUT_S = 5.0
@@ -113,7 +113,7 @@ class InstanceHeartbeat:
         arena_lease_recovery_pending: Whether daemon restart recovery still
             needs to reacquire a lease for ``arena_handle``.
         recovery_deadline: Deadline for transient daemon metadata failures.
-        stale_devagent_deadline: Deadline for a local stale-devagent warning.
+        stale_atnagent_deadline: Deadline for a local stale-agent warning.
         worker: Periodic background thread that invokes :meth:`step`.
     """
 
@@ -137,7 +137,7 @@ class InstanceHeartbeat:
         self.arena_handle: TransportArenaHandle | None = None
         self.arena_lease_recovery_pending = False
         self.recovery_deadline: float | None = None
-        self.stale_devagent_deadline: float | None = None
+        self.stale_atnagent_deadline: float | None = None
         self.worker = BackgroundThread.periodic(
             name=f"xpool-instance-heartbeat-{self.instance_id}-{self.rank}",
             interval_s=INSTANCE_HEARTBEAT_INTERVAL_S,
@@ -232,30 +232,30 @@ class InstanceHeartbeat:
         """Apply fail-closed policy for daemon heartbeat warnings."""
 
         warning_kinds = {warning.kind for warning in response.warnings if warning.cuda_device == self.local_cuda_device}
-        if "terminating_devagent" in warning_kinds:
+        if "terminating_atnagent" in warning_kinds:
             logger.warning(
-                "xpool daemon reported terminating devagent on CUDA device %s for instance %s rank %s; "
+                "xpool daemon reported terminating agent on CUDA device %s for instance %s rank %s; "
                 "waiting for daemon-scoped termination",
                 self.local_cuda_device,
                 self.instance_id,
                 self.rank,
             )
-        if "stale_devagent" not in warning_kinds:
-            self.stale_devagent_deadline = None
+        if "stale_atnagent" not in warning_kinds:
+            self.stale_atnagent_deadline = None
             return
         now = time.monotonic()
-        if self.stale_devagent_deadline is None:
-            self.stale_devagent_deadline = now + STALE_DEVAGENT_RECOVERY_GRACE_S
-        if now >= self.stale_devagent_deadline:
+        if self.stale_atnagent_deadline is None:
+            self.stale_atnagent_deadline = now + STALE_ATNAGENT_RECOVERY_GRACE_S
+        if now >= self.stale_atnagent_deadline:
             bail(
                 logger,
-                "xpool daemon reported stale devagent on CUDA device %s for instance %s rank %s beyond recovery grace",
+                "xpool daemon reported stale agent on CUDA device %s for instance %s rank %s beyond recovery grace",
                 self.local_cuda_device,
                 self.instance_id,
                 self.rank,
             )
         logger.warning(
-            "xpool daemon reported stale devagent on CUDA device %s for instance %s rank %s; waiting for recovery",
+            "xpool daemon reported stale agent on CUDA device %s for instance %s rank %s; waiting for recovery",
             self.local_cuda_device,
             self.instance_id,
             self.rank,
@@ -371,7 +371,7 @@ class Instance:
         """Detach native transport and remove this rank's daemon registration.
 
         Native detach runs first. If native cleanup fails, daemon deregistration
-        is intentionally skipped so devagents do not treat a still-attached CUDA
+        is intentionally skipped so agents do not treat a still-attached CUDA
         IPC arena as detached.
         """
 

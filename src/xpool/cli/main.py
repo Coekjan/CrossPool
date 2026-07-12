@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from xpool.cli.registry import discover_cli_commands, register_cli_commands
 from xpool.config import CONFIG_REGISTRY, ConfigError, ConfigSource, init_global_config
-from xpool.runtime.devagent import DevagentError
+from xpool.runtime.agent import AgentError
 from xpool.service.client import XpoolClientError, XpoolDaemonError
 
 
@@ -54,7 +54,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return args.handler(args, config)
     except (
         ConfigError,
-        DevagentError,
+        AgentError,
         XpoolClientError,
         XpoolDaemonError,
         OSError,

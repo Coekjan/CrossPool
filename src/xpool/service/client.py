@@ -16,11 +16,11 @@ from xpool.abi import TransportArenaHandle
 from xpool.config import get_global_config
 from xpool.service.errors import XpoolClientError, XpoolDaemonError
 from xpool.service.wire import (
+    AtnAgentRegistration,
+    AtnAgentTransportArenaBinding,
+    AtnAgentTransportArenaDrainResponse,
+    AtnAgentTransportArenaUpsertRequest,
     ControlPlaneWarning,
-    DevagentRegistration,
-    DevagentTransportArenaBinding,
-    DevagentTransportArenaDrainResponse,
-    DevagentTransportArenaUpsertRequest,
     HeartbeatResponse,
     InstanceRegistration,
     ProcessHeartbeat,
@@ -34,7 +34,7 @@ from xpool.service.wire import (
 __all__ = ["XpoolClient"]
 
 DAEMON_HTTP_TIMEOUT_S = 5.0
-DEVAGENT_TRANSPORT_DRAIN_TIMEOUT_S = 20.0
+ATNAGENT_TRANSPORT_DRAIN_TIMEOUT_S = 20.0
 DAEMON_HEALTH_RETRY_ATTEMPTS = 3
 DAEMON_HEALTH_RETRY_DELAY_S = 0.5
 logger = logging.getLogger(__name__)
@@ -237,11 +237,11 @@ class XpoolClient:
             json=get_global_config().model_dump(mode="json"),
         )
 
-    def register_devagent(self, registration: DevagentRegistration) -> None:
-        """Register one devagent process with the daemon.
+    def register_atnagent(self, registration: AtnAgentRegistration) -> None:
+        """Register one AtnAgent process with the daemon.
 
         Args:
-            registration: Devagent registration payload to send.
+            registration: AtnAgent registration payload to send.
 
         Raises:
             XpoolClientError: If config validation or registration cannot reach
@@ -251,55 +251,95 @@ class XpoolClient:
         """
 
         self.check_config()
-        self.request("POST", "/devagent/register", json=registration.model_dump(mode="json"))
+        self.request("POST", "/atnagent/register", json=registration.model_dump(mode="json"))
 
-    def heartbeat_devagent(self, cuda_device: int, heartbeat: ProcessHeartbeat) -> HeartbeatResponse:
-        """Refresh one devagent heartbeat and log daemon warnings."""
+    def heartbeat_atnagent(self, cuda_device: int, heartbeat: ProcessHeartbeat) -> HeartbeatResponse:
+        """Refresh one AtnAgent heartbeat and return daemon warnings.
 
-        response = self.request("POST", f"/devagent/{cuda_device}/heartbeat", json=heartbeat.model_dump(mode="json"))
-        heartbeat_response = self.decode_model(response, HeartbeatResponse, "devagent heartbeat")
+        Args:
+            cuda_device: CUDA device owned by the registered AtnAgent.
+            heartbeat: Process identity used to prove registration ownership.
+
+        Returns:
+            Validated heartbeat response from the daemon.
+
+        Raises:
+            XpoolClientError: If the request fails or the response is invalid.
+            XpoolDaemonError: If the daemon rejects the heartbeat.
+
+        Side Effects:
+            Logs every control-plane warning returned by the daemon.
+        """
+
+        response = self.request("POST", f"/atnagent/{cuda_device}/heartbeat", json=heartbeat.model_dump(mode="json"))
+        heartbeat_response = self.decode_model(response, HeartbeatResponse, "atnagent heartbeat")
         self.log_warnings(heartbeat_response.warnings)
         return heartbeat_response
 
-    def upsert_devagent_transport_arenas(
+    def upsert_atnagent_transport_arenas(
         self,
         cuda_device: int,
-        bindings: list[DevagentTransportArenaBinding],
+        bindings: list[AtnAgentTransportArenaBinding],
         *,
         publisher: ProcessRef,
     ) -> None:
-        """Merge devagent transport arena bindings into the daemon.
+        """Merge AtnAgent transport arena bindings into the daemon.
 
         Args:
-            cuda_device: CUDA device owned by the publishing devagent.
+            cuda_device: CUDA device owned by the publishing AtnAgent.
             bindings: Transport arena bindings to upsert.
-            publisher: Process identity for the publishing devagent.
+            publisher: Process identity for the publishing AtnAgent.
+
+        Raises:
+            XpoolClientError: If the request fails.
+            XpoolDaemonError: If the daemon rejects the publication.
+
+        Side Effects:
+            Adds or replaces daemon-brokered arena bindings owned by the
+            publisher.
         """
 
         self.request(
             "POST",
-            f"/devagent/{cuda_device}/transport-arenas",
-            json=DevagentTransportArenaUpsertRequest(
+            f"/atnagent/{cuda_device}/transport-arenas",
+            json=AtnAgentTransportArenaUpsertRequest(
                 publisher=publisher,
                 bindings=bindings,
             ).model_dump(mode="json"),
         )
 
-    def drain_devagent_transport_arenas(
+    def drain_atnagent_transport_arenas(
         self,
         cuda_device: int,
         *,
         publisher: ProcessRef,
-    ) -> DevagentTransportArenaDrainResponse:
-        """Drain one devagent's transport arenas and return active leases."""
+    ) -> AtnAgentTransportArenaDrainResponse:
+        """Drain one AtnAgent's transport arenas and return active leases.
+
+        Args:
+            cuda_device: CUDA device owned by the publishing AtnAgent.
+            publisher: Process identity that owns the arena generation.
+
+        Returns:
+            Instance ranks that still hold fresh arena leases.
+
+        Raises:
+            XpoolClientError: If the bounded drain request fails or its
+                response is invalid.
+            XpoolDaemonError: If the daemon rejects the drain request.
+
+        Side Effects:
+            Marks the published arena generation as terminating and may stop
+            processes that retain stale leases.
+        """
 
         response = self.request(
             "POST",
-            f"/devagent/{cuda_device}/transport-arenas/drain",
+            f"/atnagent/{cuda_device}/transport-arenas/drain",
             json=publisher.model_dump(mode="json"),
-            timeout_s=DEVAGENT_TRANSPORT_DRAIN_TIMEOUT_S,
+            timeout_s=ATNAGENT_TRANSPORT_DRAIN_TIMEOUT_S,
         )
-        return self.decode_model(response, DevagentTransportArenaDrainResponse, "devagent transport arena drain")
+        return self.decode_model(response, AtnAgentTransportArenaDrainResponse, "atnagent transport arena drain")
 
     def list_instances(self) -> list[InstanceRegistration]:
         """Return instance-rank registrations from the daemon."""

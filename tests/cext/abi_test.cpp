@@ -10,7 +10,7 @@
 TEST(NativeAbiContractTest, PreservesWireValuesAndLayouts) {
   using namespace xpool::abi;
 
-  EXPECT_EQ(kAbiVersion, 22U);
+  EXPECT_EQ(kAbiVersion, 24U);
   EXPECT_EQ(sizeof(FfnRequestDescriptor), 96U);
   EXPECT_EQ(sizeof(FfnResultDescriptor), 24U);
   EXPECT_EQ(sizeof(DebugOptions), 8U);
@@ -26,16 +26,22 @@ TEST(NativeAbiContractTest, PreservesWireValuesAndLayouts) {
   EXPECT_TRUE(std::is_standard_layout_v<TransportTraceRecord>);
   EXPECT_TRUE(std::is_trivially_copyable_v<TransportTraceRecord>);
 
-  const DebugOptions shim_options{
-      static_cast<std::uint64_t>(DebugOption::kShimLoopback)};
-  EXPECT_TRUE(shim_options.enabled(DebugOption::kShimLoopback));
-  EXPECT_FALSE(shim_options.enabled(DebugOption::kTransportLoopback));
+  const DebugOptions atn_options{
+      static_cast<std::uint64_t>(DebugOption::kLoopback) |
+      static_cast<std::uint64_t>(DebugLoopbackSite::kAtnagent)};
+  EXPECT_TRUE(atn_options.enabled(DebugOption::kLoopback));
+  EXPECT_EQ(atn_options.loopback_site(), DebugLoopbackSite::kAtnagent);
 
   EXPECT_EQ(static_cast<unsigned>(RuntimeRole::kInstance), 1U);
-  EXPECT_EQ(static_cast<unsigned>(RuntimeRole::kDevagent), 2U);
-  EXPECT_EQ(static_cast<std::uint64_t>(DebugOption::kShimLoopback), 1U);
-  EXPECT_EQ(static_cast<std::uint64_t>(DebugOption::kTransportLoopback), 2U);
-  EXPECT_EQ(static_cast<std::uint64_t>(DebugOption::kTransportObserver), 4U);
+  EXPECT_EQ(static_cast<unsigned>(RuntimeRole::kAtnagent), 2U);
+  EXPECT_EQ(static_cast<unsigned>(RuntimeRole::kFfnagent), 3U);
+  EXPECT_EQ(static_cast<std::uint64_t>(DebugOption::kLoopback), 1ULL << 32);
+  EXPECT_EQ(static_cast<std::uint64_t>(DebugOption::kTransportObserver),
+            1ULL << 33);
+  EXPECT_EQ(static_cast<unsigned>(DebugLoopbackSite::kNone), 0U);
+  EXPECT_EQ(static_cast<unsigned>(DebugLoopbackSite::kInstance), 1U);
+  EXPECT_EQ(static_cast<unsigned>(DebugLoopbackSite::kAtnagent), 2U);
+  EXPECT_EQ(static_cast<unsigned>(DebugLoopbackSite::kFfnagent), 3U);
   EXPECT_EQ(static_cast<unsigned>(XPoolForwardMode::kExtend), 1U);
   EXPECT_EQ(static_cast<unsigned>(XPoolForwardMode::kDecode), 2U);
   EXPECT_EQ(static_cast<unsigned>(XPoolForwardMode::kIdle), 4U);

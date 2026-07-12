@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import xpool.devkit.common.transport_observer as transport_observer
-from tests.harness.runtime.devagent import transport_arena_resource
+from tests.harness.runtime.atnagent import transport_arena_resource
 from xpool.abi import TransportArenaHandle, TransportTraceRecord, TransportTraceSnapshot
 from xpool.config import XpoolConfig, init_global_config
 from xpool.devkit.common.transport_observer import write_transport_snapshot
@@ -35,7 +35,7 @@ def test_write_transport_snapshot_serializes_structured_records(tmp_path) -> Non
         slot_claimed=110,
         input_staged=120,
         request_published=130,
-        devagent_dequeued=140,
+        atnagent_dequeued=140,
         descriptor_granted=150,
         executor_begin=160,
         executor_end=180,

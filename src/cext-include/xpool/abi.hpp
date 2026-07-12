@@ -7,7 +7,7 @@
 /// documents its producer, consumer, unit, and stability expectation.
 /// Cross-process tensor references are arena offsets, not raw CUDA virtual
 /// addresses, because CUDA IPC mappings may use different addresses in the
-/// producer process and in the local devagent.
+/// producer process and in the local atnagent.
 
 #include <ATen/core/TensorBody.h>
 #include <c10/core/ScalarType.h>
@@ -21,11 +21,11 @@
 
 #include <xpool/utils/arith.hpp>
 
-/// Native xpool ABI symbols shared by shim frontends and devagent runtime.
+/// Native xpool ABI symbols shared by shim frontends and atnagent runtime.
 namespace xpool::abi {
 
 /// Version stamped into every descriptor so incompatible producers fail closed.
-inline constexpr std::uint32_t kAbiVersion = 22;
+inline constexpr std::uint32_t kAbiVersion = 24;
 
 /// Process role selected during native runtime initialization.
 struct RuntimeRole {
@@ -33,22 +33,25 @@ struct RuntimeRole {
   enum Type : std::uint32_t {
     /// Instance process that attaches transport arenas and runs FFN shim calls.
     kInstance = 1,
-    /// Devagent process that owns transport arenas and persistent kernels.
-    kDevagent = 2,
+    /// AtnAgent process that owns local transport arenas and kernels.
+    kAtnagent = 2,
+    /// Reserved FfnAgent process role for future FFN execution resources.
+    kFfnagent = 3,
   };
 
   /// Return whether an integer is a valid RuntimeRole value.
   /// \param role Integer value read from host-side op arguments.
-  /// \return True for instance and devagent roles.
+  /// \return True for every defined RuntimeRole value.
   static constexpr bool is_valid(std::int64_t role) {
     return role == static_cast<std::int64_t>(kInstance) ||
-           role == static_cast<std::int64_t>(kDevagent);
+           role == static_cast<std::int64_t>(kAtnagent) ||
+           role == static_cast<std::int64_t>(kFfnagent);
   }
 
   /// Parse a host-side integer into a RuntimeRole value.
   /// \param role Integer value read from native init arguments.
   /// \return RuntimeRole value used to lock the native process role.
-  /// \throws c10::Error if role is not instance or devagent.
+  /// \throws c10::Error if role is not a defined RuntimeRole value.
   static Type parse(std::int64_t role) {
     TORCH_CHECK(is_valid(role), "xpool received an invalid runtime role");
     return static_cast<Type>(role);
@@ -62,7 +65,7 @@ struct RuntimeRole {
   static void expect(const std::optional<Type> &actual, Type expected,
                      const char *op_name) {
     TORCH_CHECK(actual.has_value(), "xpool op ", op_name,
-                " requires xpool.init(cuda_device, role, debug_options_mask) "
+                " requires xpool.init(cuda_device, role, debug_options) "
                 "first");
     TORCH_CHECK(*actual == expected, "xpool op ", op_name,
                 " requires runtime role ", name(expected),
@@ -74,68 +77,94 @@ private:
     switch (role) {
     case kInstance:
       return "instance";
-    case kDevagent:
-      return "devagent";
+    case kAtnagent:
+      return "atnagent";
+    case kFfnagent:
+      return "ffnagent";
     default:
       TORCH_CHECK(false, "xpool received an invalid runtime role");
     }
   }
 };
 
-/// Process-wide native debug options installed during runtime initialization.
+/// Process-wide debug option flags encoded in the high 32 bits.
 struct DebugOption {
-  /// On-wire debug option bit values.
+  /// Stable on-wire feature flag values.
   enum Bit : std::uint64_t {
-    /// Route instance FFN shim calls through the direct debug loopback
-    /// executor.
-    kShimLoopback = 1ULL << 0,
-    /// Route daemon-brokered transport requests through the debug persistent
-    /// transport loopback executor.
-    kTransportLoopback = 1ULL << 1,
+    /// Enable the loopback site encoded in option bits zero and one.
+    kLoopback = 1ULL << 32,
     /// Record native transport device-phase timing records in arena storage.
-    kTransportObserver = 1ULL << 2,
+    kTransportObserver = 1ULL << 33,
   };
 
-  /// Known option bits accepted by this ABI version.
+  /// Known feature flags accepted by this ABI version.
   static constexpr std::uint64_t kKnownMask =
-      static_cast<std::uint64_t>(kShimLoopback) |
-      static_cast<std::uint64_t>(kTransportLoopback) |
+      static_cast<std::uint64_t>(kLoopback) |
       static_cast<std::uint64_t>(kTransportObserver);
+};
+
+/// Loopback execution site encoded in option bits zero and one.
+struct DebugLoopbackSite {
+  /// Stable on-wire loopback site values.
+  enum Type : std::uint32_t {
+    /// Loopback is disabled.
+    kNone = 0,
+    /// Execute directly in the SGLang instance process.
+    kInstance = 1,
+    /// Execute in the local attention atnagent transport kernel.
+    kAtnagent = 2,
+    /// Execute in the future remote FfnAgent kernel.
+    kFfnagent = 3,
+  };
 };
 
 /// Process-wide native debug option set installed during runtime
 /// initialization.
 struct DebugOptions {
-  /// Bitmask of DebugOption::Bit values.
-  std::uint64_t mask;
+  /// Encoded high-bit features and low-bit option fields.
+  std::uint64_t raw;
 
-  /// Parse and validate a host-side integer debug option bitmask.
-  /// \param raw_mask Integer bitmask read from native init arguments.
+  /// Parse and validate a host-side integer debug-options encoding.
+  /// \param raw_options Encoded value read from native init arguments.
   /// \return DebugOptions wrapper for host and device state.
-  /// \throws c10::Error if raw_mask is negative, unknown bits are set, or
-  /// mutually exclusive options are enabled together.
-  static DebugOptions parse(std::int64_t raw_mask) {
-    TORCH_CHECK(raw_mask >= 0,
-                "xpool debug options require a non-negative option mask");
-    DebugOptions options{static_cast<std::uint64_t>(raw_mask)};
-    TORCH_CHECK((options.mask & ~DebugOption::kKnownMask) == 0U,
-                "xpool received unknown debug option bits");
-    TORCH_CHECK(!(options.enabled(DebugOption::kShimLoopback) &&
-                  options.enabled(DebugOption::kTransportLoopback)),
-                "xpool shim and transport loopback debug options are mutually "
-                "exclusive");
+  /// \throws c10::Error if the value contains unknown or inconsistent fields.
+  static DebugOptions parse(std::int64_t raw_options) {
+    TORCH_CHECK(raw_options >= 0,
+                "xpool debug options require a non-negative encoding");
+    DebugOptions options{static_cast<std::uint64_t>(raw_options)};
+    constexpr std::uint64_t kFeatureMask = 0xFFFFFFFF00000000ULL;
+    constexpr std::uint64_t kLoopbackSiteMask = 0x3ULL;
+    constexpr std::uint64_t kOptionMask = 0xFFFFFFFFULL;
+    TORCH_CHECK(((options.raw & kFeatureMask) & ~DebugOption::kKnownMask) == 0U,
+                "xpool debug options contain unknown option flags");
+    TORCH_CHECK(((options.raw & kOptionMask) & ~kLoopbackSiteMask) == 0U,
+                "xpool debug options contain non-zero reserved option bits");
+    TORCH_CHECK(options.enabled(DebugOption::kLoopback) ==
+                    (options.loopback_site() != DebugLoopbackSite::kNone),
+                "xpool loopback option and site must be enabled or disabled "
+                "together");
     return options;
   }
 
-  /// Return whether a debug option bit is enabled in a mask.
-  /// \param option Option bit to test.
-  /// \return True when option is set in mask.
+  /// Return whether a debug option is enabled.
+  /// \param option High-bit option flag to test.
+  /// \return True when the option is set in the encoding.
 #if defined(__CUDACC__)
   __host__ __device__
 #endif
       constexpr bool
       enabled(DebugOption::Bit option) const {
-    return (mask & static_cast<std::uint64_t>(option)) != 0U;
+    return (raw & static_cast<std::uint64_t>(option)) != 0U;
+  }
+
+  /// Return the loopback execution site encoded in option bits zero and one.
+  /// \return Stable DebugLoopbackSite value.
+#if defined(__CUDACC__)
+  __host__ __device__
+#endif
+      constexpr DebugLoopbackSite::Type
+      loopback_site() const {
+    return static_cast<DebugLoopbackSite::Type>(raw & 0x3ULL);
   }
 };
 
@@ -273,15 +302,15 @@ struct TensorDType {
 
 static_assert(sizeof(TensorDType) == sizeof(std::uint32_t));
 
-/// Descriptor lifecycle state shared between shim and devagent kernels.
+/// Descriptor lifecycle state shared between shim and atnagent kernels.
 struct DescriptorStatus {
   /// On-wire descriptor lifecycle integer values.
   enum Type : std::uint32_t {
     /// Descriptor slot is available for a new request.
     kEmpty = 0,
-    /// Attention-side shim has published a request for devagent polling.
+    /// Attention-side shim has published a request for atnagent polling.
     kPublished = 1,
-    /// Devagent has granted the communication slot for this request.
+    /// AtnAgent has granted the communication slot for this request.
     kGranted = 2,
     /// FFN execution completed and the output descriptor is valid.
     kDone = 3,
@@ -322,8 +351,8 @@ struct alignas(8) TransportTraceRecord {
   std::uint64_t input_staged;
   /// Used-queue publication timestamp in nanoseconds.
   std::uint64_t request_published;
-  /// Devagent used-queue dequeue timestamp in nanoseconds.
-  std::uint64_t devagent_dequeued;
+  /// AtnAgent used-queue dequeue timestamp in nanoseconds.
+  std::uint64_t atnagent_dequeued;
   /// Descriptor grant timestamp in nanoseconds.
   std::uint64_t descriptor_granted;
   /// Executor entry timestamp in nanoseconds.
@@ -475,9 +504,9 @@ struct alignas(8) FfnRequestDescriptor {
   DescriptorHeader header;
   /// Slot state and id for the request descriptor state machine.
   DescriptorState state;
-  /// FFN request metadata consumed by the devagent executor.
+  /// FFN request metadata consumed by the atnagent executor.
   FfnRequestMetadata request_metadata;
-  /// Tensor facts consumed by the devagent executor.
+  /// Tensor facts consumed by the atnagent executor.
   FfnTensorMetadata tensor_metadata;
   /// Shared-arena offsets for staged request payloads.
   FfnArenaOffsets offsets;
@@ -486,7 +515,7 @@ struct alignas(8) FfnRequestDescriptor {
   std::uint64_t trace_id;
 };
 
-/// Result descriptor written by the devagent after FFN execution advances.
+/// Result descriptor written by the atnagent after FFN execution advances.
 struct alignas(8) FfnResultDescriptor {
   /// ABI header shared by all descriptors.
   DescriptorHeader header;

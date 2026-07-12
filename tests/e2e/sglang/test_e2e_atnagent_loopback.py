@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.harness.sglang.atnagent_cluster import AtnAgentLoopbackCluster
 from tests.harness.sglang.environment import SglangTestEnvironment
 from tests.harness.sglang.graph import assert_graph_events, read_graph_events
 from tests.harness.sglang.offline_probe import GRAPH_SETTINGS, MODEL_ID
@@ -14,7 +15,7 @@ from tests.harness.sglang.probe import (
     graph_settings_key,
     run_probe,
 )
-from tests.harness.sglang.transport_cluster import TransportLoopbackCluster
+from xpool.config import LoopbackSite
 
 pytestmark = [
     pytest.mark.requires_cuda(),
@@ -24,7 +25,7 @@ pytestmark = [
 ]
 
 
-def test_sglang_transport_loopback_graph_modes(
+def test_sglang_atnagent_loopback_graph_modes(
     sglang_environment: SglangTestEnvironment,
     tmp_path: Path,
 ) -> None:
@@ -33,7 +34,7 @@ def test_sglang_transport_loopback_graph_modes(
         key = graph_settings_key(graph_settings)
         workdir = tmp_path / f"{int(key[0])}-{int(key[1])}"
         event_outdir = workdir / "events"
-        cluster = TransportLoopbackCluster.create(
+        cluster = AtnAgentLoopbackCluster.create(
             source_config=sglang_environment.config,
             model_id=MODEL_ID,
             model_path=sglang_environment.model_path,
@@ -48,7 +49,7 @@ def test_sglang_transport_loopback_graph_modes(
                     base_gpu_id=sglang_environment.base_gpu_id,
                     config_path=cluster.config_path,
                     event_outdir=event_outdir,
-                    loopback_mode="transport",
+                    loopback_site=LoopbackSite.ATNAGENT,
                 )
             except Exception as exc:
                 raise AssertionError(f"{exc}\n{cluster.diagnostics()}") from exc
@@ -78,7 +79,7 @@ def test_sglang_transport_loopback_graph_modes(
         assert run.result["output_ids"] == eager_output_ids
 
     print(
-        "XPOOL_SGLANG_TRANSPORT_LOOPBACK_DURATIONS="
+        "XPOOL_SGLANG_ATNAGENT_LOOPBACK_DURATIONS="
         + json.dumps(
             [
                 {

@@ -6,38 +6,44 @@ from http import HTTPStatus
 
 import pytest
 
-import xpool.runtime.devagent as devagent_module
-import xpool.runtime.devagent.atn as atn_module
-import xpool.runtime.devagent.common as common_module
+import xpool.runtime.atnagent as atn_module
 from xpool.abi import ABI_VERSION, TransportArenaHandle
 from xpool.config import XpoolConfig, init_global_config
-from xpool.runtime.devagent import DevagentError
-from xpool.runtime.devagent.atn import (
+from xpool.runtime.agent import (
+    AGENT_HEARTBEAT_INTERVAL_S,
+    Agent,
+    AgentHeartbeat,
+)
+from xpool.runtime.atnagent import (
+    AtnAgent,
     AtnArenaResource,
 )
-from xpool.runtime.devagent.common import (
-    DEVAGENT_HEARTBEAT_INTERVAL_S,
-    Devagent,
-)
-from xpool.service.client import XpoolClientError, XpoolDaemonError
+from xpool.service.client import XpoolClientError
 from xpool.service.wire import (
+    HeartbeatResponse,
     InstanceRegistration,
     ProcessHeartbeat,
 )
 
 
-class FakeDevagentHeartbeat:
+class SynchronousAgentHeartbeat:
+    """Run production heartbeat classification synchronously in lifecycle tests."""
+
     def __init__(
         self,
         *,
         cuda_device: int,
         heartbeat: ProcessHeartbeat,
-        interval_s: float = DEVAGENT_HEARTBEAT_INTERVAL_S,
+        sender: Callable[[int, ProcessHeartbeat], HeartbeatResponse],
+        interval_s: float = AGENT_HEARTBEAT_INTERVAL_S,
     ) -> None:
-        self.cuda_device = cuda_device
-        self.heartbeat = heartbeat
+        self.worker = AgentHeartbeat(
+            cuda_device=cuda_device,
+            heartbeat=heartbeat,
+            sender=sender,
+            interval_s=interval_s,
+        )
         self.started = False
-        self.registration_missing = False
 
     def start(self) -> None:
         self.started = True
@@ -49,51 +55,30 @@ class FakeDevagentHeartbeat:
         self.stop()
 
     def consume_registration_missing(self) -> bool:
-        registration_missing = self.registration_missing
-        self.registration_missing = False
-        return registration_missing
+        return self.worker.consume_registration_missing()
 
     def raise_if_failed(self) -> None:
         if not self.started:
             return
-        client = common_module.XpoolClient()
-        try:
-            client.heartbeat_devagent(self.cuda_device, self.heartbeat)
-        except XpoolDaemonError as exc:
-            if exc.kind == "not_ready":
-                self.registration_missing = True
-                return
-            raise DevagentError(f"devagent heartbeat received unrecoverable daemon error: {exc}") from exc
-        except XpoolClientError as exc:
-            atn_module.logger.warning("devagent heartbeat failed: %s", exc)
-        finally:
-            client.close()
+        self.worker.heartbeat_once()
 
 
-@pytest.fixture(autouse=True)
-def reset_devagent_runtime(
+@pytest.fixture
+def reset_atnagent_runtime(
     monkeypatch: pytest.MonkeyPatch,
-    reset_global_config: None,
+    reset_agent_runtime: None,
 ) -> Iterator[None]:
-    class FakeHealthyXpoolClient:
-        def __init__(self) -> None:
-            return None
+    """Install AtnAgent-specific native and heartbeat test doubles."""
 
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr(common_module.bootstrap, "init", lambda cuda_device, role: None)
-    monkeypatch.setattr(common_module.devkit, "install", lambda: None)
-    monkeypatch.setattr(common_module, "XpoolClient", FakeHealthyXpoolClient)
-    monkeypatch.setattr(atn_module, "DevagentHeartbeat", FakeDevagentHeartbeat)
+    monkeypatch.setattr(atn_module, "AgentHeartbeat", SynchronousAgentHeartbeat)
     yield
 
 
-def create_devagent(config: XpoolConfig, *, cuda_device: int) -> Devagent:
-    """Install config and construct one production devagent for tests."""
+def create_atnagent(config: XpoolConfig, *, cuda_device: int) -> Agent:
+    """Install config and construct one production AtnAgent for tests."""
 
     init_global_config(config=config)
-    return devagent_module.create_devagent(cuda_device)
+    return AtnAgent(cuda_device=cuda_device)
 
 
 def health_client_class(healthy: bool) -> type:
@@ -158,7 +143,7 @@ def transport_arena_resource(*, instance_id: str, rank: int, handle_rank: int) -
     return AtnArenaResource(instance_id=instance_id, registration=registration, handle=handle)
 
 
-def patch_native_devagent_ops(
+def patch_native_atnagent_ops(
     monkeypatch: pytest.MonkeyPatch,
     *,
     events: list[tuple[object, ...]] | None = None,
@@ -182,6 +167,6 @@ def patch_native_devagent_ops(
         if events is not None:
             events.append(("destroy", int(handle.handle[:2], 16)))
 
-    monkeypatch.setattr(atn_module.xpool.ops.devagent, "create_transport_arena", create or fake_create)
-    monkeypatch.setattr(atn_module.xpool.ops.devagent, "launch_transport_kernel", launch or fake_start)
-    monkeypatch.setattr(atn_module.xpool.ops.devagent, "destroy_transport_arena", destroy or fake_destroy)
+    monkeypatch.setattr(atn_module.xpool.ops.atnagent, "create_transport_arena", create or fake_create)
+    monkeypatch.setattr(atn_module.xpool.ops.atnagent, "launch_transport_kernel", launch or fake_start)
+    monkeypatch.setattr(atn_module.xpool.ops.atnagent, "destroy_transport_arena", destroy or fake_destroy)

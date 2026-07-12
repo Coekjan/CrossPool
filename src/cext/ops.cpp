@@ -9,8 +9,8 @@
 #include <vector>
 
 #include <xpool/abi.hpp>
+#include <xpool/atnagent.hpp>
 #include <xpool/debug/options.hpp>
-#include <xpool/devagent.hpp>
 #include <xpool/instance.hpp>
 #include <xpool/transport.hpp>
 #include <xpool/utils/arith.hpp>
@@ -32,7 +32,7 @@ void require_role(RuntimeRole::Type expected, const char *op_name) {
 }
 
 void init(std::int64_t cuda_device, std::int64_t role,
-          std::int64_t debug_options_mask) {
+          std::int64_t debug_options) {
   TORCH_CHECK(cuda_device >= 0,
               "xpool init requires a non-negative CUDA device");
   RuntimeRole::Type parsed_role = RuntimeRole::parse(role);
@@ -41,7 +41,7 @@ void init(std::int64_t cuda_device, std::int64_t role,
     g_runtime_state.role = parsed_role;
   }
   RuntimeRole::expect(g_runtime_state.role, parsed_role, "init");
-  xpool::debug::init(cuda_device, debug_options_mask);
+  xpool::debug::init(cuda_device, debug_options);
 }
 
 } // namespace
@@ -57,12 +57,12 @@ TORCH_LIBRARY(xpool, m) {
   }
 
   {
-    m.def("init(int cuda_device, int role, int debug_options_mask) -> ()");
+    m.def("init(int cuda_device, int role, int debug_options) -> ()");
     m.impl("init", init);
   }
 
   {
-    m.def("devagent.create_transport_arena("
+    m.def("atnagent.create_transport_arena("
           "int cuda_device, "
           "int max_tokens, "
           "int hidden_size, "
@@ -72,30 +72,30 @@ TORCH_LIBRARY(xpool, m) {
     const auto f = [](std::int64_t cuda_device, std::int64_t max_tokens,
                       std::int64_t hidden_size, std::int64_t element_size_bytes,
                       std::int64_t atn_dp_size) {
-      require_role(RuntimeRole::kDevagent, "devagent.create_transport_arena");
-      return xpool::devagent::create_transport_arena(
+      require_role(RuntimeRole::kAtnagent, "atnagent.create_transport_arena");
+      return xpool::atnagent::create_transport_arena(
           cuda_device, max_tokens, hidden_size, element_size_bytes,
           atn_dp_size);
     };
-    m.impl("devagent.create_transport_arena", f);
+    m.impl("atnagent.create_transport_arena", f);
   }
 
   {
-    m.def("devagent.launch_transport_kernel(str handle) -> ()");
+    m.def("atnagent.launch_transport_kernel(str handle) -> ()");
     const auto f = [](const xpool::transport::TransportArenaHandleHex &handle) {
-      require_role(RuntimeRole::kDevagent, "devagent.launch_transport_kernel");
-      xpool::devagent::launch_transport_kernel(handle);
+      require_role(RuntimeRole::kAtnagent, "atnagent.launch_transport_kernel");
+      xpool::atnagent::launch_transport_kernel(handle);
     };
-    m.impl("devagent.launch_transport_kernel", f);
+    m.impl("atnagent.launch_transport_kernel", f);
   }
 
   {
-    m.def("devagent.destroy_transport_arena(str handle) -> "
+    m.def("atnagent.destroy_transport_arena(str handle) -> "
           "(int sequence, int dropped, int[][] records)");
     const auto f = [](const xpool::transport::TransportArenaHandleHex &handle) {
-      require_role(RuntimeRole::kDevagent, "devagent.destroy_transport_arena");
+      require_role(RuntimeRole::kAtnagent, "atnagent.destroy_transport_arena");
       const xpool::abi::TransportTraceSnapshot snapshot =
-          xpool::devagent::destroy_transport_arena(handle);
+          xpool::atnagent::destroy_transport_arena(handle);
       std::vector<std::vector<std::int64_t>> records;
       records.reserve(snapshot.records.size());
       for (const xpool::abi::TransportTraceRecord &record : snapshot.records) {
@@ -107,7 +107,7 @@ TORCH_LIBRARY(xpool, m) {
             static_cast<std::int64_t>(record.slot_claimed),
             static_cast<std::int64_t>(record.input_staged),
             static_cast<std::int64_t>(record.request_published),
-            static_cast<std::int64_t>(record.devagent_dequeued),
+            static_cast<std::int64_t>(record.atnagent_dequeued),
             static_cast<std::int64_t>(record.descriptor_granted),
             static_cast<std::int64_t>(record.executor_begin),
             static_cast<std::int64_t>(record.executor_end),
@@ -121,7 +121,7 @@ TORCH_LIBRARY(xpool, m) {
                              static_cast<std::int64_t>(snapshot.dropped),
                              std::move(records));
     };
-    m.impl("devagent.destroy_transport_arena", f);
+    m.impl("atnagent.destroy_transport_arena", f);
   }
 
   {

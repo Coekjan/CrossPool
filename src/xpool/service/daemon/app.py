@@ -14,16 +14,16 @@ from fastapi.responses import JSONResponse
 from xpool.config import XpoolConfig, get_global_config
 from xpool.service.daemon.mps import MpsStatusProvider, probe_mps_controller
 from xpool.service.daemon.state import (
-    DevagentRegistrationState,
+    AtnAgentRegistrationState,
     InstanceRegistrationState,
     InstanceUniqId,
     XpoolDaemonState,
 )
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
-    DevagentRegistration,
-    DevagentTransportArenaDrainResponse,
-    DevagentTransportArenaUpsertRequest,
+    AtnAgentRegistration,
+    AtnAgentTransportArenaDrainResponse,
+    AtnAgentTransportArenaUpsertRequest,
     HeartbeatResponse,
     InstanceRegistration,
     ProcessHeartbeat,
@@ -87,19 +87,19 @@ def create_daemon(
         await asyncio.to_thread(state.check_config, request)
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
-    @app.get("/devagents")
-    async def list_devagents() -> list[DevagentRegistration]:
-        return await asyncio.to_thread(state.devagent_registrations.views)
+    @app.get("/atnagents")
+    async def list_atnagents() -> list[AtnAgentRegistration]:
+        return await asyncio.to_thread(state.atnagent_registrations.views)
 
     @app.get("/instances")
     async def list_instances() -> list[InstanceRegistration]:
         return await asyncio.to_thread(state.instance_registrations.views)
 
-    @app.post("/devagent/register")
-    async def register_devagent(request: DevagentRegistration) -> Response:
+    @app.post("/atnagent/register")
+    async def register_atnagent(request: AtnAgentRegistration) -> Response:
         await asyncio.to_thread(
-            state.register_devagent,
-            DevagentRegistrationState(
+            state.register_atnagent,
+            AtnAgentRegistrationState(
                 cuda_device=request.cuda_device,
                 abi_version=request.abi_version,
                 pid=request.pid,
@@ -108,29 +108,29 @@ def create_daemon(
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
-    @app.post("/devagent/{cuda_device}/heartbeat")
-    async def heartbeat_devagent(cuda_device: int, request: ProcessHeartbeat) -> HeartbeatResponse:
-        return await asyncio.to_thread(state.heartbeat_devagent, cuda_device, request)
+    @app.post("/atnagent/{cuda_device}/heartbeat")
+    async def heartbeat_atnagent(cuda_device: int, request: ProcessHeartbeat) -> HeartbeatResponse:
+        return await asyncio.to_thread(state.heartbeat_atnagent, cuda_device, request)
 
-    @app.post("/devagent/{cuda_device}/transport-arenas")
-    async def upsert_devagent_transport_arenas(
+    @app.post("/atnagent/{cuda_device}/transport-arenas")
+    async def upsert_atnagent_transport_arenas(
         cuda_device: int,
-        request: DevagentTransportArenaUpsertRequest,
+        request: AtnAgentTransportArenaUpsertRequest,
     ) -> Response:
         await asyncio.to_thread(
-            state.upsert_devagent_transport_arenas,
+            state.upsert_atnagent_transport_arenas,
             cuda_device,
             request.bindings,
             request.publisher,
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
-    @app.post("/devagent/{cuda_device}/transport-arenas/drain")
-    async def drain_devagent_transport_arenas(
+    @app.post("/atnagent/{cuda_device}/transport-arenas/drain")
+    async def drain_atnagent_transport_arenas(
         cuda_device: int,
         request: ProcessRef,
-    ) -> DevagentTransportArenaDrainResponse:
-        return await asyncio.to_thread(state.drain_devagent_transport_arenas, cuda_device, request)
+    ) -> AtnAgentTransportArenaDrainResponse:
+        return await asyncio.to_thread(state.drain_atnagent_transport_arenas, cuda_device, request)
 
     @app.post("/instance/register")
     async def register_instance(request: InstanceRegistration) -> Response:

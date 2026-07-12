@@ -48,9 +48,11 @@ Keep implementation structure deliberate. Model-specific code belongs under the
 model adapter that owns it; global integration layers should expose only generic
 registration, discovery, binding, and shim contracts.
 
-Use repository terminology consistently. In xpool code and documentation, prefer
-`devagent` for xpool-owned runtime roles. Use `PE` only when directly
-describing NVSHMEM APIs or behavior.
+Use repository terminology consistently. `AtnAgent` is the current xpool
+runtime entity; `FfnAgent` and lowercase `ffnagent` identify the reserved future
+FFN runtime role and loopback site. Use the generic `Agent` term only for shared
+lifecycle concepts. Use `PE` only when directly describing NVSHMEM APIs or
+behavior.
 
 Prefer behavior tests over source-string or implementation-text assertions.
 Repository tests may inspect source text only for explicit quality gates such as
@@ -111,7 +113,8 @@ runtime access pattern. Local development paths belong in ignored
 Every accepted `XPOOL_*` variable must be declared in the config registry. The
 config layer should warn on unknown `XPOOL_*` variables instead of silently
 turning them into policy. Debug settings use nested names such as
-`debug.shim_loopback.enable` and `debug.graph_observer.outdir`.
+`debug.loopback.enable`, `debug.loopback.site`, and
+`debug.graph_observer.outdir`.
 
 ## Testing
 
@@ -122,7 +125,11 @@ If a test would still pass when the user-visible behavior is broken, replace it
 with a behavior test.
 
 Put reusable test harnesses and process-management tools under
-`tests/harness/`. Keep Python tests in three explicit layers: `tests/unit/`
+`tests/harness/`. Activate reusable fixtures explicitly in the test modules
+that need them; do not use directory-level `conftest.py` imports to create
+implicit cross-module fixture dependencies. Keep common and subsystem-specific
+fixture setup separate so each fixture owns one coherent reset boundary. Keep
+Python tests in three explicit layers: `tests/unit/`
 mirrors xpool modules and must not exercise native behavior, launch subprocesses,
 or load model weights; `tests/integration/` covers cross-module, pinned SGLang,
 Python/native, and component-scoped CUDA subprocess contracts; `tests/e2e/`
@@ -165,8 +172,8 @@ NVSHMEM bindings without an accepted design change.
 The production `ffn_shim` path must support eager execution, decode full CUDA
 graph replay, and prefill piecewise CUDA graph replay before serving readiness
 is claimed. `ffn_shim_loopback` is only a development/debug substitute selected
-by `debug.shim_loopback.enable`; loopback evidence is not real FFN or serving
-evidence.
+by `debug.loopback.enable` with `debug.loopback.site=instance`; loopback
+evidence is not real FFN or serving evidence.
 
 ## Build Style
 
@@ -206,7 +213,7 @@ printf 'get_default_active_thread_percentage\n' | uv run nvidia-cuda-mps-control
 ```
 
 MPS starts its server lazily when the first CUDA client connects. Stop SGLang
-and devagents cleanly before stopping the controller with
+and agents cleanly before stopping the controller with
 `printf 'quit\n' | uv run nvidia-cuda-mps-control`. The daemon observes MPS
 readiness but does not own the controller lifecycle or change GPU compute mode.
 

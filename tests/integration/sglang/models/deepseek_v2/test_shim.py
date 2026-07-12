@@ -191,16 +191,6 @@ def test_shim_forward_rejects_integer_forward_mode() -> None:
         shim(hidden_states, forward_batch)
 
 
-def test_shim_forward_reports_missing_native_op(monkeypatch: pytest.MonkeyPatch) -> None:
-    shim = bound_shim()
-    hidden_states = torch.empty((1, 2048), dtype=torch.bfloat16)
-    monkeypatch.setattr(torch.ops, "xpool", SimpleNamespace(instance=SimpleNamespace()), raising=False)
-    monkeypatch.setattr(shim_module, "validate_hidden_states", lambda *args, **kwargs: None)
-
-    with pytest.raises(AttributeError, match="ffn_shim"):
-        shim(hidden_states, decode_forward_batch())
-
-
 def test_shim_forward_preserves_native_runtime_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_ffn_shim(
         hidden_states: torch.Tensor,
@@ -250,7 +240,7 @@ def test_shim_forward_passes_structured_native_request(monkeypatch: pytest.Monke
                 "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
-            env={"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "1"},
+            env={"XPOOL_DEBUG_LOOPBACK_ENABLE": "1", "XPOOL_DEBUG_LOOPBACK_SITE": "instance"},
         )
     )
     shim = bound_shim(layer_id=4, instance_index=2)

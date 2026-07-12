@@ -54,8 +54,8 @@ def test_defaults_fill_missing_optional_sections() -> None:
         cli={},
     )
 
-    assert config.debug.shim_loopback.enable is False
-    assert config.debug.transport_loopback.enable is False
+    assert config.debug.loopback.enable is False
+    assert config.debug.loopback.site is None
     assert config.debug.graph_observer.enable is False
     assert config.debug.graph_observer.outdir is None
     assert config.daemon.host == "127.0.0.1"
@@ -160,22 +160,28 @@ def test_init_global_config_tracks_effective_sources() -> None:
     config = init_global_config(
         config_path="configs/xpool.example.toml",
         cli={"daemon_host": "127.0.0.6"},
-        env={"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "1"},
+        env={"XPOOL_DEBUG_LOOPBACK_ENABLE": "1", "XPOOL_DEBUG_LOOPBACK_SITE": "instance"},
     )
     report = config.sources
 
     assert config.daemon.host == "127.0.0.6"
-    assert config.debug.shim_loopback.enable is True
+    assert config.debug.loopback.enable is True
+    assert config.debug.loopback.site == "instance"
     assert "sources" not in config.model_dump(mode="json")
     assert source_record(report, "daemon.host") == {
         "name": "daemon.host",
         "source": ConfigSource.CLI,
         "value": "127.0.0.6",
     }
-    assert source_record(report, "debug.shim_loopback.enable") == {
-        "name": "debug.shim_loopback.enable",
+    assert source_record(report, "debug.loopback.enable") == {
+        "name": "debug.loopback.enable",
         "source": ConfigSource.ENV,
         "value": True,
+    }
+    assert source_record(report, "debug.loopback.site") == {
+        "name": "debug.loopback.site",
+        "source": ConfigSource.ENV,
+        "value": "instance",
     }
     assert source_record(report, "daemon.port")["source"] == ConfigSource.CONFIG
     assert source_record(report, "devices.atn_cuda_devices")["source"] == ConfigSource.CONFIG

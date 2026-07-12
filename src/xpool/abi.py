@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from enum import IntEnum, IntFlag
 
-ABI_VERSION = 22
+ABI_VERSION = 24
 TRANSPORT_ARENA_HANDLE_HEX_LENGTH = 128
 
 
@@ -25,7 +25,7 @@ class TransportTraceRecord:
     slot_claimed: int
     input_staged: int
     request_published: int
-    devagent_dequeued: int
+    atnagent_dequeued: int
     descriptor_granted: int
     executor_begin: int
     executor_end: int
@@ -101,8 +101,8 @@ TRANSPORT_PHASES = (
     ("slot_wait", "request_begin", "slot_claimed"),
     ("input_staging", "slot_claimed", "input_staged"),
     ("request_publish", "input_staged", "request_published"),
-    ("publish_to_dequeue", "request_published", "devagent_dequeued"),
-    ("descriptor_grant", "devagent_dequeued", "descriptor_granted"),
+    ("publish_to_dequeue", "request_published", "atnagent_dequeued"),
+    ("descriptor_grant", "atnagent_dequeued", "descriptor_granted"),
     ("executor", "executor_begin", "executor_end"),
     ("result_notify", "result_published", "result_observed"),
     ("output_copy", "result_observed", "output_copied"),
@@ -116,26 +116,114 @@ class RuntimeRole(IntEnum):
 
     Attributes:
         INSTANCE: Process that attaches transport arenas and runs FFN shim calls.
-        DEVAGENT: Process that owns transport arenas and persistent kernels.
+        ATNAGENT: Process that owns local transport arenas and kernels.
+        FFNAGENT: Process that owns FFN execution resources.
     """
 
     INSTANCE = 1
-    DEVAGENT = 2
+    ATNAGENT = 2
+    FFNAGENT = 3
 
 
 class DebugOption(IntFlag):
-    """Native process-wide debug option bits passed during xpool initialization.
+    """Native process-wide debug option flags in the high 32 bits.
 
     Attributes:
-        SHIM_LOOPBACK: Route FFN shim calls through direct debug loopback.
-        TRANSPORT_LOOPBACK: Route daemon-brokered transport requests through the
-            debug persistent transport loopback executor.
+        LOOPBACK: Enable the loopback site encoded in the option fields.
         TRANSPORT_OBSERVER: Record native transport device-phase timings.
     """
 
-    SHIM_LOOPBACK = 1 << 0
-    TRANSPORT_LOOPBACK = 1 << 1
-    TRANSPORT_OBSERVER = 1 << 2
+    LOOPBACK = 1 << 32
+    TRANSPORT_OBSERVER = 1 << 33
+
+
+class DebugLoopbackSite(IntEnum):
+    """Native loopback execution-site values in option bits 0 and 1.
+
+    Attributes:
+        NONE: Loopback is disabled.
+        INSTANCE: Execute directly in the SGLang instance process.
+        ATNAGENT: Execute in the local AtnAgent kernel.
+        FFNAGENT: Execute in the remote FfnAgent kernel.
+    """
+
+    NONE = 0
+    INSTANCE = 1
+    ATNAGENT = 2
+    FFNAGENT = 3
+
+
+@dataclass(frozen=True, slots=True)
+class DebugOptions:
+    """Validated 64-bit native debug-options encoding.
+
+    Attributes:
+        raw: Non-negative encoded value passed through the Torch operator ABI.
+    """
+
+    raw: int
+
+    def __post_init__(self) -> None:
+        """Reject unknown bits and inconsistent loopback settings.
+
+        Raises:
+            ValueError: If the encoded value violates the debug-options ABI.
+        """
+
+        if self.raw < 0:
+            raise ValueError("xpool debug options require a non-negative encoding")
+        known_options = int(DebugOption.LOOPBACK | DebugOption.TRANSPORT_OBSERVER)
+        option_flags = self.raw & 0xFFFFFFFF00000000
+        if option_flags & ~known_options:
+            raise ValueError("xpool debug options contain unknown option flags")
+        option_bits = self.raw & 0xFFFFFFFF
+        if option_bits & ~0b11:
+            raise ValueError("xpool debug options contain non-zero reserved option bits")
+        loopback_enabled = self.enabled(DebugOption.LOOPBACK)
+        if loopback_enabled != (self.loopback_site is not DebugLoopbackSite.NONE):
+            raise ValueError("xpool loopback option and site must be enabled or disabled together")
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        loopback_site: DebugLoopbackSite = DebugLoopbackSite.NONE,
+        transport_observer: bool = False,
+    ) -> DebugOptions:
+        """Encode semantic debug settings into the stable native ABI.
+
+        Args:
+            loopback_site: Process site that executes loopback work, or none.
+            transport_observer: Whether native transport timing is enabled.
+
+        Returns:
+            Validated encoded debug options.
+        """
+
+        features = DebugOption(0)
+        if loopback_site is not DebugLoopbackSite.NONE:
+            features |= DebugOption.LOOPBACK
+        if transport_observer:
+            features |= DebugOption.TRANSPORT_OBSERVER
+        return cls(int(features) | int(loopback_site))
+
+    def enabled(self, feature: DebugOption) -> bool:
+        """Return whether one debug option is enabled.
+
+        Args:
+            feature: High-bit option flag to inspect.
+
+        Returns:
+            Whether every requested feature bit is present.
+        """
+
+        return (self.raw & int(feature)) == int(feature)
+
+    @property
+    def loopback_site(self) -> DebugLoopbackSite:
+        """Return the loopback execution site encoded in option bits 0 and 1."""
+
+        return DebugLoopbackSite(self.raw & 0b11)
 
 
 class XPoolForwardMode(IntEnum):
@@ -184,7 +272,7 @@ class DescriptorStatus(IntEnum):
     Attributes:
         EMPTY: Descriptor arena is available for a new request.
         PUBLISHED: Attention-side shim has published a request for polling.
-        GRANTED: Devagent has granted the communication slot.
+        GRANTED: Agent has granted the communication slot.
         DONE: FFN execution completed and the output descriptor is valid.
         FAILED: FFN execution failed and the result descriptor carries an error code.
     """

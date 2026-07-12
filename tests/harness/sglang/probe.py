@@ -7,7 +7,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 
 from tests.harness.sglang.graph import read_graph_events
 from tests.harness.sglang.offline_probe import (
@@ -15,6 +15,7 @@ from tests.harness.sglang.offline_probe import (
     SglangGraphSettings,
 )
 from tests.harness.sglang.process import collect_process_output_after_timeout, tail, terminate_process_group
+from xpool.config import LoopbackSite
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -23,8 +24,6 @@ type JsonValue = str | int | float | bool | list[int] | None
 type GraphEvent = dict[str, JsonValue]
 
 type GraphSettings = tuple[bool, bool]
-
-type LoopbackMode = Literal["shim", "transport"]
 
 PROBE_TIMEOUT_SECONDS = 30 * 60
 
@@ -50,7 +49,7 @@ def run_probe_worker(
     base_gpu_id: int,
     config_path: Path,
     tmp_path: Path,
-    loopback_mode: LoopbackMode,
+    loopback_site: LoopbackSite,
 ) -> list[ProbeRun]:
     runs: list[ProbeRun] = []
     for graph_settings in graph_settings_list:
@@ -61,7 +60,7 @@ def run_probe_worker(
             base_gpu_id=base_gpu_id,
             config_path=config_path,
             event_outdir=event_outdir,
-            loopback_mode=loopback_mode,
+            loopback_site=loopback_site,
         )
         events = read_graph_events(event_outdir)
         runs.append(
@@ -86,14 +85,14 @@ def run_probe(
     base_gpu_id: int,
     config_path: Path,
     event_outdir: Path,
-    loopback_mode: LoopbackMode,
+    loopback_site: LoopbackSite,
 ) -> ProbeResult:
     event_outdir.mkdir(parents=True, exist_ok=True)
     result_path = event_outdir / "result.json"
     env = probe_env(
         config_path=config_path,
         event_outdir=event_outdir,
-        loopback_mode=loopback_mode,
+        loopback_site=loopback_site,
     )
     command = [
         sys.executable,
@@ -148,10 +147,10 @@ def run_probe(
     )
 
 
-def probe_env(*, config_path: Path, event_outdir: Path, loopback_mode: LoopbackMode) -> dict[str, str]:
+def probe_env(*, config_path: Path, event_outdir: Path, loopback_site: LoopbackSite) -> dict[str, str]:
     env = dict(os.environ)
-    env.pop("XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE", None)
-    env.pop("XPOOL_DEBUG_TRANSPORT_LOOPBACK_ENABLE", None)
+    env.pop("XPOOL_DEBUG_LOOPBACK_ENABLE", None)
+    env.pop("XPOOL_DEBUG_LOOPBACK_SITE", None)
     current_pythonpath = env.get("PYTHONPATH")
     pythonpath_entries = [str(REPO_ROOT / "tests"), str(REPO_ROOT)]
     if current_pythonpath:
@@ -167,10 +166,9 @@ def probe_env(*, config_path: Path, event_outdir: Path, loopback_mode: LoopbackM
             "PYTHONPATH": os.pathsep.join(pythonpath_entries),
         }
     )
-    env["XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE" if loopback_mode == "shim" else "XPOOL_DEBUG_TRANSPORT_LOOPBACK_ENABLE"] = (
-        "1"
-    )
-    if loopback_mode == "transport":
+    env["XPOOL_DEBUG_LOOPBACK_ENABLE"] = "1"
+    env["XPOOL_DEBUG_LOOPBACK_SITE"] = loopback_site.value
+    if loopback_site is LoopbackSite.ATNAGENT:
         env["XPOOL_DEBUG_TRANSPORT_OBSERVER_ENABLE"] = "1"
         env["XPOOL_DEBUG_TRANSPORT_OBSERVER_OUTDIR"] = str(event_outdir)
     return env

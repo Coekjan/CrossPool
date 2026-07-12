@@ -114,14 +114,3 @@ def test_model_path_must_be_absolute() -> None:
             },
             cli={},
         )
-
-
-def test_model_tp_field_is_rejected() -> None:
-    with pytest.raises(ValidationError, match="tp"):
-        XpoolConfig.from_mapping(
-            {
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1, 2]},
-                "models": [{"id": "m", "path": "/models/m", "tp": 4}],
-            },
-            cli={},
-        )

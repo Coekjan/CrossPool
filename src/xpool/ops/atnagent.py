@@ -1,4 +1,4 @@
-"""Python facade for devagent-owned native transport operators."""
+"""Python facade for AtnAgent-owned native transport operators."""
 
 from __future__ import annotations
 
@@ -30,14 +30,14 @@ def create_transport_arena(
 
     Raises:
         RuntimeError: If geometry is invalid, CUDA allocation fails, or the
-            current process is not initialized as a devagent.
+            current process is not initialized as an AtnAgent.
 
     Side Effects:
-        Allocates devagent-owned CUDA IPC storage. The caller owns the returned
+        Allocates AtnAgent-owned CUDA IPC storage. The caller owns the returned
         arena until exactly one successful destroy transaction completes.
     """
 
-    value = torch.ops.xpool.devagent.create_transport_arena(
+    value = torch.ops.xpool.atnagent.create_transport_arena(
         cuda_device,
         max_tokens,
         hidden_size,
@@ -67,7 +67,7 @@ def destroy_transport_arena(handle: TransportArenaHandle) -> TransportTraceSnaps
         ``handle``.
     """
 
-    sequence, dropped, records = torch.ops.xpool.devagent.destroy_transport_arena(handle.handle)
+    sequence, dropped, records = torch.ops.xpool.atnagent.destroy_transport_arena(handle.handle)
     return TransportTraceSnapshot.from_raw(int(sequence), int(dropped), records)
 
 
@@ -86,4 +86,4 @@ def launch_transport_kernel(handle: TransportArenaHandle) -> None:
         device. The kernel remains live until arena destruction requests drain.
     """
 
-    torch.ops.xpool.devagent.launch_transport_kernel(handle.handle)
+    torch.ops.xpool.atnagent.launch_transport_kernel(handle.handle)

@@ -10,7 +10,7 @@
 
 namespace xpool::transport {
 
-/// Execute one granted transport request on the devagent resident kernel.
+/// Execute one granted transport request on the agent resident kernel.
 /// \param arena Device view of the shared transport arena.
 /// \param request Granted request descriptor whose payload offsets are valid.
 /// \return FfnResultErrorCode value written to the result descriptor.

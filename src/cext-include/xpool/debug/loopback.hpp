@@ -5,7 +5,7 @@
 ///
 /// The loopback executor is a development validation surface only. It proves
 /// tensor dispatch, CUDA graph replay, and native op registration before xpool
-/// wires the real devagent FFN executor.
+/// wires the real agent FFN executor.
 
 #include <ATen/core/TensorBody.h>
 

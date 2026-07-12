@@ -61,7 +61,7 @@ class XpoolModelBinding:
     """xpool runtime identity for one SGLang model runner.
 
     ``instance_id`` is the human-readable model id from ``XPOOL_CONFIG``; the integer
-    ``instance_index`` is fed to the xpool FFN shim ABI so the devagent can route
+    ``instance_index`` is fed to the xpool FFN shim ABI so the agent can route
     FFN results back to the right instance.
 
     Attributes:
@@ -236,7 +236,7 @@ def inject_shim_identity(model_runner: ModelRunner, binding: XpoolModelBinding) 
 
     Shims are constructed by SGLang before the binding is known, so the identity is
     injected post-load from the actual model runner config; each shim then forwards
-    it to the native FFN op so the devagent can route results back to the right
+    it to the native FFN op so the agent can route results back to the right
     instance.
     """
 

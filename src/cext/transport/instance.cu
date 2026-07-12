@@ -84,7 +84,7 @@ instance_transport_kernel(TransportArena arena, const scalar_t *hidden_input,
     }
   }
   // Every staging thread must make its global writes system-visible before
-  // thread 0 publishes the descriptor and used-queue slot to the devagent
+  // thread 0 publishes the descriptor and used-queue slot to the atnagent
   // process.
   __threadfence_system();
   __syncthreads();
@@ -92,7 +92,7 @@ instance_transport_kernel(TransportArena arena, const scalar_t *hidden_input,
     trace_record->input_staged = transport_global_timer();
   }
 
-  // Phase 3: publish the descriptor, then enqueue the slot for the devagent.
+  // Phase 3: publish the descriptor, then enqueue the slot for the atnagent.
   auto &request = arena.request(claimed_slot);
   auto &result = arena.result(claimed_slot);
   auto &request_status = request.state.status;
@@ -132,7 +132,7 @@ instance_transport_kernel(TransportArena arena, const scalar_t *hidden_input,
     xpool::utils::device::trap();
   }
 
-  // Phase 4: wait for the devagent to publish completion for this slot.
+  // Phase 4: wait for the atnagent to publish completion for this slot.
   if (threadIdx.x == 0) {
     const unsigned long long start_clock = clock64();
     while (true) {

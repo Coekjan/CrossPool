@@ -68,7 +68,7 @@ def run_isolated_native_case(
 
 
 def expected_loopback_rotation(hidden_states: torch.Tensor) -> torch.Tensor:
-    """Return the pairwise rotation implemented by both loopback modes."""
+    """Return the pairwise rotation implemented by both loopback sites."""
 
     x_values = hidden_states.float()[..., 0::2]
     y_values = hidden_states.float()[..., 1::2]

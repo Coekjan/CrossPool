@@ -42,7 +42,8 @@ def test_config_dump_reports_config_and_sources(capsys) -> None:
         "source": "cli",
         "value": "127.0.0.6",
     }
-    assert config_record(records, "debug.shim_loopback.enable")["source"] == "default"
+    assert config_record(records, "debug.loopback.enable")["source"] == "default"
+    assert config_record(records, "debug.loopback.site")["source"] == "default"
     assert config_record(records, "models[0].path")["source"] == "unset"
     assert all(set(record) == {"name", "value", "source"} for record in records)
 
@@ -59,15 +60,21 @@ def test_config_dump_uses_env_config_path(monkeypatch, capsys) -> None:
 
 def test_config_dump_reports_env_source(monkeypatch, capsys) -> None:
     monkeypatch.setenv("XPOOL_CONFIG", "configs/xpool.example.toml")
-    monkeypatch.setenv("XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE", "1")
+    monkeypatch.setenv("XPOOL_DEBUG_LOOPBACK_ENABLE", "1")
+    monkeypatch.setenv("XPOOL_DEBUG_LOOPBACK_SITE", "instance")
 
     assert main(["config", "dump"]) == 0
 
     records = json_config_records(capsys)
-    assert config_record(records, "debug.shim_loopback.enable") == {
-        "name": "debug.shim_loopback.enable",
+    assert config_record(records, "debug.loopback.enable") == {
+        "name": "debug.loopback.enable",
         "source": "env",
         "value": True,
+    }
+    assert config_record(records, "debug.loopback.site") == {
+        "name": "debug.loopback.site",
+        "source": "env",
+        "value": "instance",
     }
 
 

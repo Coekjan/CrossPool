@@ -8,7 +8,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from xpool.abi import TRANSPORT_ARENA_HANDLE_HEX_LENGTH, TransportArenaHandle
-from xpool.config import DeviceRole
 from xpool.runtime.transport import InstanceTransportAttributes
 from xpool.service.errors import XpoolDaemonError, XpoolDaemonErrorKind
 
@@ -52,13 +51,13 @@ class TransportArenaHandleRecord(WireModel):
         return TransportArenaHandle(handle=self.handle)
 
 
-class DevagentTransportArenaBinding(WireModel):
-    """Association between an instance id and one devagent-owned transport arena."""
+class AtnAgentTransportArenaBinding(WireModel):
+    """Association between an instance id and one AtnAgent-owned arena."""
 
     instance_id: str = Field(description="Instance id whose rank can attach this arena.")
     rank: int = Field(ge=0, description="Rank-local process index within the instance.")
     handle: TransportArenaHandleRecord = Field(
-        description="CUDA IPC transport arena handle owned by the publishing devagent."
+        description="CUDA IPC transport arena handle owned by the publishing AtnAgent."
     )
 
 
@@ -69,19 +68,19 @@ class ProcessRef(WireModel):
     abi_version: int = Field(ge=1, description="xpool descriptor ABI version used by the registering process.")
 
 
-class DevagentTransportArenaUpsertRequest(WireModel):
-    """Request body for upserting a devagent's transport arenas."""
+class AtnAgentTransportArenaUpsertRequest(WireModel):
+    """Request body for upserting an AtnAgent's transport arenas."""
 
-    publisher: ProcessRef = Field(description="Process identity for the publishing devagent.")
-    bindings: list[DevagentTransportArenaBinding] = Field(
-        description="Transport arena bindings to merge into the devagent's published arena set."
+    publisher: ProcessRef = Field(description="Process identity for the publishing AtnAgent.")
+    bindings: list[AtnAgentTransportArenaBinding] = Field(
+        description="Transport arena bindings to merge into the AtnAgent's published arena set."
     )
 
 
 type ControlPlaneWarningKind = Literal[
-    "stale_devagent",
+    "stale_atnagent",
     "stale_instance",
-    "terminating_devagent",
+    "terminating_atnagent",
 ]
 
 
@@ -103,10 +102,10 @@ class HeartbeatResponse(WireModel):
     warnings: list[ControlPlaneWarning] = Field(description="Current device-scoped daemon warnings.")
 
 
-class DevagentRegistration(ProcessRef):
-    """Devagent registration payload and list-entry view."""
+class AtnAgentRegistration(ProcessRef):
+    """AtnAgent registration payload and list-entry view."""
 
-    cuda_device: int = Field(ge=0, description="CUDA device index owned by the devagent.")
+    cuda_device: int = Field(ge=0, description="CUDA device index owned by the AtnAgent.")
 
 
 class InstanceRankRef(ProcessRef):
@@ -116,8 +115,8 @@ class InstanceRankRef(ProcessRef):
     rank: int = Field(ge=0, description="Rank-local process index within the instance.")
 
 
-class DevagentTransportArenaDrainResponse(WireModel):
-    """Result of a devagent transport arena drain attempt."""
+class AtnAgentTransportArenaDrainResponse(WireModel):
+    """Result of an AtnAgent transport arena drain attempt."""
 
     in_use: list[InstanceRankRef] = Field(
         description="Instance ranks that still hold fresh acquired arena leases.",
@@ -150,13 +149,11 @@ class ReadinessScope(StrEnum):
     """Participant scope selected by the daemon readiness endpoint.
 
     Attributes:
-        ATN: Require attention devagents, instance ranks, and matching arena
+        ATN: Require AtnAgents, instance ranks, and matching arena
             publications.
-        FFN: Require configured FFN devagents.
     """
 
     ATN = "atn"
-    FFN = "ffn"
 
 
 class ReadinessEntry(WireModel):
@@ -166,11 +163,10 @@ class ReadinessEntry(WireModel):
     status: ReadinessStatus = Field(description="Live registration status for this process slot.")
 
 
-class ReadinessDevagent(ReadinessEntry):
-    """One configured devagent slot reported by the readiness endpoint."""
+class ReadinessAtnAgent(ReadinessEntry):
+    """One configured AtnAgent slot reported by readiness."""
 
-    cuda_device: int = Field(ge=0, description="CUDA device index owned by this devagent.")
-    role: DeviceRole = Field(description="Configured role hosted by this devagent.")
+    cuda_device: int = Field(ge=0, description="CUDA device index owned by this AtnAgent.")
 
 
 class ReadinessInstance(ReadinessEntry):
@@ -192,7 +188,7 @@ class ReadinessSnapshot(WireModel):
         description="Readiness result for each requested participant scope.",
     )
     cuda_devices: tuple[int, ...] = Field(description="Configured CUDA devices managed by xpool.")
-    devagents: list[ReadinessDevagent] = Field(description="Per-devagent readiness entries ordered by CUDA device.")
+    atnagents: list[ReadinessAtnAgent] = Field(description="AtnAgent readiness entries ordered by rank.")
     instances: list[ReadinessInstance] = Field(
         description="Per-instance rank readiness entries ordered by instance and rank.",
     )

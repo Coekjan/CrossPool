@@ -12,37 +12,37 @@
 #include <unordered_map>
 #include <utility>
 
+#include <xpool/atnagent.hpp>
 #include <xpool/debug/options.hpp>
-#include <xpool/devagent.hpp>
 #include <xpool/transport.hpp>
 #include <xpool/utils/device.hpp>
 
-namespace xpool::devagent {
+namespace xpool::atnagent {
 
 namespace {
 
-struct DevagentTransportArenaState {
+struct AtnAgentTransportArenaState {
   xpool::transport::TransportArena arena;
   std::int64_t cuda_device = 0;
   cudaStream_t stream = nullptr;
 
-  DevagentTransportArenaState() = default;
+  AtnAgentTransportArenaState() = default;
 
-  DevagentTransportArenaState(xpool::transport::TransportArena arena,
+  AtnAgentTransportArenaState(xpool::transport::TransportArena arena,
                               std::int64_t cuda_device)
       : arena(arena), cuda_device(cuda_device) {}
 
-  DevagentTransportArenaState(const DevagentTransportArenaState &) = delete;
-  DevagentTransportArenaState &
-  operator=(const DevagentTransportArenaState &) = delete;
+  AtnAgentTransportArenaState(const AtnAgentTransportArenaState &) = delete;
+  AtnAgentTransportArenaState &
+  operator=(const AtnAgentTransportArenaState &) = delete;
 
-  DevagentTransportArenaState(DevagentTransportArenaState &&other) noexcept
+  AtnAgentTransportArenaState(AtnAgentTransportArenaState &&other) noexcept
       : arena(std::exchange(other.arena, xpool::transport::TransportArena{})),
         cuda_device(std::exchange(other.cuda_device, 0)),
         stream(std::exchange(other.stream, nullptr)) {}
 
-  DevagentTransportArenaState &
-  operator=(DevagentTransportArenaState &&other) noexcept {
+  AtnAgentTransportArenaState &
+  operator=(AtnAgentTransportArenaState &&other) noexcept {
     if (this != &other) {
       arena = std::exchange(other.arena, xpool::transport::TransportArena{});
       cuda_device = std::exchange(other.cuda_device, 0);
@@ -52,13 +52,13 @@ struct DevagentTransportArenaState {
   }
 };
 
-std::mutex g_devagent_arena_mutex;
+std::mutex g_atnagent_arena_mutex;
 std::unordered_map<xpool::transport::TransportArenaHandleHex,
-                   DevagentTransportArenaState>
-    g_devagent_arena_states;
+                   AtnAgentTransportArenaState>
+    g_atnagent_arena_states;
 
 xpool::abi::TransportTraceSnapshot
-cleanup_devagent_arena(DevagentTransportArenaState &arena_state) {
+cleanup_atnagent_arena(AtnAgentTransportArenaState &arena_state) {
   c10::cuda::CUDAGuard device_guard(
       xpool::utils::device::cuda_device_index(arena_state.cuda_device));
   xpool::utils::device::ScopedCudaStream shutdown_stream;
@@ -89,15 +89,15 @@ cleanup_devagent_arena(DevagentTransportArenaState &arena_state) {
   return snapshot;
 }
 
-DevagentTransportArenaState
-take_devagent_arena(const xpool::transport::TransportArenaHandleHex &handle) {
-  std::lock_guard<std::mutex> lock(g_devagent_arena_mutex);
-  auto iter = g_devagent_arena_states.find(handle);
-  if (iter == g_devagent_arena_states.end()) {
+AtnAgentTransportArenaState
+take_atnagent_arena(const xpool::transport::TransportArenaHandleHex &handle) {
+  std::lock_guard<std::mutex> lock(g_atnagent_arena_mutex);
+  auto iter = g_atnagent_arena_states.find(handle);
+  if (iter == g_atnagent_arena_states.end()) {
     return {};
   }
-  DevagentTransportArenaState arena_state = std::move(iter->second);
-  g_devagent_arena_states.erase(iter);
+  AtnAgentTransportArenaState arena_state = std::move(iter->second);
+  g_atnagent_arena_states.erase(iter);
   return arena_state;
 }
 
@@ -115,13 +115,13 @@ xpool::transport::TransportArenaHandleHex create_transport_arena(
 
   bool inserted = false;
   {
-    std::lock_guard<std::mutex> lock(g_devagent_arena_mutex);
+    std::lock_guard<std::mutex> lock(g_atnagent_arena_mutex);
     inserted =
-        g_devagent_arena_states.try_emplace(handle, arena, cuda_device).second;
+        g_atnagent_arena_states.try_emplace(handle, arena, cuda_device).second;
   }
   if (!inserted) {
     arena.destroy();
-    TORCH_CHECK(false, "xpool devagent created a duplicate transport arena "
+    TORCH_CHECK(false, "xpool atnagent created a duplicate transport arena "
                        "handle");
   }
 
@@ -130,21 +130,21 @@ xpool::transport::TransportArenaHandleHex create_transport_arena(
 
 xpool::abi::TransportTraceSnapshot destroy_transport_arena(
     const xpool::transport::TransportArenaHandleHex &handle) {
-  DevagentTransportArenaState arena_state = take_devagent_arena(handle);
+  AtnAgentTransportArenaState arena_state = take_atnagent_arena(handle);
   TORCH_CHECK(arena_state.arena.base != nullptr,
               "xpool cannot destroy an unknown or already destroyed CUDA IPC "
               "arena handle");
-  return cleanup_devagent_arena(arena_state);
+  return cleanup_atnagent_arena(arena_state);
 }
 
 void launch_transport_kernel(
     const xpool::transport::TransportArenaHandleHex &handle) {
-  std::lock_guard<std::mutex> lock(g_devagent_arena_mutex);
-  auto iter = g_devagent_arena_states.find(handle);
-  TORCH_CHECK(iter != g_devagent_arena_states.end(),
+  std::lock_guard<std::mutex> lock(g_atnagent_arena_mutex);
+  auto iter = g_atnagent_arena_states.find(handle);
+  TORCH_CHECK(iter != g_atnagent_arena_states.end(),
               "xpool cannot launch transport kernel for an unknown CUDA IPC "
               "arena handle");
-  DevagentTransportArenaState &arena_state = iter->second;
+  AtnAgentTransportArenaState &arena_state = iter->second;
   if (arena_state.stream != nullptr) {
     return;
   }
@@ -152,9 +152,9 @@ void launch_transport_kernel(
   c10::cuda::CUDAGuard device_guard(
       xpool::utils::device::cuda_device_index(arena_state.cuda_device));
   xpool::utils::device::ScopedCudaStream stream;
-  xpool::transport::launch_devagent_transport_kernel(arena_state.arena,
+  xpool::transport::launch_atnagent_transport_kernel(arena_state.arena,
                                                      stream.get());
   arena_state.stream = stream.release();
 }
 
-} // namespace xpool::devagent
+} // namespace xpool::atnagent

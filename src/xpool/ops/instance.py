@@ -159,7 +159,7 @@ def ffn_shim(
 
     Returns:
         Fake output during tracing. Real execution returns either the debug
-        shim-loopback output or the daemon-brokered FFN output, depending on
+        instance-loopback output or the daemon-brokered FFN output, depending on
         process-global debug config.
 
     Side Effects:

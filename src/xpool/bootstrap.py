@@ -20,7 +20,7 @@ def init(cuda_device: int, role: RuntimeRole) -> None:
 
     Args:
         cuda_device: CUDA device owned by this process.
-        role: Instance or devagent role assigned to this process.
+        role: Instance or agent role assigned to this process.
 
     Raises:
         RuntimeError: If the process was already initialized with a different
@@ -53,7 +53,7 @@ def get_runtime_role() -> RuntimeRole:
     """Return the initialized process-wide runtime role.
 
     Returns:
-        Instance or devagent role installed by :func:`init`.
+        Instance or agent role installed by :func:`init`.
 
     Raises:
         RuntimeError: If bootstrap has not initialized this process.

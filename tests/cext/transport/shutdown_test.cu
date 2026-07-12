@@ -98,7 +98,7 @@ TEST_F(TransportShutdownCudaTest,
   arena.request_shutdown(producer_stream);
   ASSERT_TRUE(cuda_succeeded(cudaStreamSynchronize(producer_stream)));
 
-  xpool::transport::launch_devagent_transport_kernel(arena, resident_stream);
+  xpool::transport::launch_atnagent_transport_kernel(arena, resident_stream);
   bool results_ready = false;
   const auto result_deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds{5};
@@ -152,7 +152,7 @@ TEST_F(TransportShutdownCudaTest, ExitsWhenProducerAbandonsClaimedSlot) {
   arena.request_shutdown(producer_stream);
   ASSERT_TRUE(cuda_succeeded(cudaStreamSynchronize(producer_stream)));
 
-  xpool::transport::launch_devagent_transport_kernel(arena, resident_stream);
+  xpool::transport::launch_atnagent_transport_kernel(arena, resident_stream);
   ASSERT_TRUE(wait_stream(resident_stream))
       << "transport resident kernel waited for an abandoned producer slot";
 

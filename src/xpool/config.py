@@ -21,22 +21,21 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 __all__ = [
     "CONFIG_REGISTRY",
+    "AtnAgentConfig",
     "ConfigError",
     "ConfigSetting",
     "ConfigSource",
     "ConfigSourceRecord",
     "DebugConfig",
-    "DevagentConfig",
-    "DeviceRole",
     "DevicesConfig",
     "GraphObserverDebugConfig",
     "InstanceConfig",
+    "LoopbackDebugConfig",
+    "LoopbackSite",
     "MissingRequiredConfig",
     "ModelConfig",
     "SchedulerConfig",
-    "ShimLoopbackDebugConfig",
     "TopologyError",
-    "TransportLoopbackDebugConfig",
     "VendorConfig",
     "XpoolConfig",
     "XpoolDaemonConfig",
@@ -88,16 +87,18 @@ class TopologyError(ConfigError):
     """Raised when model or device topology cannot be derived safely."""
 
 
-class DeviceRole(StrEnum):
-    """Exclusive role assigned to one CUDA devagent.
+class LoopbackSite(StrEnum):
+    """Execution site selected for the debug FFN loopback.
 
     Attributes:
-        ATN: Device hosts attention execution and the attention-side shim devagent role.
-        FFN: Device hosts xpool FFN execution.
+        INSTANCE: Execute directly inside the SGLang instance process.
+        ATNAGENT: Execute in the local AtnAgent transport kernel.
+        FFNAGENT: Execute in the remote FfnAgent after transport.
     """
 
-    ATN = "atn"
-    FFN = "ffn"
+    INSTANCE = "instance"
+    ATNAGENT = "atnagent"
+    FFNAGENT = "ffnagent"
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,22 +146,22 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Bootstrap TOML config path used before repository config can be loaded.",
     ),
     ConfigSetting(
-        name="debug_shim_loopback_enable",
-        path=("debug", "shim_loopback", "enable"),
+        name="debug_loopback_enable",
+        path=("debug", "loopback", "enable"),
         parser="bool",
         allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
         default=False,
-        env_var="XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE",
-        description="Development-only switch that routes FFN shim calls to the debug loopback op.",
+        env_var="XPOOL_DEBUG_LOOPBACK_ENABLE",
+        description="Development-only switch that routes FFN calls through a selected loopback execution site.",
     ),
     ConfigSetting(
-        name="debug_transport_loopback_enable",
-        path=("debug", "transport_loopback", "enable"),
-        parser="bool",
+        name="debug_loopback_site",
+        path=("debug", "loopback", "site"),
+        parser="raw",
         allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
-        default=False,
-        env_var="XPOOL_DEBUG_TRANSPORT_LOOPBACK_ENABLE",
-        description=("Development-only switch that routes production FFN shim calls through the transport checkpoint."),
+        default=None,
+        env_var="XPOOL_DEBUG_LOOPBACK_SITE",
+        description="Execution site for the enabled debug FFN loopback.",
     ),
     ConfigSetting(
         name="debug_graph_observer_enable",
@@ -247,7 +248,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="raw",
         allowed_sources=CONFIG_REQUIRED,
         required=True,
-        description=("Role-local CUDA device lists. Devagents and communication ranks are derived from this section."),
+        description=("Role-local CUDA device lists. Agents and communication ranks are derived from this section."),
     ),
     ConfigSetting(
         name="atn_cuda_devices",
@@ -255,7 +256,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="raw",
         allowed_sources=CONFIG_REQUIRED,
         required=True,
-        description="CUDA devices that host attention execution and attention-side xpool devagents.",
+        description="CUDA devices that host attention execution and attention-side xpool agents.",
     ),
     ConfigSetting(
         name="ffn_cuda_devices",
@@ -263,7 +264,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="raw",
         allowed_sources=CONFIG_REQUIRED,
         required=True,
-        description="CUDA devices that host FFN-side xpool devagents.",
+        description="CUDA devices that host FFN-side xpool agents.",
     ),
     ConfigSetting(
         name="models",
@@ -315,7 +316,7 @@ class XpoolDaemonConfig(BaseModel):
 
 
 class SchedulerConfig(BaseModel):
-    """Conservative resource-concurrency limits enforced by devagents."""
+    """Conservative resource-concurrency limits enforced by agents."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -336,11 +337,11 @@ class DevicesConfig(BaseModel):
 
     atn_cuda_devices: list[int] = Field(
         min_length=1,
-        description="CUDA device indices that host attention execution and attention-side xpool devagents.",
+        description="CUDA device indices that host attention execution and attention-side xpool agents.",
     )
     ffn_cuda_devices: list[int] = Field(
         min_length=1,
-        description="CUDA device indices that host xpool FFN execution devagents.",
+        description="CUDA device indices that host xpool FFN execution agents.",
     )
 
     @model_validator(mode="after")
@@ -402,17 +403,13 @@ class ModelConfig(BaseModel):
         return self
 
 
-class DevagentConfig(BaseModel):
-    """Derived devagent placement.
-
-    This is not a TOML schema item. It is derived from the role-local CUDA
-    device lists, with one unique xpool devagent per participating CUDA device.
-    """
+class AtnAgentConfig(BaseModel):
+    """Derived placement for one configured AtnAgent."""
 
     model_config = ConfigDict(extra="forbid")
 
-    cuda_device: int = Field(ge=0, description="CUDA device index owned by this devagent.")
-    role: DeviceRole = Field(description="Exclusive runtime role hosted by this CUDA device.")
+    cuda_device: int = Field(ge=0, description="CUDA device index owned by this AtnAgent.")
+    rank: int = Field(ge=0, description="Rank in the configured attention-device list.")
 
 
 class InstanceConfig(BaseModel):
@@ -424,26 +421,34 @@ class InstanceConfig(BaseModel):
     instance_index: int = Field(ge=0, description="Integer instance index fed to the native shim ABI.")
 
 
-class ShimLoopbackDebugConfig(BaseModel):
-    """Debug-only FFN shim loopback switch resolved through the config registry."""
+class LoopbackDebugConfig(BaseModel):
+    """Debug-only FFN loopback settings resolved through the config registry."""
 
     model_config = ConfigDict(extra="forbid")
 
     enable: bool = Field(
         default=False,
-        description="Whether FFN shim modules should call the debug loopback native op instead of production shim.",
+        description="Whether FFN calls should execute through a debug loopback path.",
+    )
+    site: LoopbackSite | None = Field(
+        default=None,
+        description="Process site that executes loopback work when loopback is enabled.",
     )
 
+    @model_validator(mode="after")
+    def validate_loopback(self) -> LoopbackDebugConfig:
+        """Require loopback enablement and execution site together.
 
-class TransportLoopbackDebugConfig(BaseModel):
-    """Debug-only production-shim transport loopback switch resolved through the config registry."""
+        Returns:
+            The validated loopback settings.
 
-    model_config = ConfigDict(extra="forbid")
+        Raises:
+            ValueError: If enabled loopback has no site or disabled loopback has one.
+        """
 
-    enable: bool = Field(
-        default=False,
-        description="Whether production FFN shim calls may use the daemon-brokered transport checkpoint.",
-    )
+        if self.enable != (self.site is not None):
+            raise ValueError("debug.loopback.enable and debug.loopback.site must be set or unset together")
+        return self
 
 
 class GraphObserverDebugConfig(BaseModel):
@@ -517,13 +522,9 @@ class DebugConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    shim_loopback: ShimLoopbackDebugConfig = Field(
-        default_factory=ShimLoopbackDebugConfig,
-        description="FFN shim loopback debug switch.",
-    )
-    transport_loopback: TransportLoopbackDebugConfig = Field(
-        default_factory=TransportLoopbackDebugConfig,
-        description="Production FFN shim transport-loopback debug switch.",
+    loopback: LoopbackDebugConfig = Field(
+        default_factory=LoopbackDebugConfig,
+        description="FFN loopback debug settings.",
     )
     graph_observer: GraphObserverDebugConfig = Field(
         default_factory=GraphObserverDebugConfig,
@@ -533,21 +534,6 @@ class DebugConfig(BaseModel):
         default_factory=TransportObserverDebugConfig,
         description="Native transport device-phase observer settings.",
     )
-
-    @model_validator(mode="after")
-    def validate_debug_options(self) -> DebugConfig:
-        """Reject mutually exclusive debug FFN shim routes.
-
-        Returns:
-            The validated debug config.
-
-        Raises:
-            ValueError: If direct loopback and transport loopback are enabled together.
-        """
-
-        if self.shim_loopback.enable and self.transport_loopback.enable:
-            raise ValueError("debug.shim_loopback.enable and debug.transport_loopback.enable are mutually exclusive")
-        return self
 
 
 class VendorConfig(BaseModel):
@@ -729,28 +715,23 @@ class XpoolConfig(BaseModel):
         return tuple(sorted({*self.devices.atn_cuda_devices, *self.devices.ffn_cuda_devices}))
 
     @cached_property
-    def devagents(self) -> tuple[DevagentConfig, ...]:
-        """Derive one devagent for every configured CUDA device.
+    def atnagents(self) -> tuple[AtnAgentConfig, ...]:
+        """Return AtnAgent placements in attention-rank order.
 
         Returns:
-            Immutable devagent placement tuple ordered by CUDA device. Runtime
-            role comes from the role-local source list.
+            Immutable AtnAgent placement tuple.
         """
 
-        role_by_cuda_device = {
-            **{cuda_device: DeviceRole.ATN for cuda_device in self.devices.atn_cuda_devices},
-            **{cuda_device: DeviceRole.FFN for cuda_device in self.devices.ffn_cuda_devices},
-        }
         return tuple(
-            DevagentConfig(cuda_device=cuda_device, role=role_by_cuda_device[cuda_device])
-            for cuda_device in self.cuda_devices
+            AtnAgentConfig(cuda_device=cuda_device, rank=rank)
+            for rank, cuda_device in enumerate(self.devices.atn_cuda_devices)
         )
 
     @cached_property
-    def devagent_by_cuda_device(self) -> Mapping[int, DevagentConfig]:
-        """Return derived devagent placement keyed by CUDA device index."""
+    def atnagent_by_cuda_device(self) -> Mapping[int, AtnAgentConfig]:
+        """Return AtnAgent placements keyed by CUDA device index."""
 
-        return MappingProxyType({devagent.cuda_device: devagent for devagent in self.devagents})
+        return MappingProxyType({agent.cuda_device: agent for agent in self.atnagents})
 
     @cached_property
     def instances(self) -> tuple[InstanceConfig, ...]:

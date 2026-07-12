@@ -6,10 +6,10 @@ import pytest
 
 from tests.harness.service.daemon import (
     ProcUniqId,
+    atnagent_registration,
+    atnagent_transport_arenas,
+    atnagent_transport_arenas_path,
     create_app,
-    devagent_registration,
-    devagent_transport_arenas,
-    devagent_transport_arenas_path,
     instance_registration,
     instance_transport_arena,
     instance_transport_arena_acquire_path,
@@ -80,8 +80,8 @@ def test_daemon_rejects_instance_deregister_from_another_process() -> None:
 def test_daemon_heartbeat_rejects_reused_pid_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     config = XpoolConfig.from_file("configs/xpool.example.toml")
     app = create_app(config)
-    registration = devagent_registration(cuda_device=0)
-    assert request(app, "POST", "/devagent/register", json=registration).status_code == HTTPStatus.NO_CONTENT
+    registration = atnagent_registration(cuda_device=0)
+    assert request(app, "POST", "/atnagent/register", json=registration).status_code == HTTPStatus.NO_CONTENT
     proc_id = ProcUniqId.current()
 
     class ReusedPidProcess:
@@ -96,7 +96,7 @@ def test_daemon_heartbeat_rejects_reused_pid_identity(monkeypatch: pytest.Monkey
     response = request(
         app,
         "POST",
-        "/devagent/0/heartbeat",
+        "/atnagent/0/heartbeat",
         json={"abi_version": ABI_VERSION, "pid": registration["pid"]},
     )
 
@@ -107,19 +107,19 @@ def test_daemon_heartbeat_rejects_reused_pid_identity(monkeypatch: pytest.Monkey
     }
 
 
-def test_daemon_rejects_transport_arenas_from_non_owner_devagent() -> None:
+def test_daemon_rejects_transport_arenas_from_non_owner_atnagent() -> None:
     config = XpoolConfig.from_file("configs/xpool.example.toml")
     app = create_app(config)
-    devagent = devagent_registration(cuda_device=0)
-    non_owner = {**devagent, "pid": int(devagent["pid"]) + 1}
-    assert request(app, "POST", "/devagent/register", json=devagent).status_code == HTTPStatus.NO_CONTENT
+    atnagent = atnagent_registration(cuda_device=0)
+    non_owner = {**atnagent, "pid": int(atnagent["pid"]) + 1}
+    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
     assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
 
     response = request(
         app,
         "POST",
-        devagent_transport_arenas_path(0),
-        json=devagent_transport_arenas(("deepseek-ai/DeepSeek-V2-Lite-Chat", 0), publisher=non_owner),
+        atnagent_transport_arenas_path(0),
+        json=atnagent_transport_arenas(("deepseek-ai/DeepSeek-V2-Lite-Chat", 0), publisher=non_owner),
     )
     fetch = request(
         app,
@@ -136,27 +136,27 @@ def test_daemon_rejects_transport_arenas_from_non_owner_devagent() -> None:
     assert fetch.status_code == HTTPStatus.SERVICE_UNAVAILABLE
     assert fetch.json()["detail"] == {
         "kind": "not_ready",
-        "message": "local attention devagent transport arenas are not published",
+        "message": "local attention atnagent transport arenas are not published",
     }
 
 
-def test_daemon_preserves_devagent_transport_arenas_after_same_process_reregister() -> None:
+def test_daemon_preserves_atnagent_transport_arenas_after_same_process_reregister() -> None:
     config = XpoolConfig.from_file("configs/xpool.example.toml")
     app = create_app(config)
-    devagent = devagent_registration(cuda_device=0)
-    assert request(app, "POST", "/devagent/register", json=devagent).status_code == HTTPStatus.NO_CONTENT
+    atnagent = atnagent_registration(cuda_device=0)
+    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
     assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
     assert (
         request(
             app,
             "POST",
-            devagent_transport_arenas_path(0),
-            json=devagent_transport_arenas(("deepseek-ai/DeepSeek-V2-Lite-Chat", 0), publisher=devagent),
+            atnagent_transport_arenas_path(0),
+            json=atnagent_transport_arenas(("deepseek-ai/DeepSeek-V2-Lite-Chat", 0), publisher=atnagent),
         ).status_code
         == HTTPStatus.NO_CONTENT
     )
 
-    assert request(app, "POST", "/devagent/register", json=devagent).status_code == HTTPStatus.NO_CONTENT
+    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
     response = request(
         app,
         "POST",
@@ -178,31 +178,31 @@ def test_daemon_rejects_dead_instance_registration_pid() -> None:
     assert response.json()["detail"] == {"kind": "conflict", "message": "registering pid 999999999 is not live"}
 
 
-def test_daemon_rejects_dead_devagent_registration_pid() -> None:
+def test_daemon_rejects_dead_atnagent_registration_pid() -> None:
     config = XpoolConfig.from_file("configs/xpool.example.toml")
     app = create_app(config)
 
-    response = request(app, "POST", "/devagent/register", json=devagent_registration(cuda_device=0, pid=999_999_999))
+    response = request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=0, pid=999_999_999))
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"] == {"kind": "conflict", "message": "registering pid 999999999 is not live"}
 
 
-def test_daemon_rejects_devagent_abi_mismatch() -> None:
+def test_daemon_rejects_atnagent_abi_mismatch() -> None:
     config = XpoolConfig.from_file("configs/xpool.example.toml")
     app = create_app(config)
 
     response = request(
         app,
         "POST",
-        "/devagent/register",
-        json=devagent_registration(cuda_device=0, abi_version=ABI_VERSION + 1),
+        "/atnagent/register",
+        json=atnagent_registration(cuda_device=0, abi_version=ABI_VERSION + 1),
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"] == {
         "kind": "conflict",
-        "message": "devagent ABI version does not match daemon ABI",
+        "message": "atnagent ABI version does not match daemon ABI",
     }
 
 

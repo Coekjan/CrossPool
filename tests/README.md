@@ -18,7 +18,10 @@ types when validating local translation logic.
 | `config/` | Schema validation, source precedence, environment allowlisting, and model lookup. |
 | `devkit/` | Role-aware observer discovery, graph events, and transport snapshots. |
 | `ops/` | Typed wrapper delegation and transport-handle validation. |
-| `runtime/` | Devagent, instance, heartbeat, transport, retry, and cleanup state machines. |
+| `runtime/agent/test_heartbeat.py` | Shared heartbeat retry, registration-loss, and fatal-error behavior. |
+| `runtime/atnagent/test_lifecycle.py` | AtnAgent construction, residency, and daemon health behavior. |
+| `runtime/atnagent/test_transport_lifecycle.py` | Arena creation, publication, recovery, drain, and destruction. |
+| `runtime/instance/` | Instance lifecycle, heartbeat recovery, transport attachment, and cleanup. |
 | `service/` | HTTP client retry, readiness, protocol, and arena-acquisition behavior. |
 | `utils/` | Background-thread and signal-handler lifecycle. |
 
@@ -32,8 +35,8 @@ pinned external/native interface without launching a serving engine.
 | `native/test_runtime_ops.py` | Native role initialization and ABI behavior. | Built extension and CUDA |
 | `native/test_arena_ops.py` | Arena attachment, detachment, and geometry behavior. | Built extension and CUDA |
 | `native/test_shim_ops.py` | Shim meta dispatch and graph compilation behavior. | Built extension and CUDA |
-| `native/test_shim_loopback.py` | Direct native shim dtype, validation, and CUDA graph behavior in isolated processes. | Built extension and CUDA |
-| `native/test_transport_loopback.py` | Native persistent transport lifecycle, metadata, contention, and slot reuse. | Built extension and CUDA |
+| `native/test_instance_loopback.py` | Instance-local native shim dtype, validation, and CUDA graph behavior in isolated processes. | Built extension and CUDA |
+| `native/test_atnagent_loopback.py` | AtnAgent persistent transport lifecycle, metadata, contention, and slot reuse. | Built extension and CUDA |
 | `sglang/models/deepseek_v2/` | DeepSeek shim construction, translation, hooks, and model invariants. | SGLang |
 | `sglang/plugin/` | Plugin lifecycle, transport sizing, and fail-closed behavior. | SGLang |
 | `sglang/test_registry.py` | Adapter discovery and strict discovery failures. | SGLang |
@@ -50,8 +53,8 @@ eager baselines.
 
 | Area | Evidence | Requirements |
 | --- | --- | --- |
-| `sglang/test_e2e_shim_loopback.py` | Token parity and observer events across eager, full graph, and piecewise graph paths. | Native extension, CUDA, SGLang, model weights |
-| `sglang/test_e2e_transport_loopback.py` | The same graph evidence through daemon, devagent, arena, and persistent transport. | Native extension, CUDA, SGLang, model weights |
+| `sglang/test_e2e_instance_loopback.py` | Instance-loopback token parity and observer events across eager, full graph, and piecewise graph paths. | Native extension, CUDA, SGLang, model weights |
+| `sglang/test_e2e_atnagent_loopback.py` | The same graph evidence through daemon, AtnAgent, arena, and persistent transport. | Native extension, CUDA, SGLang, model weights |
 
 Shared process, probe, fake, and native utilities live under `tests/harness/`
 and are not collected as tests.

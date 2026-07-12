@@ -15,7 +15,7 @@ from tests.harness.service.client import (
 from xpool.abi import ABI_VERSION
 from xpool.service.client import DAEMON_HEALTH_RETRY_ATTEMPTS, XpoolClient, XpoolDaemonError
 from xpool.service.errors import XpoolClientError
-from xpool.service.wire import DevagentRegistration, InstanceRegistration, ProcessRef
+from xpool.service.wire import AtnAgentRegistration, InstanceRegistration, ProcessRef
 
 
 def test_client_constructor_retries_and_rejects_unhealthy_daemon(
@@ -39,7 +39,7 @@ def test_client_constructor_retries_and_rejects_unhealthy_daemon(
     assert len(caplog.messages) == DAEMON_HEALTH_RETRY_ATTEMPTS
 
 
-@pytest.mark.parametrize("participant", ["devagent", "instance"])
+@pytest.mark.parametrize("participant", ["atnagent", "instance"])
 def test_client_rejects_registration_after_config_conflict(
     monkeypatch: pytest.MonkeyPatch,
     participant: str,
@@ -62,8 +62,8 @@ def test_client_rejects_registration_after_config_conflict(
     client = XpoolClient()
     try:
         with pytest.raises(XpoolDaemonError, match="client xpool config differs") as exc_info:
-            if participant == "devagent":
-                client.register_devagent(DevagentRegistration(pid=11, abi_version=ABI_VERSION, cuda_device=0))
+            if participant == "atnagent":
+                client.register_atnagent(AtnAgentRegistration(pid=11, abi_version=ABI_VERSION, cuda_device=0))
             else:
                 client.register_instance(
                     InstanceRegistration(

@@ -3,8 +3,8 @@ from __future__ import annotations
 from tests.harness.native.ops import (
     Callable,
     assert_fake_transport_arena_usable,
+    atnagent_arena_process,
     attach_transport_arena_for_test,
-    devagent_arena_process,
     ffn_shim_native,
     pytest,
     torch,
@@ -51,7 +51,7 @@ def test_attach_instance_transport_arena_rejects_invalid_handle() -> None:
 
 def test_transport_arena_geometry_overflow_fails_closed() -> None:
     with pytest.raises(RuntimeError, match="overflows int64"):
-        with devagent_arena_process(
+        with atnagent_arena_process(
             cuda_device=torch.cuda.current_device(),
             max_tokens=2**32,
             hidden_size=2**31,

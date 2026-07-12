@@ -7,8 +7,8 @@ import pytest
 import torch
 
 from tests.harness.native.loopback import expected_loopback_rotation, run_isolated_native_case
-from tests.harness.native.transport import devagent_arena_process
-from xpool.abi import DebugOption, FfnResultErrorCode, RuntimeRole
+from tests.harness.native.transport import atnagent_arena_process
+from xpool.abi import DebugLoopbackSite, DebugOptions, FfnResultErrorCode, RuntimeRole
 
 pytestmark = [
     pytest.mark.requires_cuda(),
@@ -58,14 +58,18 @@ finally:
 """
 
 
-def isolated_case_ffn_shim_transport_loopback_runtime_rotates_hidden_pairs() -> None:
-    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), int(DebugOption.TRANSPORT_LOOPBACK))
+def isolated_case_ffn_shim_atnagent_loopback_rotates_hidden_pairs() -> None:
+    torch.ops.xpool.init(
+        torch.cuda.current_device(),
+        int(RuntimeRole.INSTANCE),
+        DebugOptions.create(loopback_site=DebugLoopbackSite.ATNAGENT).raw,
+    )
     hidden_states = torch.tensor(
         [[1.0, 2.0, 3.0, 4.0], [8.0, 6.0, 4.0, 2.0]],
         device="cuda",
         dtype=torch.float32,
     )
-    with devagent_arena_process(
+    with atnagent_arena_process(
         cuda_device=hidden_states.device.index,
         max_tokens=8,
         hidden_size=4,
@@ -97,9 +101,13 @@ def isolated_case_ffn_shim_transport_loopback_runtime_rotates_hidden_pairs() -> 
 
 
 def isolated_case_transport_observer_records_cross_process_phases(output_path: str) -> None:
-    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), int(DebugOption.TRANSPORT_LOOPBACK))
+    torch.ops.xpool.init(
+        torch.cuda.current_device(),
+        int(RuntimeRole.INSTANCE),
+        DebugOptions.create(loopback_site=DebugLoopbackSite.ATNAGENT).raw,
+    )
     hidden_states = torch.ones((2, 4), device="cuda", dtype=torch.float32)
-    with devagent_arena_process(
+    with atnagent_arena_process(
         cuda_device=hidden_states.device.index,
         max_tokens=8,
         hidden_size=4,
@@ -139,9 +147,13 @@ def isolated_case_transport_observer_records_cross_process_phases(output_path: s
 
 
 def isolated_case_ffn_shim_transport_dp_padding_requires_token_count_metadata() -> None:
-    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), int(DebugOption.TRANSPORT_LOOPBACK))
+    torch.ops.xpool.init(
+        torch.cuda.current_device(),
+        int(RuntimeRole.INSTANCE),
+        DebugOptions.create(loopback_site=DebugLoopbackSite.ATNAGENT).raw,
+    )
     hidden_states = torch.ones((2, 4), device="cuda", dtype=torch.float32)
-    with devagent_arena_process(
+    with atnagent_arena_process(
         cuda_device=hidden_states.device.index,
         max_tokens=8,
         hidden_size=4,
@@ -172,10 +184,14 @@ def isolated_case_ffn_shim_transport_dp_padding_requires_token_count_metadata() 
 
 
 def isolated_case_ffn_shim_transport_rejects_dp_token_count_size_mismatch() -> None:
-    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), int(DebugOption.TRANSPORT_LOOPBACK))
+    torch.ops.xpool.init(
+        torch.cuda.current_device(),
+        int(RuntimeRole.INSTANCE),
+        DebugOptions.create(loopback_site=DebugLoopbackSite.ATNAGENT).raw,
+    )
     hidden_states = torch.ones((2, 4), device="cuda", dtype=torch.float32)
     global_num_tokens_gpu = torch.tensor([2], device="cuda", dtype=torch.int32)
-    with devagent_arena_process(
+    with atnagent_arena_process(
         cuda_device=hidden_states.device.index,
         max_tokens=8,
         hidden_size=4,
@@ -206,14 +222,18 @@ def isolated_case_ffn_shim_transport_rejects_dp_token_count_size_mismatch() -> N
 
 
 def isolated_case_ffn_shim_transport_accepts_int64_dp_token_counts() -> None:
-    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), int(DebugOption.TRANSPORT_LOOPBACK))
+    torch.ops.xpool.init(
+        torch.cuda.current_device(),
+        int(RuntimeRole.INSTANCE),
+        DebugOptions.create(loopback_site=DebugLoopbackSite.ATNAGENT).raw,
+    )
     hidden_states = torch.tensor(
         [[1.0, 2.0, 3.0, 4.0], [8.0, 6.0, 4.0, 2.0]],
         device="cuda",
         dtype=torch.float32,
     )
     global_num_tokens_gpu = torch.tensor([hidden_states.shape[0]], device="cuda", dtype=torch.int64)
-    with devagent_arena_process(
+    with atnagent_arena_process(
         cuda_device=hidden_states.device.index,
         max_tokens=8,
         hidden_size=4,
@@ -245,16 +265,16 @@ def isolated_case_ffn_shim_transport_accepts_int64_dp_token_counts() -> None:
 
 
 def isolated_case_ffn_shim_transport_disabled_reports_not_implemented() -> None:
-    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), int(DebugOption(0)))
+    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), DebugOptions(0).raw)
     hidden_states = torch.ones((2, 4), device="cuda", dtype=torch.float32)
-    with devagent_arena_process(
+    with atnagent_arena_process(
         cuda_device=hidden_states.device.index,
         max_tokens=8,
         hidden_size=4,
         element_size=4,
         atn_dp_size=1,
         launch_kernel=True,
-        transport_loopback_enabled=False,
+        atnagent_loopback_enabled=False,
     ) as arena:
         torch.ops.xpool.instance.attach_transport_arena(0, 0, arena)
         try:
@@ -286,7 +306,11 @@ def isolated_case_ffn_shim_transport_disabled_reports_not_implemented() -> None:
 
 
 def isolated_case_ffn_shim_transport_reuses_contended_slot_for_concurrent_graphs() -> None:
-    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), int(DebugOption.TRANSPORT_LOOPBACK))
+    torch.ops.xpool.init(
+        torch.cuda.current_device(),
+        int(RuntimeRole.INSTANCE),
+        DebugOptions.create(loopback_site=DebugLoopbackSite.ATNAGENT).raw,
+    )
     first = torch.tensor(
         [[1.0, 2.0, 3.0, 4.0], [8.0, 6.0, 4.0, 2.0]],
         device="cuda",
@@ -297,7 +321,7 @@ def isolated_case_ffn_shim_transport_reuses_contended_slot_for_concurrent_graphs
         device="cuda",
         dtype=torch.float32,
     )
-    with devagent_arena_process(
+    with atnagent_arena_process(
         cuda_device=first.device.index,
         max_tokens=8,
         hidden_size=4,
@@ -335,10 +359,10 @@ def isolated_case_ffn_shim_transport_reuses_contended_slot_for_concurrent_graphs
     assert torch.allclose(second_output, expected_loopback_rotation(second), atol=1e-5, rtol=1e-5)
 
 
-def test_ffn_shim_transport_loopback_runtime_rotates_hidden_pairs() -> None:
+def test_ffn_shim_atnagent_loopback_rotates_hidden_pairs() -> None:
     run_isolated_native_case(
         Path(__file__),
-        "isolated_case_ffn_shim_transport_loopback_runtime_rotates_hidden_pairs",
+        "isolated_case_ffn_shim_atnagent_loopback_rotates_hidden_pairs",
     )
 
 
@@ -379,7 +403,7 @@ def test_ffn_shim_transport_disabled_fails_closed() -> None:
 
 
 def test_transport_persistent_arena_launches_and_destroys() -> None:
-    with devagent_arena_process(
+    with atnagent_arena_process(
         cuda_device=torch.cuda.current_device(),
         max_tokens=8,
         hidden_size=4,
@@ -391,14 +415,14 @@ def test_transport_persistent_arena_launches_and_destroys() -> None:
 
 
 def test_launch_transport_kernel_accepts_non_loopback_until_request() -> None:
-    with devagent_arena_process(
+    with atnagent_arena_process(
         cuda_device=torch.cuda.current_device(),
         max_tokens=8,
         hidden_size=4,
         element_size=4,
         atn_dp_size=1,
         launch_kernel=True,
-        transport_loopback_enabled=False,
+        atnagent_loopback_enabled=False,
     ):
         pass
 

@@ -14,7 +14,7 @@ from sglang.srt.server_args import ServerArgs
 
 from xpool import bootstrap, devkit
 from xpool.abi import RuntimeRole
-from xpool.config import get_global_config, init_global_config
+from xpool.config import LoopbackSite, get_global_config, init_global_config
 from xpool.integrations.sglang.adapter import (
     SglangModelAdapter,
     XpoolModelBinding,
@@ -210,16 +210,18 @@ def after_model_runner_init_memory_pool[R](
 
     Side Effects:
         Initializes and attaches the process-global xpool instance transport
-        runtime unless direct shim loopback is enabled.
+        runtime unless instance loopback is enabled.
     """
 
     binding = getattr(model_runner, "xpool_model_binding", None)
     if not isinstance(binding, XpoolModelBinding):
         raise RuntimeError("xpool ModelRunner.init_memory_pool hook requires an attached model binding")
     config = get_global_config()
-    if config.debug.shim_loopback.enable:
+    if config.debug.loopback.site is LoopbackSite.INSTANCE:
         return result
     try:
+        if config.debug.loopback.site is LoopbackSite.FFNAGENT:
+            raise RuntimeError("xpool FfnAgent loopback runtime is not implemented yet")
         server_args = model_runner_server_args(model_runner)
         transport = derive_transport_attributes(model_runner, binding, server_args)
         init_instance(

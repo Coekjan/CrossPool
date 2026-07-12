@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 
 from tests.harness.sglang.offline_probe import (
     SglangGraphSettings,
@@ -15,8 +15,6 @@ type JsonValue = str | int | float | bool | list[int] | None
 type GraphEvent = dict[str, JsonValue]
 
 type GraphSettings = tuple[bool, bool]
-
-type LoopbackMode = Literal["shim", "transport"]
 
 PROBE_TIMEOUT_SECONDS = 30 * 60
 

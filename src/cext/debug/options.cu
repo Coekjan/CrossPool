@@ -23,14 +23,14 @@ std::mutex g_debug_options_mutex;
 
 } // namespace
 
-void init(std::int64_t cuda_device, std::int64_t debug_options_mask) {
+void init(std::int64_t cuda_device, std::int64_t debug_options) {
   TORCH_CHECK(cuda_device >= 0,
               "xpool debug options require a non-negative CUDA device");
   xpool::abi::DebugOptions options =
-      xpool::abi::DebugOptions::parse(debug_options_mask);
+      xpool::abi::DebugOptions::parse(debug_options);
   std::lock_guard<std::mutex> lock(g_debug_options_mutex);
   if (g_debug_options_initialized) {
-    TORCH_CHECK(g_debug_options_host.mask == options.mask,
+    TORCH_CHECK(g_debug_options_host.raw == options.raw,
                 "xpool init debug options differ from the process-wide options "
                 "installed by the first init call");
   }

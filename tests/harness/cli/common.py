@@ -30,12 +30,9 @@ def ready_snapshot(*, ready: bool) -> ReadinessSnapshot:
         {
             "ready": ready,
             "mps_status": "online" if ready else "offline",
-            "scopes": {"atn": ready, "ffn": ready},
+            "scopes": {"atn": ready},
             "cuda_devices": [0, 1],
-            "devagents": [
-                {"pid": 100, "status": "online", "cuda_device": 0, "role": "atn"},
-                {"pid": 101, "status": "online", "cuda_device": 1, "role": "ffn"},
-            ],
+            "atnagents": [{"pid": 100, "status": "online", "cuda_device": 0}],
             "instances": [
                 {
                     "pid": 200 if ready else None,

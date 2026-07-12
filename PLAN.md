@@ -27,20 +27,18 @@ is SGLang-only.
 
 ## Runtime Model
 
-xpool has three runtime placements:
+xpool currently has three runtime placements:
 
 1. `xpool daemon` is a single global host control plane. It owns registration,
    policy configuration, readiness, health reporting, and global state for
    attention-side SGLang instance arbitration. It must not participate in
    request-time FFN progress or captured CUDA graph execution. Registration
-   readiness is process-liveness aware: stale SGLang instance or devagent
+   readiness is process-liveness aware: stale SGLang instance or agent
    pids do not satisfy `/ready`, and a restarted participant may replace a dead
    registration without restarting the daemon.
-2. `xpool devagent` is launched once per participating GPU. Each devagent
-   owns one NVSHMEM rank, symmetric memory, CUDA IPC surfaces, and the
-   resident persistent kernels on that GPU. Each SGLang rank talks to the local
-   attention devagent on the same CUDA device; non-local devagents participate
-   through persistent kernels and device-side devagent-to-devagent communication.
+2. `xpool atnagent` is launched once per configured attention GPU. Each
+   AtnAgent owns the rank-local CUDA IPC ingress/egress arenas and the local
+   transport progress runtime.
 3. SGLang instances are normal SGLang server processes. Each instance loads the
    xpool SGLang plugin from `xpool.integrations.sglang`. The plugin is
    model-neutral: public adapter contracts live in
@@ -57,13 +55,11 @@ xpool has three runtime placements:
 
 xpool requires a responsive CUDA MPS control daemon before transport execution.
 `/health` reports only daemon process liveness. `/ready` reports MPS status and
-accepts repeated `scope` query parameters from the closed set `atn` and `ffn`,
-defaulting to both scopes. The final result is the logical AND of MPS readiness
-and the selected scope results. ATN readiness requires the configured attention
-devagents and instance ranks to be online and every rank to have a matching
-published transport arena. FFN readiness currently requires the configured FFN
-devagents to be online. Readiness responses contain only participants from the
-selected scopes.
+accepts the current `atn` scope, which is also the default. The final result is
+the logical AND of MPS readiness and ATN readiness. ATN readiness requires the
+configured AtnAgents and instance ranks to be online and every rank to have a
+matching published transport arena. FfnAgent readiness is deferred with the
+rest of the FfnAgent control plane.
 
 ## Shim Component
 
@@ -78,7 +74,7 @@ runtime path with two placements:
   original SGLang FFN classes for `isinstance` compatibility but do not call the
   original FFN constructors, so dense FFN weights, MoE experts, and shared
   experts are never allocated in the attention-side SGLang process.
-- **Shim devagent** lives in each local attention-side devagent. It is a
+- **Shim agent** lives in each local AtnAgent. It is a
   persistent kernel that polls rank-local queues, arbitrates resources,
   advances attention-to-FFN transport, and writes grants/results.
 
@@ -130,7 +126,7 @@ hard-coded architecture string.
 
 ## Resource Policy
 
-The daemon configures policy, but the attention-side shim devagent performs
+The daemon configures policy, but the attention-side shim agent performs
 the request-time grant on device.
 
 The initial policy is intentionally conservative:
@@ -144,38 +140,57 @@ The initial policy is intentionally conservative:
 
 ## FFN Execution
 
-FFN-side devagents own xpool FFN execution. The planned execution stack is:
+FfnAgents own xpool FFN execution. The planned execution stack is:
 
 - persistent-kernel scheduler,
 - captured graph execution and lowering,
 - declared host fallback for unsupported shapes,
 - FlashInfer-backed kernels where available,
-- tensor parallelism across participating FFN devagents.
+- tensor parallelism across participating FfnAgents.
 
 Correctness is first proven against layer-level oracles before serving metrics
 are claimed.
 
+The next execution milestones are ordered and independently gated. First,
+`debug.loopback.site=ffnagent` must prove the complete device-side path from
+the instance CUDA IPC arena through the local AtnAgent, over NVSHMEM to an
+FfnAgent, through the pairwise-rotation debug executor, and back through
+the AtnAgent to the instance. A local FFN kernel or one-way delivery is not
+sufficient evidence. Second, the DeepSeek-V2-Lite executor must replace the
+debug rotation when loopback is disabled and prove dense, routed-expert,
+shared-expert, graph, eager, and FFN-TP correctness against layer-level oracles. Debug
+loopback never acts as a fallback for unsupported production executor shapes.
+
 ## NVSHMEM Transport
 
-Every participating GPU owns one NVSHMEM rank through its devagent. The
+Every participating GPU owns one NVSHMEM rank through its agent. The
 daemon does not own an NVSHMEM rank. SGLang instances do not initialize NVSHMEM.
 
-The transport uses NVSHMEM symmetric memory and device-side signal/put/get or
-collective primitives between devagents. Each SGLang shim communicates with its
-local attention devagent through CUDA IPC-mapped queues and descriptors; all
-other attention and FFN devagents participate only through device-side channels
-owned by the devagent runtime.
+NVSHMEM rank assignment is deterministic from configured device order: ATN
+devices precede FFN devices. The daemon brokers opaque bootstrap metadata and
+generation membership but never initializes NVSHMEM or enters the data plane.
+All participants in one generation complete rendezvous before symmetric arenas
+and persistent kernels become ready. Replacing any member invalidates the old
+generation; old and new symmetric heaps must never be mixed. Shutdown stops
+admission, resolves in-flight slots, stops persistent kernels, finalizes the
+collective runtime, and only then removes control-plane ownership.
 
-Devagent metadata is the daemon's live transport table, not a readiness bit and
-not request-time routing state. An attention devagent publishes the transport
+The transport uses NVSHMEM symmetric memory and device-side signal/put/get or
+collective primitives between agents. Each SGLang shim communicates with its
+local AtnAgent through CUDA IPC-mapped queues and descriptors; all
+other attention and FfnAgents participate only through device-side channels
+owned by the agent runtime.
+
+Agent metadata is the daemon's live transport table, not a readiness bit and
+not request-time routing state. An AtnAgent publishes the transport
 arenas it owns after registering with the daemon and after instance ranks declare
 their transport requirements. The daemon validates those arenas against static
 config-derived placement and the registered rank requirements, stores them with
-the devagent's liveness, and returns only filtered per-instance-rank metadata to
+the agent's liveness, and returns only filtered per-instance-rank metadata to
 SGLang. The instance-side key is `(instance_id, rank)`; the local attention CUDA
 device is derived from `devices.atn_cuda_devices[rank]`, not repeated in the
 instance response. The daemon brokers only the lowercase CUDA IPC arena handle.
-Arena geometry is native-owned: the devagent writes a `TransportArenaLayout`
+Arena geometry is native-owned: the agent writes a `TransportArenaLayout`
 header at the beginning of the CUDA IPC allocation, and the instance runtime
 maps the handle and reads that header before installing the arena.
 
@@ -192,21 +207,21 @@ Transport arena publications are daemon-internal records keyed by
 exact transport attributes captured from the matching instance registration.
 Publication fails unless rank placement, TP/DP geometry, dtype size, hidden
 width, token capacity, and cross-rank agreement match current registrations.
-An instance lease is valid only for the exact publishing devagent generation.
+An instance lease is valid only for the exact publishing agent generation.
 
-A replacement devagent registration synchronously drains a dead previous
+A replacement agent registration synchronously drains a dead previous
 generation for at most 60 seconds. All live instance owners holding leases to
 that generation are terminated concurrently, receive one shared 15-second
 grace period, and are then killed if necessary. The daemon removes their
-registrations only after process death and installs the new devagent generation
+registrations only after process death and installs the new agent generation
 only after every old user is gone. A timed-out replacement returns retryable
 `not_ready`.
 
 Daemon restart does not require recreating native arenas. A published ATN
-devagent that loses daemon registration re-registers and republishes each
+agent that loses daemon registration re-registers and republishes each
 original handle as the corresponding instance rank re-registers. Different
 models may load and register at different times: each local rank receives its
-arena without waiting for unrelated configured models, while the devagent keeps
+arena without waiting for unrelated configured models, while the agent keeps
 one aggregate lifecycle state over all resources it owns. Each instance
 re-registers and reacquires once per heartbeat; it restores the lease only when
 the daemon returns the same handle already mapped by that process. A different
@@ -218,7 +233,7 @@ KV cache sharing is phase 2. The phase-2 design must audit:
 
 - SGLang 0.5.13 KV allocator and memory-pool internals,
 - kvcached's SGLang autopatch and virtual memory allocator pattern,
-- compatibility with xpool's per-devagent worker ownership model.
+- compatibility with xpool's per-agent worker ownership model.
 
 Until that audit is complete, xpool must not claim cross-model KV sharing.
 
@@ -249,7 +264,7 @@ the instance id is derived from the
 one-model-one-instance mapping in TOML.
 
 The daemon `/config` endpoint returns its complete validated process-global
-`XpoolConfig`. Config-derived devagent and instance placement remains available
+`XpoolConfig`. Config-derived agent and instance placement remains available
 through that model's properties and is not wrapped in a second response schema.
 The endpoint must not perform expensive model metadata resolution or read model
 `config.json`; SGLang model metadata and full model-derived parallel policy
@@ -267,18 +282,17 @@ adapter coverage and validation.
 uv run xpool config dump --config configs/xpool.example.toml
 uv run xpool daemon check --config configs/xpool.example.toml
 uv run xpool daemon serve --config configs/xpool.example.toml
-uv run xpool devagent --config configs/xpool.example.toml --cuda-device 0
+uv run xpool atnagent --config configs/xpool.example.toml --cuda-device 0
 UV_ENV_FILE=/path/to/xpool/.env uv run sglang serve ...
 ```
 
 `xpool config dump` validates local configuration without starting resident GPU
 work and reports the resolved config with registry setting sources. `xpool
 daemon check` reports daemon readiness through the daemon API client because the
-daemon owns service readiness. It accepts repeatable `--scope {atn,ffn}` flags.
-`xpool daemon serve` starts the daemon. A
-resident `xpool devagent` process is selected by configured CUDA device; the
-same CUDA device index is also the daemon/control-plane identity for that
-devagent registration.
+daemon owns service readiness. Its current scope is `atn`. `xpool daemon serve`
+starts the daemon, and `xpool atnagent` starts one resident process selected
+from the configured attention CUDA devices. FfnAgent CLI, runtime, and
+control-plane APIs are deferred until the NVSHMEM FFN milestone.
 
 For repeated local development commands, copy `.env.example` to an untracked
 `.env`, edit local values, and set `UV_ENV_FILE=/path/to/.env` before invoking
@@ -295,13 +309,13 @@ The repository configuration is TOML. It defines:
 - optional vendor model-base URI,
 - target model ids and optional absolute model-path overrides.
 
-It does not configure devagents, NVSHMEM ranks, instances, model
+It does not configure agent records, NVSHMEM ranks, instances, model
 family, hidden size, or attention topology directly. These are derived:
 
-- one xpool devagent per configured CUDA device,
-- one role per CUDA device,
-- NVSHMEM ranks assigned by ascending CUDA device id after merging attention and
-  FFN device lists,
+- one `AtnAgent` per configured attention CUDA device,
+- one future `FfnAgent` per configured FFN CUDA device,
+- future NVSHMEM ranks assigned to attention devices in configured order,
+  followed by FFN devices in configured order,
 - one instance per configured model,
 - SGLang-specific model family, hidden size, KV heads, and attention layout in
   `xpool.integrations.sglang.topology`, not in `xpool.config`.
@@ -386,7 +400,7 @@ Model entries do not carry tensor-parallel placement. `xpool.config` derives
 only static serving placement: the attention world size is
 `len(devices.atn_cuda_devices)`, and FFN TP is
 `len(devices.ffn_cuda_devices)`. Multiple configured models share the same FFN
-devagent pool; the runtime scheduler arbitrates ownership. If future work
+agent pool; the runtime scheduler arbitrates ownership. If future work
 needs model-specific FFN subsets, that should be introduced as an explicit
 placement policy rather than a scalar `models[].tp` knob.
 Derived instances store the explicit `atn_cuda_devices` and
@@ -435,20 +449,18 @@ as an opt-in switch. `XPOOL_CONFIG` is an
 env-backed bootstrap registry setting used before TOML can be loaded, not a
 runtime `XpoolConfig` field. `SGLANG_PLUGINS` belongs to SGLang's plugin loader
 and is documented in `.env.example`, not in xpool's config registry.
-`XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE=1` is a development-only env source for
-`debug.shim_loopback.enable`; that field currently allows only `ENV` and
-`DEFAULT`, so TOML attempts to set it fail closed. It routes the Python FFN shim
-to the loopback debug op and must not be used as a deployment policy or
-production fallback. `XPOOL_DEBUG_TRANSPORT_LOOPBACK_ENABLE=1` is a separate
-development-only env source for `debug.transport_loopback.enable`. It keeps the
-Python shim on the production `ffn_shim` route, requires daemon-brokered
-devagent transport arena handles, and installs a native transport runtime registry
-entry for the first controlled production-shim slice. The corresponding devagent
-process must stay resident and continue publishing arena handles as instance ranks
-register so daemon pid liveness never leaves stale handles installed. It is
-mutually exclusive with `debug.shim_loopback.enable`: direct native-op loopback
-and daemon-brokered transport loopback prove different paths and must not be
-enabled together. `XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE` and
+`XPOOL_DEBUG_LOOPBACK_ENABLE=1` and `XPOOL_DEBUG_LOOPBACK_SITE` are paired
+development-only env sources for `debug.loopback.enable` and
+`debug.loopback.site`. The site is one of `instance`, `atnagent`, or
+`ffnagent`. `instance` routes the Python FFN shim to the direct loopback debug
+op. `atnagent` keeps the production `ffn_shim` route and executes the loopback
+in the local AtnAgent persistent kernel. `ffnagent` is
+reserved for the complete NVSHMEM request/result path and fails explicitly
+until that runtime exists. Enabling loopback requires a site, while disabling
+loopback forbids a site. Both fields allow only `ENV` and `DEFAULT`, so TOML
+attempts fail closed. The corresponding agent process must stay resident and
+continue publishing arena handles as instance ranks register so daemon pid
+liveness never leaves stale handles installed. `XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE` and
 `XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR` are paired development-only env sources for
 `debug.graph_observer.enable` and `debug.graph_observer.outdir`: they must be
 enabled/present together or disabled/absent together. The output directory is
@@ -463,16 +475,25 @@ global config write API is `init_global_config`; test injection uses
 `init_global_config(config=...)` rather than a separate setter.
 Config source provenance is produced during the same resolution pass that
 validates the config and is exposed by the resolved `XpoolConfig` object.
-The transport-loopback debug switch is config-only: daemon registration and
-metadata payloads do not carry a transport-loopback boolean.
+The loopback site is config-only: daemon registration and metadata payloads do
+not carry loopback policy.
 Loading the xpool SGLang plugin enables the shim; there is no separate xpool
 enable flag or manually configured instance id. The instance id is derived from
 the one-model-one-instance mapping.
 
 ## ABI Surfaces
 
-The shared Python/C++ ABI version 22 starts with versioned FFN request/result
+The shared Python/C++ ABI version 24 starts with versioned FFN request/result
 descriptors and structured transport trace records.
+Native debug options use one non-negative 64-bit encoding. Bits 32 through 62
+are feature flags, with bit 32 enabling loopback and bit 33 enabling transport
+observation; bit 63 is reserved so the value remains representable by Torch's
+signed integer schema. Bits 0 through 31 are feature-specific option fields.
+Bits 0 and 1 encode the loopback site as zero for none, one for `instance`, two
+for `atnagent`, and three for `ffnagent`; all remaining low bits are
+reserved. Loopback enablement and its site must agree, and unknown feature or
+reserved option bits fail closed. Future parameterized features receive
+disjoint low-bit fields rather than reinterpreting the whole option word.
 Both descriptors contain:
 
 - ABI version and byte size,
@@ -498,7 +519,7 @@ FFN result descriptors also contain:
 - output arena offset.
 
 Descriptors must not carry raw CUDA pointers across processes. SGLang and the
-local devagent may map the same CUDA IPC allocation at different virtual
+local agent may map the same CUDA IPC allocation at different virtual
 addresses, so all cross-process references use arena offsets. Each arena owns two
 device-resident bounded ring queues backed by the generic
 `xpool::utils::queue::RingQueue<uint32_t>` primitive: a free-slot queue
@@ -506,15 +527,15 @@ initialized with every slot id, and a used-slot queue initialized empty.
 Instance-side shim kernels pop the arena slot from the free queue, stage input
 and DP token counts, stamp a descriptor, and push the slot id to the used queue.
 Each instance/rank pair binds one local transport arena. The local transport
-checkpoint defaults to one reusable slot and one resident devagent warp that
+checkpoint defaults to one reusable slot and one resident agent warp that
 consumes its used queue. Queue depth is nevertheless a real native layout
 parameter so shutdown and future microbatching are correct for multiple slots.
 Future FFN-side concurrency belongs to the
-FFN devagent scheduler/executor, not to the local attention arena queue depth.
+FfnAgent scheduler/executor, not to the local attention arena queue depth.
 The shim copies the completed output before pushing the slot back to the free
-queue, so the devagent cannot reuse output storage before the producer has
+queue, so the agent cannot reuse output storage before the producer has
 consumed it. The shim publish path must split payload staging from queue
-publication so devagents cannot
+publication so agents cannot
 observe partially staged input, including when CUDA graph replay reuses the same
 graph body. Queue cells use system-scope acquire/release atomics for slot
 ownership publication, while descriptor status fields use the same system-scope
@@ -529,8 +550,8 @@ not allocate trace storage and request kernels do not read timers or write trace
 records. `TransportArenaLayout` resolves this process-wide native debug option
 when it constructs the arena geometry; callers provide workload dimensions but
 do not pass a second observer-policy flag. When enabled, every instance request receives a monotonic trace id and
-the instance and devagent write device-global timestamps into the same bounded
-arena record for slot acquisition, input staging, publication, devagent dequeue,
+the instance and agent write device-global timestamps into the same bounded
+arena record for slot acquisition, input staging, publication, agent dequeue,
 descriptor grant, executor entry/exit, result publication/observation, output
 copy, and slot recycling. `TransportTraceRecord` and
 `TransportTraceSnapshot {sequence, dropped, records}` are matching C++ and
@@ -550,7 +571,7 @@ slot-address derivation are private `TransportArena` operations rather than
 free helpers that accept an arena as their first argument.
 
 Expected executor failures are device-visible protocol results, not CUDA traps.
-The devagent publishes a typed `FfnResultErrorCode`, records the first fatal
+The agent publishes a typed `FfnResultErrorCode`, records the first fatal
 executor error in arena-local sticky state, and lets the instance request kernel
 complete with poison output while preserving the CUDA context. A process-local
 background monitor reads that sticky state outside the request path and
@@ -586,10 +607,10 @@ controller with every GPU visible to xpool clients and give controller and
 clients the same MPS pipe and log directories.
 
 Shutdown is a bounded drain protocol. The daemon blocks new leases and
-concurrently terminates every live instance owner of the devagent's arenas;
+concurrently terminates every live instance owner of the agent's arenas;
 heartbeat freshness is not evidence that a live CUDA IPC mapping is safe to
 free. Once shutdown is observed, producers may not enqueue new work. The
-resident devagent marks already-used slots failed with the shutdown error
+resident agent marks already-used slots failed with the shutdown error
 instead of executing them and exits after the used queue is empty. A slot held
 by a producer that died before publication is abandoned rather than restored to
 the free queue because the arena is destroyed immediately after the resident
@@ -606,7 +627,7 @@ guarantees.
 1. Land this plan and the repository skeleton.
 2. Add Python package, `xpool <subcommand>` CLI, config validation, and daemon API
    skeleton.
-3. Add devagent launcher and runtime preflight checks.
+3. Add agent launcher and runtime preflight checks.
 4. Add model-neutral SGLang plugin registration and DeepSeek FFN class adapter.
 5. Add shared ABI headers and Python packing tests.
 6. Close review-gate correctness gaps in SGLang plugin policy, model binding,
@@ -619,7 +640,7 @@ guarantees.
    decode full CUDA graph, and prefill piecewise CUDA graph modes.
 9. Implement the production `ffn_shim` publish/wait path with communication-slot
    ownership and replay-safe descriptor side effects.
-10. Prove one NVSHMEM rank per devagent transport with device-side progress.
+10. Prove one NVSHMEM rank per agent transport with device-side progress.
 11. Attach DeepSeek-V2-Lite FFN executor and correctness oracle tests.
 12. Run SGLang E2E with multiple instances on the same attention GPU.
 13. Start phase-2 KV sharing design and implementation.
@@ -637,8 +658,8 @@ serving code calls them.
 Runtime shim code calls the compile-friendly `xpool.ops.instance.ffn_shim`
 Python custom-op wrapper. The wrapper preserves SGLang's symbolic token
 dimension during piecewise CUDA graph compilation and dispatches at runtime to
-`torch.ops.xpool.instance.ffn_shim`. Devagent-owned arena operations are exposed
-through `xpool.ops.devagent` and dispatch to `torch.ops.xpool.devagent.*`;
+`torch.ops.xpool.instance.ffn_shim`. Agent-owned arena operations are exposed
+through `xpool.ops.atnagent` and dispatch to `torch.ops.xpool.atnagent.*`;
 instance-owned arena and shim operations are exposed through
 `xpool.ops.instance` and dispatch to `torch.ops.xpool.instance.*`.
 This two-layer shape contract avoids per-capture-bucket whole-model
@@ -650,20 +671,19 @@ The current production `torch.ops.xpool.instance.ffn_shim` is implemented for th
 daemon-brokered transport checkpoint slice. Without a native transport arena handle
 registered for the locally derived `(instance_index, rank)`, it fails closed
 before launching work.
-When `debug.transport_loopback.enable=true`, the SGLang plugin registers the
+When `debug.loopback.enable=true` and `debug.loopback.site=atnagent`, the SGLang plugin registers the
 requesting instance rank with the daemon after model load, fetches that rank's
 filtered transport arena handle, and installs a native registry entry. The native op
 publishes descriptors into the CUDA IPC arena, waits for the local attention
-devagent arena to complete, and returns the temporary 45-degree rotate executor
+agent arena to complete, and returns the temporary 45-degree rotate executor
 output through the production `ffn_shim` route. This proves registry-driven
 production shim dispatch, CUDA IPC arena handoff, descriptor sequencing, and
-local devagent device progress for one same-device arena; attention admission
-arbitration, the NVSHMEM hop to FFN devagents, and the real FFN executor remain
+local agent device progress for one same-device arena; attention admission
+arbitration, the NVSHMEM hop to FfnAgents, and the real FFN executor remain
 the next runtime implementation slice.
-Because `debug.shim_loopback.enable` and `debug.transport_loopback.enable`
-default to false, the default shim route is still not a serving-capable
-configuration. When the resolved global config has
-`debug.shim_loopback.enable=true`, process initialization installs the matching
+Because `debug.loopback.enable` defaults to false, the default shim route is
+still not a serving-capable configuration. When the resolved global config has
+the `instance` loopback site, process initialization installs the matching
 native debug option, so `torch.ops.xpool.instance.ffn_shim` runs the temporary
 loopback executor while preserving the same graph wrapper and native ABI. This lets tests
 cover SGLang's current eager-compiler piecewise CUDA graph prefill path and
@@ -673,24 +693,26 @@ not a blanket torch.compile/Inductor support claim: SGLang's explicit global
 prefill with the default eager compiler remains accepted. Non-eager piecewise
 CUDA graph compiler modes also remain rejected until XPool defines a compiler
 contract for request publication,
-communication-slot ownership, stream/event ordering, devagent progress, and
+communication-slot ownership, stream/event ordering, agent progress, and
 replay-safe descriptor side effects.
 
-The daemon control-plane routes for this handoff are singular resource routes:
-devagents register with `POST /devagent/register`, each attention devagent
+The current daemon control-plane routes are AtnAgent-specific. AtnAgents register with
+`POST /atnagent/register`, each AtnAgent
 publishes rank-local transport arena handles with
-`POST /devagent/{cuda_device}/transport-arenas`, instance ranks register with
+`POST /atnagent/{cuda_device}/transport-arenas` and use an AtnAgent heartbeat
+route. There is no generic agent endpoint and no current FfnAgent route.
+Instance ranks register with
 `POST /instance/register`, and each instance rank acquires its local handle
 through `POST /instance/{instance_id}/transport-arena/acquire?rank={rank}`.
 There is no aggregate fetch on the instance route; each SGLang rank installs
 only its local arena. Runtime participants access these routes through
 `xpool.service.client.XpoolClient`, not ad hoc `httpx.Client` calls. The
-devagent publish body contains the publisher process reference and a list of
+agent publish body contains the publisher process reference and a list of
 `{instance_id, rank, handle}` bindings, where `handle` is the lowercase CUDA IPC
 arena handle. Drain marks the publisher's arenas as terminating for heartbeat
 warnings until every live instance lease owner exits. The instance acquire response is the bare rank-local
 `TransportArenaHandleRecord`, not a wrapper object. The supported startup order
-is devagents first, then instance ranks: devagents may start resident before
+is agents first, then instance ranks: agents may start resident before
 any rank is registered, then publish arenas as live instance registrations
 appear. The daemon rejects handles for unknown or unregistered instance ranks,
 so an early instance acquire receives a retryable `not_ready` response rather
@@ -699,7 +721,7 @@ than waiting for all ranks.
 The daemon process-global `XpoolConfig` is the control-plane configuration
 authority. `GET /config` returns that Pydantic model directly, without a
 separate derived-view wrapper. Before every initial or recovery registration,
-devagents and instances submit their complete local effective config to
+agents and instances submit their complete local effective config to
 `POST /config/check`. The daemon compares it with its own config, including
 env-only debug settings and ordered model/device lists but excluding source
 provenance. A match returns `204 No Content`; a mismatch returns the existing
@@ -709,7 +731,7 @@ runtime clients submit their local Pydantic JSON but never reconstruct the
 daemon config. The check and registration are separate requests because daemon
 config is immutable for the daemon process lifetime.
 
-Devagent-published handle bindings carry only control-plane ownership facts.
+Agent-published handle bindings carry only control-plane ownership facts.
 They use `(instance_id, rank)` as the route-table key and leave arena geometry
 opaque to Python and the daemon. Instance-scoped responses do not repeat
 `instance_id` because the route already identifies the requester. The instance
@@ -717,15 +739,15 @@ process derives `instance_index` from its local xpool config before installing
 the native runtime. Instance registration stores process identity, local rank,
 and transport requirements including hidden-state element size and attention DP
 size; the daemon uses those requirements to reject undersized or
-topology-mismatched devagent arenas before SGLang installs them. The transport
+topology-mismatched agent arenas before SGLang installs them. The transport
 runtime starts only after SGLang applies its resolved memory-pool configuration.
 The registered transport token capacity is the maximum of SGLang's resolved
 prefill, CUDA-graph batch, piecewise-graph token, and
 `ModelRunner.max_running_requests` limits. The last value covers eager decode
 when a legal running batch is larger than the captured CUDA-graph buckets.
-Every SGLang rank talks only to the local attention devagent on the same
-physical CUDA device. Non-local devagents participate through persistent kernels
-and the on-device/NVSHMEM devagent network. The native transport registry is
+Every SGLang rank talks only to the local AtnAgent on the same
+physical CUDA device. Non-local agents participate through persistent kernels
+and the on-device/NVSHMEM agent network. The native transport registry is
 keyed by `(instance_index, rank)`.
 
 Daemon registration payloads carry only `pid`; the daemon samples the process
@@ -733,13 +755,13 @@ Daemon registration payloads carry only `pid`; the daemon samples the process
 full identity so PID reuse and permission failures cannot refresh old
 registrations. Stale registrations remain visible for observability, but they
 do not satisfy `/ready` and cannot serve transport arena handles. Liveness probing
-must not run while holding daemon state locks. Devagent metadata is bound to the
+must not run while holding daemon state locks. Agent metadata is bound to the
 exact `ProcUniqId` that published it; if that owner no longer matches the live
-devagent registration, the daemon returns retryable `not_ready` instead of
+agent registration, the daemon returns retryable `not_ready` instead of
 handing stale CUDA IPC handles to an instance rank.
-`debug.transport_loopback.enable` remains an explicit debug checkpoint path: it
+The `atnagent` loopback site remains an explicit debug checkpoint path: it
 proves daemon-brokered metadata, native registry handoff, CUDA IPC descriptor
-publication, and local devagent progress, while warnings make clear that real
+publication, and local agent progress, while warnings make clear that real
 attention admission arbitration, NVSHMEM FFN routing, and FFN execution are not
 implemented by this debug slice. This checkpoint still is not a complete
 serving lifecycle protocol: full graph-replay error propagation and the real
@@ -754,7 +776,13 @@ SGLang shim normalizes every attention-DP-size-one request to
 length to the hidden-state row count. Multi-rank requests retain SGLang's
 padding mode, global buffer length, and per-rank token counts; native validation
 continues to reject non-none padding without those counts. SGLang DP attention
-remains rejected before this future multi-rank path is reachable.
+is enabled only after the real FFN executor can aggregate the described DP
+input and return the reduce-scattered output expected by each ATN DP rank. Its
+acceptance gate uses at least two ATN DP ranks and covers unequal rank-local
+batches, idle ranks, `MAX_LEN`, and `SUM_LEN` under eager, decode full-graph,
+and piecewise prefill graph execution. Layer outputs must match the model oracle
+within dtype tolerance and generated token ids must match an unsplit SGLang
+baseline; merely removing the topology rejection is not compatibility evidence.
 
 Current loopback validation must cover three compatibility surfaces that SGLang
 uses together in normal high-performance serving:
@@ -769,7 +797,7 @@ transport timing belongs to `xpool.devkit.common.transport_observer`. Process
 runtime initialization flows through `xpool.bootstrap.init(cuda_device, role)`,
 which locks one Python process to a CUDA device and `RuntimeRole`, loads and
 initializes the native runtime, and rejects conflicting reinitialization. After
-bootstrap, the SGLang plugin and common devagent constructor call
+bootstrap, the SGLang plugin and common agent constructor call
 `xpool.devkit.install()`. Its unified registry recursively discovers observer
 modules under `xpool.devkit`, imports only observers enabled by matching
 `debug.<module_name>` config, and installs only observers declaring support for
@@ -789,10 +817,10 @@ process-local lock. Runtime event-recording failures are warnings and must not
 change SGLang graph runner return values or exception behavior. The observer
 belongs to devkit, not the production runtime or model-adapter layer.
 
-The transport observer follows the same boundary in devagent processes.
+The transport observer follows the same boundary in agent processes.
 Production `AtnArenaResource` owns only instance identity, registration, and the
 native arena handle; destruction returns the ABI-defined trace snapshot without
-consulting debug configuration. When enabled for `RuntimeRole.DEVAGENT`, the
+consulting debug configuration. When enabled for `RuntimeRole.ATNAGENT`, the
 devkit transport observer patches that destruction method, calls the original
 method exactly once, and serializes the returned snapshot using the output
 directory resolved from global config. Output-directory creation fails during
@@ -802,14 +830,14 @@ back.
 
 The debug loopback op implements a non-identity pairwise 45-degree hidden-state
 rotation so tests can assert that shim output was computed rather than returned
-unchanged. SGLang validation has two explicit levels. Direct shim-loopback runs
+unchanged. SGLang validation has two explicit levels. Instance loopback runs
 all four `(cuda graph, piecewise CUDA graph)` combinations in isolated
 processes: `(off, off)`, `(off, on)`, `(on, off)`, and `(on, on)`. A separate
-transport-loopback test starts an isolated daemon and every configured ATN
-devagent, then runs eager `(off, off)` and combined graph `(on, on)` SGLang
+AtnAgent loopback test starts an isolated daemon and every configured ATN
+agent, then runs eager `(off, off)` and combined graph `(on, on)` SGLang
 instances through daemon registration, arena publication/acquisition, CUDA IPC,
 descriptor queues, and the persistent transport kernel. It deliberately does
-not start the unimplemented FFN devagent.
+not start the unimplemented FfnAgent.
 
 Both levels use the normal offline `Engine` API with `SGLANG_PLUGINS=xpool`, a
 short deterministic generation, and SGLang's default graph bucket settings.
@@ -817,12 +845,12 @@ The E2E harness must not reduce SGLang's native graph buckets, even when doing s
 would shorten the test, because graph-construction scaling is part of the
 transport evidence and preserves coverage for future workloads.
 Each graph configuration runs in a fresh process, and each transport probe owns
-a fresh daemon/devagent lifecycle on a temporary loopback port. The graph
+a fresh daemon/agent lifecycle on a temporary loopback port. The graph
 observer must record capture and replay for every enabled full or piecewise
 graph path, and no events for disabled paths. Token ids must match the eager
-baseline within and across direct and transport loopback modes. These tests are
+baseline within and across instance and AtnAgent loopback sites. These tests are
 transport-checkpoint evidence only: production readiness still requires the
-FFN devagent, NVSHMEM routing, and real FFN execution.
+FfnAgent, NVSHMEM routing, and real FFN execution.
 
 ## Validation
 

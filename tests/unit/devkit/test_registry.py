@@ -39,11 +39,11 @@ def test_registry_skips_observer_for_different_runtime_role(
 ) -> None:
     """Enabled observers do not install in an unsupported process role."""
 
-    monkeypatch.setattr(bootstrap_module, "runtime_role", RuntimeRole.DEVAGENT)
+    monkeypatch.setattr(bootstrap_module, "runtime_role", RuntimeRole.ATNAGENT)
     monkeypatch.setattr(
         graph_observer,
         "install",
-        lambda: pytest.fail("graph observer must not install in a devagent"),
+        lambda: pytest.fail("graph observer must not install in a AtnAgent"),
     )
     init_global_config(config=graph_observer_enabled_config(tmp_path))
 
@@ -53,7 +53,7 @@ def test_registry_skips_observer_for_different_runtime_role(
 @pytest.mark.parametrize(
     ("runtime_role", "expected"),
     [
-        (RuntimeRole.DEVAGENT, ("xpool.devkit.common.transport_observer",)),
+        (RuntimeRole.ATNAGENT, ("xpool.devkit.common.transport_observer",)),
         (RuntimeRole.INSTANCE, ()),
     ],
 )
@@ -63,7 +63,7 @@ def test_registry_filters_common_transport_observer_by_runtime_role(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Common transport observation is discoverable only for devagents."""
+    """Common transport observation is discoverable only for AtnAgents."""
 
     monkeypatch.setattr(bootstrap_module, "runtime_role", runtime_role)
     init_global_config(config=transport_observer_enabled_config(tmp_path))

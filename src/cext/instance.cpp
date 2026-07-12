@@ -155,7 +155,8 @@ ffn_shim_cuda(const at::Tensor &hidden_states,
               const xpool::abi::FfnTensorMetadata &tensor_metadata,
               std::int64_t rank,
               const std::optional<at::Tensor> &global_num_tokens_gpu) {
-  if (xpool::debug::options().enabled(xpool::abi::DebugOption::kShimLoopback)) {
+  if (xpool::debug::options().loopback_site() ==
+      xpool::abi::DebugLoopbackSite::kInstance) {
     at::Tensor output = at::empty_like(hidden_states);
     xpool::debug::launch_loopback_rotation(output, hidden_states);
     return output;
@@ -168,7 +169,8 @@ at::Tensor ffn_shim_meta(const at::Tensor &hidden_states,
                          const xpool::abi::FfnRequestMetadata &request_metadata,
                          const xpool::abi::FfnTensorMetadata &tensor_metadata,
                          std::int64_t rank) {
-  if (xpool::debug::options().enabled(xpool::abi::DebugOption::kShimLoopback)) {
+  if (xpool::debug::options().loopback_site() ==
+      xpool::abi::DebugLoopbackSite::kInstance) {
     return at::empty_like(hidden_states);
   }
   const xpool::transport::TransportArenaLayout layout = [&] {

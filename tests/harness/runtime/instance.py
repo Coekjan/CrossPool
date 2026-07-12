@@ -46,7 +46,7 @@ def reset_instance_runtime(
 
 
 def runtime_config(*, enabled: bool) -> XpoolConfig:
-    env = {"XPOOL_DEBUG_TRANSPORT_LOOPBACK_ENABLE": "1"} if enabled else {}
+    env = {"XPOOL_DEBUG_LOOPBACK_ENABLE": "1", "XPOOL_DEBUG_LOOPBACK_SITE": "atnagent"} if enabled else {}
     config = XpoolConfig.from_mapping(
         {
             "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},

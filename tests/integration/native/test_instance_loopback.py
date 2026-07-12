@@ -8,7 +8,7 @@ from sglang.srt.model_executor.forward_batch_info import ForwardMode as SglangFo
 
 import xpool.config as config_module
 from tests.harness.native.loopback import expected_loopback_rotation, run_isolated_native_case
-from xpool.abi import DebugOption, RuntimeRole
+from xpool.abi import DebugLoopbackSite, DebugOptions, RuntimeRole
 from xpool.config import XpoolConfig, init_global_config
 from xpool.integrations.sglang.shim import FfnLayerKind, FfnShimModule
 
@@ -18,24 +18,28 @@ pytestmark = [
 ]
 
 
-def install_shim_loopback_config() -> None:
-    """Initialize an isolated process for direct shim-loopback execution."""
+def install_instance_loopback_config() -> None:
+    """Initialize an isolated process for instance-loopback execution."""
 
     config_module.global_config = None
-    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), int(DebugOption.SHIM_LOOPBACK))
+    torch.ops.xpool.init(
+        torch.cuda.current_device(),
+        int(RuntimeRole.INSTANCE),
+        DebugOptions.create(loopback_site=DebugLoopbackSite.INSTANCE).raw,
+    )
     init_global_config(
         config=XpoolConfig.from_mapping(
             {
                 "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
-            env={"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "1"},
+            env={"XPOOL_DEBUG_LOOPBACK_ENABLE": "1", "XPOOL_DEBUG_LOOPBACK_SITE": "instance"},
         )
     )
 
 
-def isolated_case_ffn_shim_loopback_eager_rotates_hidden_pairs(dtype_name: str) -> None:
-    install_shim_loopback_config()
+def isolated_case_instance_loopback_eager_rotates_hidden_pairs(dtype_name: str) -> None:
+    install_instance_loopback_config()
     dtype = getattr(torch, dtype_name)
     shim = loopback_shim(hidden_size=4)
     hidden_states = torch.tensor(
@@ -52,8 +56,8 @@ def isolated_case_ffn_shim_loopback_eager_rotates_hidden_pairs(dtype_name: str) 
     assert torch.allclose(output.float(), expected_loopback_rotation(hidden_states).float(), atol=2e-2, rtol=2e-2)
 
 
-def isolated_case_ffn_shim_loopback_rejects_odd_hidden_size() -> None:
-    install_shim_loopback_config()
+def isolated_case_instance_loopback_rejects_odd_hidden_size() -> None:
+    install_instance_loopback_config()
     shim = loopback_shim(hidden_size=3)
     hidden_states = torch.ones((2, 3), device="cuda", dtype=torch.float32)
 
@@ -61,8 +65,8 @@ def isolated_case_ffn_shim_loopback_rejects_odd_hidden_size() -> None:
         shim(hidden_states, forward_batch())
 
 
-def isolated_case_ffn_shim_loopback_cuda_graph_replay_rotates_updated_inputs() -> None:
-    install_shim_loopback_config()
+def isolated_case_instance_loopback_cuda_graph_replay_rotates_updated_inputs() -> None:
+    install_instance_loopback_config()
     shim = loopback_shim(hidden_size=4)
     static_input = torch.empty((2, 4), device="cuda", dtype=torch.float32)
     first_input = torch.tensor(
@@ -102,22 +106,22 @@ def isolated_case_ffn_shim_loopback_cuda_graph_replay_rotates_updated_inputs() -
         pytest.param(torch.bfloat16, marks=pytest.mark.requires_cuda(bf16=True)),
     ],
 )
-def test_ffn_shim_loopback_eager_rotates_hidden_pairs(dtype: torch.dtype) -> None:
+def test_instance_loopback_eager_rotates_hidden_pairs(dtype: torch.dtype) -> None:
     run_isolated_native_case(
         Path(__file__),
-        "isolated_case_ffn_shim_loopback_eager_rotates_hidden_pairs",
+        "isolated_case_instance_loopback_eager_rotates_hidden_pairs",
         str(dtype).removeprefix("torch."),
     )
 
 
-def test_ffn_shim_loopback_rejects_odd_hidden_size() -> None:
-    run_isolated_native_case(Path(__file__), "isolated_case_ffn_shim_loopback_rejects_odd_hidden_size")
+def test_instance_loopback_rejects_odd_hidden_size() -> None:
+    run_isolated_native_case(Path(__file__), "isolated_case_instance_loopback_rejects_odd_hidden_size")
 
 
-def test_ffn_shim_loopback_cuda_graph_replay_rotates_updated_inputs() -> None:
+def test_instance_loopback_cuda_graph_replay_rotates_updated_inputs() -> None:
     run_isolated_native_case(
         Path(__file__),
-        "isolated_case_ffn_shim_loopback_cuda_graph_replay_rotates_updated_inputs",
+        "isolated_case_instance_loopback_cuda_graph_replay_rotates_updated_inputs",
     )
 
 

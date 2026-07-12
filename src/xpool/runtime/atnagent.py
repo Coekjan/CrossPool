@@ -1,4 +1,4 @@
-"""Attention-side devagent transport arena lifecycle."""
+"""Attention-side atnagent transport arena lifecycle."""
 
 from __future__ import annotations
 
@@ -8,25 +8,26 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import xpool.ops
-from xpool.abi import TransportArenaHandle, TransportTraceSnapshot
-from xpool.config import DeviceRole, get_global_config
-from xpool.runtime.devagent.common import (
-    DEVAGENT_CONTROL_INTERVAL_S,
-    DEVAGENT_SHUTDOWN_POLL_INTERVAL_S,
-    Devagent,
-    DevagentError,
-    DevagentHeartbeat,
+from xpool.abi import ABI_VERSION, RuntimeRole, TransportArenaHandle, TransportTraceSnapshot
+from xpool.config import get_global_config
+from xpool.runtime.agent import (
+    AGENT_CONTROL_INTERVAL_S,
+    AGENT_SHUTDOWN_POLL_INTERVAL_S,
+    Agent,
+    AgentError,
+    AgentHeartbeat,
     logger,
 )
 from xpool.service.client import XpoolClientError, XpoolDaemonError
 from xpool.service.wire import (
-    DevagentTransportArenaBinding,
+    AtnAgentRegistration,
+    AtnAgentTransportArenaBinding,
     InstanceRegistration,
     TransportArenaHandleRecord,
 )
 from xpool.utils.sighandler import sighandle
 
-__all__ = ["AtnDevagent"]
+__all__ = ["AtnAgent"]
 
 TRANSPORT_PUBLICATION_RECOVERY_S = 60.0
 TRANSPORT_SHUTDOWN_DEADLINE_S = 60.0
@@ -34,7 +35,7 @@ TRANSPORT_SHUTDOWN_DEADLINE_S = 60.0
 
 @dataclass(frozen=True, slots=True)
 class AtnArenaResource:
-    """Transport arena resource owned by one ATN devagent for one instance.
+    """Transport arena resource owned by one ATN atnagent for one instance.
 
     Attributes:
         instance_id: Configured instance id that will consume this arena.
@@ -48,10 +49,10 @@ class AtnArenaResource:
     registration: InstanceRegistration
     handle: TransportArenaHandle
 
-    def binding(self) -> DevagentTransportArenaBinding:
+    def binding(self) -> AtnAgentTransportArenaBinding:
         """Return the daemon binding that publishes this arena."""
 
-        return DevagentTransportArenaBinding(
+        return AtnAgentTransportArenaBinding(
             instance_id=self.instance_id,
             rank=self.registration.rank,
             handle=TransportArenaHandleRecord.from_handle(self.handle),
@@ -65,7 +66,7 @@ class AtnArenaResource:
             records are empty when transport observation was disabled.
         """
 
-        return xpool.ops.devagent.destroy_transport_arena(self.handle)
+        return xpool.ops.atnagent.destroy_transport_arena(self.handle)
 
     def validate_registration(self, registration: InstanceRegistration) -> None:
         """Reject runtime transport-attribute changes for this resource."""
@@ -76,12 +77,12 @@ class AtnArenaResource:
             f"transport attributes changed for instance {self.instance_id} rank {self.registration.rank}; "
             "runtime hot resize is unsupported"
         )
-        raise DevagentError(message)
+        raise AgentError(message)
 
 
 @dataclass(frozen=True, slots=True)
-class AtnDevagentState(ABC):
-    """Base state for the whole ATN devagent arena lifecycle.
+class AtnAgentState(ABC):
+    """Base state for the whole ATN atnagent arena lifecycle.
 
     Attributes:
         resources: Native arenas owned by this state. States before arena
@@ -96,87 +97,87 @@ class AtnDevagentState(ABC):
     published_instance_ids: frozenset[str] = frozenset()
     previously_published: bool = False
 
-    def step(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def step(self, atnagent: AtnAgent) -> AtnAgentState:
         """Recover registration if needed, then perform the state transition."""
 
-        should_recover_registration = not devagent.registered
-        if devagent.registered:
-            should_recover_registration = devagent.heartbeat_worker.consume_registration_missing()
+        should_recover_registration = not atnagent.registered
+        if atnagent.registered:
+            should_recover_registration = atnagent.heartbeat_worker.consume_registration_missing()
         if should_recover_registration:
-            self.recover_registration_if_missing(devagent)
-        if not devagent.registered:
+            self.recover_registration_if_missing(atnagent)
+        if not atnagent.registered:
             return self
         if should_recover_registration:
-            return self.registration_recover(devagent)
-        return self.advance(devagent)
+            return self.registration_recover(atnagent)
+        return self.advance(atnagent)
 
     @abstractmethod
-    def advance(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def advance(self, atnagent: AtnAgent) -> AtnAgentState:
         """Perform this state's legal side effects and return the next state."""
 
         raise NotImplementedError
 
-    def recover_registration_if_missing(self, devagent: AtnDevagent) -> None:
-        """Recover the daemon devagent registration when heartbeat marked it stale."""
+    def recover_registration_if_missing(self, atnagent: AtnAgent) -> None:
+        """Recover the daemon atnagent registration when heartbeat marked it stale."""
 
-        devagent.heartbeat_worker.stop()
-        devagent.registered = False
-        devagent.register()
-        if devagent.registered:
-            devagent.heartbeat_worker.start()
-            devagent.heartbeat_worker.raise_if_failed()
-            if devagent.heartbeat_worker.consume_registration_missing():
-                devagent.heartbeat_worker.stop()
-                devagent.registered = False
+        atnagent.heartbeat_worker.stop()
+        atnagent.registered = False
+        atnagent.register()
+        if atnagent.registered:
+            atnagent.heartbeat_worker.start()
+            atnagent.heartbeat_worker.raise_if_failed()
+            if atnagent.heartbeat_worker.consume_registration_missing():
+                atnagent.heartbeat_worker.stop()
+                atnagent.registered = False
 
-    def registration_recover(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def registration_recover(self, atnagent: AtnAgent) -> AtnAgentState:
         """Return the state that follows successful daemon registration recovery."""
 
         return self
 
-    def local_instance_registrations(self, devagent: AtnDevagent) -> dict[str, InstanceRegistration]:
-        """Return daemon registrations for this ATN devagent's local rank."""
+    def local_instance_registrations(self, atnagent: AtnAgent) -> dict[str, InstanceRegistration]:
+        """Return daemon registrations for this ATN atnagent's local rank."""
 
-        if not devagent.registered:
-            raise DevagentError("devagent must be registered before listing local instance registrations")
+        if not atnagent.registered:
+            raise AgentError("atnagent must be registered before listing local instance registrations")
         return {
             registration.instance_id: registration
-            for registration in devagent.client.list_instances()
-            if registration.rank == devagent.local_rank
+            for registration in atnagent.client.list_instances()
+            if registration.rank == atnagent.local_rank
             and registration.instance_id in get_global_config().instance_by_id
         }
 
 
 @dataclass(frozen=True, slots=True)
-class AtnInitialized(AtnDevagentState):
-    """Initial ATN devagent state before daemon registration succeeds."""
+class AtnInitialized(AtnAgentState):
+    """Initial ATN atnagent state before daemon registration succeeds."""
 
-    def advance(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def advance(self, atnagent: AtnAgent) -> AtnAgentState:
         """Move to registered state after daemon registration succeeds."""
 
         return AtnRegistered()
 
-    def registration_recover(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def registration_recover(self, atnagent: AtnAgent) -> AtnAgentState:
         """Enter registered state after the initial daemon registration."""
 
         return AtnRegistered()
 
 
 @dataclass(frozen=True, slots=True)
-class AtnRegistered(AtnDevagentState):
-    """ATN devagent state that reconciles registered instances incrementally."""
+class AtnRegistered(AtnAgentState):
+    """ATN atnagent state that reconciles registered instances incrementally."""
 
-    def advance(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def advance(self, atnagent: AtnAgent) -> AtnAgentState:
         """Create or select the next publishable local arena batch."""
 
         try:
-            registrations_by_instance = self.local_instance_registrations(devagent)
+            registrations_by_instance = self.local_instance_registrations(atnagent)
         except (XpoolDaemonError, XpoolClientError) as exc:
             if not exc.is_recoverable:
-                raise DevagentError(
-                    f"devagent instance-list reconcile received unrecoverable daemon error: {exc}"
+                raise AgentError(
+                    f"atnagent instance-list reconcile received unrecoverable daemon error: {exc}"
                 ) from exc
-            logger.warning("failed to reconcile devagent transport arenas: %s", exc)
+            logger.warning("failed to reconcile atnagent transport arenas: %s", exc)
             return self
 
         resources_by_instance = {resource.instance_id: resource for resource in self.resources}
@@ -197,8 +198,8 @@ class AtnRegistered(AtnDevagentState):
                 registration = registrations_by_instance.get(instance.id)
                 if registration is None or instance.id in resources_by_instance:
                     continue
-                handle = xpool.ops.devagent.create_transport_arena(
-                    devagent.cuda_device,
+                handle = xpool.ops.atnagent.create_transport_arena(
+                    atnagent.cuda_device,
                     registration.transport.max_tokens,
                     registration.transport.hidden_size,
                     registration.transport.element_size,
@@ -216,10 +217,10 @@ class AtnRegistered(AtnDevagentState):
                 try:
                     resource.destroy()
                 except Exception as cleanup_exc:
-                    raise DevagentError(
+                    raise AgentError(
                         "failed to destroy partially created ATN transport arenas after create failure"
                     ) from cleanup_exc
-            raise DevagentError(f"failed to create transport arenas for CUDA device {devagent.cuda_device}") from exc
+            raise AgentError(f"failed to create transport arenas for CUDA device {atnagent.cuda_device}") from exc
 
         resources = (*self.resources, *created_resources)
         if created_resources:
@@ -242,15 +243,15 @@ class AtnRegistered(AtnDevagentState):
         if missing:
             logger.info(
                 "waiting for local instance registrations on CUDA device %s rank %s; missing instances: %s",
-                devagent.cuda_device,
-                devagent.local_rank,
+                atnagent.cuda_device,
+                atnagent.local_rank,
                 ", ".join(sorted(missing)),
             )
             return self
 
         return self
 
-    def registration_recover(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def registration_recover(self, atnagent: AtnAgent) -> AtnAgentState:
         """Reset current-generation publications after daemon re-registration."""
 
         return AtnRegistered(
@@ -260,8 +261,8 @@ class AtnRegistered(AtnDevagentState):
 
 
 @dataclass(frozen=True, slots=True)
-class AtnArenaCreated(AtnDevagentState):
-    """ATN devagent state after one native arena batch is created.
+class AtnArenaCreated(AtnAgentState):
+    """ATN atnagent state after one native arena batch is created.
 
     Attributes:
         created_resources: Newly allocated resources whose resident kernels
@@ -273,15 +274,15 @@ class AtnArenaCreated(AtnDevagentState):
     created_resources: tuple[AtnArenaResource, ...] = ()
     publication_resources: tuple[AtnArenaResource, ...] = ()
 
-    def advance(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def advance(self, atnagent: AtnAgent) -> AtnAgentState:
         """Launch persistent kernels for the newly created arena batch."""
 
         for resource in self.created_resources:
             try:
-                xpool.ops.devagent.launch_transport_kernel(resource.handle)
+                xpool.ops.atnagent.launch_transport_kernel(resource.handle)
             except Exception as exc:
-                raise DevagentError(
-                    "devagent transport kernel launch failed for "
+                raise AgentError(
+                    "atnagent transport kernel launch failed for "
                     f"instance {resource.instance_id} rank {resource.registration.rank}"
                 ) from exc
         return AtnKernelLaunched(
@@ -291,7 +292,7 @@ class AtnArenaCreated(AtnDevagentState):
             publication_resources=self.publication_resources,
         )
 
-    def registration_recover(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def registration_recover(self, atnagent: AtnAgent) -> AtnAgentState:
         """Retain created resources while resetting daemon publications."""
 
         return AtnArenaCreated(
@@ -303,8 +304,8 @@ class AtnArenaCreated(AtnDevagentState):
 
 
 @dataclass(frozen=True, slots=True)
-class AtnKernelLaunched(AtnDevagentState):
-    """ATN devagent state after a persistent-kernel batch is running.
+class AtnKernelLaunched(AtnAgentState):
+    """ATN atnagent state after a persistent-kernel batch is running.
 
     Attributes:
         publication_deadline: Monotonic deadline for a recoverable publication
@@ -316,14 +317,14 @@ class AtnKernelLaunched(AtnDevagentState):
     publication_resources: tuple[AtnArenaResource, ...] = ()
     publication_deadline: float | None = None
 
-    def advance(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def advance(self, atnagent: AtnAgent) -> AtnAgentState:
         """Publish the currently registered subset of the launched batch."""
 
         try:
-            registrations_by_instance = self.local_instance_registrations(devagent)
+            registrations_by_instance = self.local_instance_registrations(atnagent)
         except (XpoolDaemonError, XpoolClientError) as exc:
             if not exc.is_recoverable:
-                raise DevagentError(f"devagent instance-list reconcile failed after kernel launch: {exc}") from exc
+                raise AgentError(f"atnagent instance-list reconcile failed after kernel launch: {exc}") from exc
             return self.retry_or_raise(exc)
         publishable: list[AtnArenaResource] = []
         for resource in self.publication_resources:
@@ -339,14 +340,14 @@ class AtnKernelLaunched(AtnDevagentState):
                 previously_published=self.previously_published,
             )
         try:
-            devagent.client.upsert_devagent_transport_arenas(
-                devagent.cuda_device,
+            atnagent.client.upsert_atnagent_transport_arenas(
+                atnagent.cuda_device,
                 [resource.binding() for resource in publishable],
-                publisher=devagent.process_ref,
+                publisher=atnagent.process_ref,
             )
         except (XpoolDaemonError, XpoolClientError) as exc:
             if not exc.is_recoverable:
-                raise DevagentError(f"devagent transport arena upsert failed: {exc}") from exc
+                raise AgentError(f"atnagent transport arena upsert failed: {exc}") from exc
             return self.retry_or_raise(exc)
         published_instance_ids = self.published_instance_ids | frozenset(
             resource.instance_id for resource in publishable
@@ -366,8 +367,8 @@ class AtnKernelLaunched(AtnDevagentState):
     def retry_or_raise(self, exc: Exception) -> AtnKernelLaunched:
         deadline = self.publication_deadline or (time.monotonic() + TRANSPORT_PUBLICATION_RECOVERY_S)
         if time.monotonic() >= deadline:
-            raise DevagentError("devagent transport arenas were not republished before the recovery deadline") from exc
-        logger.warning("waiting to publish devagent transport arenas: %s", exc)
+            raise AgentError("atnagent transport arenas were not republished before the recovery deadline") from exc
+        logger.warning("waiting to publish atnagent transport arenas: %s", exc)
         return AtnKernelLaunched(
             resources=self.resources,
             published_instance_ids=self.published_instance_ids,
@@ -376,7 +377,7 @@ class AtnKernelLaunched(AtnDevagentState):
             publication_deadline=deadline,
         )
 
-    def registration_recover(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def registration_recover(self, atnagent: AtnAgent) -> AtnAgentState:
         """Republish every launched resource after daemon re-registration."""
 
         return AtnKernelLaunched(
@@ -388,15 +389,15 @@ class AtnKernelLaunched(AtnDevagentState):
 
 
 @dataclass(frozen=True, slots=True)
-class AtnArenaPublished(AtnDevagentState):
-    """ATN devagent state after daemon publication succeeds."""
+class AtnArenaPublished(AtnAgentState):
+    """ATN atnagent state after daemon publication succeeds."""
 
-    def advance(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def advance(self, atnagent: AtnAgent) -> AtnAgentState:
         """Keep the published arenas stable without polling daemon state."""
 
         return self
 
-    def registration_recover(self, devagent: AtnDevagent) -> AtnDevagentState:
+    def registration_recover(self, atnagent: AtnAgent) -> AtnAgentState:
         """Republish original handles incrementally after daemon recovery."""
 
         return AtnKernelLaunched(
@@ -407,8 +408,8 @@ class AtnArenaPublished(AtnDevagentState):
         )
 
 
-class AtnDevagent(Devagent):
-    """Attention-side devagent that publishes local transport arenas.
+class AtnAgent(Agent):
+    """Attention-side atnagent that publishes local transport arenas.
 
     Attributes:
         local_rank: Rank mapped to this process's configured ATN CUDA device.
@@ -417,23 +418,42 @@ class AtnDevagent(Devagent):
     """
 
     local_rank: int
-    state: AtnDevagentState
-    heartbeat_worker: DevagentHeartbeat
+    state: AtnAgentState
+    heartbeat_worker: AgentHeartbeat
 
-    def __init__(self, *, cuda_device: int, role: DeviceRole) -> None:
-        """Create an attention devagent and derive its local instance rank."""
+    def __init__(self, *, cuda_device: int) -> None:
+        """Create an attention atnagent and derive its local instance rank."""
 
-        super().__init__(cuda_device=cuda_device, role=role)
+        super().__init__(cuda_device=cuda_device, runtime_role=RuntimeRole.ATNAGENT)
+        self.registration = AtnAgentRegistration(
+            cuda_device=cuda_device,
+            abi_version=ABI_VERSION,
+            pid=self.proc_id.pid,
+        )
         config = get_global_config()
         try:
             self.local_rank = config.devices.atn_cuda_devices.index(cuda_device)
         except ValueError as exc:
-            raise DevagentError(f"CUDA device {cuda_device} has no local instance-rank arenas") from exc
+            raise AgentError(f"CUDA device {cuda_device} has no local instance-rank arenas") from exc
         self.state = AtnInitialized()
-        self.heartbeat_worker = DevagentHeartbeat(
+        self.heartbeat_worker = AgentHeartbeat(
             cuda_device=cuda_device,
             heartbeat=self.heartbeat_payload,
+            sender=lambda device, heartbeat: self.client.heartbeat_atnagent(device, heartbeat),
         )
+
+    def register(self) -> None:
+        """Register this AtnAgent and update local registration state."""
+
+        try:
+            self.client.register_atnagent(self.registration)
+        except (XpoolDaemonError, XpoolClientError) as exc:
+            self.registered = False
+            if not exc.is_recoverable:
+                raise AgentError(f"AtnAgent registration received unrecoverable daemon error: {exc}") from exc
+            logger.warning("AtnAgent registration failed: %s", exc)
+            return
+        self.registered = True
 
     def run(self) -> None:
         """Run the attention-side resident lifecycle until interrupted."""
@@ -443,7 +463,7 @@ class AtnDevagent(Devagent):
                 while True:
                     self.heartbeat_worker.raise_if_failed()
                     self.advance_state()
-                    time.sleep(DEVAGENT_CONTROL_INTERVAL_S)
+                    time.sleep(AGENT_CONTROL_INTERVAL_S)
             except KeyboardInterrupt:
                 return
             finally:
@@ -475,19 +495,19 @@ class AtnDevagent(Devagent):
         """Wait until daemon reports no live lease owners for local arenas."""
 
         if not self.registered:
-            raise DevagentError("devagent must be registered before draining transport arenas")
+            raise AgentError("atnagent must be registered before draining transport arenas")
         deadline = time.monotonic() + TRANSPORT_SHUTDOWN_DEADLINE_S
         while time.monotonic() < deadline:
             try:
-                response = self.client.drain_devagent_transport_arenas(
+                response = self.client.drain_atnagent_transport_arenas(
                     self.cuda_device,
                     publisher=self.process_ref,
                 )
             except (XpoolClientError, XpoolDaemonError) as exc:
                 if not exc.is_recoverable:
-                    raise DevagentError("failed to drain devagent transport arenas") from exc
-                logger.warning("failed to drain devagent transport arenas before destroying arenas: %s", exc)
-                time.sleep(DEVAGENT_SHUTDOWN_POLL_INTERVAL_S)
+                    raise AgentError("failed to drain atnagent transport arenas") from exc
+                logger.warning("failed to drain atnagent transport arenas before destroying arenas: %s", exc)
+                time.sleep(AGENT_SHUTDOWN_POLL_INTERVAL_S)
                 continue
             if not response.in_use:
                 return
@@ -498,5 +518,5 @@ class AtnDevagent(Devagent):
                 self.local_rank,
                 in_use,
             )
-            time.sleep(DEVAGENT_SHUTDOWN_POLL_INTERVAL_S)
-        raise DevagentError("timed out draining transport arena leases; native arenas remain allocated")
+            time.sleep(AGENT_SHUTDOWN_POLL_INTERVAL_S)
+        raise AgentError("timed out draining transport arena leases; native arenas remain allocated")

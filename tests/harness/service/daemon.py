@@ -48,7 +48,7 @@ def instance_registration(
     }
 
 
-def devagent_registration(
+def atnagent_registration(
     *,
     cuda_device: int,
     pid: int | None = None,
@@ -62,12 +62,12 @@ def devagent_registration(
     }
 
 
-def devagent_transport_arenas_path(cuda_device: int) -> str:
-    return f"/devagent/{cuda_device}/transport-arenas"
+def atnagent_transport_arenas_path(cuda_device: int) -> str:
+    return f"/atnagent/{cuda_device}/transport-arenas"
 
 
-def devagent_transport_arenas_drain_path(cuda_device: int) -> str:
-    return f"/devagent/{cuda_device}/transport-arenas/drain"
+def atnagent_transport_arenas_drain_path(cuda_device: int) -> str:
+    return f"/atnagent/{cuda_device}/transport-arenas/drain"
 
 
 def instance_transport_arena_acquire_path(instance_id: str, rank: int) -> str:
@@ -80,17 +80,17 @@ def process_ref(registration: Mapping[str, object] | None = None) -> dict[str, o
     return {"pid": registration["pid"], "abi_version": registration["abi_version"]}
 
 
-def devagent_transport_arenas(
+def atnagent_transport_arenas(
     *arenas: tuple[str, int],
     publisher: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "publisher": process_ref(publisher),
-        "bindings": devagent_transport_arena_bindings(*arenas),
+        "bindings": atnagent_transport_arena_bindings(*arenas),
     }
 
 
-def devagent_transport_arena_bindings(*arenas: tuple[str, int]) -> list[dict[str, object]]:
+def atnagent_transport_arena_bindings(*arenas: tuple[str, int]) -> list[dict[str, object]]:
     if not arenas:
         arenas = (("deepseek-ai/DeepSeek-V2-Lite-Chat", 0),)
     return [
@@ -128,9 +128,9 @@ def process_pid(pid: int | None) -> int:
     return pid
 
 
-def expire_devagent_registration(app: FastAPI, *, cuda_device: int) -> None:
+def expire_atnagent_registration(app: FastAPI, *, cuda_device: int) -> None:
     state = app.state.xpool_daemon_state
-    registration = state.devagent_registrations.registrations[cuda_device]
+    registration = state.atnagent_registrations.registrations[cuda_device]
     registration.last_seen_at -= HEARTBEAT_WARNING_WATERMARK_S + 1.0
 
 

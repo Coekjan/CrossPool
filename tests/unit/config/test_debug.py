@@ -9,7 +9,7 @@ from tests.harness.config import (
     pytest,
     write_minimal_config,
 )
-from xpool.config import ConfigError, XpoolConfig, init_global_config
+from xpool.config import ConfigError, LoopbackSite, XpoolConfig, init_global_config
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.0.2.1", "daemon.example"])
@@ -24,19 +24,22 @@ def test_daemon_host_must_be_loopback(host: str) -> None:
         )
 
 
-def test_env_source_parses_debug_loopback_flag() -> None:
+@pytest.mark.parametrize("site", list(LoopbackSite))
+def test_env_source_parses_debug_loopback_settings(site: LoopbackSite) -> None:
     payload = {
         "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
-    enabled = XpoolConfig.from_mapping(payload, env={"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "1"})
+    enabled = XpoolConfig.from_mapping(
+        payload,
+        env={"XPOOL_DEBUG_LOOPBACK_ENABLE": "1", "XPOOL_DEBUG_LOOPBACK_SITE": site.value},
+    )
     disabled = XpoolConfig.from_mapping(payload, env={})
-    explicitly_disabled = XpoolConfig.from_mapping(payload, env={"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "0"})
 
-    assert enabled.debug.shim_loopback.enable is True
-    assert disabled.debug.shim_loopback.enable is False
-    assert explicitly_disabled.debug.shim_loopback.enable is False
-    assert disabled.debug.transport_loopback.enable is False
+    assert enabled.debug.loopback.enable is True
+    assert enabled.debug.loopback.site is site
+    assert disabled.debug.loopback.enable is False
+    assert disabled.debug.loopback.site is None
     assert disabled.debug.graph_observer.enable is False
     assert disabled.debug.transport_observer.enable is False
 
@@ -73,30 +76,21 @@ def test_transport_observer_requires_enable_and_outdir_together(tmp_path: Path) 
         )
 
 
-def test_env_source_parses_transport_loopback_flag() -> None:
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"XPOOL_DEBUG_LOOPBACK_ENABLE": "1"},
+        {"XPOOL_DEBUG_LOOPBACK_SITE": "instance"},
+        {"XPOOL_DEBUG_LOOPBACK_ENABLE": "0", "XPOOL_DEBUG_LOOPBACK_SITE": "instance"},
+    ],
+)
+def test_debug_loopback_requires_enable_and_site_together(env: dict[str, str]) -> None:
     payload = {
         "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
-    enabled = XpoolConfig.from_mapping(payload, env={"XPOOL_DEBUG_TRANSPORT_LOOPBACK_ENABLE": "1"})
-    disabled = XpoolConfig.from_mapping(payload, env={})
-
-    assert enabled.debug.transport_loopback.enable is True
-    assert disabled.debug.transport_loopback.enable is False
-
-
-def test_debug_loopback_flags_are_mutually_exclusive() -> None:
-    with pytest.raises(ValidationError, match="mutually exclusive"):
-        XpoolConfig.from_mapping(
-            {
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
-                "models": [{"id": "m", "path": "/models/m"}],
-            },
-            env={
-                "XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "1",
-                "XPOOL_DEBUG_TRANSPORT_LOOPBACK_ENABLE": "1",
-            },
-        )
+    with pytest.raises(ValidationError, match="debug.loopback"):
+        XpoolConfig.from_mapping(payload, env=env)
 
 
 def test_env_source_parses_graph_observer_settings(tmp_path: Path) -> None:
@@ -146,18 +140,18 @@ def test_env_source_rejects_invalid_debug_loopback_flag() -> None:
                 "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
-            env={"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "true"},
+            env={"XPOOL_DEBUG_LOOPBACK_ENABLE": "true"},
         )
 
 
-def test_env_source_rejects_invalid_transport_loopback_flag() -> None:
-    with pytest.raises(ConfigError, match="boolean flag"):
+def test_env_source_rejects_invalid_loopback_site() -> None:
+    with pytest.raises(ValidationError, match="debug.loopback.site"):
         XpoolConfig.from_mapping(
             {
                 "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
-            env={"XPOOL_DEBUG_TRANSPORT_LOOPBACK_ENABLE": "true"},
+            env={"XPOOL_DEBUG_LOOPBACK_ENABLE": "1", "XPOOL_DEBUG_LOOPBACK_SITE": "transport"},
         )
 
 
@@ -173,21 +167,10 @@ def test_env_source_rejects_invalid_graph_observer_flag() -> None:
 
 
 def test_debug_loopback_cannot_be_set_from_toml() -> None:
-    with pytest.raises(ConfigError, match="debug_shim_loopback_enable"):
+    with pytest.raises(ConfigError, match="debug_loopback_enable"):
         XpoolConfig.from_mapping(
             {
-                "debug": {"shim_loopback": {"enable": True}},
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
-                "models": [{"id": "m", "path": "/models/m"}],
-            },
-        )
-
-
-def test_debug_transport_loopback_cannot_be_set_from_toml() -> None:
-    with pytest.raises(ConfigError, match="debug_transport_loopback_enable"):
-        XpoolConfig.from_mapping(
-            {
-                "debug": {"transport_loopback": {"enable": True}},
+                "debug": {"loopback": {"enable": True, "site": "instance"}},
                 "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
@@ -237,15 +220,14 @@ def test_unknown_xpool_env_warns(caplog: pytest.LogCaptureFixture) -> None:
                 "models": [{"id": "m", "path": "/models/m"}],
             },
             env={
-                "XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "0",
-                "XPOOL_DEBUG_TRANSPORT_LOOPBACK_ENABLE": "0",
+                "XPOOL_DEBUG_LOOPBACK_ENABLE": "0",
                 "XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE": "0",
                 "XPOOL_UNKNOWN": "1",
             },
         )
 
-    assert config.debug.shim_loopback.enable is False
-    assert config.debug.transport_loopback.enable is False
+    assert config.debug.loopback.enable is False
+    assert config.debug.loopback.site is None
     assert config.debug.graph_observer.enable is False
     assert "XPOOL_UNKNOWN" in caplog.text
 

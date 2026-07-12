@@ -33,8 +33,8 @@ execute_loopback_request(const TransportArena &arena,
 __device__ std::uint32_t
 execute_transport_request(const TransportArena &arena,
                           const xpool::abi::FfnRequestDescriptor &request) {
-  if (xpool::debug::g_debug_options.enabled(
-          xpool::abi::DebugOption::kTransportLoopback)) {
+  if (xpool::debug::g_debug_options.loopback_site() ==
+      xpool::abi::DebugLoopbackSite::kAtnagent) {
     switch (request.tensor_metadata.dtype.value) {
     case xpool::abi::TensorDType::kFp32:
       execute_loopback_request<float>(arena, request);

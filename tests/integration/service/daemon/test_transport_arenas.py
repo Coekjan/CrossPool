@@ -4,11 +4,11 @@ from http import HTTPStatus
 from typing import cast
 
 from tests.harness.service.daemon import (
+    atnagent_registration,
+    atnagent_transport_arena_bindings,
+    atnagent_transport_arenas,
+    atnagent_transport_arenas_path,
     create_app,
-    devagent_registration,
-    devagent_transport_arena_bindings,
-    devagent_transport_arenas,
-    devagent_transport_arenas_path,
     instance_registration,
     instance_transport_arena,
     instance_transport_arena_acquire_path,
@@ -21,17 +21,9 @@ from xpool.config import XpoolConfig
 def test_daemon_brokers_rank_local_ffn_shim_transport_arena() -> None:
     config = XpoolConfig.from_file("configs/xpool.example.toml")
     app = create_app(config)
-    devagent = devagent_registration(cuda_device=0)
+    atnagent = atnagent_registration(cuda_device=0)
 
-    assert (
-        request(
-            app,
-            "POST",
-            "/devagent/register",
-            json=devagent,
-        ).status_code
-        == HTTPStatus.NO_CONTENT
-    )
+    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
     not_ready = request(
         app,
         "POST",
@@ -48,8 +40,8 @@ def test_daemon_brokers_rank_local_ffn_shim_transport_arena() -> None:
     publish_response = request(
         app,
         "POST",
-        devagent_transport_arenas_path(0),
-        json=devagent_transport_arenas(("deepseek-ai/DeepSeek-V2-Lite-Chat", 0), publisher=devagent),
+        atnagent_transport_arenas_path(0),
+        json=atnagent_transport_arenas(("deepseek-ai/DeepSeek-V2-Lite-Chat", 0), publisher=atnagent),
     )
     assert publish_response.status_code == HTTPStatus.NO_CONTENT
     assert publish_response.content == b""
@@ -68,17 +60,17 @@ def test_daemon_brokers_rank_local_ffn_shim_transport_arena() -> None:
 def test_daemon_rejects_stale_arena_geometry_after_instance_reregister() -> None:
     config = XpoolConfig.from_file("configs/xpool.example.toml")
     app = create_app(config)
-    devagent = devagent_registration(cuda_device=0)
+    atnagent = atnagent_registration(cuda_device=0)
     initial_registration = instance_registration(element_size=2)
 
-    assert request(app, "POST", "/devagent/register", json=devagent).status_code == HTTPStatus.NO_CONTENT
+    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
     assert request(app, "POST", "/instance/register", json=initial_registration).status_code == HTTPStatus.NO_CONTENT
-    initial_arena = devagent_transport_arenas(("deepseek-ai/DeepSeek-V2-Lite-Chat", 0), publisher=devagent)
+    initial_arena = atnagent_transport_arenas(("deepseek-ai/DeepSeek-V2-Lite-Chat", 0), publisher=atnagent)
     assert (
         request(
             app,
             "POST",
-            devagent_transport_arenas_path(0),
+            atnagent_transport_arenas_path(0),
             json=initial_arena,
         ).status_code
         == HTTPStatus.NO_CONTENT
@@ -106,24 +98,6 @@ def test_daemon_rejects_stale_arena_geometry_after_instance_reregister() -> None
         "kind": "not_ready",
         "message": "published transport arena geometry is stale",
     }
-
-
-def test_daemon_does_not_expose_raw_devagent_transport_arenas() -> None:
-    config = XpoolConfig.from_file("configs/xpool.example.toml")
-    app = create_app(config)
-
-    response = request(app, "GET", "/devagent/0/transport-arenas")
-
-    assert response.status_code == HTTPStatus.METHOD_NOT_ALLOWED
-
-
-def test_daemon_rejects_wrapped_devagent_transport_arenas() -> None:
-    config = XpoolConfig.from_file("configs/xpool.example.toml")
-    app = create_app(config)
-
-    response = request(app, "POST", devagent_transport_arenas_path(0), json={"arenas": []})
-
-    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
 
 def test_daemon_rejects_transport_tp_geometry_that_disagrees_with_config() -> None:
@@ -185,7 +159,7 @@ def test_daemon_rejects_cross_rank_transport_geometry_mismatch() -> None:
     assert response.json()["detail"]["message"] == "instance transport attributes disagree across ranks"
 
 
-def test_daemon_returns_rank_local_attention_devagent_transport_arena_for_instance() -> None:
+def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instance() -> None:
     config = XpoolConfig.from_mapping(
         {
             "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
@@ -193,13 +167,13 @@ def test_daemon_returns_rank_local_attention_devagent_transport_arena_for_instan
         }
     )
     app = create_app(config)
-    devagents: dict[int, dict[str, int | float]] = {}
+    atnagents: dict[int, dict[str, int | float]] = {}
     for payload in (
-        devagent_registration(cuda_device=0),
-        devagent_registration(cuda_device=1),
+        atnagent_registration(cuda_device=0),
+        atnagent_registration(cuda_device=1),
     ):
-        devagents[int(payload["cuda_device"])] = payload
-        assert request(app, "POST", "/devagent/register", json=payload).status_code == HTTPStatus.NO_CONTENT
+        atnagents[int(payload["cuda_device"])] = payload
+        assert request(app, "POST", "/atnagent/register", json=payload).status_code == HTTPStatus.NO_CONTENT
     for rank in (0, 1):
         assert (
             request(
@@ -219,8 +193,8 @@ def test_daemon_returns_rank_local_attention_devagent_transport_arena_for_instan
             request(
                 app,
                 "POST",
-                devagent_transport_arenas_path(rank),
-                json=devagent_transport_arenas(("m", rank)),
+                atnagent_transport_arenas_path(rank),
+                json=atnagent_transport_arenas(("m", rank)),
             ).status_code
             == HTTPStatus.NO_CONTENT
         )
@@ -234,32 +208,7 @@ def test_daemon_returns_rank_local_attention_devagent_transport_arena_for_instan
     assert rank1.json() == instance_transport_arena(rank=1)
 
 
-def test_daemon_rejects_ffn_shim_transport_arenas_from_ffn_agent() -> None:
-    config = XpoolConfig.from_file("configs/xpool.example.toml")
-    app = create_app(config)
-    devagent = devagent_registration(cuda_device=1)
-    assert (
-        request(
-            app,
-            "POST",
-            "/devagent/register",
-            json=devagent,
-        ).status_code
-        == HTTPStatus.NO_CONTENT
-    )
-
-    response = request(
-        app,
-        "POST",
-        devagent_transport_arenas_path(1),
-        json=devagent_transport_arenas(("deepseek-ai/DeepSeek-V2-Lite-Chat", 0), publisher=devagent),
-    )
-
-    assert response.status_code == HTTPStatus.CONFLICT
-    assert "attention devagents" in response.text
-
-
-def test_daemon_rejects_devagent_transport_arena_with_wrong_rank_device() -> None:
+def test_daemon_rejects_atnagent_transport_arena_with_wrong_rank_device() -> None:
     config = XpoolConfig.from_mapping(
         {
             "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
@@ -268,7 +217,7 @@ def test_daemon_rejects_devagent_transport_arena_with_wrong_rank_device() -> Non
     )
     app = create_app(config)
     assert (
-        request(app, "POST", "/devagent/register", json=devagent_registration(cuda_device=0)).status_code
+        request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=0)).status_code
         == HTTPStatus.NO_CONTENT
     )
     assert (
@@ -284,27 +233,27 @@ def test_daemon_rejects_devagent_transport_arena_with_wrong_rank_device() -> Non
     response = request(
         app,
         "POST",
-        devagent_transport_arenas_path(0),
-        json=devagent_transport_arenas(("m", 1)),
+        atnagent_transport_arenas_path(0),
+        json=atnagent_transport_arenas(("m", 1)),
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"] == {
         "kind": "conflict",
-        "message": "devagent transport arena handle rank 1 belongs to CUDA device 1, not 0",
+        "message": "atnagent transport arena handle rank 1 belongs to CUDA device 1, not 0",
     }
 
 
-def test_daemon_rejects_duplicate_devagent_transport_arena() -> None:
+def test_daemon_rejects_duplicate_atnagent_transport_arena() -> None:
     config = XpoolConfig.from_file("configs/xpool.example.toml")
     app = create_app(config)
     assert (
-        request(app, "POST", "/devagent/register", json=devagent_registration(cuda_device=0)).status_code
+        request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=0)).status_code
         == HTTPStatus.NO_CONTENT
     )
     assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
 
-    arenas = devagent_transport_arena_bindings(
+    arenas = atnagent_transport_arena_bindings(
         ("deepseek-ai/DeepSeek-V2-Lite-Chat", 0),
         ("deepseek-ai/DeepSeek-V2-Lite-Chat", 0),
     )
@@ -312,14 +261,14 @@ def test_daemon_rejects_duplicate_devagent_transport_arena() -> None:
     response = request(
         app,
         "POST",
-        devagent_transport_arenas_path(0),
+        atnagent_transport_arenas_path(0),
         json={"publisher": process_ref(), "bindings": arenas},
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"] == {
         "kind": "conflict",
-        "message": "devagent transport arenas contain duplicate instance-rank handle",
+        "message": "atnagent transport arenas contain duplicate instance-rank handle",
     }
 
 
@@ -332,7 +281,7 @@ def test_daemon_rejects_duplicate_transport_arena_handle() -> None:
     )
     app = create_app(config)
     assert (
-        request(app, "POST", "/devagent/register", json=devagent_registration(cuda_device=0)).status_code
+        request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=0)).status_code
         == HTTPStatus.NO_CONTENT
     )
     for instance_id in ("a", "b"):
@@ -346,39 +295,39 @@ def test_daemon_rejects_duplicate_transport_arena_handle() -> None:
             == HTTPStatus.NO_CONTENT
         )
 
-    first = devagent_transport_arenas(("a", 0))
-    second = devagent_transport_arenas(("b", 0))
-    assert request(app, "POST", devagent_transport_arenas_path(0), json=first).status_code == HTTPStatus.NO_CONTENT
+    first = atnagent_transport_arenas(("a", 0))
+    second = atnagent_transport_arenas(("b", 0))
+    assert request(app, "POST", atnagent_transport_arenas_path(0), json=first).status_code == HTTPStatus.NO_CONTENT
     response = request(
         app,
         "POST",
-        devagent_transport_arenas_path(0),
+        atnagent_transport_arenas_path(0),
         json=second,
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"] == {
         "kind": "conflict",
-        "message": "devagent transport arenas contain duplicate arena handle",
+        "message": "atnagent transport arenas contain duplicate arena handle",
     }
 
 
-def test_daemon_rejects_empty_devagent_transport_arena_upsert() -> None:
+def test_daemon_rejects_empty_atnagent_transport_arena_upsert() -> None:
     config = XpoolConfig.from_file("configs/xpool.example.toml")
     app = create_app(config)
-    devagent = devagent_registration(cuda_device=0)
-    assert request(app, "POST", "/devagent/register", json=devagent).status_code == HTTPStatus.NO_CONTENT
+    atnagent = atnagent_registration(cuda_device=0)
+    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
     assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
 
     response = request(
         app,
         "POST",
-        devagent_transport_arenas_path(0),
-        json={"publisher": process_ref(devagent), "bindings": []},
+        atnagent_transport_arenas_path(0),
+        json={"publisher": process_ref(atnagent), "bindings": []},
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"] == {
         "kind": "conflict",
-        "message": "devagent transport arena upsert must not be empty",
+        "message": "atnagent transport arena upsert must not be empty",
     }

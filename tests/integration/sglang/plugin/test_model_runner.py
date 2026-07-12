@@ -273,19 +273,20 @@ def test_model_runner_hook_clears_binding_when_instance_start_fails_before_attac
     assert runner.xpool_model_binding is None
 
 
-def test_model_runner_hook_skips_transport_runtime_for_direct_shim_loopback(
+def test_model_runner_hook_skips_transport_runtime_for_instance_loopback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
-    monkeypatch.setenv("XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE", "1")
+    monkeypatch.setenv("XPOOL_DEBUG_LOOPBACK_ENABLE", "1")
+    monkeypatch.setenv("XPOOL_DEBUG_LOOPBACK_SITE", "instance")
     configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
     monkeypatch.setattr(
         sglang_plugin,
         "init_instance",
-        lambda *args, **kwargs: pytest.fail("direct shim loopback must not create instance runtime"),
+        lambda *args, **kwargs: pytest.fail("instance loopback must not create instance runtime"),
     )
 
     def original(model_runner: ModelRunner) -> str:
@@ -298,6 +299,32 @@ def test_model_runner_hook_skips_transport_runtime_for_direct_shim_loopback(
     assert result == "loaded"
     assert pool_result is None
     assert events == ["validate_before_load", "bind_runtime", "original", "validate_after_load"]
+
+
+def test_model_runner_hook_rejects_unimplemented_ffnagent_loopback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reserved FfnAgent site fails before attaching local transport."""
+
+    events: list[str] = []
+    adapter = FakeAdapter(matches=True, events=events)
+    runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
+    monkeypatch.setenv("XPOOL_DEBUG_LOOPBACK_ENABLE", "1")
+    monkeypatch.setenv("XPOOL_DEBUG_LOOPBACK_SITE", "ffnagent")
+    configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
+    monkeypatch.setattr(
+        sglang_plugin,
+        "init_instance",
+        lambda *args, **kwargs: pytest.fail("unimplemented FfnAgent loopback must not attach transport"),
+    )
+
+    sglang_plugin.around_model_runner_load_model((adapter,), lambda model_runner: None, runner.as_model_runner())
+
+    with pytest.raises(RuntimeError, match="FfnAgent loopback runtime is not implemented"):
+        sglang_plugin.after_model_runner_init_memory_pool(None, runner.as_model_runner(), 0)
+
+    assert runner.xpool_model_binding is None
 
 
 def test_model_runner_hook_rejects_configured_model_without_matching_adapter(

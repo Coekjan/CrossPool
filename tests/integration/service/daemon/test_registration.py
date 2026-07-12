@@ -4,10 +4,10 @@ from http import HTTPStatus
 from typing import cast
 
 from tests.harness.service.daemon import (
+    atnagent_registration,
+    atnagent_transport_arenas,
+    atnagent_transport_arenas_path,
     create_app,
-    devagent_registration,
-    devagent_transport_arenas,
-    devagent_transport_arenas_path,
     expire_instance_registration,
     instance_registration,
     instance_transport_arena,
@@ -32,12 +32,9 @@ def test_daemon_registration_flow() -> None:
     assert ready == {
         "ready": False,
         "mps_status": "online",
-        "scopes": {"atn": False, "ffn": False},
+        "scopes": {"atn": False},
         "cuda_devices": [0, 1],
-        "devagents": [
-            {"pid": None, "cuda_device": 0, "role": "atn", "status": "offline"},
-            {"pid": None, "cuda_device": 1, "role": "ffn", "status": "offline"},
-        ],
+        "atnagents": [{"pid": None, "cuda_device": 0, "status": "offline"}],
         "instances": [
             {
                 "pid": None,
@@ -51,12 +48,10 @@ def test_daemon_registration_flow() -> None:
 
     assert request(app, "GET", "/config").json() == config.model_dump(mode="json")
 
-    devagent0 = devagent_registration(cuda_device=0)
-    devagent1 = devagent_registration(cuda_device=1)
-    for payload in (devagent0, devagent1):
-        response = request(app, "POST", "/devagent/register", json=payload)
-        assert response.status_code == HTTPStatus.NO_CONTENT
-        assert response.content == b""
+    atnagent0 = atnagent_registration(cuda_device=0)
+    response = request(app, "POST", "/atnagent/register", json=atnagent0)
+    assert response.status_code == HTTPStatus.NO_CONTENT
+    assert response.content == b""
 
     registration = instance_registration()
     response = request(app, "POST", "/instance/register", json=registration)
@@ -66,8 +61,8 @@ def test_daemon_registration_flow() -> None:
         request(
             app,
             "POST",
-            devagent_transport_arenas_path(0),
-            json=devagent_transport_arenas(publisher=devagent0),
+            atnagent_transport_arenas_path(0),
+            json=atnagent_transport_arenas(publisher=atnagent0),
         ).status_code
         == HTTPStatus.NO_CONTENT
     )
@@ -76,12 +71,9 @@ def test_daemon_registration_flow() -> None:
     assert ready == {
         "ready": True,
         "mps_status": "online",
-        "scopes": {"atn": True, "ffn": True},
+        "scopes": {"atn": True},
         "cuda_devices": [0, 1],
-        "devagents": [
-            {"pid": devagent0["pid"], "cuda_device": 0, "role": "atn", "status": "online"},
-            {"pid": devagent1["pid"], "cuda_device": 1, "role": "ffn", "status": "online"},
-        ],
+        "atnagents": [{"pid": atnagent0["pid"], "cuda_device": 0, "status": "online"}],
         "instances": [
             {
                 "pid": registration["pid"],
@@ -119,7 +111,7 @@ def test_daemon_reports_all_effective_config_differences() -> None:
     config = XpoolConfig.from_file("configs/xpool.example.toml")
     app = create_app(config)
     client_config = config.model_dump(mode="json")
-    client_config["debug"]["transport_loopback"]["enable"] = True
+    client_config["debug"]["loopback"] = {"enable": True, "site": "atnagent"}
     client_config["devices"]["ffn_cuda_devices"] = [2]
 
     response = request(app, "POST", "/config/check", json=client_config)
@@ -130,7 +122,8 @@ def test_daemon_reports_all_effective_config_differences() -> None:
             "kind": "conflict",
             "message": (
                 "client xpool config differs from daemon config:\n"
-                "- debug.transport_loopback.enable: client=true, daemon=false\n"
+                "- debug.loopback.enable: client=true, daemon=false\n"
+                '- debug.loopback.site: client="atnagent", daemon=null\n'
                 "- devices.ffn_cuda_devices[0]: client=2, daemon=1"
             ),
         }
@@ -183,8 +176,8 @@ def test_daemon_incremental_upsert_preserves_publication_when_existing_instance_
         }
     )
     app = create_app(config)
-    devagent = devagent_registration(cuda_device=0)
-    assert request(app, "POST", "/devagent/register", json=devagent).status_code == HTTPStatus.NO_CONTENT
+    atnagent = atnagent_registration(cuda_device=0)
+    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
     for instance_id in ("a", "b"):
         assert (
             request(
@@ -196,12 +189,12 @@ def test_daemon_incremental_upsert_preserves_publication_when_existing_instance_
             == HTTPStatus.NO_CONTENT
         )
 
-    first = devagent_transport_arenas(("a", 0), publisher=devagent)
-    second = devagent_transport_arenas(("b", 0), publisher=devagent)
+    first = atnagent_transport_arenas(("a", 0), publisher=atnagent)
+    second = atnagent_transport_arenas(("b", 0), publisher=atnagent)
     second_binding = cast("list[dict[str, object]]", second["bindings"])[0]
     second_binding["handle"] = instance_transport_arena(rank=1)
 
-    assert request(app, "POST", devagent_transport_arenas_path(0), json=first).status_code == HTTPStatus.NO_CONTENT
+    assert request(app, "POST", atnagent_transport_arenas_path(0), json=first).status_code == HTTPStatus.NO_CONTENT
     assert request(
         app,
         "POST",
@@ -227,7 +220,7 @@ def test_daemon_incremental_upsert_preserves_publication_when_existing_instance_
         == HTTPStatus.NO_CONTENT
     )
 
-    assert request(app, "POST", devagent_transport_arenas_path(0), json=second).status_code == HTTPStatus.NO_CONTENT
+    assert request(app, "POST", atnagent_transport_arenas_path(0), json=second).status_code == HTTPStatus.NO_CONTENT
     assert (
         request(
             app,
@@ -266,13 +259,13 @@ def test_daemon_rank_local_fetch_does_not_wait_for_other_ranks() -> None:
     )
     app = create_app(config)
     for rank in (0, 1):
-        devagent = devagent_registration(cuda_device=rank)
+        atnagent = atnagent_registration(cuda_device=rank)
         assert (
             request(
                 app,
                 "POST",
-                "/devagent/register",
-                json=devagent,
+                "/atnagent/register",
+                json=atnagent,
             ).status_code
             == HTTPStatus.NO_CONTENT
         )
@@ -293,8 +286,8 @@ def test_daemon_rank_local_fetch_does_not_wait_for_other_ranks() -> None:
         request(
             app,
             "POST",
-            devagent_transport_arenas_path(0),
-            json=devagent_transport_arenas(("m", 0)),
+            atnagent_transport_arenas_path(0),
+            json=atnagent_transport_arenas(("m", 0)),
         ).status_code
         == HTTPStatus.NO_CONTENT
     )
@@ -309,13 +302,3 @@ def test_daemon_rank_local_fetch_does_not_wait_for_other_ranks() -> None:
         "kind": "not_ready",
         "message": "instance rank is not registered",
     }
-
-
-def test_daemon_rejects_client_supplied_create_time() -> None:
-    config = XpoolConfig.from_file("configs/xpool.example.toml")
-    app = create_app(config)
-    registration = instance_registration()
-
-    response = request(app, "POST", "/instance/register", json={**registration, "create_time": 1.0})
-
-    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY

@@ -16,13 +16,11 @@ MODELS_PACKAGE = "xpool.integrations.sglang.models"
 logger = logging.getLogger(__name__)
 
 
-def discover_sglang_model_adapters(package_name: str, *, strict: bool = True) -> tuple[SglangModelAdapter, ...]:
+def discover_sglang_model_adapters(package_name: str) -> tuple[SglangModelAdapter, ...]:
     """Discover and instantiate SGLang model adapters from a package.
 
     Args:
         package_name: Importable package containing model adapter modules.
-        strict: Whether child module import failures should abort discovery.
-
     Returns:
         Stable, name-validated adapter instances.
 
@@ -33,7 +31,7 @@ def discover_sglang_model_adapters(package_name: str, *, strict: bool = True) ->
     """
 
     adapters: list[SglangModelAdapter] = []
-    for module in iter_model_modules(package_name, strict=strict):
+    for module in iter_model_modules(package_name):
         for adapter_class in adapter_classes_in_module(module):
             try:
                 adapters.append(adapter_class())
@@ -44,13 +42,11 @@ def discover_sglang_model_adapters(package_name: str, *, strict: bool = True) ->
     return sort_and_validate_adapters(adapters)
 
 
-def iter_model_modules(package_name: str, *, strict: bool = True) -> tuple[ModuleType, ...]:
+def iter_model_modules(package_name: str) -> tuple[ModuleType, ...]:
     """Import non-private model adapter modules from a package tree.
 
     Args:
         package_name: Importable package whose children should be scanned recursively.
-        strict: Whether child import failures should abort discovery.
-
     Returns:
         Imported module objects for non-private children and subpackages.
 
@@ -76,14 +72,7 @@ def iter_model_modules(package_name: str, *, strict: bool = True) -> tuple[Modul
         try:
             modules.append(importlib.import_module(module_info.name))
         except Exception as exc:
-            if strict:
-                raise RuntimeError(f"failed to import SGLang adapter module {module_info.name}: {exc}") from exc
-            logger.warning(
-                "Skipping SGLang adapter module %s after import failure: %s",
-                module_info.name,
-                exc,
-                exc_info=True,
-            )
+            raise RuntimeError(f"failed to import SGLang adapter module {module_info.name}: {exc}") from exc
     return tuple(modules)
 
 

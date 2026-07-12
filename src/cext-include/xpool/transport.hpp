@@ -44,15 +44,15 @@ inline constexpr std::uint64_t kTransportArenaLayoutMagic =
 
 /// CUDA thread count for the instance-side one-shot transport request kernel.
 inline constexpr int kRequestThreadsPerBlock = 256;
-/// CUDA thread count for the devagent-side resident transport kernel.
-inline constexpr int kDevagentThreadsPerBlock = 32;
+/// CUDA thread count for the atnagent-side resident transport kernel.
+inline constexpr int kAtnAgentThreadsPerBlock = 32;
 /// Device clock budget used by transport queue waits before trapping.
 inline constexpr unsigned long long kDeviceSpinTimeoutClocks =
     xpool::utils::queue::kDefaultRingQueueSpinTimeoutClocks;
 /// Number of recent requests retained by an observed transport arena.
 inline constexpr std::int64_t kTransportTraceCapacity = 8192;
 
-/// CUDA IPC handle that identifies one devagent-owned transport arena.
+/// CUDA IPC handle that identifies one atnagent-owned transport arena.
 struct TransportArenaHandle {
   /// Raw CUDA IPC memory handle returned by cudaIpcGetMemHandle.
   cudaIpcMemHandle_t value;
@@ -96,7 +96,7 @@ struct TransportArenaLayout {
   std::int64_t slot_stride_bytes;
   /// Queue whose cells carry slots available for instance producers.
   xpool::utils::queue::RingQueueLayout free_queue;
-  /// Queue whose cells carry slots published for devagent consumers.
+  /// Queue whose cells carry slots published for atnagent consumers.
   xpool::utils::queue::RingQueueLayout used_queue;
   /// Byte offset of the arena-wide shutdown flag.
   std::int64_t shutdown_offset;
@@ -168,14 +168,14 @@ struct TransportArena {
   /// Release operation required by destroy(); ignored when base is null.
   ReleaseKind release_kind = ReleaseKind::kOwnedAllocation;
 
-  /// Allocate and fully initialize a devagent-owned arena.
+  /// Allocate and fully initialize a atnagent-owned arena.
   /// \param cuda_device CUDA device index that owns the allocation.
   /// \param layout Host-computed arena layout written into the arena header.
   /// \return Process-local owner view for the allocated arena.
   static TransportArena create(std::int64_t cuda_device,
                                const TransportArenaLayout &layout);
   /// Open an instance-side CUDA IPC mapping for an existing arena handle.
-  /// \param handle CUDA IPC memory handle exported by the devagent process.
+  /// \param handle CUDA IPC memory handle exported by the atnagent process.
   /// \return Process-local IPC mapping view for the existing arena.
   static TransportArena from_handle(const TransportArenaHandle &handle) {
     std::uint8_t *arena = nullptr;
@@ -192,7 +192,7 @@ struct TransportArena {
   }
   /// Release the arena pointer according to release_kind.
   void destroy();
-  /// Export a CUDA IPC handle for a devagent-owned arena.
+  /// Export a CUDA IPC handle for a atnagent-owned arena.
   /// \return CUDA IPC memory handle for the owned arena allocation.
   TransportArenaHandle handle() const {
     TORCH_CHECK(base != nullptr,
@@ -222,7 +222,7 @@ struct TransportArena {
   /// Copy the sticky fatal executor error code to host memory.
   /// \return FfnResultErrorCode value, or kOk when no error was recorded.
   std::uint32_t error_code_snapshot() const;
-  /// Ask a resident devagent kernel to drain and stop.
+  /// Ask a resident atnagent kernel to drain and stop.
   /// \param stream CUDA stream used to publish the shutdown flag.
   void request_shutdown(cudaStream_t stream) const {
     TORCH_CHECK(base != nullptr,
@@ -336,7 +336,7 @@ static_assert(std::is_trivially_copyable_v<TransportArenaHandle>);
 static_assert(std::is_standard_layout_v<TransportArenaLayout>);
 static_assert(std::is_trivially_copyable_v<TransportArenaLayout>);
 
-/// Host-side request object for launching one instance-to-devagent FFN request.
+/// Host-side request object for launching one instance-to-atnagent FFN request.
 ///
 /// This object is not the device-side FfnRequestDescriptor. It only carries
 /// host-side launch arguments used to stage and publish one descriptor.
@@ -357,10 +357,10 @@ struct TransportRequest {
   const xpool::abi::FfnTensorMetadata &tensor_metadata;
 };
 
-/// Launch the resident devagent-side transport kernel for one arena.
-/// \param arena Process-local arena view owned by the devagent process.
+/// Launch the resident atnagent-side transport kernel for one arena.
+/// \param arena Process-local arena view owned by the atnagent process.
 /// \param stream CUDA stream that owns the resident kernel launch.
-void launch_devagent_transport_kernel(TransportArena arena,
+void launch_atnagent_transport_kernel(TransportArena arena,
                                       cudaStream_t stream);
 /// Launch one instance-side transport kernel for a single FFN request.
 /// \param request Host launch arguments and descriptor metadata.

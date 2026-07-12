@@ -8,8 +8,8 @@ from tests.harness.cli.common import (
     ready_snapshot,
 )
 from xpool.cli import main
+from xpool.cli.subcommands import atnagent as atnagent_cli
 from xpool.cli.subcommands import daemon as daemon_cli
-from xpool.cli.subcommands import devagent as devagent_cli
 from xpool.service.client import XpoolClientError
 
 
@@ -25,10 +25,7 @@ def test_daemon_check_reports_ready_snapshot(monkeypatch, capsys) -> None:
     assert payload["daemon"] == {"host": "127.0.0.1", "port": 9810}
     assert payload["readiness"]["cuda_devices"] == [0, 1]
     assert payload["readiness"]["mps_status"] == "online"
-    assert payload["readiness"]["devagents"] == [
-        {"cuda_device": 0, "pid": 100, "role": "atn", "status": "online"},
-        {"cuda_device": 1, "pid": 101, "role": "ffn", "status": "online"},
-    ]
+    assert payload["readiness"]["atnagents"] == [{"cuda_device": 0, "pid": 100, "status": "online"}]
     assert payload["readiness"]["instances"] == [
         {
             "cuda_device": 0,
@@ -57,8 +54,8 @@ def test_daemon_check_forwards_repeated_readiness_scopes(monkeypatch, capsys) ->
 
     monkeypatch.setattr(daemon_cli, "XpoolClient", RecordingXpoolClient)
 
-    assert main(["daemon", "check", "--scope", "atn", "--scope", "ffn"]) == 0
-    assert requested_scopes == [(ReadinessScope.ATN, ReadinessScope.FFN)]
+    assert main(["daemon", "check", "--scope", "atn"]) == 0
+    assert requested_scopes == [(ReadinessScope.ATN,)]
     assert json.loads(capsys.readouterr().out)["ready"] is True
 
 
@@ -109,16 +106,19 @@ def test_daemon_serve_runs_uvicorn(monkeypatch) -> None:
     assert calls == [(app, "127.0.0.1", 9810)]
 
 
-def test_devagent_run_reports_daemon_transport_error(monkeypatch, capsys) -> None:
+def test_atnagent_run_reports_daemon_transport_error(monkeypatch, capsys) -> None:
     monkeypatch.setenv("XPOOL_CONFIG", "configs/xpool.example.toml")
 
-    class FakeDevagent:
+    class FakeAtnAgent:
+        def __init__(self, *, cuda_device: int) -> None:
+            return None
+
         def run(self) -> None:
             raise XpoolClientError("transport", "daemon unavailable")
 
-    monkeypatch.setattr(devagent_cli, "create_devagent", lambda cuda_device: FakeDevagent())
+    monkeypatch.setattr(atnagent_cli, "AtnAgent", FakeAtnAgent)
 
-    assert main(["devagent", "--cuda-device", "0"]) == 2
+    assert main(["atnagent", "--cuda-device", "0"]) == 2
 
     captured = capsys.readouterr()
     assert captured.out == ""

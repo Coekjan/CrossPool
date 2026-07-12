@@ -70,7 +70,7 @@ def test_transport_monitor_fail_closes_on_executor_error(monkeypatch: pytest.Mon
         monitor.step()
 
 
-def test_attach_transport_arena_does_not_require_transport_loopback_flag(
+def test_attach_transport_arena_does_not_require_atnagent_loopback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[object, ...]] = []

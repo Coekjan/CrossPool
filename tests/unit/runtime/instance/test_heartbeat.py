@@ -108,7 +108,7 @@ def test_instance_start_deregisters_when_heartbeat_start_fails(monkeypatch: pyte
     assert events == ["register", "heartbeat", "deregister"]
 
 
-def test_instance_heartbeat_ignores_devagent_warning_for_another_cuda_device(
+def test_instance_heartbeat_ignores_atnagent_warning_for_another_cuda_device(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[object] = []
@@ -131,9 +131,9 @@ def test_instance_heartbeat_ignores_devagent_warning_for_another_cuda_device(
             return HeartbeatResponse(
                 warnings=[
                     ControlPlaneWarning(
-                        kind="stale_devagent",
+                        kind="stale_atnagent",
                         cuda_device=0,
-                        message="devagent 0 is stale",
+                        message="atnagent 0 is stale",
                     )
                 ]
             )
@@ -151,7 +151,7 @@ def test_instance_heartbeat_ignores_devagent_warning_for_another_cuda_device(
     ]
 
 
-def test_instance_heartbeat_logs_local_terminating_devagent_without_self_exit(
+def test_instance_heartbeat_logs_local_terminating_atnagent_without_self_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[object] = []
@@ -169,15 +169,15 @@ def test_instance_heartbeat_logs_local_terminating_devagent_without_self_exit(
             return HeartbeatResponse(
                 warnings=[
                     ControlPlaneWarning(
-                        kind="terminating_devagent",
+                        kind="terminating_atnagent",
                         cuda_device=0,
-                        message="devagent is terminating",
+                        message="atnagent is terminating",
                     )
                 ]
             )
 
         def acquire_instance_transport_arena(self, *args: object, **kwargs: object) -> TransportArenaHandle:
-            pytest.fail("terminating devagent must not fetch transport arenas")
+            pytest.fail("terminating atnagent must not fetch transport arenas")
 
     monkeypatch.setattr(instance_module, "XpoolClient", FakeXpoolClient)
     monkeypatch.setattr(procs_module.os, "_exit", lambda code: pytest.fail(f"unexpected os._exit({code})"))
@@ -189,7 +189,7 @@ def test_instance_heartbeat_logs_local_terminating_devagent_without_self_exit(
     ]
 
 
-def test_instance_heartbeat_tolerates_local_stale_devagent_until_recovery_deadline(
+def test_instance_heartbeat_tolerates_local_stale_atnagent_until_recovery_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[object] = []
@@ -207,15 +207,15 @@ def test_instance_heartbeat_tolerates_local_stale_devagent_until_recovery_deadli
             return HeartbeatResponse(
                 warnings=[
                     ControlPlaneWarning(
-                        kind="stale_devagent",
+                        kind="stale_atnagent",
                         cuda_device=0,
-                        message="devagent is stale",
+                        message="atnagent is stale",
                     )
                 ]
             )
 
         def acquire_instance_transport_arena(self, *args: object, **kwargs: object) -> TransportArenaHandle:
-            pytest.fail("stale devagent warning must not fetch transport arenas")
+            pytest.fail("stale atnagent warning must not fetch transport arenas")
 
     monkeypatch.setattr(instance_module, "XpoolClient", FakeXpoolClient)
     monkeypatch.setattr(procs_module.os, "_exit", lambda code: pytest.fail(f"unexpected os._exit({code})"))
@@ -227,7 +227,7 @@ def test_instance_heartbeat_tolerates_local_stale_devagent_until_recovery_deadli
     ]
 
 
-def test_instance_heartbeat_fail_closes_after_local_stale_devagent_deadline(
+def test_instance_heartbeat_fail_closes_after_local_stale_atnagent_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[object] = []
@@ -245,14 +245,14 @@ def test_instance_heartbeat_fail_closes_after_local_stale_devagent_deadline(
             return HeartbeatResponse(
                 warnings=[
                     ControlPlaneWarning(
-                        kind="stale_devagent",
+                        kind="stale_atnagent",
                         cuda_device=0,
-                        message="devagent is stale",
+                        message="atnagent is stale",
                     )
                 ]
             )
 
-    monotonic_values = iter([0.0, instance_module.STALE_DEVAGENT_RECOVERY_GRACE_S + 1.0])
+    monotonic_values = iter([0.0, instance_module.STALE_ATNAGENT_RECOVERY_GRACE_S + 1.0])
 
     monkeypatch.setattr(instance_module, "XpoolClient", FakeXpoolClient)
     monkeypatch.setattr(instance_module.time, "monotonic", lambda: next(monotonic_values))
@@ -407,7 +407,7 @@ def test_instance_heartbeat_fail_closes_after_transport_error_deadline(
     ]
 
 
-def test_instance_heartbeat_resets_transport_recovery_deadline_during_stale_devagent(
+def test_instance_heartbeat_resets_transport_recovery_deadline_during_stale_atnagent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[object] = []
@@ -430,9 +430,9 @@ def test_instance_heartbeat_resets_transport_recovery_deadline_during_stale_deva
             return HeartbeatResponse(
                 warnings=[
                     ControlPlaneWarning(
-                        kind="stale_devagent",
+                        kind="stale_atnagent",
                         cuda_device=0,
-                        message="devagent is stale",
+                        message="atnagent is stale",
                     )
                 ]
             )
@@ -442,8 +442,8 @@ def test_instance_heartbeat_resets_transport_recovery_deadline_during_stale_deva
             0.0,
             1.0,
             10.0,
-            instance_module.STALE_DEVAGENT_RECOVERY_GRACE_S + 5.0,
-            instance_module.STALE_DEVAGENT_RECOVERY_GRACE_S + 5.0,
+            instance_module.STALE_ATNAGENT_RECOVERY_GRACE_S + 5.0,
+            instance_module.STALE_ATNAGENT_RECOVERY_GRACE_S + 5.0,
         ]
     )
 

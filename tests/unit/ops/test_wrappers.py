@@ -7,7 +7,8 @@ import torch
 
 import xpool.ops
 from xpool.abi import (
-    DebugOption,
+    DebugLoopbackSite,
+    DebugOptions,
     DpPaddingMode,
     FfnCollectivePolicy,
     FfnRequestMetadata,
@@ -79,23 +80,32 @@ def test_init_delegates_runtime_role_to_torch_namespace(monkeypatch: pytest.Monk
         "get_global_config",
         lambda: SimpleNamespace(
             debug=SimpleNamespace(
-                shim_loopback=SimpleNamespace(enable=False),
-                transport_loopback=SimpleNamespace(enable=True),
+                loopback=SimpleNamespace(enable=True, site=xpool.ops.LoopbackSite.ATNAGENT),
                 transport_observer=SimpleNamespace(enable=False),
             )
         ),
     )
 
     xpool.ops.init(3, RuntimeRole.INSTANCE)
-    xpool.ops.init(4, RuntimeRole.DEVAGENT)
+    xpool.ops.init(4, RuntimeRole.ATNAGENT)
 
     assert calls == [
-        ("init", 3, int(RuntimeRole.INSTANCE), int(DebugOption.TRANSPORT_LOOPBACK)),
-        ("init", 4, int(RuntimeRole.DEVAGENT), int(DebugOption.TRANSPORT_LOOPBACK)),
+        (
+            "init",
+            3,
+            int(RuntimeRole.INSTANCE),
+            DebugOptions.create(loopback_site=DebugLoopbackSite.ATNAGENT).raw,
+        ),
+        (
+            "init",
+            4,
+            int(RuntimeRole.ATNAGENT),
+            DebugOptions.create(loopback_site=DebugLoopbackSite.ATNAGENT).raw,
+        ),
     ]
 
 
-def test_devagent_ops_delegate_to_torch_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_atnagent_ops_delegate_to_torch_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[object, ...]] = []
     handle = "00" * 64
 
@@ -114,7 +124,7 @@ def test_devagent_ops_delegate_to_torch_namespace(monkeypatch: pytest.MonkeyPatc
         xpool.ops.torch.ops,
         "xpool",
         SimpleNamespace(
-            devagent=SimpleNamespace(
+            atnagent=SimpleNamespace(
                 create_transport_arena=fake_create_transport_arena,
                 launch_transport_kernel=fake_launch_transport_kernel,
                 destroy_transport_arena=fake_destroy_transport_arena,
@@ -124,9 +134,9 @@ def test_devagent_ops_delegate_to_torch_namespace(monkeypatch: pytest.MonkeyPatc
     )
 
     arena = TransportArenaHandle(handle)
-    assert xpool.ops.devagent.create_transport_arena(0, 8, 4, 2, 1) == arena
-    xpool.ops.devagent.launch_transport_kernel(arena)
-    assert xpool.ops.devagent.destroy_transport_arena(arena).records == ()
+    assert xpool.ops.atnagent.create_transport_arena(0, 8, 4, 2, 1) == arena
+    xpool.ops.atnagent.launch_transport_kernel(arena)
+    assert xpool.ops.atnagent.destroy_transport_arena(arena).records == ()
 
     assert calls == [
         ("create", 0, 8, 4, 2, 1),
@@ -143,14 +153,14 @@ def test_destroy_transport_arena_decodes_observer_snapshot(
         xpool.ops.torch.ops,
         "xpool",
         SimpleNamespace(
-            devagent=SimpleNamespace(
+            atnagent=SimpleNamespace(
                 destroy_transport_arena=lambda handle: (7, 2, [raw_record]),
             )
         ),
         raising=False,
     )
 
-    snapshot = xpool.ops.devagent.destroy_transport_arena(TransportArenaHandle("00" * 64))
+    snapshot = xpool.ops.atnagent.destroy_transport_arena(TransportArenaHandle("00" * 64))
 
     assert snapshot.sequence == 7
     assert snapshot.dropped == 2

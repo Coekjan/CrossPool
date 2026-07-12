@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import torch
 
-from xpool.abi import DebugOption, RuntimeRole
-from xpool.config import get_global_config
-from xpool.ops import devagent, instance
+from xpool.abi import DebugLoopbackSite, DebugOptions, RuntimeRole
+from xpool.config import LoopbackSite, get_global_config
+from xpool.ops import atnagent, instance
 
-__all__ = ["abi_version", "devagent", "init", "instance"]
+__all__ = ["abi_version", "atnagent", "init", "instance"]
 
 
 def abi_version() -> int:
@@ -30,11 +30,14 @@ def init(cuda_device: int, role: RuntimeRole | int) -> None:
     """
 
     config = get_global_config()
-    debug_options = DebugOption(0)
-    if config.debug.shim_loopback.enable:
-        debug_options |= DebugOption.SHIM_LOOPBACK
-    if config.debug.transport_loopback.enable:
-        debug_options |= DebugOption.TRANSPORT_LOOPBACK
-    if config.debug.transport_observer.enable:
-        debug_options |= DebugOption.TRANSPORT_OBSERVER
-    torch.ops.xpool.init(cuda_device, int(role), int(debug_options))
+    loopback_sites = {
+        None: DebugLoopbackSite.NONE,
+        LoopbackSite.INSTANCE: DebugLoopbackSite.INSTANCE,
+        LoopbackSite.ATNAGENT: DebugLoopbackSite.ATNAGENT,
+        LoopbackSite.FFNAGENT: DebugLoopbackSite.FFNAGENT,
+    }
+    debug_options = DebugOptions.create(
+        loopback_site=loopback_sites[config.debug.loopback.site],
+        transport_observer=config.debug.transport_observer.enable,
+    )
+    torch.ops.xpool.init(cuda_device, int(role), debug_options.raw)

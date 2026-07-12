@@ -7,8 +7,8 @@ import pytest
 import torch
 from torch import nn
 
-from tests.harness.native.transport import devagent_arena_process
-from xpool.abi import DebugOption, RuntimeRole
+from tests.harness.native.transport import atnagent_arena_process
+from xpool.abi import DebugLoopbackSite, DebugOptions, RuntimeRole
 from xpool.config import XpoolConfig, init_global_config
 from xpool.integrations.sglang.shim import FfnShimModule
 
@@ -27,7 +27,7 @@ def uses_native_ops_fixtures(request: pytest.FixtureRequest) -> bool:
 def load_native_ops(request: pytest.FixtureRequest) -> None:
     if not uses_native_ops_fixtures(request):
         return
-    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), int(DebugOption(0)))
+    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), DebugOptions(0).raw)
 
 
 @pytest.fixture(autouse=True)
@@ -38,11 +38,11 @@ def reset_native_runtime(
     if not uses_native_ops_fixtures(request):
         yield
         return
-    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), int(DebugOption(0)))
+    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), DebugOptions(0).raw)
     torch.ops.xpool.instance.detach_transport_arena(1, 0)
     torch.ops.xpool.instance.detach_transport_arena(1, 1)
     yield
-    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), int(DebugOption(0)))
+    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), DebugOptions(0).raw)
     torch.ops.xpool.instance.detach_transport_arena(1, 0)
     torch.ops.xpool.instance.detach_transport_arena(1, 1)
 
@@ -60,7 +60,7 @@ def native_arena_handle() -> Iterator[Callable[..., str]]:
             launch_kernel: bool = False,
         ) -> str:
             return stack.enter_context(
-                devagent_arena_process(
+                atnagent_arena_process(
                     cuda_device=torch.cuda.current_device(),
                     max_tokens=max_tokens,
                     hidden_size=hidden_size,
@@ -114,7 +114,7 @@ def install_global_config(*, debug_loopback: bool) -> None:
         Replaces the process-global xpool config.
     """
 
-    env = {"XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE": "1"} if debug_loopback else {}
+    env = {"XPOOL_DEBUG_LOOPBACK_ENABLE": "1", "XPOOL_DEBUG_LOOPBACK_SITE": "instance"} if debug_loopback else {}
     init_global_config(
         config=XpoolConfig.from_mapping(
             {
@@ -124,8 +124,9 @@ def install_global_config(*, debug_loopback: bool) -> None:
             env=env,
         ),
     )
-    debug_options = DebugOption.SHIM_LOOPBACK if debug_loopback else DebugOption(0)
-    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), int(debug_options))
+    loopback_site = DebugLoopbackSite.INSTANCE if debug_loopback else DebugLoopbackSite.NONE
+    debug_options = DebugOptions.create(loopback_site=loopback_site)
+    torch.ops.xpool.init(torch.cuda.current_device(), int(RuntimeRole.INSTANCE), debug_options.raw)
 
 
 def attach_transport_arena_for_test(

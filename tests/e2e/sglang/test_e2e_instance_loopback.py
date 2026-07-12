@@ -13,6 +13,7 @@ from tests.harness.sglang.probe import (
     graph_settings_key,
     run_probe_worker,
 )
+from xpool.config import LoopbackSite
 
 pytestmark = [
     pytest.mark.requires_cuda(),
@@ -23,25 +24,25 @@ pytestmark = [
 
 
 @pytest.fixture(scope="module")
-def shim_loopback_runs(
+def instance_loopback_runs(
     sglang_environment: SglangTestEnvironment,
     tmp_path_factory: pytest.TempPathFactory,
 ) -> list[ProbeRun]:
-    """Run all four graph settings with direct shim loopback enabled."""
+    """Run all four graph settings with instance loopback enabled."""
 
     return run_probe_worker(
         graph_settings_list=list(GRAPH_SETTINGS),
         base_gpu_id=sglang_environment.base_gpu_id,
         config_path=sglang_environment.config_path,
-        tmp_path=tmp_path_factory.mktemp("sglang-shim-loopback"),
-        loopback_mode="shim",
+        tmp_path=tmp_path_factory.mktemp("sglang-instance-loopback"),
+        loopback_site=LoopbackSite.INSTANCE,
     )
 
 
-def test_sglang_shim_loopback_graph_modes(shim_loopback_runs: list[ProbeRun]) -> None:
+def test_sglang_instance_loopback_graph_modes(instance_loopback_runs: list[ProbeRun]) -> None:
     results: dict[GraphSettings, ProbeResult] = {}
     runs_by_settings: dict[GraphSettings, ProbeRun] = {}
-    for run in shim_loopback_runs:
+    for run in instance_loopback_runs:
         key = graph_settings_key(run.graph_settings)
         results[key] = run.result
         runs_by_settings[key] = run
@@ -52,7 +53,7 @@ def test_sglang_shim_loopback_graph_modes(shim_loopback_runs: list[ProbeRun]) ->
         assert results[graph_settings_key(graph_settings)]["output_ids"] == eager_output_ids
 
     print(
-        "XPOOL_SGLANG_SHIM_LOOPBACK_DURATIONS="
+        "XPOOL_SGLANG_INSTANCE_LOOPBACK_DURATIONS="
         + json.dumps(
             [
                 {

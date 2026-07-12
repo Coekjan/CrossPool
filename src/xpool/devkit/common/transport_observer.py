@@ -17,9 +17,9 @@ from xpool.abi import (
     TransportTraceSnapshot,
 )
 from xpool.config import get_global_config
-from xpool.runtime.devagent.atn import AtnArenaResource
+from xpool.runtime.atnagent import AtnArenaResource
 
-runtime_roles = frozenset({RuntimeRole.DEVAGENT})
+runtime_roles = frozenset({RuntimeRole.ATNAGENT})
 logger = logging.getLogger(__name__)
 install_lock = Lock()
 installed = False

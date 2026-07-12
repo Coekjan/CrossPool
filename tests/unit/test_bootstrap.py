@@ -26,7 +26,7 @@ def test_bootstrap_initializes_native_runtime_once(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.parametrize(
     ("cuda_device", "role"),
-    [(3, RuntimeRole.INSTANCE), (2, RuntimeRole.DEVAGENT)],
+    [(3, RuntimeRole.INSTANCE), (2, RuntimeRole.ATNAGENT)],
 )
 def test_bootstrap_rejects_conflicting_reinitialization(
     cuda_device: int,
@@ -54,7 +54,7 @@ def test_bootstrap_does_not_commit_failed_native_initialization(monkeypatch: pyt
     monkeypatch.setattr(bootstrap.xpool.ops, "init", fail_init)
 
     with pytest.raises(RuntimeError, match="native init failed"):
-        bootstrap.init(0, RuntimeRole.DEVAGENT)
+        bootstrap.init(0, RuntimeRole.ATNAGENT)
     with pytest.raises(RuntimeError, match="before bootstrap"):
         bootstrap.get_runtime_role()
 

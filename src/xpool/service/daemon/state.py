@@ -14,21 +14,21 @@ from dataclasses import dataclass, field
 import psutil
 
 from xpool.abi import ABI_VERSION
-from xpool.config import DeviceRole, XpoolConfig, get_global_config
+from xpool.config import XpoolConfig, get_global_config
 from xpool.runtime.transport import InstanceTransportAttributes
 from xpool.service.daemon.mps import MpsProbeResult, MpsStatusProvider, probe_mps_controller
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
+    AtnAgentRegistration,
+    AtnAgentTransportArenaBinding,
+    AtnAgentTransportArenaDrainResponse,
     ControlPlaneWarning,
-    DevagentRegistration,
-    DevagentTransportArenaBinding,
-    DevagentTransportArenaDrainResponse,
     HeartbeatResponse,
     InstanceRankRef,
     InstanceRegistration,
     ProcessHeartbeat,
     ProcessRef,
-    ReadinessDevagent,
+    ReadinessAtnAgent,
     ReadinessInstance,
     ReadinessScope,
     ReadinessSnapshot,
@@ -40,7 +40,7 @@ from xpool.utils.procs import ProcUniqId
 HEARTBEAT_WARNING_WATERMARK_S = 15.0
 TRANSPORT_ARENA_LEASE_HEARTBEAT_TIMEOUT_S = 2.0 * HEARTBEAT_WARNING_WATERMARK_S
 TRANSPORT_DRAIN_TERM_GRACE_S = HEARTBEAT_WARNING_WATERMARK_S
-DEVAGENT_REPLACEMENT_TIMEOUT_S = 60.0
+ATNAGENT_REPLACEMENT_TIMEOUT_S = 60.0
 GLOBAL_WARNING_CACHE_S = 1.0
 MPS_READINESS_CACHE_S = 1.0
 logger = logging.getLogger(__name__)
@@ -132,11 +132,11 @@ class TransportArenaLease:
     """Daemon-owned record for one acquired transport arena handle.
 
     Attributes:
-        cuda_device: Local attention devagent CUDA device that owns the handle.
+        cuda_device: Local attention atnagent CUDA device that owns the handle.
         handle: Opaque transport arena handle record acquired by the instance rank.
-        publisher: Exact devagent process generation that published the arena.
+        publisher: Exact atnagent process generation that published the arena.
         termination_requested: Whether daemon has already requested owner
-            process termination during devagent arena drain.
+            process termination during atnagent arena drain.
     """
 
     cuda_device: int
@@ -216,15 +216,15 @@ class InstanceRegistrationState(CommonRegistration):
         )
 
 
-class DevagentRegistrationState(CommonRegistration):
-    """One live devagent registration stored by the daemon.
+class AtnAgentRegistrationState(CommonRegistration):
+    """One live atnagent registration stored by the daemon.
 
     Attributes:
-        cuda_device: CUDA device index owned by the registering devagent.
-        abi_version: xpool descriptor ABI version used by the registering devagent.
-        transport_arenas: Transport arena bindings published by this devagent, or ``None`` before first publication.
-        transport_arenas_terminating: Whether the devagent is draining its published transport arenas.
-        proc: Process unique id captured by the daemon for the registering devagent.
+        cuda_device: CUDA device index owned by the registering atnagent.
+        abi_version: xpool descriptor ABI version used by the registering atnagent.
+        transport_arenas: Transport arena bindings published by this atnagent, or ``None`` before first publication.
+        transport_arenas_terminating: Whether the atnagent is draining its published transport arenas.
+        proc: Process unique id captured by the daemon for the registering atnagent.
     """
 
     __slots__ = ("abi_version", "cuda_device", "transport_arenas", "transport_arenas_terminating")
@@ -235,7 +235,7 @@ class DevagentRegistrationState(CommonRegistration):
     transport_arenas_terminating: bool
 
     def __init__(self, *, cuda_device: int, abi_version: int, pid: int, now: float) -> None:
-        """Create one devagent registration from a client-supplied pid."""
+        """Create one atnagent registration from a client-supplied pid."""
 
         super().__init__(pid, now=now)
         self.abi_version = abi_version
@@ -249,10 +249,10 @@ class DevagentRegistrationState(CommonRegistration):
         return self.cuda_device
 
     def conflicts_with(self, candidate: CommonRegistration) -> bool:
-        """Return whether two live devagent registrations conflict."""
+        """Return whether two live atnagent registrations conflict."""
 
-        if not isinstance(candidate, DevagentRegistrationState):
-            raise TypeError(f"expected DevagentRegistrationState, got {type(candidate).__name__}")
+        if not isinstance(candidate, AtnAgentRegistrationState):
+            raise TypeError(f"expected AtnAgentRegistrationState, got {type(candidate).__name__}")
         conflict = super().conflicts_with(candidate)
         return conflict or self.cuda_device != candidate.cuda_device or self.abi_version != candidate.abi_version
 
@@ -411,7 +411,7 @@ class InstanceRegistry(RegistrationRegistry[InstanceRegistrationState]):
         *,
         term_grace_s: float,
     ) -> list[InstanceRankRef]:
-        """Terminate every live process tree leasing from one devagent."""
+        """Terminate every live process tree leasing from one atnagent."""
 
         with self.lock:
             candidates = list(self.registrations.values())
@@ -460,7 +460,7 @@ class InstanceRegistry(RegistrationRegistry[InstanceRegistrationState]):
         cuda_device: int,
         publisher: ProcUniqId,
     ) -> list[InstanceRegistrationState]:
-        """Return every registration leased from one devagent generation."""
+        """Return every registration leased from one atnagent generation."""
 
         with self.lock:
             return [
@@ -481,25 +481,25 @@ class InstanceRegistry(RegistrationRegistry[InstanceRegistrationState]):
                     self.drop(registration.instance)
 
 
-class DevagentRegistry(RegistrationRegistry[DevagentRegistrationState]):
-    """Registry for devagent process registrations and their transport arenas."""
+class AtnAgentRegistry(RegistrationRegistry[AtnAgentRegistrationState]):
+    """Registry for atnagent process registrations and their transport arenas."""
 
     def upsert_transport_arenas(
         self,
         cuda_device: int,
         publications: list[TransportArenaPublication],
         *,
-        registration: DevagentRegistrationState,
+        registration: AtnAgentRegistrationState,
     ) -> None:
         """Commit publications after owner and liveness validation."""
 
         if not publications:
-            raise XpoolDaemonError("conflict", "devagent transport arena upsert must not be empty")
+            raise XpoolDaemonError("conflict", "atnagent transport arena upsert must not be empty")
         with self.lock:
             if self.registrations.get(cuda_device) is not registration:
-                raise XpoolDaemonError("not_ready", "devagent registration changed during arena publication")
+                raise XpoolDaemonError("not_ready", "atnagent registration changed during arena publication")
             if registration.transport_arenas_terminating:
-                raise XpoolDaemonError("not_ready", "devagent transport arenas are terminating")
+                raise XpoolDaemonError("not_ready", "atnagent transport arenas are terminating")
             publication_by_instance = dict(registration.transport_arenas or {})
             publication_by_instance.update({publication.instance: publication for publication in publications})
             registration.transport_arenas = publication_by_instance
@@ -508,13 +508,13 @@ class DevagentRegistry(RegistrationRegistry[DevagentRegistrationState]):
         self,
         cuda_device: int,
         *,
-        registration: DevagentRegistrationState,
+        registration: AtnAgentRegistrationState,
     ) -> None:
         """Commit arena termination after owner and liveness validation."""
 
         with self.lock:
             if self.registrations.get(cuda_device) is not registration:
-                raise XpoolDaemonError("not_ready", "devagent registration changed during arena drain")
+                raise XpoolDaemonError("not_ready", "atnagent registration changed during arena drain")
             registration.transport_arenas_terminating = True
 
     def transport_arena(
@@ -522,27 +522,27 @@ class DevagentRegistry(RegistrationRegistry[DevagentRegistrationState]):
         cuda_device: int,
         instance: InstanceUniqId,
         *,
-        registration: DevagentRegistrationState,
+        registration: AtnAgentRegistrationState,
     ) -> tuple[TransportArenaPublication, ProcUniqId]:
-        """Return a publication after devagent liveness was validated."""
+        """Return a publication after atnagent liveness was validated."""
 
         with self.lock:
             if self.registrations.get(cuda_device) is not registration:
-                raise XpoolDaemonError("not_ready", "devagent registration changed during arena acquisition")
+                raise XpoolDaemonError("not_ready", "atnagent registration changed during arena acquisition")
             if registration.transport_arenas_terminating:
-                raise XpoolDaemonError("not_ready", "local attention devagent transport arenas are terminating")
+                raise XpoolDaemonError("not_ready", "local attention atnagent transport arenas are terminating")
             if registration.transport_arenas is None:
-                raise XpoolDaemonError("not_ready", "local attention devagent transport arenas are not published")
+                raise XpoolDaemonError("not_ready", "local attention atnagent transport arenas are not published")
             publication = registration.transport_arenas.get(instance)
             if publication is not None:
                 return publication, registration.proc
-        raise XpoolDaemonError("not_ready", "local attention devagent has no transport arena handle for instance rank")
+        raise XpoolDaemonError("not_ready", "local attention atnagent has no transport arena handle for instance rank")
 
-    def views(self) -> list[DevagentRegistration]:
-        """Return devagent registrations as wire views."""
+    def views(self) -> list[AtnAgentRegistration]:
+        """Return atnagent registrations as wire views."""
 
         return [
-            DevagentRegistration(
+            AtnAgentRegistration(
                 pid=registration.proc.pid,
                 cuda_device=registration.cuda_device,
                 abi_version=registration.abi_version,
@@ -558,7 +558,7 @@ class XpoolDaemonState:
     Attributes:
         started_at: Unix timestamp recorded when the daemon state was created.
         instance_registrations: Instance-rank process registration registry.
-        devagent_registrations: Devagent process registration and transport arena handle registry.
+        atnagent_registrations: AtnAgent process registration and transport arena handle registry.
         transport_lock: State-level lock for cross-registry transport acquire
             and drain invariants.
         warning_cache_lock: Lock protecting the bounded-heartbeat warning cache.
@@ -570,7 +570,7 @@ class XpoolDaemonState:
     mps_status_provider: MpsStatusProvider = probe_mps_controller
     started_at: float = field(default_factory=time.time)
     instance_registrations: InstanceRegistry = field(default_factory=InstanceRegistry)
-    devagent_registrations: DevagentRegistry = field(default_factory=DevagentRegistry)
+    atnagent_registrations: AtnAgentRegistry = field(default_factory=AtnAgentRegistry)
     transport_lock: threading.Lock = field(default_factory=threading.Lock)
     warning_cache_lock: threading.Lock = field(default_factory=threading.Lock)
     warning_cache_at: float = field(default=float("-inf"))
@@ -658,25 +658,23 @@ class XpoolDaemonState:
             if now - self.warning_cache_at < GLOBAL_WARNING_CACHE_S:
                 return list(self.warning_cache)
         warnings: list[ControlPlaneWarning] = []
-        devagent_by_dev = dict(self.devagent_registrations.items())
-        for devagent in get_global_config().devagents:
-            if devagent.role is not DeviceRole.ATN:
-                continue
-            registration = devagent_by_dev.get(devagent.cuda_device)
+        atnagent_by_device = dict(self.atnagent_registrations.items())
+        for agent in get_global_config().atnagents:
+            registration = atnagent_by_device.get(agent.cuda_device)
             if registration is None or registration.readiness_status(now) is not ReadinessStatus.ONLINE:
                 warnings.append(
                     ControlPlaneWarning(
-                        kind="stale_devagent",
-                        cuda_device=devagent.cuda_device,
-                        message=f"devagent on CUDA device {devagent.cuda_device} is not heartbeating",
+                        kind="stale_atnagent",
+                        cuda_device=agent.cuda_device,
+                        message=f"AtnAgent on CUDA device {agent.cuda_device} is not heartbeating",
                     )
                 )
             elif registration.transport_arenas_terminating:
                 warnings.append(
                     ControlPlaneWarning(
-                        kind="terminating_devagent",
-                        cuda_device=devagent.cuda_device,
-                        message=f"devagent on CUDA device {devagent.cuda_device} is terminating",
+                        kind="terminating_atnagent",
+                        cuda_device=agent.cuda_device,
+                        message=f"AtnAgent on CUDA device {agent.cuda_device} is terminating",
                     )
                 )
 
@@ -699,11 +697,11 @@ class XpoolDaemonState:
             self.warning_cache = tuple(warnings)
         return warnings
 
-    def register_devagent(self, registration: DevagentRegistrationState) -> None:
-        """Install a devagent registration after draining a dead generation.
+    def register_atnagent(self, registration: AtnAgentRegistrationState) -> None:
+        """Install a atnagent registration after draining a dead generation.
 
         Args:
-            registration: Candidate devagent process registration.
+            registration: Candidate atnagent process registration.
 
         Raises:
             XpoolDaemonError: If the device or ABI is invalid, a conflicting
@@ -715,11 +713,11 @@ class XpoolDaemonState:
             a dead prior generation and removes their registrations after death.
         """
 
-        if registration.cuda_device not in get_global_config().cuda_devices:
-            raise XpoolDaemonError("not_found", "unknown devagent")
+        if registration.cuda_device not in get_global_config().atnagent_by_cuda_device:
+            raise XpoolDaemonError("not_found", "unknown AtnAgent")
         if registration.abi_version != ABI_VERSION:
-            raise XpoolDaemonError("conflict", "devagent ABI version does not match daemon ABI")
-        existing = self.devagent_registrations.query(registration.cuda_device)
+            raise XpoolDaemonError("conflict", "atnagent ABI version does not match daemon ABI")
+        existing = self.atnagent_registrations.query(registration.cuda_device)
         if existing is not None and existing.proc != registration.proc and not existing.proc.is_alive():
             owners = self.instance_registrations.lease_owners_for_generation(
                 registration.cuda_device,
@@ -727,7 +725,7 @@ class XpoolDaemonState:
             )
             live_owners = [owner for owner in owners if owner.proc.is_alive()]
             if live_owners:
-                deadline = time.monotonic() + DEVAGENT_REPLACEMENT_TIMEOUT_S
+                deadline = time.monotonic() + ATNAGENT_REPLACEMENT_TIMEOUT_S
                 with ThreadPoolExecutor(max_workers=len(live_owners)) as executor:
                     futures = [
                         executor.submit(owner.proc.terminate_tree, term_grace_s=TRANSPORT_DRAIN_TERM_GRACE_S)
@@ -738,11 +736,11 @@ class XpoolDaemonState:
                 while any(owner.proc.is_alive() for owner in live_owners) and time.monotonic() < deadline:
                     time.sleep(0.05)
                 if any(owner.proc.is_alive() for owner in live_owners):
-                    raise XpoolDaemonError("not_ready", "previous devagent generation still has live arena users")
+                    raise XpoolDaemonError("not_ready", "previous atnagent generation still has live arena users")
                 self.instance_registrations.remove_dead(live_owners)
-            if self.devagent_registrations.query(registration.cuda_device) is not existing:
-                raise XpoolDaemonError("not_ready", "devagent registration changed during generation cleanup")
-        self.devagent_registrations.install(registration)
+            if self.atnagent_registrations.query(registration.cuda_device) is not existing:
+                raise XpoolDaemonError("not_ready", "atnagent registration changed during generation cleanup")
+        self.atnagent_registrations.install(registration)
 
     def register_instance(self, registration: InstanceRegistrationState) -> None:
         """Install an instance registration unless a different live one exists."""
@@ -803,11 +801,11 @@ class XpoolDaemonState:
             owner,
         )
 
-    def heartbeat_devagent(self, cuda_device: int, heartbeat: ProcessHeartbeat) -> HeartbeatResponse:
-        """Refresh a devagent heartbeat and return global daemon warnings."""
+    def heartbeat_atnagent(self, cuda_device: int, heartbeat: ProcessHeartbeat) -> HeartbeatResponse:
+        """Refresh a atnagent heartbeat and return global daemon warnings."""
 
         now = time.monotonic()
-        self.devagent_registrations.heartbeat(
+        self.atnagent_registrations.heartbeat(
             cuda_device,
             heartbeat,
             now=now,
@@ -825,32 +823,26 @@ class XpoolDaemonState:
         )
         return HeartbeatResponse(warnings=self.global_warnings(now))
 
-    def upsert_devagent_transport_arenas(
+    def upsert_atnagent_transport_arenas(
         self,
         cuda_device: int,
-        bindings: list[DevagentTransportArenaBinding],
+        bindings: list[AtnAgentTransportArenaBinding],
         publisher: ProcessRef,
     ) -> None:
-        """Upsert transport arenas if the owning devagent registration is live."""
+        """Upsert transport arenas if the owning atnagent registration is live."""
 
         now = time.monotonic()
-        devagent = get_global_config().devagent_by_cuda_device.get(cuda_device)
-        if devagent is None:
-            raise XpoolDaemonError("not_found", "unknown devagent")
-        if devagent.role is not DeviceRole.ATN:
-            raise XpoolDaemonError(
-                "conflict",
-                "only attention devagents may upsert transport arenas",
-            )
-        registration = self.devagent_registrations.query(cuda_device)
+        if cuda_device not in get_global_config().atnagent_by_cuda_device:
+            raise XpoolDaemonError("not_found", "unknown AtnAgent")
+        registration = self.atnagent_registrations.query(cuda_device)
         if registration is None:
-            raise XpoolDaemonError("not_ready", "devagent must register before upserting transport arenas")
+            raise XpoolDaemonError("not_ready", "atnagent must register before upserting transport arenas")
         registration.validate_process_ref(publisher, context="transport arena publisher")
-        registration.require_online(now, context="local attention devagent")
+        registration.require_online(now, context="local attention atnagent")
         with self.transport_lock:
-            if self.devagent_registrations.query(cuda_device) is not registration:
-                raise XpoolDaemonError("not_ready", "devagent registration changed during arena publication")
-            publications = self.validate_devagent_transport_arenas(cuda_device, bindings)
+            if self.atnagent_registrations.query(cuda_device) is not registration:
+                raise XpoolDaemonError("not_ready", "atnagent registration changed during arena publication")
+            publications = self.validate_atnagent_transport_arenas(cuda_device, bindings)
             existing_publications = registration.transport_arenas or {}
             existing_instance_by_handle = {
                 publication.handle.handle: instance for instance, publication in existing_publications.items()
@@ -861,53 +853,47 @@ class XpoolDaemonState:
                     raise XpoolDaemonError("conflict", "published transport arena cannot be replaced in place")
                 handle_owner = existing_instance_by_handle.get(publication.handle.handle)
                 if handle_owner is not None and handle_owner != publication.instance:
-                    raise XpoolDaemonError("conflict", "devagent transport arenas contain duplicate arena handle")
-            self.devagent_registrations.upsert_transport_arenas(
+                    raise XpoolDaemonError("conflict", "atnagent transport arenas contain duplicate arena handle")
+            self.atnagent_registrations.upsert_transport_arenas(
                 cuda_device,
                 publications,
                 registration=registration,
             )
 
-    def drain_devagent_transport_arenas(
+    def drain_atnagent_transport_arenas(
         self,
         cuda_device: int,
         publisher: ProcessRef,
-    ) -> DevagentTransportArenaDrainResponse:
+    ) -> AtnAgentTransportArenaDrainResponse:
         """Mark transport arenas terminating and terminate every live lease owner."""
 
         now = time.monotonic()
-        devagent = get_global_config().devagent_by_cuda_device.get(cuda_device)
-        if devagent is None:
-            raise XpoolDaemonError("not_found", "unknown devagent")
-        if devagent.role is not DeviceRole.ATN:
-            raise XpoolDaemonError(
-                "conflict",
-                "only attention devagents may drain transport arenas",
-            )
-        registration = self.devagent_registrations.query(cuda_device)
+        if cuda_device not in get_global_config().atnagent_by_cuda_device:
+            raise XpoolDaemonError("not_found", "unknown AtnAgent")
+        registration = self.atnagent_registrations.query(cuda_device)
         if registration is None:
-            raise XpoolDaemonError("not_ready", "devagent must register before draining transport arenas")
+            raise XpoolDaemonError("not_ready", "atnagent must register before draining transport arenas")
         registration.validate_process_ref(publisher, context="transport arena drain")
         if registration.readiness_status(now) is ReadinessStatus.OFFLINE:
-            raise XpoolDaemonError("not_ready", "local attention devagent process is not live")
+            raise XpoolDaemonError("not_ready", "local attention atnagent process is not live")
         with self.transport_lock:
-            self.devagent_registrations.drain_transport_arenas(
+            self.atnagent_registrations.drain_transport_arenas(
                 cuda_device,
                 registration=registration,
             )
-        return DevagentTransportArenaDrainResponse(
+        return AtnAgentTransportArenaDrainResponse(
             in_use=self.instance_registrations.terminate_transport_arena_leases(
                 cuda_device,
                 term_grace_s=TRANSPORT_DRAIN_TERM_GRACE_S,
             )
         )
 
-    def validate_devagent_transport_arenas(
+    def validate_atnagent_transport_arenas(
         self,
         cuda_device: int,
-        bindings: list[DevagentTransportArenaBinding],
+        bindings: list[AtnAgentTransportArenaBinding],
     ) -> list[TransportArenaPublication]:
-        """Validate and normalize transport arenas published by one devagent."""
+        """Validate and normalize transport arenas published by one atnagent."""
 
         atn_cuda_devices = get_global_config().devices.atn_cuda_devices
         seen: set[InstanceUniqId] = set()
@@ -916,24 +902,24 @@ class XpoolDaemonState:
         for binding in bindings:
             handle = binding.handle
             if handle.handle in seen_handles:
-                raise XpoolDaemonError("conflict", "devagent transport arenas contain duplicate arena handle")
+                raise XpoolDaemonError("conflict", "atnagent transport arenas contain duplicate arena handle")
             seen_handles.add(handle.handle)
             if binding.instance_id not in get_global_config().instance_by_id:
-                raise XpoolDaemonError("conflict", "devagent transport arena handle references unknown instance")
+                raise XpoolDaemonError("conflict", "atnagent transport arena handle references unknown instance")
             self.validate_instance_rank(binding.rank)
             expected_cuda_device = atn_cuda_devices[binding.rank]
             if expected_cuda_device != cuda_device:
                 raise XpoolDaemonError(
                     "conflict",
                     (
-                        f"devagent transport arena handle rank {binding.rank} belongs to CUDA device "
+                        f"atnagent transport arena handle rank {binding.rank} belongs to CUDA device "
                         f"{expected_cuda_device}, "
                         f"not {cuda_device}"
                     ),
                 )
             instance = InstanceUniqId(instance_id=binding.instance_id, rank=binding.rank)
             if instance in seen:
-                raise XpoolDaemonError("conflict", "devagent transport arenas contain duplicate instance-rank handle")
+                raise XpoolDaemonError("conflict", "atnagent transport arenas contain duplicate instance-rank handle")
             registration = self.instance_registrations.rank_registration(
                 binding.instance_id,
                 binding.rank,
@@ -941,7 +927,7 @@ class XpoolDaemonState:
             if registration is None:
                 raise XpoolDaemonError(
                     "not_ready",
-                    "devagent transport arena handle references an instance rank that is not registered",
+                    "atnagent transport arena handle references an instance rank that is not registered",
                 )
             publications.append(
                 TransportArenaPublication(
@@ -955,33 +941,26 @@ class XpoolDaemonState:
 
     def readiness_snapshot(
         self,
-        selected_scopes: tuple[ReadinessScope, ...] = (ReadinessScope.ATN, ReadinessScope.FFN),
+        selected_scopes: tuple[ReadinessScope, ...] = (ReadinessScope.ATN,),
     ) -> ReadinessSnapshot:
         """Return daemon readiness for selected participant scopes."""
 
         now = time.monotonic()
         mps_status = self.mps_readiness_status()
         atn_cuda_devices = get_global_config().devices.atn_cuda_devices
-        devagent_by_dev = dict(self.devagent_registrations.items())
+        atnagent_by_device = dict(self.atnagent_registrations.items())
         instance_by_uid = dict(self.instance_registrations.items())
 
-        selected_roles = {
-            role
-            for role, scope in ((DeviceRole.ATN, ReadinessScope.ATN), (DeviceRole.FFN, ReadinessScope.FFN))
-            if scope in selected_scopes
-        }
-        devagents = [
-            ReadinessDevagent(
+        atnagents = [
+            ReadinessAtnAgent(
                 pid=None if registration is None else registration.proc.pid,
-                cuda_device=devagent.cuda_device,
-                role=devagent.role,
+                cuda_device=agent.cuda_device,
                 status=ReadinessStatus.OFFLINE if registration is None else registration.readiness_status(now),
             )
-            for devagent in get_global_config().devagents
-            if devagent.role in selected_roles
-            for registration in (devagent_by_dev.get(devagent.cuda_device),)
+            for agent in get_global_config().atnagents
+            if ReadinessScope.ATN in selected_scopes
+            for registration in (atnagent_by_device.get(agent.cuda_device),)
         ]
-
         instances = [
             ReadinessInstance(
                 pid=None if registration is None else registration.proc.pid,
@@ -995,12 +974,7 @@ class XpoolDaemonState:
             for rank, cuda_device in enumerate(atn_cuda_devices)
             for registration in (instance_by_uid.get(InstanceUniqId(instance_id=instance.id, rank=rank)),)
         ]
-        atn_devagents_online = all(
-            entry.status == ReadinessStatus.ONLINE for entry in devagents if entry.role is DeviceRole.ATN
-        )
-        ffn_devagents_online = all(
-            entry.status == ReadinessStatus.ONLINE for entry in devagents if entry.role is DeviceRole.FFN
-        )
+        atnagents_online = all(entry.status == ReadinessStatus.ONLINE for entry in atnagents)
         instances_online = all(entry.status == ReadinessStatus.ONLINE for entry in instances)
         arenas_ready = True
         if ReadinessScope.ATN in selected_scopes:
@@ -1008,16 +982,16 @@ class XpoolDaemonState:
                 for rank, cuda_device in enumerate(atn_cuda_devices):
                     instance_uid = InstanceUniqId(instance_id=instance.id, rank=rank)
                     instance_registration = instance_by_uid.get(instance_uid)
-                    devagent_registration = devagent_by_dev.get(cuda_device)
+                    atnagent_registration = atnagent_by_device.get(cuda_device)
                     publication = (
                         None
-                        if devagent_registration is None or devagent_registration.transport_arenas is None
-                        else devagent_registration.transport_arenas.get(instance_uid)
+                        if atnagent_registration is None or atnagent_registration.transport_arenas is None
+                        else atnagent_registration.transport_arenas.get(instance_uid)
                     )
                     if (
                         instance_registration is None
-                        or devagent_registration is None
-                        or devagent_registration.transport_arenas_terminating
+                        or atnagent_registration is None
+                        or atnagent_registration.transport_arenas_terminating
                         or publication is None
                         or publication.transport != instance_registration.transport
                     ):
@@ -1026,12 +1000,7 @@ class XpoolDaemonState:
                 if not arenas_ready:
                     break
         participant_scopes = {
-            scope: (
-                atn_devagents_online and instances_online and arenas_ready
-                if scope is ReadinessScope.ATN
-                else ffn_devagents_online
-            )
-            for scope in selected_scopes
+            scope: atnagents_online and instances_online and arenas_ready for scope in selected_scopes
         }
         scopes = {scope: ready and mps_status is ReadinessStatus.ONLINE for scope, ready in participant_scopes.items()}
         return ReadinessSnapshot(
@@ -1039,7 +1008,7 @@ class XpoolDaemonState:
             mps_status=mps_status,
             scopes=scopes,
             cuda_devices=get_global_config().cuda_devices,
-            devagents=devagents,
+            atnagents=atnagents,
             instances=instances,
         )
 
@@ -1066,17 +1035,17 @@ class XpoolDaemonState:
             raise XpoolDaemonError("not_ready", "instance rank is not registered")
         registration.validate_process_ref(owner, context="transport arena handle acquirer")
         registration.require_online(now, context="instance rank")
-        devagent_registration = self.devagent_registrations.query(cuda_device)
-        if devagent_registration is None:
-            raise XpoolDaemonError("not_ready", "local attention devagent is not registered")
-        devagent_registration.require_online(now, context="local attention devagent")
+        atnagent_registration = self.atnagent_registrations.query(cuda_device)
+        if atnagent_registration is None:
+            raise XpoolDaemonError("not_ready", "local attention atnagent is not registered")
+        atnagent_registration.require_online(now, context="local attention atnagent")
         with self.transport_lock:
             if self.instance_registrations.rank_registration(instance_id, rank) is not registration:
                 raise XpoolDaemonError("not_ready", "instance registration changed during arena acquisition")
-            publication, publisher = self.devagent_registrations.transport_arena(
+            publication, publisher = self.atnagent_registrations.transport_arena(
                 cuda_device,
                 instance_uid,
-                registration=devagent_registration,
+                registration=atnagent_registration,
             )
             if publication.transport != registration.transport:
                 raise XpoolDaemonError("not_ready", "published transport arena geometry is stale")

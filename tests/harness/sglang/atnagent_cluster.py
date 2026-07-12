@@ -14,12 +14,12 @@ from typing import TextIO
 
 import httpx
 
-from xpool.config import DeviceRole, XpoolConfig
+from xpool.config import XpoolConfig
 from xpool.service.client import XpoolClient, XpoolClientError, XpoolDaemonError
 from xpool.service.wire import ReadinessScope, ReadinessStatus
 
 STARTUP_TIMEOUT_S = 30.0
-DEVAGENT_SHUTDOWN_TIMEOUT_S = 75.0
+ATNAGENT_SHUTDOWN_TIMEOUT_S = 75.0
 DAEMON_SHUTDOWN_TIMEOUT_S = 15.0
 POLL_INTERVAL_S = 0.1
 DAEMON_START_ATTEMPTS = 3
@@ -55,7 +55,7 @@ class ManagedProcess:
             return f"<failed to read {self.log_path}: {exc}>"
 
 
-class TransportLoopbackCluster:
+class AtnAgentLoopbackCluster:
     def __init__(
         self,
         *,
@@ -86,9 +86,9 @@ class TransportLoopbackCluster:
         model_path: Path,
         graph_observer_outdir: Path,
         workdir: Path,
-    ) -> TransportLoopbackCluster:
+    ) -> AtnAgentLoopbackCluster:
         workdir.mkdir(parents=True, exist_ok=True)
-        config_path = workdir / "xpool.transport-loopback.toml"
+        config_path = workdir / "xpool.atn-atnagent-loopback.toml"
         daemon_port = cls.allocate_daemon_port()
         cls.write_config(
             config_path,
@@ -100,7 +100,8 @@ class TransportLoopbackCluster:
         debug_env = {
             "XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE": "1",
             "XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR": str(graph_observer_outdir),
-            "XPOOL_DEBUG_TRANSPORT_LOOPBACK_ENABLE": "1",
+            "XPOOL_DEBUG_LOOPBACK_ENABLE": "1",
+            "XPOOL_DEBUG_LOOPBACK_SITE": "atnagent",
             "XPOOL_DEBUG_TRANSPORT_OBSERVER_ENABLE": "1",
             "XPOOL_DEBUG_TRANSPORT_OBSERVER_OUTDIR": str(graph_observer_outdir),
         }
@@ -132,7 +133,7 @@ class TransportLoopbackCluster:
         model_path: Path,
         daemon_port: int,
     ) -> None:
-        """Write one retryable transport-loopback config generation."""
+        """Write one retryable ATN-atnagent-loopback config generation."""
 
         config_path.write_text(
             "\n".join(
@@ -164,7 +165,8 @@ class TransportLoopbackCluster:
         return {
             "XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE": "1",
             "XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR": str(self.graph_observer_outdir),
-            "XPOOL_DEBUG_TRANSPORT_LOOPBACK_ENABLE": "1",
+            "XPOOL_DEBUG_LOOPBACK_ENABLE": "1",
+            "XPOOL_DEBUG_LOOPBACK_SITE": "atnagent",
             "XPOOL_DEBUG_TRANSPORT_OBSERVER_ENABLE": "1",
             "XPOOL_DEBUG_TRANSPORT_OBSERVER_OUTDIR": str(self.graph_observer_outdir),
         }
@@ -181,9 +183,10 @@ class TransportLoopbackCluster:
         )
         self.config = XpoolConfig.from_file(self.config_path, env=self.debug_env())
 
-    def __enter__(self) -> TransportLoopbackCluster:
+    def __enter__(self) -> AtnAgentLoopbackCluster:
         env = dict(os.environ)
-        env.pop("XPOOL_DEBUG_SHIM_LOOPBACK_ENABLE", None)
+        env.pop("XPOOL_DEBUG_LOOPBACK_ENABLE", None)
+        env.pop("XPOOL_DEBUG_LOOPBACK_SITE", None)
         env["XPOOL_CONFIG"] = str(self.config_path)
         env.update(self.debug_env())
         try:
@@ -209,16 +212,16 @@ class TransportLoopbackCluster:
             )
             for cuda_device in self.config.devices.atn_cuda_devices:
                 self.spawn(
-                    f"atn-devagent-{cuda_device}",
-                    ["devagent", "--cuda-device", str(cuda_device)],
+                    f"atnagent-{cuda_device}",
+                    ["atnagent", "--cuda-device", str(cuda_device)],
                     env=env,
                 )
-            self.wait_for_atn_devagents()
+            self.wait_for_atnagents()
         except Exception as exc:
             diagnostics = self.diagnostics()
             self.close_processes(force=True)
             self.close_logs()
-            raise RuntimeError(f"failed to start transport-loopback cluster: {exc}\n{diagnostics}") from exc
+            raise RuntimeError(f"failed to start ATN-atnagent-loopback cluster: {exc}\n{diagnostics}") from exc
         return self
 
     def discard_failed_daemon(self) -> None:
@@ -244,8 +247,8 @@ class TransportLoopbackCluster:
         if failures:
             message = "; ".join(failures)
             if exc is not None:
-                raise RuntimeError(f"{exc}\ntransport-loopback cleanup failed: {message}\n{diagnostics}") from exc
-            raise RuntimeError(f"transport-loopback cleanup failed: {message}\n{diagnostics}")
+                raise RuntimeError(f"{exc}\nATN-atnagent-loopback cleanup failed: {message}\n{diagnostics}") from exc
+            raise RuntimeError(f"ATN-atnagent-loopback cleanup failed: {message}\n{diagnostics}")
         return False
 
     def diagnostics(self) -> str:
@@ -281,9 +284,9 @@ class TransportLoopbackCluster:
                 time.sleep(POLL_INTERVAL_S)
         raise RuntimeError("timed out waiting for daemon health")
 
-    def wait_for_atn_devagents(self) -> None:
+    def wait_for_atnagents(self) -> None:
         if self.client is None:
-            raise RuntimeError("transport-loopback daemon client is not initialized")
+            raise RuntimeError("ATN-atnagent-loopback daemon client is not initialized")
         expected_devices = set(self.config.devices.atn_cuda_devices)
         deadline = time.monotonic() + STARTUP_TIMEOUT_S
         while time.monotonic() < deadline:
@@ -294,14 +297,12 @@ class TransportLoopbackCluster:
                 time.sleep(POLL_INTERVAL_S)
                 continue
             online_devices = {
-                entry.cuda_device
-                for entry in readiness.devagents
-                if entry.role is DeviceRole.ATN and entry.status is ReadinessStatus.ONLINE
+                entry.cuda_device for entry in readiness.atnagents if entry.status is ReadinessStatus.ONLINE
             }
             if online_devices == expected_devices:
                 return
             time.sleep(POLL_INTERVAL_S)
-        raise RuntimeError("timed out waiting for ATN devagent registration")
+        raise RuntimeError("timed out waiting for ATN atnagent registration")
 
     def raise_for_exited_process(self) -> None:
         for managed in self.processes:
@@ -314,17 +315,15 @@ class TransportLoopbackCluster:
         if self.client is not None:
             self.client.close()
             self.client = None
-        devagents = [managed for managed in self.processes if managed.name.startswith("atn-devagent-")]
+        atnagents = [managed for managed in self.processes if managed.name.startswith("atnagent-")]
         daemons = [managed for managed in self.processes if managed.name == "daemon"]
-        for managed in (*reversed(devagents), *reversed(daemons)):
+        for managed in (*reversed(atnagents), *reversed(daemons)):
             if force and managed.process.poll() is None:
                 managed.process.kill()
                 managed.process.wait(timeout=10)
             else:
                 timeout_s = (
-                    DEVAGENT_SHUTDOWN_TIMEOUT_S
-                    if managed.name.startswith("atn-devagent-")
-                    else DAEMON_SHUTDOWN_TIMEOUT_S
+                    ATNAGENT_SHUTDOWN_TIMEOUT_S if managed.name.startswith("atnagent-") else DAEMON_SHUTDOWN_TIMEOUT_S
                 )
                 if failure := managed.stop(timeout_s=timeout_s):
                     failures.append(failure)

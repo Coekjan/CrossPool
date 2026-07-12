@@ -8,14 +8,14 @@ from tests.harness.config import (
     Path,
     pytest,
 )
-from xpool.config import DeviceRole, MissingRequiredConfig, XpoolConfig
+from xpool.config import MissingRequiredConfig, XpoolConfig
 
 
 def test_example_config_loads_schema_only() -> None:
     config = XpoolConfig.from_file(Path("configs/xpool.example.toml"))
 
-    assert config.debug.shim_loopback.enable is False
-    assert config.debug.transport_loopback.enable is False
+    assert config.debug.loopback.enable is False
+    assert config.debug.loopback.site is None
     assert config.debug.graph_observer.enable is False
     assert config.debug.graph_observer.outdir is None
     assert config.scheduler.atn_concurrency == 1
@@ -24,10 +24,7 @@ def test_example_config_loads_schema_only() -> None:
     assert config.devices.atn_cuda_devices == [0]
     assert config.devices.ffn_cuda_devices == [1]
     assert config.cuda_devices == (0, 1)
-    assert [(agent.cuda_device, agent.role) for agent in config.devagents] == [
-        (0, DeviceRole.ATN),
-        (1, DeviceRole.FFN),
-    ]
+    assert [agent.cuda_device for agent in config.atnagents] == [0]
     assert config.models[0].id == "deepseek-ai/DeepSeek-V2-Lite-Chat"
     assert config.models[0].path is None
     assert config.model_path_of("deepseek-ai/DeepSeek-V2-Lite-Chat") == Path(
@@ -58,20 +55,18 @@ def test_instance_schema_does_not_duplicate_global_devices() -> None:
     assert "ffn_tp_size" not in payload
 
 
-def test_old_explicit_topology_fields_are_rejected() -> None:
+def test_config_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         XpoolConfig.from_mapping(
             {
                 "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
-                "devagents": [{"id": "gpu0", "cuda_device": 0, "nvshmem_rank": 0, "roles": ["atn"]}],
                 "models": [{"id": "m", "path": "/models/m"}],
-                "sglang_instances": [{"id": "m", "model": "m"}],
-            },
-            cli={},
+                "unexpected": True,
+            }
         )
 
 
-def test_devagents_follow_sorted_cuda_devices_and_roles_from_lists() -> None:
+def test_atnagents_follow_attention_cuda_device_list() -> None:
     config = XpoolConfig.from_mapping(
         {
             "devices": {"atn_cuda_devices": [2, 4], "ffn_cuda_devices": [3, 7]},
@@ -79,14 +74,9 @@ def test_devagents_follow_sorted_cuda_devices_and_roles_from_lists() -> None:
         }
     )
 
-    assert [(agent.cuda_device, agent.role) for agent in config.devagents] == [
-        (2, DeviceRole.ATN),
-        (3, DeviceRole.FFN),
-        (4, DeviceRole.ATN),
-        (7, DeviceRole.FFN),
-    ]
+    assert [agent.cuda_device for agent in config.atnagents] == [2, 4]
     assert config.cuda_devices == (2, 3, 4, 7)
-    assert "roles" not in config.devagents[0].model_dump(mode="json")
+    assert "role" not in config.atnagents[0].model_dump(mode="json")
     assert config.devices.atn_cuda_devices == [2, 4]
 
 
@@ -99,31 +89,12 @@ def test_derived_config_views_are_cached_and_read_only() -> None:
     )
 
     assert isinstance(config.cuda_devices, tuple)
-    assert isinstance(config.devagents, tuple)
+    assert isinstance(config.atnagents, tuple)
     assert isinstance(config.instances, tuple)
-    assert not isinstance(config.devagent_by_cuda_device, MutableMapping)
+    assert not isinstance(config.atnagent_by_cuda_device, MutableMapping)
     assert not isinstance(config.instance_by_id, MutableMapping)
-    assert "devagents" not in config.model_dump(mode="json")
+    assert "atnagents" not in config.model_dump(mode="json")
     assert "instances" not in config.model_dump(mode="json")
-
-
-def test_model_metadata_fields_are_rejected_from_toml() -> None:
-    with pytest.raises(ValidationError):
-        XpoolConfig.from_mapping(
-            {
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
-                "models": [
-                    {
-                        "id": "m",
-                        "path": "/models/m",
-                        "dtype": "bfloat16",
-                        "family": "dense",
-                        "hidden_size": 1,
-                    }
-                ],
-            },
-            cli={},
-        )
 
 
 def test_duplicate_and_overlapping_devices_are_rejected() -> None:

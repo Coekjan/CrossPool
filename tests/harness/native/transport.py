@@ -7,14 +7,14 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-DEVAGENT_ARENA_SCRIPT = r"""
+ATNAGENT_ARENA_SCRIPT = r"""
 import json
 import sys
 import traceback
 
 import torch
 
-from xpool.abi import DebugOption, RuntimeRole
+from xpool.abi import DebugLoopbackSite, DebugOptions, RuntimeRole
 from xpool.cext import ensure_xpool_ops_loaded
 
 try:
@@ -24,15 +24,17 @@ try:
     element_size = int(sys.argv[4])
     atn_dp_size = int(sys.argv[5])
     launch_kernel = sys.argv[6] == "1"
-    transport_loopback_enabled = sys.argv[7] == "1"
+    atnagent_loopback_enabled = sys.argv[7] == "1"
     observer_output_path = sys.argv[8]
 
     ensure_xpool_ops_loaded()
-    debug_options = DebugOption.TRANSPORT_LOOPBACK if transport_loopback_enabled else DebugOption(0)
-    if observer_output_path:
-        debug_options |= DebugOption.TRANSPORT_OBSERVER
-    torch.ops.xpool.init(cuda_device, int(RuntimeRole.DEVAGENT), int(debug_options))
-    arena = torch.ops.xpool.devagent.create_transport_arena(
+    loopback_site = DebugLoopbackSite.ATNAGENT if atnagent_loopback_enabled else DebugLoopbackSite.NONE
+    debug_options = DebugOptions.create(
+        loopback_site=loopback_site,
+        transport_observer=bool(observer_output_path),
+    )
+    torch.ops.xpool.init(cuda_device, int(RuntimeRole.ATNAGENT), debug_options.raw)
+    arena = torch.ops.xpool.atnagent.create_transport_arena(
         cuda_device,
         max_tokens,
         hidden_size,
@@ -40,11 +42,11 @@ try:
         atn_dp_size,
     )
     if launch_kernel:
-        torch.ops.xpool.devagent.launch_transport_kernel(arena)
+        torch.ops.xpool.atnagent.launch_transport_kernel(arena)
     print(json.dumps({"handle": arena}), flush=True)
     command = sys.stdin.readline().strip()
     if command == "destroy":
-        sequence, dropped, records = torch.ops.xpool.devagent.destroy_transport_arena(arena)
+        sequence, dropped, records = torch.ops.xpool.atnagent.destroy_transport_arena(arena)
         if observer_output_path:
             with open(observer_output_path, "w", encoding="utf-8") as output_file:
                 json.dump(
@@ -58,7 +60,7 @@ except BaseException:
 
 
 @contextmanager
-def devagent_arena_process(
+def atnagent_arena_process(
     *,
     cuda_device: int,
     max_tokens: int,
@@ -66,11 +68,11 @@ def devagent_arena_process(
     element_size: int,
     atn_dp_size: int,
     launch_kernel: bool,
-    transport_loopback_enabled: bool = True,
+    atnagent_loopback_enabled: bool = True,
     observer_output_path: str = "",
     startup_timeout_s: float = 30.0,
 ) -> Iterator[str]:
-    """Start a devagent subprocess that owns one native transport arena.
+    """Start a atnagent subprocess that owns one native transport arena.
 
     Args:
         cuda_device: CUDA device that owns the arena allocation.
@@ -80,8 +82,8 @@ def devagent_arena_process(
         atn_dp_size: Attention data-parallel world size for DP token counts.
         launch_kernel: Whether to start the persistent transport kernel before
             returning the arena.
-        transport_loopback_enabled: Whether the devagent subprocess should
-            launch the debug loopback transport kernel.
+        atnagent_loopback_enabled: Whether the atnagent subprocess should
+            execute requests with the attention-atnagent loopback.
         observer_output_path: Optional JSON path that receives the native
             observer snapshot immediately before arena destruction.
         startup_timeout_s: Seconds to wait for the subprocess to publish arena
@@ -98,14 +100,14 @@ def devagent_arena_process(
         [
             sys.executable,
             "-c",
-            DEVAGENT_ARENA_SCRIPT,
+            ATNAGENT_ARENA_SCRIPT,
             str(cuda_device),
             str(max_tokens),
             str(hidden_size),
             str(element_size),
             str(atn_dp_size),
             "1" if launch_kernel else "0",
-            "1" if transport_loopback_enabled else "0",
+            "1" if atnagent_loopback_enabled else "0",
             observer_output_path,
         ],
         stdin=subprocess.PIPE,
@@ -115,16 +117,16 @@ def devagent_arena_process(
     )
     try:
         if process.stdout is None:
-            raise RuntimeError("devagent subprocess stdout was not captured")
+            raise RuntimeError("atnagent subprocess stdout was not captured")
         selector = selectors.DefaultSelector()
         selector.register(process.stdout, selectors.EVENT_READ)
         if not selector.select(startup_timeout_s):
             terminate_process(process)
-            raise RuntimeError("devagent subprocess timed out before publishing arena")
+            raise RuntimeError("atnagent subprocess timed out before publishing arena")
         line = process.stdout.readline()
         if not line:
             stderr = process.communicate(timeout=5)[1]
-            raise RuntimeError(f"devagent subprocess exited before publishing arena: {stderr}")
+            raise RuntimeError(f"atnagent subprocess exited before publishing arena: {stderr}")
         payload = json.loads(line)
         yield str(payload["handle"])
     finally:

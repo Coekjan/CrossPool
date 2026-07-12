@@ -14,7 +14,7 @@ namespace xpool::transport {
 
 namespace {
 
-__global__ void devagent_transport_kernel(TransportArena arena) {
+__global__ void atnagent_transport_kernel(TransportArena arena) {
   auto used_queue = arena.used_queue();
   constexpr unsigned int kWarpMask = 0xFFFFFFFFU;
   while (true) {
@@ -57,7 +57,7 @@ __global__ void devagent_transport_kernel(TransportArena arena) {
     xpool::abi::TransportTraceRecord *trace_record =
         arena.trace(request.trace_id);
     if (threadIdx.x == 0 && trace_record != nullptr) {
-      trace_record->devagent_dequeued = transport_global_timer();
+      trace_record->atnagent_dequeued = transport_global_timer();
     }
 
     if (threadIdx.x == 0) {
@@ -82,7 +82,7 @@ __global__ void devagent_transport_kernel(TransportArena arena) {
     }
     shutdown_requested = __shfl_sync(kWarpMask, shutdown_requested, 0);
 
-    // Phase 3: execute the request. In the current transport-loopback
+    // Phase 3: execute the request. In the current ATN-atnagent loopback
     // checkpoint, the warp writes the output slot directly.
     if (threadIdx.x == 0 && trace_record != nullptr) {
       trace_record->executor_begin = transport_global_timer();
@@ -128,9 +128,9 @@ __global__ void devagent_transport_kernel(TransportArena arena) {
 
 } // namespace
 
-void launch_devagent_transport_kernel(TransportArena arena,
+void launch_atnagent_transport_kernel(TransportArena arena,
                                       cudaStream_t stream) {
-  devagent_transport_kernel<<<1, kDevagentThreadsPerBlock, 0, stream>>>(arena);
+  atnagent_transport_kernel<<<1, kAtnAgentThreadsPerBlock, 0, stream>>>(arena);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 

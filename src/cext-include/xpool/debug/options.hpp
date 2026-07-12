@@ -12,9 +12,9 @@ namespace xpool::debug {
 /// Install process-wide native debug options for one CUDA device.
 /// \param cuda_device CUDA device whose device-side debug state should be
 /// updated.
-/// \param debug_options_mask Raw debug option mask resolved from xpool config.
+/// \param debug_options Structured debug-options encoding resolved from config.
 /// \throws c10::Error if CUDA state update fails.
-void init(std::int64_t cuda_device, std::int64_t debug_options_mask);
+void init(std::int64_t cuda_device, std::int64_t debug_options);
 
 /// Return a snapshot of the host-side native debug options.
 /// \return Process-wide debug options last installed by init().
