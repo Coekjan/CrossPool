@@ -1,0 +1,10 @@
+# Ignore every file unless it uses a native extension recognized by CMake.
+*
+!**/*.c
+!**/*.cc
+!**/*.cpp
+!**/*.cu
+!**/*.h
+!**/*.hh
+!**/*.hpp
+!**/*.cuh

@@ -62,13 +62,14 @@ directory.
 4. Run an explicit preference extraction pass for user corrections when recent
    history includes code-quality, configuration, testing, review, or workflow
    complaints. Cluster repeated corrections by theme and compare them against
-   `AGENTS.md`, `PLAN.md`, `.codex/skills/`, `.codex/agents/`, and existing
-   memory before deciding whether they are new, covered, or conflicting.
+   `docs/code-style.md`, `AGENTS.md`, `PLAN.md`, `.codex/skills/`,
+   `.codex/agents/`, and existing memory before deciding whether they are new,
+   covered, or conflicting.
 5. Extract only lessons that are durable beyond the current patch:
    user preferences, workflow rules, tool availability, validation standards,
    recurring failure modes, and instruction conflicts.
-6. Drop lessons already covered by `AGENTS.md`, `PLAN.md`, `.codex/skills/`,
-   `.codex/agents/`, or existing memory.
+6. Drop lessons already covered by `docs/code-style.md`, `AGENTS.md`, `PLAN.md`,
+   `.codex/skills/`, `.codex/agents/`, or existing memory.
 7. Report candidate lessons and exact instruction conflicts. Do not write memory
    or edit files from a delegated reviewer/self-evolve subagent.
 
@@ -85,10 +86,14 @@ The main session owns persistence. For each accepted lesson:
 - Update the relevant repo instruction when user intent conflicts with the
   repository's current workflow.
 - If a code-quality, configuration, or testing correction appears at least twice
-  in the same conversation or across recent excerpts, explicitly decide whether
-  it belongs in `AGENTS.md`, a repo-local skill, reviewer instructions, or an
-  ad-hoc memory note. Do not leave repeated corrections as only transient chat
-  context.
+  in the same conversation or across recent excerpts, explicitly route it by
+  ownership: code-level naming, typing, abstraction, documentation, formatting,
+  or native-language rules belong in `docs/code-style.md`; repository
+  architecture, configuration, testing layers, build environment, and workflow
+  belong in `AGENTS.md`; reusable task procedures belong in their owning skill;
+  design-specific runtime behavior belongs in `PLAN.md`; and personal or
+  session-only context belongs in memory when authorized. Do not leave repeated
+  corrections as only transient chat context.
 - Persist memory according to the active git-commit workflow.
 - Add `Self-Evolved: <lesson>` to the commit message only when the lesson was
   actually persisted.

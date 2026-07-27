@@ -15,8 +15,8 @@ from typing import Literal, TextIO
 from sglang.srt.model_executor.cuda_graph_runner import CudaGraphRunner
 from sglang.srt.model_executor.piecewise_cuda_graph_runner import PiecewiseCudaGraphRunner
 
-from xpool.abi import RuntimeRole
 from xpool.config import get_global_config
+from xpool.runtime import RuntimeRole
 
 __all__ = ["install"]
 

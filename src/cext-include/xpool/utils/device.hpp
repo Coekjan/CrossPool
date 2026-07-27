@@ -3,91 +3,129 @@
 /// \file xpool/utils/device.hpp
 /// \brief Host-side CUDA device utility helpers.
 
-#include <c10/core/Device.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/util/Exception.h>
 
+#include <cuda.h>
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
-#include <limits>
 #include <utility>
 
 namespace xpool::utils::device {
 
-/// Convert a public int64 CUDA device id to c10's compact device index type.
-/// \param cuda_device Non-negative CUDA device id.
-/// \return CUDA device id narrowed to c10::DeviceIndex.
-/// \throws c10::Error if cuda_device is negative or outside DeviceIndex range.
-inline c10::DeviceIndex cuda_device_index(std::int64_t cuda_device) {
-  TORCH_CHECK(cuda_device >= 0, "xpool CUDA device id must be non-negative");
-  TORCH_CHECK(cuda_device <= std::numeric_limits<c10::DeviceIndex>::max(),
-              "xpool CUDA device id exceeds c10::DeviceIndex range");
-  return static_cast<c10::DeviceIndex>(cuda_device);
-}
-
-/// RAII owner for a host-created CUDA stream.
+/// Move-only owner for a host-created CUDA stream.
 ///
-/// The caller must install the intended CUDA device before constructing this
-/// object. Destruction performs best-effort stream cleanup and never throws;
-/// call reset() on the normal path when CUDA stream-destroy errors should be
+/// The caller must install the intended CUDA device before creating, querying,
+/// or destroying a live stream. Destruction performs best-effort cleanup and
+/// never throws; call destroy() on the normal path when CUDA errors should be
 /// surfaced.
-class ScopedCudaStream {
+class OwnedCudaStream {
 public:
-  /// Create a CUDA stream on the current CUDA device.
+  /// Construct an empty CUDA stream owner.
+  OwnedCudaStream() = default;
+
+  /// Create an owned CUDA stream on the current CUDA device.
   /// \param flags Flags passed to cudaStreamCreateWithFlags.
-  explicit ScopedCudaStream(unsigned int flags = cudaStreamNonBlocking) {
-    C10_CUDA_CHECK(cudaStreamCreateWithFlags(&stream_, flags));
+  /// \return Owner of the newly created stream.
+  static OwnedCudaStream create(unsigned int flags = cudaStreamNonBlocking) {
+    OwnedCudaStream stream;
+    C10_CUDA_CHECK(cudaStreamCreateWithFlags(&stream.stream_, flags));
+    return stream;
   }
 
   /// Destroy the owned stream with best-effort cleanup.
-  ~ScopedCudaStream() { reset_noexcept(); }
+  ~OwnedCudaStream() {
+    if (stream_ != nullptr) {
+      C10_CUDA_IGNORE_ERROR(cudaStreamDestroy(stream_));
+    }
+  }
 
-  ScopedCudaStream(const ScopedCudaStream &) = delete;
-  ScopedCudaStream &operator=(const ScopedCudaStream &) = delete;
+  OwnedCudaStream(const OwnedCudaStream &) = delete;
+  OwnedCudaStream &operator=(const OwnedCudaStream &) = delete;
 
   /// Move a stream owner, leaving the source empty.
   /// \param other Owner whose stream should be transferred here.
-  ScopedCudaStream(ScopedCudaStream &&other) noexcept
-      : stream_(std::exchange(other.stream_, nullptr)) {}
+  OwnedCudaStream(OwnedCudaStream &&other) noexcept : stream_(std::exchange(other.stream_, nullptr)) {}
 
-  /// Replace this owner with another stream owner.
+  /// Replace this empty owner with another stream owner.
   /// \param other Owner whose stream should be transferred here.
   /// \return This stream owner.
-  ScopedCudaStream &operator=(ScopedCudaStream &&other) noexcept {
+  /// \pre This owner is empty and has already been explicitly destroyed.
+  OwnedCudaStream &operator=(OwnedCudaStream &&other) {
     if (this != &other) {
-      reset_noexcept();
+      TORCH_CHECK(stream_ == nullptr, "a live CUDA stream cannot be replaced by move");
       stream_ = std::exchange(other.stream_, nullptr);
     }
     return *this;
   }
 
+  /// Return whether this owner holds a CUDA stream.
+  explicit operator bool() const noexcept { return stream_ != nullptr; }
+
   /// Return the raw CUDA stream handle.
-  /// \return Owned stream, or nullptr after reset or move.
+  /// \return Owned stream, or nullptr when empty.
   cudaStream_t get() const { return stream_; }
 
-  /// Release the owned stream without destroying it.
-  /// \return Previously owned stream, or nullptr after reset or move.
-  cudaStream_t release() { return std::exchange(stream_, nullptr); }
+  /// Enqueue one stream-ordered 32-bit write to a device address.
+  /// \param address Device address receiving value.
+  /// \param value Value published after preceding stream work.
+  /// \throws c10::Error if the owner is empty, address is null, or the CUDA
+  /// Driver rejects the operation.
+  void write_value(std::uint32_t *address, std::uint32_t value) const {
+    TORCH_CHECK(stream_ != nullptr, "xpool cannot write through an empty CUDA stream");
+    TORCH_CHECK(address != nullptr, "xpool CUDA stream write requires a device address");
+    const auto result = cuStreamWriteValue32(reinterpret_cast<CUstream>(stream_),
+                                             reinterpret_cast<CUdeviceptr>(address), value,
+                                             CU_STREAM_WRITE_VALUE_DEFAULT);
+    TORCH_CHECK(result == CUDA_SUCCESS, "xpool CUDA stream-ordered write failed: CUDA driver error ",
+                static_cast<int>(result));
+  }
+
+  /// Attempt one stream-ordered 32-bit device write during cleanup.
+  /// \param address Device address receiving value.
+  /// \param value Value published after preceding stream work.
+  /// \return True when the Driver accepted the write.
+  [[nodiscard]] bool try_write_value(std::uint32_t *address, std::uint32_t value) const noexcept {
+    if (stream_ == nullptr || address == nullptr) {
+      return false;
+    }
+    return cuStreamWriteValue32(reinterpret_cast<CUstream>(stream_),
+                                reinterpret_cast<CUdeviceptr>(address), value,
+                                CU_STREAM_WRITE_VALUE_DEFAULT) == CUDA_SUCCESS;
+  }
+
+  /// Query whether all work submitted to the stream has completed.
+  /// \return True when the stream is empty or complete; false when work is
+  /// still pending.
+  /// \throws c10::Error if CUDA reports an error other than pending work.
+  [[nodiscard]] bool query() const {
+    if (stream_ == nullptr) {
+      return true;
+    }
+    const auto status = cudaStreamQuery(stream_);
+    if (status == cudaSuccess) {
+      return true;
+    }
+    if (status == cudaErrorNotReady) {
+      (void)cudaGetLastError();
+      return false;
+    }
+    C10_CUDA_CHECK(status);
+    return false;
+  }
 
   /// Destroy the owned stream and surface CUDA errors.
   /// \throws c10::Error if cudaStreamDestroy fails.
-  void reset() {
+  void destroy() {
     if (stream_ == nullptr) {
       return;
     }
-    cudaStream_t stream = std::exchange(stream_, nullptr);
-    C10_CUDA_CHECK(cudaStreamDestroy(stream));
+    C10_CUDA_CHECK(cudaStreamDestroy(stream_));
+    stream_ = nullptr;
   }
 
 private:
-  void reset_noexcept() noexcept {
-    if (stream_ != nullptr) {
-      (void)cudaStreamDestroy(stream_);
-      stream_ = nullptr;
-    }
-  }
-
   cudaStream_t stream_ = nullptr;
 };
 

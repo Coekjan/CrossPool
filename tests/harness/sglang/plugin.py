@@ -1,36 +1,49 @@
+"""Install and reset the pinned SGLang plugin hook environment for tests."""
+
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import ClassVar
 
 import pytest
 from sglang.srt.model_executor.model_runner import ModelRunner
-from sglang.srt.plugins.hook_registry import HookType
+from sglang.srt.plugins.hook_registry import HookRegistry
 
-import xpool.config as config_module
+import xpool.config
+import xpool.integrations.sglang.plugin
+from tests.harness.config import TEST_MODEL_ID
+from xpool.abi import TensorDType
 from xpool.config import XpoolConfig
-from xpool.integrations.sglang import plugin as sglang_plugin
-from xpool.integrations.sglang import topology as sglang_topology
+from xpool.fabric import FfnLayerKind, FfnLayerSpec, FfnWorkload
 from xpool.integrations.sglang.adapter import (
     SglangHook,
-    SglangHookHandler,
     SglangModelAdapter,
     XpoolModelBinding,
 )
 from xpool.integrations.sglang.topology import AtnKind, SglangModelMetadata
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def reset_plugin_required_hook_targets(
     monkeypatch: pytest.MonkeyPatch,
     reset_global_config: None,
 ) -> Iterator[None]:
-    monkeypatch.setattr(sglang_plugin.bootstrap, "init", lambda cuda_device, role: None)
-    monkeypatch.setattr(sglang_plugin.devkit, "install", lambda: None)
-    sglang_plugin.XPOOL_REQUIRED_HOOK_TARGETS.clear()
+    apply_hooks = HookRegistry.__dict__["apply_hooks"]
+    guarded = HookRegistry.__dict__.get("xpool_apply_hooks_guarded")
+    HookRegistry.reset()
+    monkeypatch.setattr(xpool.integrations.sglang.plugin.bootstrap, "init", lambda cuda_device, role: None)
+    monkeypatch.setattr(xpool.integrations.sglang.plugin.devkit, "install", lambda: None)
+    xpool.integrations.sglang.plugin.XPOOL_REQUIRED_HOOK_TARGETS.clear()
     yield
-    sglang_plugin.XPOOL_REQUIRED_HOOK_TARGETS.clear()
+    HookRegistry.reset()
+    setattr(HookRegistry, "apply_hooks", apply_hooks)
+    if guarded is None:
+        with contextlib.suppress(AttributeError):
+            delattr(HookRegistry, "xpool_apply_hooks_guarded")
+    else:
+        setattr(HookRegistry, "xpool_apply_hooks_guarded", guarded)
+    xpool.integrations.sglang.plugin.XPOOL_REQUIRED_HOOK_TARGETS.clear()
 
 
 def configure_xpool_model(
@@ -42,7 +55,6 @@ def configure_xpool_model(
     ffn_cuda_devices: tuple[int, ...] = (1,),
     atn_kind: AtnKind = AtnKind.GQA,
     num_key_value_heads: int = 2,
-    physical_kv_lanes: int = 2,
 ) -> None:
     resolved_model_path = Path(model_path).expanduser().resolve()
     resolved_model_path.mkdir(parents=True, exist_ok=True)
@@ -77,7 +89,7 @@ atn_cuda_devices = [{atn_devices}]
 ffn_cuda_devices = [{ffn_devices}]
 
 [[models]]
-id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+id = "{TEST_MODEL_ID}"
 path = "{resolved_model_path}"
 """.strip(),
         encoding="utf-8",
@@ -91,16 +103,15 @@ path = "{resolved_model_path}"
             num_atn_heads=16,
             num_key_value_heads=num_key_value_heads,
             atn_kind=atn_kind,
-            physical_kv_lanes=physical_kv_lanes,
         )
 
-    monkeypatch.setattr(sglang_topology, "load_sglang_model_metadata", fake_sglang_metadata)
-    config_module.init_global_config()
+    monkeypatch.setattr(SglangModelMetadata, "load", fake_sglang_metadata)
+    xpool.config.init_global_config()
 
 
 def binding() -> XpoolModelBinding:
     return XpoolModelBinding(
-        instance_id="deepseek-ai/DeepSeek-V2-Lite-Chat",
+        instance_id=TEST_MODEL_ID,
         model_path=Path("/tmp/xpool/fake-model"),
         instance_index=0,
         sglang_rank=0,
@@ -109,7 +120,7 @@ def binding() -> XpoolModelBinding:
         sglang_dp_size=1,
         sglang_base_gpu_id=0,
         sglang_gpu_id_step=1,
-        enable_dp_atn=False,
+        enable_dp_attention=False,
         atn_tp_rank=0,
         atn_tp_size=1,
         atn_dp_rank=0,
@@ -117,12 +128,22 @@ def binding() -> XpoolModelBinding:
     )
 
 
-class FakeHookRegistry:
-    calls: ClassVar[list[tuple[str, SglangHookHandler, HookType]]] = []
+def ffn_workload(
+    *,
+    hidden_size: int = 2048,
+    max_decode_rows: int = 4,
+    max_prefill_rows: int = 8,
+) -> FfnWorkload:
+    """Return one strict workload suitable for SGLang plugin tests."""
 
-    @classmethod
-    def register(cls, target: str, handler: SglangHookHandler, hook_type: HookType) -> None:
-        cls.calls.append((target, handler, hook_type))
+    return FfnWorkload(
+        model_config_digest="a" * 64,
+        dtype=TensorDType.FP16,
+        hidden_size=hidden_size,
+        layers=(FfnLayerSpec(layer_id=0, kind=FfnLayerKind.DENSE),),
+        max_decode_rows=max_decode_rows,
+        max_prefill_rows=max_prefill_rows,
+    )
 
 
 def minimal_config() -> XpoolConfig:
@@ -134,6 +155,24 @@ def minimal_config() -> XpoolConfig:
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )
+
+
+def hook_target_load() -> str:
+    """Synthetic valid target for the plugin's required load hook."""
+
+    return "load"
+
+
+def hook_target_memory_pool() -> str:
+    """Synthetic valid target for the plugin's required memory-pool hook."""
+
+    return "memory_pool"
+
+
+def hook_target_initialize() -> str:
+    """Synthetic valid target for the plugin's required initialize hook."""
+
+    return "initialize"
 
 
 class FakeAdapter(SglangModelAdapter):

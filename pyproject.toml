@@ -1,7 +1,8 @@
 [build-system]
 requires = [
-    "cmake>=4.3.2",
+    "cmake==4.3.2",
     "ninja>=1.13.0",
+    "pybind11-stubgen==2.5.5",
     "scikit-build-core>=0.11",
     "torch==2.11.0",
 ]
@@ -18,11 +19,12 @@ dependencies = [
     "flashinfer-cubin==0.6.12",
     "flashinfer-python[cu13]==0.6.12",
     "httpx>=0.28.1",
-    "nvidia-nvshmem-cu13==3.4.5",
+    "nvidia-nvshmem-cu13==3.7.2",
     "numpy>=2.3.5,<2.4",
     "pydantic>=2.13.4",
     "psutil>=7.2.2",
     "safetensors>=0.8.0",
+    "setproctitle>=1.3.7,<2",
     "sglang==0.5.13.post1",
     "torch==2.11.0",
     "transformers==5.8.1",
@@ -37,19 +39,23 @@ xpool = "xpool.integrations.sglang.plugin:install"
 
 [dependency-groups]
 dev = [
-    "cmake>=4.3.2",
+    "clang-format==22.1.5",
+    "cmake==4.3.2",
     "ninja>=1.13.0",
     "pre-commit>=4.6.0",
+    "pybind11-stubgen==2.5.5",
     "pytest>=9.1.0",
     "pytest-cov>=7.0.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.15.17",
     "scikit-build-core>=0.11",
+    "tomli-w>=1.2.0",
     "ty>=0.0.49",
 ]
 
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+override-dependencies = ["nvidia-nvshmem-cu13==3.7.2"]
 package = true
 prerelease = "if-necessary-or-explicit"
 python-downloads = "automatic"
@@ -64,13 +70,16 @@ wheel.packages = ["src/xpool"]
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
+timeout = 300
 markers = [
     "requires_config: requires an XpoolConfig supplied by XPOOL_CONFIG",
-    "requires_cuda(min_devices=1, bf16=False): requires visible CUDA devices and optional BF16 support",
+    "requires_cuda(min_devices=1): requires visible CUDA devices",
+    "requires_mps: requires a responsive CUDA MPS controller",
     "requires_model_weights(model_id): requires model weights resolved through XPOOL_CONFIG",
+    "estimated_duration(seconds): estimated runtime used by python -m tests scheduling",
+    "token_parity_group(name, expected_case_count): complete cross-task token parity group",
 ]
-pythonpath = ["tests"]
-testpaths = ["tests"]
+testpaths = ["tests/suites"]
 
 [tool.coverage.run]
 branch = true
@@ -79,6 +88,9 @@ source = ["xpool"]
 
 [tool.coverage.report]
 show_missing = true
+
+[tool.ty.rules]
+deprecated = "error"
 
 [tool.ruff]
 line-length = 120

@@ -4,31 +4,29 @@ from __future__ import annotations
 
 import logging
 import os
-import threading
 import time
 
-import xpool.ops
-from xpool.abi import ABI_VERSION, FfnResultErrorCode, TransportArenaHandle
+import xpool.native
+from xpool.abi import ABI_VERSION, FfnResultCode
 from xpool.config import get_global_config
+from xpool.fabric import FabricGenerationPhase, FabricPlan, FfnWorkload
 from xpool.runtime.transport import InstanceTransportAttributes
 from xpool.service.client import XpoolClient, XpoolClientError, XpoolDaemonError
 from xpool.service.wire import (
     HeartbeatResponse,
+    InstanceInitializedPublication,
     InstanceRegistration,
-    ProcessHeartbeat,
     ProcessRef,
 )
+from xpool.transport import TransportArenaHandle
 from xpool.utils.background import BackgroundThread
 from xpool.utils.procs import bail
 
 __all__ = [
     "Instance",
     "InstanceError",
+    "InstanceFailureMonitor",
     "InstanceHeartbeat",
-    "InstanceTransportMonitor",
-    "del_instance",
-    "get_instance",
-    "init_instance",
 ]
 
 INSTANCE_HEARTBEAT_INTERVAL_S = 5.0
@@ -36,8 +34,9 @@ STALE_ATNAGENT_RECOVERY_GRACE_S = 60.0
 TRANSPORT_METADATA_RECOVERY_DEADLINE_S = 60.0
 INSTANCE_TRANSPORT_ACQUIRE_INTERVAL_S = 0.5
 INSTANCE_HEARTBEAT_STOP_JOIN_TIMEOUT_S = 5.0
-INSTANCE_TRANSPORT_MONITOR_INTERVAL_S = 0.1
-INSTANCE_TRANSPORT_MONITOR_STOP_JOIN_TIMEOUT_S = 5.0
+INSTANCE_FAILURE_MONITOR_INTERVAL_S = 0.1
+INSTANCE_STARTUP_BARRIER_TIMEOUT_S = 600.0
+INSTANCE_FAILURE_MONITOR_STOP_JOIN_TIMEOUT_S = 5.0
 logger = logging.getLogger(__name__)
 
 
@@ -45,8 +44,8 @@ class InstanceError(RuntimeError):
     """Raised when daemon-brokered FFN shim transport arenas cannot be attached."""
 
 
-class InstanceTransportMonitor:
-    """Fail-close an instance when its device transport records an error.
+class InstanceFailureMonitor:
+    """Fail-close an instance when its transport arena records a failure.
 
     Args:
         instance_id: Configured instance id used in fatal diagnostics.
@@ -54,43 +53,43 @@ class InstanceTransportMonitor:
         rank: Rank-local process index within the instance.
 
     Attributes:
-        worker: Periodic background thread that polls native sticky error state.
+        worker: Periodic background thread that polls native sticky failure state.
     """
 
     def __init__(self, *, instance_id: str, instance_index: int, rank: int) -> None:
-        """Create a stopped transport error monitor."""
+        """Create a stopped instance failure monitor."""
 
         self.instance_id = instance_id
         self.instance_index = instance_index
         self.rank = rank
         self.worker = BackgroundThread.periodic(
-            name=f"xpool-instance-transport-monitor-{instance_id}-{rank}",
-            interval_s=INSTANCE_TRANSPORT_MONITOR_INTERVAL_S,
+            name=f"xpool-instance-failure-monitor-{instance_id}-{rank}",
+            interval_s=INSTANCE_FAILURE_MONITOR_INTERVAL_S,
             target=self.step,
-            join_timeout_s=INSTANCE_TRANSPORT_MONITOR_STOP_JOIN_TIMEOUT_S,
+            join_timeout_s=INSTANCE_FAILURE_MONITOR_STOP_JOIN_TIMEOUT_S,
         )
 
     def start(self) -> None:
-        """Start polling native transport error state."""
+        """Start polling native sticky failure state."""
 
         self.worker.start()
 
     def stop(self) -> None:
-        """Stop polling native transport error state."""
+        """Stop polling native sticky failure state."""
 
         self.worker.close()
 
     def step(self) -> bool:
         """Poll once and terminate the process when the arena has failed."""
 
-        error = xpool.ops.instance.transport_error_snapshot(self.instance_index, self.rank)
-        if error != FfnResultErrorCode.OK:
+        failure = FfnResultCode(xpool.native.transport.read_generation_failure())
+        if failure != FfnResultCode.OK:
             bail(
                 logger,
                 "xpool transport executor failed for instance %s rank %s: %s",
                 self.instance_id,
                 self.rank,
-                error.name,
+                failure.name,
             )
         return True
 
@@ -124,7 +123,7 @@ class InstanceHeartbeat:
         rank: int,
         local_cuda_device: int,
         registration: InstanceRegistration,
-        heartbeat: ProcessHeartbeat,
+        heartbeat: ProcessRef,
     ) -> None:
         """Create a stopped heartbeat worker owner."""
 
@@ -232,10 +231,10 @@ class InstanceHeartbeat:
         """Apply fail-closed policy for daemon heartbeat warnings."""
 
         warning_kinds = {warning.kind for warning in response.warnings if warning.cuda_device == self.local_cuda_device}
-        if "terminating_atnagent" in warning_kinds:
+        if "quiescing_atnagent" in warning_kinds:
             logger.warning(
-                "xpool daemon reported terminating agent on CUDA device %s for instance %s rank %s; "
-                "waiting for daemon-scoped termination",
+                "xpool daemon reported quiescing agent on CUDA device %s for instance %s rank %s; "
+                "waiting for daemon-scoped quiesce",
                 self.local_cuda_device,
                 self.instance_id,
                 self.rank,
@@ -293,9 +292,9 @@ class Instance:
     local_cuda_device: int
     process_ref: ProcessRef
     registration: InstanceRegistration | None
-    heartbeat: ProcessHeartbeat
+    heartbeat: ProcessRef
     heartbeat_worker: InstanceHeartbeat | None
-    transport_monitor: InstanceTransportMonitor | None
+    failure_monitor: InstanceFailureMonitor | None
     arena_handle: TransportArenaHandle | None
 
     def __init__(
@@ -328,22 +327,59 @@ class Instance:
         self.local_cuda_device = config.devices.atn_cuda_devices[rank]
         self.process_ref = ProcessRef(abi_version=ABI_VERSION, pid=pid)
         self.registration = None
-        self.heartbeat = ProcessHeartbeat(abi_version=ABI_VERSION, pid=pid)
+        self.heartbeat = self.process_ref
         self.heartbeat_worker = None
-        self.transport_monitor = None
+        self.failure_monitor = None
         self.arena_handle = None
+        self.fabric_plan: FabricPlan | None = None
 
-    def start_runtime(self, transport: InstanceTransportAttributes) -> None:
-        """Register, heartbeat, and attach this instance rank transactionally."""
+    @classmethod
+    def start(
+        cls,
+        *,
+        instance_id: str,
+        rank: int,
+        transport: InstanceTransportAttributes,
+        workload: FfnWorkload,
+    ) -> Instance:
+        """Construct and transactionally start one runner-owned runtime.
+
+        Args:
+            instance_id: Configured model/instance id owned by this rank.
+            rank: Rank-local SGLang process index within the instance.
+            transport: Transport geometry declared by this rank.
+            workload: Rank-independent FFN execution contract.
+
+        Returns:
+            Registered runtime with a running heartbeat worker. Transport
+            attachment remains an explicit post-``EXECUTABLE`` operation.
+
+        Raises:
+            InstanceError: If identity, registration, or attachment fails.
+
+        Side Effects:
+            Registers with the daemon and starts the heartbeat worker.
+        """
+
+        runtime = cls(instance_id=instance_id, rank=rank)
+        try:
+            runtime.start_runtime(transport, workload)
+        except Exception:
+            runtime.close()
+            raise
+        return runtime
+
+    def start_runtime(self, transport: InstanceTransportAttributes, workload: FfnWorkload) -> None:
+        """Register this instance rank and start its heartbeat transactionally."""
 
         if self.registration is not None:
             self.expect_transport(transport)
+            if self.registration.workload != workload:
+                raise InstanceError("instance runtime is already registered with a different workload")
             return
-        self.register_runtime(transport)
+        self.register_runtime(transport, workload)
         try:
             self.start_heartbeat_worker()
-            self.attach_arena_from_daemon()
-            self.start_transport_monitor()
         except Exception:
             try:
                 self.deregister_runtime()
@@ -351,11 +387,13 @@ class Instance:
                 logger.warning("failed to clean up xpool instance registration: %s", cleanup_exc)
             raise
 
-    def register_runtime(self, transport: InstanceTransportAttributes) -> None:
+    def register_runtime(self, transport: InstanceTransportAttributes, workload: FfnWorkload) -> None:
         """Register this instance rank with the daemon."""
 
         if self.registration is not None:
             self.expect_transport(transport)
+            if self.registration.workload != workload:
+                raise InstanceError("instance runtime is already registered with a different workload")
             return
         registration = InstanceRegistration(
             instance_id=self.instance_id,
@@ -363,20 +401,108 @@ class Instance:
             abi_version=ABI_VERSION,
             pid=self.process_ref.pid,
             transport=transport,
+            workload=workload,
         )
         self.client.register_instance(registration)
         self.registration = registration
 
-    def deregister_runtime(self) -> None:
-        """Detach native transport and remove this rank's daemon registration.
+    def wait_for_fabric_executable(self) -> FabricPlan:
+        """Wait until every Agent and FFN Executor is device-executable.
 
-        Native detach runs first. If native cleanup fails, daemon deregistration
-        is intentionally skipped so agents do not treat a still-attached CUDA
-        IPC arena as detached.
+        Returns:
+            Immutable active fabric plan observed at the executable barrier.
+
+        Raises:
+            InstanceError: If the barrier times out or the generation fails or drains.
+        """
+
+        deadline = time.monotonic() + INSTANCE_STARTUP_BARRIER_TIMEOUT_S
+        while time.monotonic() < deadline:
+            readiness = self.client.readiness()
+            match readiness.fabric_phase:
+                case FabricGenerationPhase.EXECUTABLE:
+                    plan = self.client.fabric_plan()
+                    if readiness.generation is None or plan.generation != readiness.generation:
+                        raise InstanceError("daemon returned inconsistent executable Fabric generation facts")
+                    self.fabric_plan = plan
+                    return plan
+                case None | FabricGenerationPhase.JOINING:
+                    time.sleep(INSTANCE_TRANSPORT_ACQUIRE_INTERVAL_S)
+                case phase:
+                    failures = tuple(
+                        failure
+                        for failure in (
+                            readiness.fabric_invocation_failure,
+                            readiness.fabric_owner_failure,
+                            readiness.fabric_protocol_failure,
+                        )
+                        if failure is not None
+                    )
+                    detail = f": {failures}" if failures else ""
+                    raise InstanceError(f"fabric entered {phase.value} during startup{detail}")
+        raise InstanceError("timed out waiting for executable fabric generation")
+
+    def publish_initialized(self) -> None:
+        """Publish the post-ModelRunner.initialize startup barrier.
+
+        Raises:
+            InstanceError: If this runtime did not observe an executable plan.
+        """
+
+        plan = self.fabric_plan
+        if plan is None:
+            raise InstanceError("instance cannot publish initialized before the executable fabric barrier")
+        self.client.publish_instance_initialized(
+            self.instance_id,
+            rank=self.rank,
+            publication=InstanceInitializedPublication(
+                owner=self.process_ref,
+                generation=plan.generation,
+                plan_digest=plan.digest(),
+            ),
+        )
+
+    def wait_for_ready(self) -> None:
+        """Wait for every configured SGLang rank to finish initialization.
+
+        Raises:
+            InstanceError: If the barrier times out or the generation fails or drains.
+        """
+
+        deadline = time.monotonic() + INSTANCE_STARTUP_BARRIER_TIMEOUT_S
+        while time.monotonic() < deadline:
+            readiness = self.client.readiness()
+            if readiness.ready:
+                return
+            match readiness.fabric_phase:
+                case None | FabricGenerationPhase.JOINING | FabricGenerationPhase.EXECUTABLE:
+                    time.sleep(INSTANCE_TRANSPORT_ACQUIRE_INTERVAL_S)
+                case phase:
+                    failures = tuple(
+                        failure
+                        for failure in (
+                            readiness.fabric_invocation_failure,
+                            readiness.fabric_owner_failure,
+                            readiness.fabric_protocol_failure,
+                        )
+                        if failure is not None
+                    )
+                    detail = f": {failures}" if failures else ""
+                    raise InstanceError(f"fabric entered {phase.value} during initialization{detail}")
+        raise InstanceError("timed out waiting for every instance rank to initialize")
+
+    def deregister_runtime(self) -> None:
+        """Detach transport and remove this rank's registration.
+
+        Native detach runs before daemon deregistration. The deregistration is
+        the authoritative Instance-departure event that makes the daemon select
+        generation-wide cooperative quiesce. If native cleanup fails, daemon
+        deregistration is intentionally skipped so agents do not treat a
+        still-attached CUDA IPC arena as detached.
         """
 
         registration = self.registration
-        self.stop_transport_monitor()
+        self.stop_failure_monitor()
         self.detach_arena()
         self.stop_heartbeat_worker()
         if registration is None:
@@ -395,7 +521,7 @@ class Instance:
             if self.arena_handle != handle:
                 raise InstanceError("instance transport arena is already attached with a different handle")
             return
-        xpool.ops.instance.attach_transport_arena(self.instance_index, self.rank, handle)
+        xpool.native.transport.attach_arena(self.instance_index, self.rank, handle.handle)
         self.arena_handle = handle
         if self.heartbeat_worker is not None:
             self.heartbeat_worker.arena_handle = handle
@@ -404,8 +530,10 @@ class Instance:
     def detach_arena(self) -> None:
         """Detach this rank's native transport arena, if one is attached."""
 
-        self.stop_transport_monitor()
-        xpool.ops.instance.detach_transport_arena(self.instance_index, self.rank)
+        self.stop_failure_monitor()
+        if self.arena_handle is None:
+            return
+        xpool.native.transport.detach_arena()
         self.arena_handle = None
         if self.heartbeat_worker is not None:
             self.heartbeat_worker.arena_handle = None
@@ -453,133 +581,46 @@ class Instance:
         self.heartbeat_worker.stop()
         self.heartbeat_worker = None
 
-    def start_transport_monitor(self) -> None:
-        """Start the device transport error monitor for the attached arena."""
+    def start_failure_monitor(self) -> None:
+        """Start the sticky failure monitor for the attached arena."""
 
         if self.arena_handle is None:
-            raise InstanceError("instance transport monitor requires an attached arena")
-        if self.transport_monitor is None:
-            self.transport_monitor = InstanceTransportMonitor(
+            raise InstanceError("instance failure monitor requires an attached arena")
+        if self.failure_monitor is None:
+            self.failure_monitor = InstanceFailureMonitor(
                 instance_id=self.instance_id,
                 instance_index=self.instance_index,
                 rank=self.rank,
             )
-        self.transport_monitor.start()
+        self.failure_monitor.start()
 
-    def stop_transport_monitor(self) -> None:
-        """Stop the device transport error monitor, if one is active."""
+    def stop_failure_monitor(self) -> None:
+        """Stop the sticky failure monitor, if one is active."""
 
-        if self.transport_monitor is None:
+        if self.failure_monitor is None:
             return
-        self.transport_monitor.stop()
-        self.transport_monitor = None
+        self.failure_monitor.stop()
+        self.failure_monitor = None
 
     def close(self) -> None:
-        """Stop heartbeat activity and close the daemon client."""
+        """Release all runtime resources in dependency order.
 
-        self.stop_transport_monitor()
-        self.stop_heartbeat_worker()
-        self.client.close()
+        Cleanup is idempotent after success. If native detach fails, the
+        registration and client remain available so the caller can retry.
+        """
 
-    def expect_identity(self, instance_id: str, rank: int) -> None:
-        """Raise when a singleton request targets a different instance identity."""
-
-        if self.instance_id != instance_id or self.rank != rank:
-            raise InstanceError(
-                "xpool instance runtime singleton already owns "
-                f"{self.instance_id} rank {self.rank}, got {instance_id} rank {rank}"
-            )
+        try:
+            self.deregister_runtime()
+        finally:
+            if self.registration is None and self.arena_handle is None:
+                self.client.close()
 
     def expect_transport(self, transport: InstanceTransportAttributes) -> None:
-        """Raise when a started singleton is requested with different transport attributes."""
+        """Raise when a started runtime receives different transport attributes."""
 
         if self.registration is None:
             return
         installed = self.registration.transport.model_dump(mode="json")
         requested = transport.model_dump(mode="json")
         if installed != requested:
-            raise InstanceError("xpool instance runtime singleton already started with different transport attributes")
-
-
-instance_runtime: Instance | None = None
-instance_runtime_lock = threading.RLock()
-
-
-def init_instance(
-    *,
-    instance_id: str,
-    rank: int,
-    transport: InstanceTransportAttributes,
-) -> Instance:
-    """Initialize the process-global instance runtime exactly once.
-
-    Args:
-        instance_id: Configured model/instance id owned by this SGLang rank.
-        rank: Rank-local SGLang process index within the instance.
-        transport: Transport capacity and topology reported by this rank.
-
-    Returns:
-        Active process-global instance runtime.
-
-    Raises:
-        InstanceError: If an existing runtime has a different identity or
-            transport contract.
-
-    Side Effects:
-        Registers the rank, starts heartbeat and transport monitoring, and
-        publishes the singleton only after startup succeeds.
-    """
-
-    global instance_runtime
-    with instance_runtime_lock:
-        if instance_runtime is not None:
-            instance_runtime.expect_identity(instance_id, rank)
-            if instance_runtime.registration is None:
-                instance_runtime.start_runtime(transport)
-            else:
-                instance_runtime.expect_transport(transport)
-            return instance_runtime
-
-        candidate = Instance(instance_id=instance_id, rank=rank)
-        try:
-            candidate.start_runtime(transport)
-        except Exception:
-            candidate.close()
-            raise
-        instance_runtime = candidate
-        return candidate
-
-
-def get_instance() -> Instance:
-    """Return the initialized process-global instance runtime.
-
-    Returns:
-        Active instance runtime.
-
-    Raises:
-        InstanceError: If this process has not initialized an instance runtime.
-    """
-
-    with instance_runtime_lock:
-        if instance_runtime is None:
-            raise InstanceError("xpool instance runtime is not initialized")
-        return instance_runtime
-
-
-def del_instance() -> None:
-    """Deregister and delete the process-global instance runtime.
-
-    Side Effects:
-        Stops monitor and heartbeat workers, detaches native transport,
-        deregisters from the daemon, and closes the daemon client. The
-        singleton remains installed if any cleanup step fails so cleanup can be
-        retried safely.
-    """
-
-    global instance_runtime
-    with instance_runtime_lock:
-        if instance_runtime is None:
-            return
-        instance_runtime.deregister_runtime()
-        instance_runtime.close()
-        instance_runtime = None
+            raise InstanceError("xpool instance runtime already started with different transport attributes")

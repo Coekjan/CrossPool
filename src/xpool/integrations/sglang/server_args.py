@@ -42,6 +42,7 @@ def validate_sglang_server_args(server_args: ServerArgs) -> None:
 
 SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (
     ServerArgRule("Pipeline Parallelism", lambda args: args.pp_size == 1),
+    ServerArgRule("Attention Context Parallelism", lambda args: args.attn_cp_size == 1),
     ServerArgRule("Speculative Decoding", lambda args: disabled_string_option(args.speculative_algorithm)),
     ServerArgRule("LoRA", lambda args: not args.enable_lora and not args.lora_paths),
     ServerArgRule("Quantization", lambda args: args.quantization is None),
@@ -60,6 +61,7 @@ SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (
     ServerArgRule("Single-Batch Overlap", lambda args: not args.enable_single_batch_overlap),
     ServerArgRule("Torch Compile", lambda args: not args.enable_torch_compile),
     ServerArgRule("Piecewise CUDA Graph Compiler", lambda args: args.piecewise_cuda_graph_compiler == "eager"),
+    ServerArgRule("Piecewise CUDA Graph Enforcement", lambda args: not args.enforce_piecewise_cuda_graph),
     ServerArgRule("Mixed Chunked Prefill", lambda args: not args.enable_mixed_chunk),
     ServerArgRule("Attention TP Input Scattering", lambda args: not args.enable_attn_tp_input_scattered),
     ServerArgRule("Prefill Context Parallelism", lambda args: not args.enable_prefill_context_parallel),

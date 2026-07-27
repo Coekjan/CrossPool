@@ -1,34 +1,103 @@
+"""Provide explicitly imported fixtures for Instance runtime lifecycle tests."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
 
 import pytest
 
-from xpool.abi import ABI_VERSION, TransportArenaHandle
-from xpool.config import XpoolConfig, init_global_config
-from xpool.runtime import instance as instance_module
+import xpool.runtime.instance
+from tests.harness.config import install_test_config
+from xpool.abi import ABI_VERSION, TensorDType
+from xpool.config import XpoolConfig
+from xpool.fabric import FfnLayerKind, FfnLayerSpec, FfnWorkload
 from xpool.runtime.instance import (
     Instance,
     InstanceHeartbeat,
 )
 from xpool.runtime.transport import InstanceTransportAttributes
 from xpool.service.wire import (
+    HeartbeatResponse,
     InstanceRegistration,
-    ProcessHeartbeat,
+    ProcessRef,
 )
+from xpool.transport import TransportArenaHandle
 
 
-@pytest.fixture(autouse=True)
-def reset_instance_runtime(
+@dataclass(slots=True)
+class ScriptedInstanceClient:
+    """Response scripts and call observations for one Instance heartbeat test."""
+
+    heartbeat_results: list[HeartbeatResponse | BaseException] = field(default_factory=list)
+    arena_results: list[TransportArenaHandle | BaseException] = field(default_factory=list)
+    calls: list[tuple[object, ...]] = field(default_factory=list)
+    close_count: int = 0
+
+    def close(self) -> None:
+        self.close_count += 1
+        self.calls.append(("close",))
+
+    def heartbeat_instance(
+        self,
+        instance_id: str,
+        *,
+        rank: int,
+        heartbeat: ProcessRef,
+    ) -> HeartbeatResponse:
+        self.calls.append(("heartbeat", instance_id, rank, heartbeat))
+        return self.consume(self.heartbeat_results, "heartbeat")
+
+    def register_instance(self, registration: InstanceRegistration) -> None:
+        self.calls.append(("register", registration))
+
+    def deregister_instance(self, instance_id: str, *, rank: int, owner: ProcessRef) -> None:
+        self.calls.append(("deregister", instance_id, rank, owner))
+
+    def acquire_instance_transport_arena(
+        self,
+        instance_id: str,
+        *,
+        rank: int,
+        owner: ProcessRef,
+    ) -> TransportArenaHandle:
+        self.calls.append(("acquire", instance_id, rank, owner))
+        return self.consume(self.arena_results, "arena acquisition")
+
+    @staticmethod
+    def consume[T](script: list[T | BaseException], operation: str) -> T:
+        if not script:
+            raise AssertionError(f"unexpected scripted Instance client {operation}")
+        result = script.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+
+def install_scripted_instance_client(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    heartbeat_results: list[HeartbeatResponse | BaseException],
+    arena_results: list[TransportArenaHandle | BaseException] | None = None,
+) -> ScriptedInstanceClient:
+    """Install one isolated scripted client for a production Instance heartbeat."""
+
+    client = ScriptedInstanceClient(
+        heartbeat_results=list(heartbeat_results),
+        arena_results=list(arena_results or ()),
+    )
+    monkeypatch.setattr(xpool.runtime.instance, "XpoolClient", lambda: client)
+    return client
+
+
+@pytest.fixture
+def install_offline_instance_client(
     monkeypatch: pytest.MonkeyPatch,
     reset_global_config: None,
 ) -> Iterator[None]:
     class OfflineXpoolClient:
-        def __init__(self) -> None:
-            return None
-
         def close(self) -> None:
-            return None
+            pass
 
         def register_instance(self, registration: InstanceRegistration) -> None:
             pytest.fail("test must install a client fake before daemon registration")
@@ -39,10 +108,8 @@ def reset_instance_runtime(
         def acquire_instance_transport_arena(self, *args: object, **kwargs: object) -> TransportArenaHandle:
             pytest.fail("test must install a client fake before arena acquisition")
 
-    monkeypatch.setattr(instance_module, "instance_runtime", None)
-    monkeypatch.setattr(instance_module, "XpoolClient", OfflineXpoolClient)
+    monkeypatch.setattr(xpool.runtime.instance, "XpoolClient", OfflineXpoolClient)
     yield
-    monkeypatch.setattr(instance_module, "instance_runtime", None)
 
 
 def runtime_config(*, enabled: bool) -> XpoolConfig:
@@ -54,7 +121,7 @@ def runtime_config(*, enabled: bool) -> XpoolConfig:
         },
         env=env,
     )
-    init_global_config(config=config)
+    install_test_config(config)
     return config
 
 
@@ -65,11 +132,9 @@ def runtime_instance(
     rank: int = 0,
     pid: int = 123,
 ) -> Instance:
-    monkeypatch.setattr(instance_module.os, "getpid", lambda: pid)
-    init_global_config(config=config)
-    instance = Instance(instance_id="m", rank=rank)
-    monkeypatch.setattr(instance_module, "instance_runtime", instance)
-    return instance
+    monkeypatch.setattr(xpool.runtime.instance.os, "getpid", lambda: pid)
+    install_test_config(config)
+    return Instance(instance_id="m", rank=rank)
 
 
 def runtime_heartbeat(
@@ -79,11 +144,11 @@ def runtime_heartbeat(
     rank: int = 0,
     pid: int = 123,
 ) -> InstanceHeartbeat:
-    monkeypatch.setattr(instance_module.os, "getpid", lambda: pid)
-    init_global_config(config=config)
+    monkeypatch.setattr(xpool.runtime.instance.os, "getpid", lambda: pid)
+    install_test_config(config)
     instance_id = "m"
     local_cuda_device = config.devices.atn_cuda_devices[rank]
-    heartbeat = ProcessHeartbeat(abi_version=ABI_VERSION, pid=pid)
+    heartbeat = ProcessRef(abi_version=ABI_VERSION, pid=pid)
     return InstanceHeartbeat(
         instance_id=instance_id,
         rank=rank,
@@ -94,21 +159,14 @@ def runtime_heartbeat(
             abi_version=ABI_VERSION,
             pid=pid,
             transport=transport_attributes(),
+            workload=workload(),
         ),
         heartbeat=heartbeat,
     )
 
 
-def arena_for_rank(*, rank: int) -> TransportArenaHandle:
-    return transport_arena()
-
-
 def transport_arena() -> TransportArenaHandle:
     return TransportArenaHandle(handle="00" * 64)
-
-
-def native_attach_args(instance_index: int, rank: int, handle: TransportArenaHandle) -> tuple[object, ...]:
-    return (instance_index, rank, handle)
 
 
 def patch_native_instance_ops(
@@ -118,22 +176,46 @@ def patch_native_instance_ops(
     detach: Callable[..., object] | None = None,
     error_snapshot: Callable[..., object] | None = None,
 ) -> None:
-    monkeypatch.setattr(instance_module.xpool.ops.instance, "attach_transport_arena", attach or (lambda *args: None))
-    monkeypatch.setattr(instance_module.xpool.ops.instance, "detach_transport_arena", detach or (lambda *args: None))
+    def attach_arena(instance_index: int, rank: int, handle: str) -> object:
+        callback = attach or (lambda *args: None)
+        return callback(instance_index, rank, TransportArenaHandle(handle=handle))
+
     monkeypatch.setattr(
-        instance_module.xpool.ops.instance,
-        "transport_error_snapshot",
-        error_snapshot or (lambda *args: instance_module.FfnResultErrorCode.OK),
+        xpool.runtime.instance.xpool.native.transport,
+        "attach_arena",
+        attach_arena,
+    )
+    monkeypatch.setattr(
+        xpool.runtime.instance.xpool.native.transport,
+        "detach_arena",
+        detach or (lambda *args: None),
+    )
+    monkeypatch.setattr(
+        xpool.runtime.instance.xpool.native.transport,
+        "read_generation_failure",
+        error_snapshot or (lambda *args: int(xpool.runtime.instance.FfnResultCode.OK)),
     )
 
 
 def transport_attributes() -> InstanceTransportAttributes:
     return InstanceTransportAttributes(
-        element_size=4,
         hidden_size=4,
         max_tokens=8,
         atn_tp_rank=0,
         atn_tp_size=1,
         atn_dp_rank=0,
         atn_dp_size=1,
+    )
+
+
+def workload() -> FfnWorkload:
+    """Return the minimal valid workload used by instance runtime tests."""
+
+    return FfnWorkload(
+        model_config_digest="a" * 64,
+        dtype=TensorDType.BF16,
+        hidden_size=4,
+        layers=(FfnLayerSpec(layer_id=0, kind=FfnLayerKind.DENSE),),
+        max_decode_rows=1,
+        max_prefill_rows=1,
     )

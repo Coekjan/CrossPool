@@ -1,62 +1,342 @@
+"""Typed subprocess harness for native Transport arena ownership."""
+
 from __future__ import annotations
 
 import json
-import selectors
-import subprocess
-import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
+import tempfile
+import time
+from collections.abc import Callable, Generator, Iterator
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
+from enum import StrEnum
+from multiprocessing.connection import Connection
+from pathlib import Path
 
-ATNAGENT_ARENA_SCRIPT = r"""
-import json
-import sys
-import traceback
-
+import pytest
 import torch
 
-from xpool.abi import DebugLoopbackSite, DebugOptions, RuntimeRole
-from xpool.cext import ensure_xpool_ops_loaded
+import xpool.native
+from tests.harness.native.debug import native_debug_options
+from tests.harness.process import SpawnedProcess
+from xpool.abi import TensorDType
+from xpool.cext import ensure_native_loaded
+from xpool.config import LoopbackSite
+from xpool.runtime import RuntimeRole
 
-try:
-    cuda_device = int(sys.argv[1])
-    max_tokens = int(sys.argv[2])
-    hidden_size = int(sys.argv[3])
-    element_size = int(sys.argv[4])
-    atn_dp_size = int(sys.argv[5])
-    launch_kernel = sys.argv[6] == "1"
-    atnagent_loopback_enabled = sys.argv[7] == "1"
-    observer_output_path = sys.argv[8]
+TRANSPORT_COMMAND_TIMEOUT_SECONDS = 30.0
+TRACE_FIELDS = (
+    "trace_id",
+    "payload_rows",
+    "layer_ordinal",
+    "forward_mode",
+    "result_handoff",
+    "dp_padding_mode",
+    "result_code",
+    "staging_started",
+    "staging_completed",
+    "published",
+    "published_observed",
+    "execution_started",
+    "execution_admitted",
+    "execution_completed",
+    "evaluated",
+    "evaluated_observed",
+    "output_copied",
+    "acknowledged",
+    "closed",
+)
 
-    ensure_xpool_ops_loaded()
-    loopback_site = DebugLoopbackSite.ATNAGENT if atnagent_loopback_enabled else DebugLoopbackSite.NONE
-    debug_options = DebugOptions.create(
-        loopback_site=loopback_site,
-        transport_observer=bool(observer_output_path),
+
+@pytest.fixture
+def instance_transport_runtime(reset_global_config: None) -> Iterator[None]:
+    """Initialize and reset one Instance-role Transport binding boundary."""
+
+    xpool.native.initialize(RuntimeRole.INSTANCE, torch.cuda.current_device(), None)
+    xpool.native.transport.detach_arena()
+    yield
+    xpool.native.transport.detach_arena()
+
+
+def initialize_instance_transport(*, atnagent_loopback: bool) -> None:
+    """Initialize one isolated Instance-role native Transport runtime."""
+
+    debug_options = native_debug_options(loopback_site=LoopbackSite.ATNAGENT) if atnagent_loopback else None
+    xpool.native.initialize(
+        RuntimeRole.INSTANCE,
+        cuda_device=torch.cuda.current_device(),
+        debug_options=debug_options,
     )
-    torch.ops.xpool.init(cuda_device, int(RuntimeRole.ATNAGENT), debug_options.raw)
-    arena = torch.ops.xpool.atnagent.create_transport_arena(
-        cuda_device,
-        max_tokens,
-        hidden_size,
-        element_size,
-        atn_dp_size,
+
+
+class TransportOwnerCommand(StrEnum):
+    """Lifecycle commands accepted by a Transport owner child."""
+
+    ACTIVATE = "activate"
+    HEALTH = "health"
+    DRAIN = "drain"
+    DESTROY = "destroy"
+
+
+class TransportOwnerState(StrEnum):
+    """Command outcomes published by a Transport owner child."""
+
+    ACTIVATED = "activated"
+    HEALTHY = "healthy"
+    FAILED = "failed"
+    DRAINED = "drained"
+    DESTROYED = "destroyed"
+
+
+@dataclass(frozen=True, slots=True)
+class TransportOwnerSpec:
+    """Complete Transport owner startup configuration."""
+
+    cuda_device: int
+    max_tokens: int
+    hidden_size: int
+    dtype: TensorDType
+    atn_dp_size: int
+    activate_resident: bool
+    atnagent_loopback_enabled: bool
+    observer_output_path: Path | None
+    instance_index: int
+    instance_rank: int
+    atn_tp_rank: int
+    atn_tp_size: int
+    atn_dp_rank: int
+
+
+@dataclass(frozen=True, slots=True)
+class TransportArenaPublished:
+    """Owner startup acknowledgement carrying the native arena handle."""
+
+    handle: str
+
+
+@dataclass(frozen=True, slots=True)
+class TransportOwnerStatus:
+    """Typed response to one owner lifecycle command."""
+
+    state: TransportOwnerState
+    message: str = ""
+
+
+@dataclass(slots=True)
+class AtnAgentArenaController:
+    """Control one subprocess-owned native Transport arena."""
+
+    handle: str
+    process: SpawnedProcess
+    timeout_seconds: float = TRANSPORT_COMMAND_TIMEOUT_SECONDS
+    activated: bool = True
+    drained: bool = False
+    destroyed: bool = False
+
+    def command(self, command: TransportOwnerCommand) -> TransportOwnerStatus:
+        """Send one typed lifecycle command and receive its status."""
+
+        self.process.send(command)
+        return self.process.receive(TransportOwnerStatus, timeout_seconds=self.timeout_seconds)
+
+    def activate(self) -> None:
+        """Launch the process-wide Resident after arena publication."""
+
+        if self.activated:
+            return
+        response = self.command(TransportOwnerCommand.ACTIVATE)
+        if response.state is not TransportOwnerState.ACTIVATED:
+            raise RuntimeError(f"unexpected Transport activation state: {response.state}")
+        self.activated = True
+
+    def health(self) -> TransportOwnerStatus:
+        """Return the child Resident health status."""
+
+        return self.command(TransportOwnerCommand.HEALTH)
+
+    def drain(self) -> None:
+        """Drain the Resident while retaining the owner allocation."""
+
+        if self.drained:
+            return
+        if not self.activated:
+            self.drained = True
+            return
+        response = self.command(TransportOwnerCommand.DRAIN)
+        if response.state is not TransportOwnerState.DRAINED:
+            raise RuntimeError(f"unexpected Transport drain state: {response.state}")
+        self.drained = True
+
+    def destroy(self) -> None:
+        """Destroy the owner allocation and reap the child."""
+
+        if self.destroyed:
+            return
+        response = self.command(TransportOwnerCommand.DESTROY)
+        if response.state is not TransportOwnerState.DESTROYED:
+            raise RuntimeError(f"unexpected Transport destroy state: {response.state}")
+        self.process.wait(timeout_seconds=self.timeout_seconds)
+        self.drained = True
+        self.destroyed = True
+
+
+def drain_transport_resident() -> None:
+    """Drain the process-wide Transport Resident with a bounded deadline."""
+
+    xpool.native.transport.drain_async()
+    deadline = time.monotonic() + TRANSPORT_COMMAND_TIMEOUT_SECONDS
+    while xpool.native.transport.drain_pending():
+        if time.monotonic() >= deadline:
+            raise RuntimeError("timed out draining native Transport Resident")
+        time.sleep(0.001)
+
+
+def write_transport_trace(arena: str, output_path: Path) -> None:
+    """Verify stable trace reads and write the raw observer payload."""
+
+    first = xpool.native.transport.read_trace(arena)
+    second = xpool.native.transport.read_trace(arena)
+    if first is None or second is None:
+        raise RuntimeError("enabled transport observer returned no trace snapshot")
+    if (
+        first.sequence != second.sequence
+        or first.dropped != second.dropped
+        or len(first.records) != len(second.records)
+    ):
+        raise RuntimeError("repeated owner transport trace reads differ")
+    records = [{field: int(getattr(record, field)) for field in TRACE_FIELDS} for record in first.records]
+    output_path.write_text(
+        json.dumps({"sequence": first.sequence, "dropped": first.dropped, "records": records}),
+        encoding="utf-8",
     )
-    if launch_kernel:
-        torch.ops.xpool.atnagent.launch_transport_kernel(arena)
-    print(json.dumps({"handle": arena}), flush=True)
-    command = sys.stdin.readline().strip()
-    if command == "destroy":
-        sequence, dropped, records = torch.ops.xpool.atnagent.destroy_transport_arena(arena)
-        if observer_output_path:
-            with open(observer_output_path, "w", encoding="utf-8") as output_file:
-                json.dump(
-                    {"sequence": sequence, "dropped": dropped, "records": records},
-                    output_file,
-                )
-except BaseException:
-    traceback.print_exc()
-    sys.exit(1)
-"""
+
+
+def run_transport_owner(connection: Connection, spec: TransportOwnerSpec) -> None:
+    """Own and serve one native Transport arena until terminal destroy."""
+
+    ensure_native_loaded()
+    debug_options = json.dumps(
+        {
+            "loopback": {
+                "enable": spec.atnagent_loopback_enabled,
+                "site": "atnagent" if spec.atnagent_loopback_enabled else None,
+            },
+            "transport_observer": {
+                "enable": spec.observer_output_path is not None,
+                "trace_capacity": 8192,
+            },
+            "fabric_observer": {"enable": False, "trace_capacity": 8192},
+        }
+    )
+    xpool.native.initialize(int(RuntimeRole.ATNAGENT), spec.cuda_device, debug_options)
+    arena = xpool.native.transport.create_arena(
+        spec.instance_index,
+        spec.instance_rank,
+        spec.max_tokens,
+        spec.hidden_size,
+        int(spec.dtype),
+        spec.atn_tp_rank,
+        spec.atn_tp_size,
+        spec.atn_dp_rank,
+        spec.atn_dp_size,
+    )
+    activated = spec.activate_resident
+    if activated:
+        xpool.native.transport.activate()
+    connection.send(TransportArenaPublished(str(arena)))
+    drained = False
+    while True:
+        command = connection.recv()
+        if not isinstance(command, TransportOwnerCommand):
+            raise RuntimeError(f"invalid Transport owner command: {command!r}")
+        match command:
+            case TransportOwnerCommand.ACTIVATE:
+                if not activated:
+                    xpool.native.transport.activate()
+                    activated = True
+                connection.send(TransportOwnerStatus(TransportOwnerState.ACTIVATED))
+            case TransportOwnerCommand.HEALTH:
+                try:
+                    xpool.native.transport.check_health()
+                except RuntimeError as error:
+                    connection.send(TransportOwnerStatus(TransportOwnerState.FAILED, str(error)))
+                else:
+                    connection.send(TransportOwnerStatus(TransportOwnerState.HEALTHY))
+            case TransportOwnerCommand.DRAIN:
+                if not drained:
+                    if activated:
+                        drain_transport_resident()
+                    drained = True
+                connection.send(TransportOwnerStatus(TransportOwnerState.DRAINED))
+            case TransportOwnerCommand.DESTROY:
+                if activated and not drained:
+                    drain_transport_resident()
+                if spec.observer_output_path is not None:
+                    write_transport_trace(arena, spec.observer_output_path)
+                xpool.native.transport.destroy_arenas([arena])
+                connection.send(TransportOwnerStatus(TransportOwnerState.DESTROYED))
+                return
+
+
+@contextmanager
+def controlled_atnagent_arena_process(
+    *,
+    cuda_device: int,
+    max_tokens: int,
+    hidden_size: int,
+    dtype: TensorDType,
+    atn_dp_size: int,
+    activate_resident: bool,
+    atnagent_loopback_enabled: bool = True,
+    observer_output_path: str = "",
+    startup_timeout_s: float = TRANSPORT_COMMAND_TIMEOUT_SECONDS,
+    instance_index: int = 0,
+    instance_rank: int = 0,
+    atn_tp_rank: int = 0,
+    atn_tp_size: int = 1,
+    atn_dp_rank: int = 0,
+) -> Generator[AtnAgentArenaController, None, None]:
+    """Start a controllable AtnAgent child and publish its arena."""
+
+    spec = TransportOwnerSpec(
+        cuda_device=cuda_device,
+        max_tokens=max_tokens,
+        hidden_size=hidden_size,
+        dtype=dtype,
+        atn_dp_size=atn_dp_size,
+        activate_resident=activate_resident,
+        atnagent_loopback_enabled=atnagent_loopback_enabled,
+        observer_output_path=Path(observer_output_path) if observer_output_path else None,
+        instance_index=instance_index,
+        instance_rank=instance_rank,
+        atn_tp_rank=atn_tp_rank,
+        atn_tp_size=atn_tp_size,
+        atn_dp_rank=atn_dp_rank,
+    )
+    with tempfile.TemporaryDirectory(prefix="xpool-transport-owner-") as directory:
+        process = SpawnedProcess.start(
+            "atnagent-transport-owner",
+            run_transport_owner,
+            spec,
+            log_path=Path(directory) / "owner.log",
+        )
+        controller: AtnAgentArenaController | None = None
+        try:
+            published = process.receive(TransportArenaPublished, timeout_seconds=startup_timeout_s)
+            controller = AtnAgentArenaController(
+                handle=published.handle,
+                process=process,
+                timeout_seconds=startup_timeout_s,
+                activated=activate_resident,
+            )
+            yield controller
+        finally:
+            try:
+                if controller is not None and process.process.is_alive():
+                    controller.destroy()
+            finally:
+                if process.process.is_alive():
+                    SpawnedProcess.terminate_all((process,))
+                process.close()
 
 
 @contextmanager
@@ -65,85 +345,66 @@ def atnagent_arena_process(
     cuda_device: int,
     max_tokens: int,
     hidden_size: int,
-    element_size: int,
+    dtype: TensorDType,
     atn_dp_size: int,
-    launch_kernel: bool,
+    activate_resident: bool,
     atnagent_loopback_enabled: bool = True,
     observer_output_path: str = "",
-    startup_timeout_s: float = 30.0,
-) -> Iterator[str]:
-    """Start a atnagent subprocess that owns one native transport arena.
+    startup_timeout_s: float = TRANSPORT_COMMAND_TIMEOUT_SECONDS,
+    instance_index: int = 0,
+    instance_rank: int = 0,
+    atn_tp_rank: int = 0,
+    atn_tp_size: int = 1,
+    atn_dp_rank: int = 0,
+) -> Generator[str, None, None]:
+    """Yield a handle owned by one spawned AtnAgent process."""
 
-    Args:
-        cuda_device: CUDA device that owns the arena allocation.
-        max_tokens: Maximum token rows supported by one slot.
-        hidden_size: Hidden-state width supported by one slot.
-        element_size: Hidden-state element size in bytes.
-        atn_dp_size: Attention data-parallel world size for DP token counts.
-        launch_kernel: Whether to start the persistent transport kernel before
-            returning the arena.
-        atnagent_loopback_enabled: Whether the atnagent subprocess should
-            execute requests with the attention-atnagent loopback.
-        observer_output_path: Optional JSON path that receives the native
-            observer snapshot immediately before arena destruction.
-        startup_timeout_s: Seconds to wait for the subprocess to publish arena
-            arena.
-
-    Yields:
-        Native transport arena handle.
-
-    Side Effects:
-        Spawns a Python subprocess and destroys the arena before exit.
-    """
-
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            ATNAGENT_ARENA_SCRIPT,
-            str(cuda_device),
-            str(max_tokens),
-            str(hidden_size),
-            str(element_size),
-            str(atn_dp_size),
-            "1" if launch_kernel else "0",
-            "1" if atnagent_loopback_enabled else "0",
-            observer_output_path,
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        if process.stdout is None:
-            raise RuntimeError("atnagent subprocess stdout was not captured")
-        selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ)
-        if not selector.select(startup_timeout_s):
-            terminate_process(process)
-            raise RuntimeError("atnagent subprocess timed out before publishing arena")
-        line = process.stdout.readline()
-        if not line:
-            stderr = process.communicate(timeout=5)[1]
-            raise RuntimeError(f"atnagent subprocess exited before publishing arena: {stderr}")
-        payload = json.loads(line)
-        yield str(payload["handle"])
-    finally:
-        if process.poll() is None:
-            if process.stdin is not None:
-                process.stdin.write("destroy\n")
-                process.stdin.flush()
-            try:
-                process.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                terminate_process(process)
+    with controlled_atnagent_arena_process(
+        cuda_device=cuda_device,
+        max_tokens=max_tokens,
+        hidden_size=hidden_size,
+        dtype=dtype,
+        atn_dp_size=atn_dp_size,
+        activate_resident=activate_resident,
+        atnagent_loopback_enabled=atnagent_loopback_enabled,
+        observer_output_path=observer_output_path,
+        startup_timeout_s=startup_timeout_s,
+        instance_index=instance_index,
+        instance_rank=instance_rank,
+        atn_tp_rank=atn_tp_rank,
+        atn_tp_size=atn_tp_size,
+        atn_dp_rank=atn_dp_rank,
+    ) as controller:
+        yield controller.handle
 
 
-def terminate_process(process: subprocess.Popen[str]) -> None:
-    process.terminate()
-    try:
-        process.communicate(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.communicate(timeout=5)
+@contextmanager
+def transport_arena_handles() -> Generator[Callable[..., str], None, None]:
+    """Yield a factory and retain every spawned arena owner until scope exit."""
+
+    with ExitStack() as stack:
+
+        def create(
+            *,
+            max_tokens: int = 8,
+            hidden_size: int = 4,
+            dtype: TensorDType = TensorDType.FP32,
+            atn_dp_size: int = 1,
+            activate_resident: bool = True,
+            instance_index: int = 0,
+            instance_rank: int = 0,
+        ) -> str:
+            return stack.enter_context(
+                atnagent_arena_process(
+                    cuda_device=0,
+                    max_tokens=max_tokens,
+                    hidden_size=hidden_size,
+                    dtype=dtype,
+                    atn_dp_size=atn_dp_size,
+                    activate_resident=activate_resident,
+                    instance_index=instance_index,
+                    instance_rank=instance_rank,
+                )
+            )
+
+        yield create

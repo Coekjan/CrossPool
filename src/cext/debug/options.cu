@@ -4,46 +4,41 @@
 
 #include <cuda_runtime_api.h>
 
-#include <cstdint>
 #include <mutex>
+#include <optional>
 
-#include <xpool/debug/options.cuh>
 #include <xpool/debug/options.hpp>
 
 namespace xpool::debug {
 
-// Device-side debug options installed for transport kernels.
-__device__ __constant__ xpool::abi::DebugOptions g_debug_options{0};
+__device__ __constant__ DebugOptions options_d{};
 
 namespace {
 
-xpool::abi::DebugOptions g_debug_options_host{0};
-bool g_debug_options_initialized = false;
-std::mutex g_debug_options_mutex;
+DebugOptions options_h{};
+std::optional<c10::DeviceIndex> configured_cuda_device;
+std::mutex options_mutex;
 
 } // namespace
 
-void init(std::int64_t cuda_device, std::int64_t debug_options) {
-  TORCH_CHECK(cuda_device >= 0,
-              "xpool debug options require a non-negative CUDA device");
-  xpool::abi::DebugOptions options =
-      xpool::abi::DebugOptions::parse(debug_options);
-  std::lock_guard<std::mutex> lock(g_debug_options_mutex);
-  if (g_debug_options_initialized) {
-    TORCH_CHECK(g_debug_options_host.raw == options.raw,
-                "xpool init debug options differ from the process-wide options "
-                "installed by the first init call");
+void configure(const DebugOptions &debug_options, c10::DeviceIndex cuda_device) {
+  TORCH_CHECK(cuda_device >= 0, "xpool debug options require a non-negative CUDA device");
+  std::lock_guard<std::mutex> lock(options_mutex);
+  if (configured_cuda_device.has_value()) {
+    TORCH_CHECK(*configured_cuda_device == cuda_device, "xpool debug CUDA device differs from the first configure "
+                                                        "call");
+    TORCH_CHECK(options_h == debug_options, "xpool debug options differ from the first configure call");
+    return;
   }
-  c10::cuda::CUDAGuard device_guard(static_cast<int>(cuda_device));
-  C10_CUDA_CHECK(
-      cudaMemcpyToSymbol(g_debug_options, &options, sizeof(options)));
-  g_debug_options_host = options;
-  g_debug_options_initialized = true;
+  c10::cuda::CUDAGuard device_guard(cuda_device);
+  C10_CUDA_CHECK(cudaMemcpyToSymbol(options_d, &debug_options, sizeof(debug_options)));
+  options_h = debug_options;
+  configured_cuda_device = cuda_device;
 }
 
-xpool::abi::DebugOptions options() {
-  std::lock_guard<std::mutex> lock(g_debug_options_mutex);
-  return g_debug_options_host;
+DebugOptions options() {
+  std::lock_guard<std::mutex> lock(options_mutex);
+  return options_h;
 }
 
 } // namespace xpool::debug

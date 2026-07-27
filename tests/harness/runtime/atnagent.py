@@ -1,29 +1,26 @@
+"""Provide explicitly imported fixtures for AtnAgent runtime lifecycle tests."""
+
 from __future__ import annotations
 
-import time
 from collections.abc import Callable, Iterator
-from http import HTTPStatus
 
 import pytest
 
-import xpool.runtime.atnagent as atn_module
-from xpool.abi import ABI_VERSION, TransportArenaHandle
-from xpool.config import XpoolConfig, init_global_config
+import xpool.runtime.agent
+import xpool.runtime.atnagent
+from tests.harness.config import install_test_config
+from xpool.abi import ABI_VERSION
+from xpool.config import XpoolConfig
 from xpool.runtime.agent import (
-    AGENT_HEARTBEAT_INTERVAL_S,
     Agent,
     AgentHeartbeat,
 )
 from xpool.runtime.atnagent import (
     AtnAgent,
-    AtnArenaResource,
+    AtnTransportEntry,
 )
-from xpool.service.client import XpoolClientError
-from xpool.service.wire import (
-    HeartbeatResponse,
-    InstanceRegistration,
-    ProcessHeartbeat,
-)
+from xpool.service.wire import HeartbeatResponse, InstanceRegistration
+from xpool.transport import TransportArenaHandle
 
 
 class SynchronousAgentHeartbeat:
@@ -32,15 +29,11 @@ class SynchronousAgentHeartbeat:
     def __init__(
         self,
         *,
-        cuda_device: int,
-        heartbeat: ProcessHeartbeat,
-        sender: Callable[[int, ProcessHeartbeat], HeartbeatResponse],
-        interval_s: float = AGENT_HEARTBEAT_INTERVAL_S,
+        agent: Agent,
+        interval_s: float = 5.0,
     ) -> None:
         self.worker = AgentHeartbeat(
-            cuda_device=cuda_device,
-            heartbeat=heartbeat,
-            sender=sender,
+            agent=agent,
             interval_s=interval_s,
         )
         self.started = False
@@ -57,10 +50,30 @@ class SynchronousAgentHeartbeat:
     def consume_registration_missing(self) -> bool:
         return self.worker.consume_registration_missing()
 
+    def consume_response(self) -> HeartbeatResponse | None:
+        return self.worker.consume_response()
+
     def raise_if_failed(self) -> None:
         if not self.started:
             return
         self.worker.heartbeat_once()
+
+
+@pytest.fixture
+def reset_agent_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    reset_global_config: None,
+) -> Iterator[None]:
+    """Replace process-global Agent bootstrap dependencies for one test."""
+
+    class HealthyClient:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(xpool.runtime.agent.bootstrap, "init", lambda cuda_device, role: None)
+    monkeypatch.setattr(xpool.runtime.agent.devkit, "install", lambda: None)
+    monkeypatch.setattr(xpool.runtime.agent, "XpoolClient", HealthyClient)
+    yield
 
 
 @pytest.fixture
@@ -70,47 +83,25 @@ def reset_atnagent_runtime(
 ) -> Iterator[None]:
     """Install AtnAgent-specific native and heartbeat test doubles."""
 
-    monkeypatch.setattr(atn_module, "AgentHeartbeat", SynchronousAgentHeartbeat)
+    monkeypatch.setattr(xpool.runtime.atnagent, "AgentHeartbeat", SynchronousAgentHeartbeat)
     yield
 
 
-def create_atnagent(config: XpoolConfig, *, cuda_device: int) -> Agent:
+def create_atnagent(config: XpoolConfig, *, cuda_device: int) -> AtnAgent:
     """Install config and construct one production AtnAgent for tests."""
 
-    init_global_config(config=config)
+    install_test_config(config)
     return AtnAgent(cuda_device=cuda_device)
 
 
-def health_client_class(healthy: bool) -> type:
-    class FakeXpoolClient:
-        def __init__(self) -> None:
-            if not healthy:
-                raise XpoolClientError("transport", "daemon health check failed")
+def forming_heartbeat_response() -> HeartbeatResponse:
+    """Return the daemon response before a Fabric generation is available."""
 
-        def close(self) -> None:
-            return None
-
-        def health(self) -> HTTPStatus:
-            return HTTPStatus.OK
-
-    return FakeXpoolClient
-
-
-def wait_until(predicate: Callable[[], bool], *, timeout_s: float = 1.0) -> bool:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(0.01)
-    return predicate()
-
-
-def wait_until_raise(callback: Callable[[], None], *, timeout_s: float = 1.0) -> None:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        callback()
-        time.sleep(0.01)
-    callback()
+    return HeartbeatResponse(
+        warnings=[],
+        generation=None,
+        fabric_phase=None,
+    )
 
 
 def instance_registration_view(*, instance_id: str, rank: int) -> dict[str, object]:
@@ -120,13 +111,20 @@ def instance_registration_view(*, instance_id: str, rank: int) -> dict[str, obje
         "rank": rank,
         "abi_version": ABI_VERSION,
         "transport": {
-            "element_size": 4,
             "hidden_size": 4,
             "max_tokens": 8,
             "atn_tp_rank": 0,
             "atn_tp_size": 1,
             "atn_dp_rank": 0,
             "atn_dp_size": 1,
+        },
+        "workload": {
+            "model_config_digest": "a" * 64,
+            "dtype": 1,
+            "hidden_size": 4,
+            "layers": [{"layer_id": 0, "kind": 1}],
+            "max_decode_rows": 1,
+            "max_prefill_rows": 1,
         },
     }
 
@@ -137,10 +135,12 @@ def transport_arena(rank: int) -> dict[str, object]:
     }
 
 
-def transport_arena_resource(*, instance_id: str, rank: int, handle_rank: int) -> AtnArenaResource:
+def transport_entry(*, instance_id: str, rank: int, handle_rank: int) -> AtnTransportEntry:
+    """Return one rank-local transport catalog entry."""
+
     registration = InstanceRegistration.model_validate(instance_registration_view(instance_id=instance_id, rank=rank))
     handle = TransportArenaHandle(handle=f"{handle_rank:02x}" * 64)
-    return AtnArenaResource(instance_id=instance_id, registration=registration, handle=handle)
+    return AtnTransportEntry(instance_id=instance_id, registration=registration, handle=handle)
 
 
 def patch_native_atnagent_ops(
@@ -148,25 +148,64 @@ def patch_native_atnagent_ops(
     *,
     events: list[tuple[object, ...]] | None = None,
     create: Callable[..., object] | None = None,
-    launch: Callable[..., object] | None = None,
+    activate: Callable[[], object] | None = None,
+    check_health: Callable[[], object] | None = None,
+    drain_async: Callable[[], object] | None = None,
+    drain_pending: Callable[[], bool] | None = None,
     destroy: Callable[[TransportArenaHandle], object] | None = None,
 ) -> None:
     def fake_create(
-        cuda_device: int,
+        instance_index: int,
+        instance_rank: int,
         max_tokens: int,
         hidden_size: int,
-        element_size: int,
+        dtype: int,
+        atn_tp_rank: int,
+        atn_tp_size: int,
+        atn_dp_rank: int,
         atn_dp_size: int,
-    ) -> TransportArenaHandle:
-        return TransportArenaHandle(handle=f"{cuda_device:02x}" * 64)
-
-    def fake_start(handle: TransportArenaHandle) -> None:
-        return None
+    ) -> str:
+        return "00" * 64
 
     def fake_destroy(handle: TransportArenaHandle) -> None:
         if events is not None:
             events.append(("destroy", int(handle.handle[:2], 16)))
 
-    monkeypatch.setattr(atn_module.xpool.ops.atnagent, "create_transport_arena", create or fake_create)
-    monkeypatch.setattr(atn_module.xpool.ops.atnagent, "launch_transport_kernel", launch or fake_start)
-    monkeypatch.setattr(atn_module.xpool.ops.atnagent, "destroy_transport_arena", destroy or fake_destroy)
+    def create_arena(*args: object) -> str:
+        create_function: Callable[..., object] = create if create is not None else fake_create
+        result = create_function(*args)
+        if isinstance(result, TransportArenaHandle):
+            return result.handle
+        return str(result)
+
+    def destroy_arenas(handles: list[str]) -> None:
+        destroy_function = destroy or fake_destroy
+        for handle in handles:
+            destroy_function(TransportArenaHandle(handle=handle))
+
+    monkeypatch.setattr(xpool.runtime.atnagent.xpool.native.transport, "create_arena", create_arena)
+    monkeypatch.setattr(
+        xpool.runtime.atnagent.xpool.native.transport,
+        "activate",
+        activate or (lambda: None),
+    )
+    monkeypatch.setattr(
+        xpool.runtime.atnagent.xpool.native.transport,
+        "check_health",
+        check_health or (lambda: None),
+    )
+    monkeypatch.setattr(
+        xpool.runtime.atnagent.xpool.native.transport,
+        "drain_async",
+        drain_async or (lambda: None),
+    )
+    monkeypatch.setattr(
+        xpool.runtime.atnagent.xpool.native.transport,
+        "drain_pending",
+        drain_pending or (lambda: False),
+    )
+    monkeypatch.setattr(
+        xpool.runtime.atnagent.xpool.native.transport,
+        "destroy_arenas",
+        destroy_arenas,
+    )

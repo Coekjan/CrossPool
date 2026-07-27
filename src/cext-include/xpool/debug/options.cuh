@@ -5,11 +5,19 @@
 
 #include <cstdint>
 
-#include <xpool/abi.hpp>
+#include <xpool/debug/options.hpp>
+#include <xpool/macros.hpp>
 
 namespace xpool::debug {
 
-/// Device-side debug option bitmask installed by xpool::debug::init.
-extern __device__ __constant__ xpool::abi::DebugOptions g_debug_options;
+/// Device-side typed debug options installed by xpool::debug::configure.
+/// The symbol contains the all-disabled DebugOptions value before explicit
+/// configuration and is accessed by options().
+extern __device__ __constant__ DebugOptions options_d;
+
+/// Return the device-side native debug options snapshot.
+/// \return Explicitly configured options, or the all-disabled default before
+/// configuration.
+XPOOL_DEVICE_FN inline DebugOptions options() { return options_d; }
 
 } // namespace xpool::debug

@@ -1,14 +1,12 @@
+"""Model requested SGLang graph modes and read graph-observer evidence."""
+
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import cast
-
-from tests.harness.sglang.offline_probe import (
-    SglangGraphSettings,
-)
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
 type JsonValue = str | int | float | bool | list[int] | None
 
@@ -16,13 +14,37 @@ type GraphEvent = dict[str, JsonValue]
 
 type GraphSettings = tuple[bool, bool]
 
-PROBE_TIMEOUT_SECONDS = 30 * 60
 
-PROCESS_TERMINATE_TIMEOUT_SECONDS = 30
+@dataclass(frozen=True, slots=True)
+class SglangGraphSettings:
+    """Requested full and piecewise CUDA graph modes for one SGLang server run."""
 
-PROCESS_KILL_TIMEOUT_SECONDS = 30
+    cuda_graph: bool
+    piecewise_cuda_graph: bool
 
-PROCESS_OUTPUT_DRAIN_TIMEOUT_SECONDS = 30
+    def id(self) -> str:
+        """Return a deterministic artifact suffix for this graph mode."""
+
+        return f"full-{int(self.cuda_graph)}-piecewise-{int(self.piecewise_cuda_graph)}"
+
+
+class SglangGraphMode(StrEnum):
+    """Declarative graph modes accepted by the E2E manifest."""
+
+    EAGER = "eager"
+    FULL = "full"
+    PIECEWISE = "piecewise"
+
+    def settings(self) -> SglangGraphSettings:
+        """Project this manifest value to concrete SGLang graph settings."""
+
+        match self:
+            case SglangGraphMode.EAGER:
+                return SglangGraphSettings(cuda_graph=False, piecewise_cuda_graph=False)
+            case SglangGraphMode.FULL:
+                return SglangGraphSettings(cuda_graph=True, piecewise_cuda_graph=False)
+            case SglangGraphMode.PIECEWISE:
+                return SglangGraphSettings(cuda_graph=False, piecewise_cuda_graph=True)
 
 
 def read_graph_events(outdir: Path) -> list[GraphEvent]:
@@ -35,7 +57,14 @@ def read_graph_events(outdir: Path) -> list[GraphEvent]:
     return events
 
 
-def assert_graph_events(graph_settings: SglangGraphSettings, events: list[GraphEvent]) -> None:
+def assert_graph_events(
+    graph_settings: SglangGraphSettings,
+    events: list[GraphEvent],
+    *,
+    resolved_piecewise_cuda_graph: bool,
+) -> None:
+    """Require capture and replay evidence for every resolved graph mode."""
+
     full_graph_phases = graph_phases(events, kind="full_cuda_graph")
     pcg_phases = graph_phases(events, kind="piecewise_cuda_graph")
     full_graph_phases_expected = {"capture_begin", "capture_end", "replay_begin", "replay_end"}
@@ -44,7 +73,7 @@ def assert_graph_events(graph_settings: SglangGraphSettings, events: list[GraphE
         assert full_graph_phases_expected <= full_graph_phases
     else:
         assert full_graph_phases == set()
-    if graph_settings.piecewise_cuda_graph:
+    if resolved_piecewise_cuda_graph:
         assert piecewise_graph_phases_expected <= pcg_phases
     else:
         assert pcg_phases == set()

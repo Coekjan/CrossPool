@@ -20,7 +20,6 @@ class AtnAgentCommand(RunnableCliCommand):
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         """Add AtnAgent command arguments."""
 
-        XpoolConfig.add_cli_args(parser)
         parser.add_argument("--cuda-device", type=int, help="Configured ATN CUDA device index")
 
     def run(self, args: argparse.Namespace, config: XpoolConfig) -> int:

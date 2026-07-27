@@ -6,10 +6,8 @@ repos:
       - id: native-build
         name: native build
         entry: >-
-          bash -lc 'if [ -f .env ]; then
-            export UV_ENV_FILE="$PWD/.env";
-          fi;
-          exec uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool'
+          uv sync --group dev --reinstall-package xpool
+          --no-build-isolation-package xpool
         language: system
         pass_filenames: false
 
@@ -39,7 +37,7 @@ repos:
 
       - id: clang-format
         name: clang-format
-        entry: clang-format --dry-run --Werror
+        entry: uv run clang-format --dry-run --Werror
         language: system
         types_or: [c, c++, cuda]
 
@@ -50,24 +48,12 @@ repos:
         files: ^(Doxyfile|src/cext-include/.*\.(cuh|h|hh|hpp))$
         pass_filenames: false
 
-      - id: ctest
-        name: ctest
+      - id: full-test
+        name: test suites
         entry: >-
-          bash -lc 'set -- build/*/CTestTestfile.cmake;
-          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
-            echo "expected exactly one CTest build dir; run native-build first" >&2;
-            exit 1;
-          fi;
-          uv run --no-build-isolation-package xpool ctest --test-dir "$(dirname "$1")" --output-on-failure'
-        language: system
-        pass_filenames: false
-
-      - id: pytest
-        name: pytest
-        entry: >-
-          bash -lc 'if [ -f .env ]; then
-            export UV_ENV_FILE="$PWD/.env";
-          fi;
-          exec uv run pytest'
+          sh -c '
+            if [ -f .env ]; then export UV_ENV_FILE="$PWD/.env"; fi;
+            exec uv run python -m tests
+          '
         language: system
         pass_filenames: false

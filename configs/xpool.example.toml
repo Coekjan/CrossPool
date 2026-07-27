@@ -5,6 +5,7 @@ port = 9810
 [scheduler]
 atn_concurrency = 1
 ffn_concurrency = 1
+ffn_policy = "fifo"
 
 [vendor]
 model_base_uri = "/absolute/path/to/models"
@@ -15,3 +16,6 @@ ffn_cuda_devices = [1]
 
 [[models]]
 id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+
+[[models]]
+id = "Qwen/Qwen3-14B"

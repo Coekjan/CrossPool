@@ -8,6 +8,9 @@ supported-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
 
+[manifest]
+overrides = [{ name = "nvidia-nvshmem-cu13", specifier = "==3.7.2" }]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.6.2"
@@ -208,6 +211,16 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/4b/f8/d0118a2f5f23b02cd166fa385c60f9b0d4f9194f574e2b31cef350ad7223/charset_normalizer-3.4.7-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5649fd1c7bade02f320a462fdefd0b4bd3ce036065836d4f42e0de958038e116", size = 216589, upload-time = "2026-04-02T09:26:29.239Z" },
     { url = "https://files.pythonhosted.org/packages/8a/2d/a572df5c9204ab7688ec1edc895a73ebded3b023bb07364710b05dd1c9be/charset_normalizer-3.4.7-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:bb6d88045545b26da47aa879dd4a89a71d1dce0f0e549b1abcb31dfe4a8eac49", size = 218468, upload-time = "2026-04-02T09:26:40.17Z" },
     { url = "https://files.pythonhosted.org/packages/db/8f/61959034484a4a7c527811f4721e75d02d653a35afb0b6054474d8185d4c/charset_normalizer-3.4.7-py3-none-any.whl", hash = "sha256:3dce51d0f5e7951f8bb4900c257dad282f49190fdbebecd4ba99bcc41fef404d", size = 61958, upload-time = "2026-04-02T09:28:37.794Z" },
+]
+
+[[package]]
+name = "clang-format"
+version = "22.1.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/12/67/4195b7bf2204e77a1c6305ea976f8e5dc63e70bcb59702912adb266a102e/clang_format-22.1.5.tar.gz", hash = "sha256:94401741d1db878ee1e002e3c33305a7c8e50ff1a9b0a4b8c713690f404d535c", size = 11508, upload-time = "2026-05-06T13:12:22.996Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/39/5e/bf1ea7a20ec3ffecda7eff98ad0f1621255e244e0f888d011a2106a04318/clang_format-22.1.5-py2.py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:451efcd0738908b2bd4d76409b52920ef381e045eb6728f9286d2ae5f02f3ef2", size = 1841172, upload-time = "2026-05-06T13:12:02.03Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/eb/a1fa659d85d9b40eee594bfd2be7ddaf05e0296788ee2955473ef1e7bb38/clang_format-22.1.5-py2.py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:5028f730a1acd0a2ff5fde309c3a064b2f8375caa664e57ff99c69a524d6cfd2", size = 2848433, upload-time = "2026-05-06T13:12:15.421Z" },
 ]
 
 [[package]]
@@ -1090,6 +1103,14 @@ wheels = [
 ]
 
 [[package]]
+name = "nvidia-cuda-cccl"
+version = "13.3.3.4.1"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f8/ab/049726d90147865a3ea53bae6cb7c35b98bf1fdf96cdb967101329625f83/nvidia_cuda_cccl-13.3.3.4.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:cc0adc188d570b09f4d606c7dc05a42aa3d8aa082e0d60f7bbfc5b6435f627c6", size = 3454034, upload-time = "2026-06-29T16:42:07.435Z" },
+]
+
+[[package]]
 name = "nvidia-cuda-crt"
 version = "13.3.33"
 source = { registry = "https://pypi.org/simple" }
@@ -1294,10 +1315,13 @@ wheels = [
 
 [[package]]
 name = "nvidia-nvshmem-cu13"
-version = "3.4.5"
+version = "3.7.2"
 source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nvidia-cuda-cccl", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3c/35/a9bf80a609e74e3b000fef598933235c908fcefcef9026042b8e6dfde2a9/nvidia_nvshmem_cu13-3.4.5-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:290f0a2ee94c9f3687a02502f3b9299a9f9fe826e6d0287ee18482e78d495b80", size = 60412546, upload-time = "2025-09-06T00:32:41.564Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/4a/037dfbbafc96ad1828ef62326f27970cae2c0eb271cf5b8e6922f32a7427/nvidia_nvshmem_cu13-3.7.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:b9a4f843c62b5dded8ad33fd6d220e007dcd39f06cee549292f5ba14ce4c235c", size = 135397797, upload-time = "2026-07-17T19:25:26.4Z" },
 ]
 
 [[package]]
@@ -1604,6 +1628,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/62/f7/965b79ff391ad208b50e412b5d3205ccce372a2d27b7218ae86d5295b105/pybase64-1.4.3-cp312-cp312-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:bb632edfd132b3eaf90c39c89aa314beec4e946e210099b57d40311f704e11d4", size = 71599, upload-time = "2025-12-06T13:23:20.195Z" },
     { url = "https://files.pythonhosted.org/packages/96/97/2a2e57acf8f5c9258d22aba52e71f8050e167b29ed2ee1113677c1b600c1/pybase64-1.4.3-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:5b3365dbcbcdb0a294f0f50af0c0a16b27a232eddeeb0bceeefd844ef30d2a23", size = 70974, upload-time = "2025-12-06T13:23:36.27Z" },
     { url = "https://files.pythonhosted.org/packages/fa/8f/43c3bb11ca9bacf81cb0b7a71500bb65b2eda6d5fe07433c09b543de97f3/pybase64-1.4.3-graalpy312-graalpy250_312_native-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:5c29a582b0ea3936d02bd6fe9bf674ab6059e6e45ab71c78404ab2c913224414", size = 43461, upload-time = "2025-12-06T13:26:28.906Z" },
+]
+
+[[package]]
+name = "pybind11-stubgen"
+version = "2.5.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/81/81/81900180501a51056572dd01aa852cc2d162478d4676ecebbfaad5cc20d1/pybind11_stubgen-2.5.5.tar.gz", hash = "sha256:758d6d6bbeefc62ad7f78d5e5bbf357ccf6af83cd4504f5f549403f452942708", size = 25031, upload-time = "2025-08-09T01:22:44.403Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/e4/4f2d41881fae547f06ffa4c9748fa8ed13c4db5c830ff268b84175546b3c/pybind11_stubgen-2.5.5-py3-none-any.whl", hash = "sha256:10824cd2fc5cbbee032b8fb39e6f6c08de232deb309bc66d786a6c6e8a4601bd", size = 30210, upload-time = "2025-08-09T01:22:43.135Z" },
 ]
 
 [[package]]
@@ -2249,6 +2282,15 @@ wheels = [
 ]
 
 [[package]]
+name = "tomli-w"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/19/75/241269d1da26b624c0d5e110e8149093c759b7a286138f4efd61a60e75fe/tomli_w-1.2.0.tar.gz", hash = "sha256:2dd14fac5a47c27be9cd4c976af5a12d87fb1f0b4512f81d69cce3b35ae25021", size = 7184, upload-time = "2025-01-15T12:07:24.262Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c7/18/c86eb8e0202e32dd3df50d43d7ff9854f8e0603945ff398974c1d91ac1ef/tomli_w-1.2.0-py3-none-any.whl", hash = "sha256:188306098d013b691fcadc011abd66727d3c414c571bb01b1a174ba8c983cf90", size = 6675, upload-time = "2025-01-15T12:07:22.074Z" },
+]
+
+[[package]]
 name = "tomlkit"
 version = "0.15.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2534,6 +2576,7 @@ dependencies = [
     { name = "psutil", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pydantic", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "safetensors", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "setproctitle", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "sglang", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "transformers", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -2542,14 +2585,17 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "clang-format", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "cmake", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "ninja", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pre-commit", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "pybind11-stubgen", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pytest", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pytest-cov", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pytest-timeout", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "ruff", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "scikit-build-core", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "tomli-w", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "ty", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 
@@ -2561,10 +2607,11 @@ requires-dist = [
     { name = "flashinfer-python", extras = ["cu13"], specifier = "==0.6.12" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "numpy", specifier = ">=2.3.5,<2.4" },
-    { name = "nvidia-nvshmem-cu13", specifier = "==3.4.5" },
+    { name = "nvidia-nvshmem-cu13", specifier = "==3.7.2" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "safetensors", specifier = ">=0.8.0" },
+    { name = "setproctitle", specifier = ">=1.3.7,<2" },
     { name = "sglang", specifier = "==0.5.13.post1" },
     { name = "torch", specifier = "==2.11.0" },
     { name = "transformers", specifier = "==5.8.1" },
@@ -2573,14 +2620,17 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "cmake", specifier = ">=4.3.2" },
+    { name = "clang-format", specifier = "==22.1.5" },
+    { name = "cmake", specifier = "==4.3.2" },
     { name = "ninja", specifier = ">=1.13.0" },
     { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "pybind11-stubgen", specifier = "==2.5.5" },
     { name = "pytest", specifier = ">=9.1.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "ruff", specifier = ">=0.15.17" },
     { name = "scikit-build-core", specifier = ">=0.11" },
+    { name = "tomli-w", specifier = ">=1.2.0" },
     { name = "ty", specifier = ">=0.0.49" },
 ]
 

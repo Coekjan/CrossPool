@@ -1,11 +1,68 @@
+"""Construct and install isolated xpool configurations for reusable fixtures."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
 
-import pytest
+import xpool.config
+from xpool.config import DebugConfig, LoopbackDebugConfig, LoopbackSite, XpoolConfig
 
-pytestmark = pytest.mark.usefixtures("reset_global_config")
+TEST_MODEL_ID = "test-model"
+
+
+def synthetic_config(
+    *,
+    model_id: str = TEST_MODEL_ID,
+    atn_cuda_devices: tuple[int, ...] = (0,),
+    ffn_cuda_devices: tuple[int, ...] = (1,),
+    loopback_site: LoopbackSite | None = None,
+) -> XpoolConfig:
+    """Return an in-memory config for tests where model identity is incidental."""
+
+    config = XpoolConfig.from_mapping(
+        {
+            "daemon": {"host": "127.0.0.1", "port": 9810},
+            "scheduler": {"atn_concurrency": 1, "ffn_concurrency": 1, "ffn_policy": "fifo"},
+            "vendor": {"model_base_uri": "/models"},
+            "devices": {
+                "atn_cuda_devices": list(atn_cuda_devices),
+                "ffn_cuda_devices": list(ffn_cuda_devices),
+            },
+            "models": [{"id": model_id}],
+        }
+    )
+    if loopback_site is None:
+        return config
+    return config.model_copy(
+        update={
+            "debug": DebugConfig(
+                loopback=LoopbackDebugConfig(enable=True, site=loopback_site),
+            )
+        }
+    )
+
+
+def with_loopback(config: XpoolConfig, site: LoopbackSite) -> XpoolConfig:
+    """Return ``config`` with one explicitly enabled debug loopback site."""
+
+    return config.model_copy(
+        update={
+            "debug": DebugConfig(
+                loopback=LoopbackDebugConfig(enable=True, site=site),
+            )
+        }
+    )
+
+
+def install_test_config(config: XpoolConfig) -> None:
+    """Install an already validated config in isolated test process state."""
+
+    if xpool.config.global_config is config:
+        return
+    if xpool.config.global_config is not None:
+        raise RuntimeError("test attempted to replace an installed global config")
+    xpool.config.global_config = config
 
 
 def source_record(records: tuple[Mapping[str, object], ...], name: str) -> Mapping[str, object]:
@@ -31,7 +88,7 @@ def write_minimal_config(
         path = path / "xpool.toml"
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
-    resolved_model_path = model_path or Path("/models/deepseek-ai/DeepSeek-V2-Lite-Chat")
+    resolved_model_path = model_path or Path("/models") / TEST_MODEL_ID
     atn_devices = ", ".join(str(device) for device in atn_cuda_devices)
     ffn_devices = ", ".join(str(device) for device in ffn_cuda_devices)
     path.write_text(
@@ -49,7 +106,7 @@ atn_cuda_devices = [{atn_devices}]
 ffn_cuda_devices = [{ffn_devices}]
 
 [[models]]
-id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+id = "{TEST_MODEL_ID}"
 path = "{resolved_model_path}"
 """.strip(),
         encoding="utf-8",

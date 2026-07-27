@@ -9,24 +9,56 @@ from functools import wraps
 from pathlib import Path
 from threading import Lock
 
-from xpool.abi import (
-    TRANSPORT_PHASES,
-    TRANSPORT_TRACE_FIELDS,
-    RuntimeRole,
-    TransportArenaHandle,
-    TransportTraceSnapshot,
-)
+import xpool.native
+from xpool.abi import DpPaddingMode, FfnResultCode, FfnResultHandoff, XPoolForwardMode
 from xpool.config import get_global_config
-from xpool.runtime.atnagent import AtnArenaResource
+from xpool.runtime import RuntimeRole
+from xpool.runtime.atnagent import AtnTransportCatalog
+from xpool.transport import TransportArenaHandle
 
 runtime_roles = frozenset({RuntimeRole.ATNAGENT})
 logger = logging.getLogger(__name__)
 install_lock = Lock()
 installed = False
+transport_trace_fields = (
+    "trace_id",
+    "payload_rows",
+    "layer_ordinal",
+    "forward_mode",
+    "result_handoff",
+    "dp_padding_mode",
+    "result_code",
+    "staging_started",
+    "staging_completed",
+    "published",
+    "published_observed",
+    "execution_started",
+    "execution_admitted",
+    "execution_completed",
+    "evaluated",
+    "evaluated_observed",
+    "output_copied",
+    "acknowledged",
+    "closed",
+)
+transport_phases = (
+    ("staging", "staging_started", "staging_completed"),
+    ("publication", "staging_completed", "published"),
+    ("publication_visibility", "published", "published_observed"),
+    ("evaluation", "published_observed", "evaluated"),
+    ("execution_admission", "execution_started", "execution_admitted"),
+    ("execution", "execution_started", "execution_completed"),
+    ("evaluation_visibility", "evaluated", "evaluated_observed"),
+    ("output_copy", "evaluated_observed", "output_copied"),
+    ("acknowledgement", "output_copied", "acknowledged"),
+    ("acknowledged_total", "staging_started", "acknowledged"),
+    ("closed_total", "staging_started", "closed"),
+)
+type TransportRecordJson = dict[str, int | str | dict[str, int]]
 
 
 def install() -> None:
-    """Install transport snapshot recording around arena destruction.
+    """Install transport snapshot recording after process-wide quiesce.
 
     Raises:
         MissingRequiredConfig: If no process-global config is installed.
@@ -35,7 +67,7 @@ def install() -> None:
 
     Side Effects:
         Prepares the configured output directory and monkeypatches
-        :meth:`AtnArenaResource.destroy` once per process.
+        :meth:`AtnTransportCatalog.quiesce` once per process.
     """
 
     config = get_global_config()
@@ -48,27 +80,30 @@ def install() -> None:
         outdir.mkdir(parents=True, exist_ok=True)
         if installed:
             return
-        original_destroy = AtnArenaResource.destroy
+        original_quiesce = AtnTransportCatalog.quiesce
 
-        @wraps(original_destroy)
-        def observed_destroy(resource: AtnArenaResource) -> TransportTraceSnapshot:
-            snapshot = original_destroy(resource)
-            try:
-                write_transport_snapshot(
-                    instance_id=resource.instance_id,
-                    rank=resource.registration.rank,
-                    handle=resource.handle,
-                    snapshot=snapshot,
-                )
-            except Exception:
-                logger.warning("Failed to record xpool transport observer snapshot", exc_info=True)
-            return snapshot
+        @wraps(original_quiesce)
+        def observed_quiesce(catalog: AtnTransportCatalog) -> None:
+            resources = catalog.resources
+            original_quiesce(catalog)
+            for resource in resources:
+                try:
+                    snapshot = xpool.native.transport.read_trace(resource.handle.handle)
+                    if snapshot is not None:
+                        write_transport_snapshot(
+                            instance_id=resource.instance_id,
+                            rank=resource.registration.rank,
+                            handle=resource.handle,
+                            snapshot=snapshot,
+                        )
+                except Exception:
+                    logger.warning("Failed to record xpool transport observer snapshot", exc_info=True)
 
-        setattr(AtnArenaResource, "destroy", observed_destroy)
+        setattr(AtnTransportCatalog, "quiesce", observed_quiesce)
         installed = True
 
 
-def transport_phase_summary(records: list[dict[str, int | dict[str, int]]]) -> dict[str, dict[str, int]]:
+def transport_phase_summary(records: list[TransportRecordJson]) -> dict[str, dict[str, int]]:
     """Aggregate observer phase durations with nearest-rank percentiles.
 
     Args:
@@ -105,7 +140,7 @@ def write_transport_snapshot(
     instance_id: str,
     rank: int,
     handle: TransportArenaHandle,
-    snapshot: TransportTraceSnapshot,
+    snapshot: xpool.native.TransportTraceSnapshot,
 ) -> Path:
     """Write one native observer snapshot as deterministic JSON.
 
@@ -113,7 +148,7 @@ def write_transport_snapshot(
         instance_id: Configured instance associated with the arena.
         rank: Instance rank associated with the arena.
         handle: Arena identity used to distinguish resource generations.
-        snapshot: Native trace ring snapshot copied at the drain boundary.
+        snapshot: Native bounded-buffer trace snapshot copied at the drain boundary.
 
     Returns:
         Path of the written JSON document.
@@ -126,28 +161,44 @@ def write_transport_snapshot(
     outdir = get_global_config().debug.transport_observer.outdir
     if outdir is None:
         raise RuntimeError("xpool transport observer requires debug.transport_observer.outdir")
-    records: list[dict[str, int | dict[str, int]]] = []
+    records: list[TransportRecordJson] = []
     for record in snapshot.records:
-        values = {field: int(getattr(record, field)) for field in TRANSPORT_TRACE_FIELDS}
-        if values["trace_id"] == 0:
+        raw_values = {field: int(getattr(record, field)) for field in transport_trace_fields}
+        if raw_values["trace_id"] == 0:
             continue
         durations = {
-            name: values[end] - values[start]
-            for name, start, end in TRANSPORT_PHASES
-            if values[start] != 0 and values[end] != 0 and values[end] >= values[start]
+            name: raw_values[end] - raw_values[start]
+            for name, start, end in transport_phases
+            if raw_values[start] != 0 and raw_values[end] != 0 and raw_values[end] >= raw_values[start]
+        }
+        values: TransportRecordJson = {
+            **raw_values,
+            "forward_mode": XPoolForwardMode(raw_values["forward_mode"]).name.lower(),
+            "result_handoff": FfnResultHandoff(raw_values["result_handoff"]).name.lower(),
+            "dp_padding_mode": DpPaddingMode(raw_values["dp_padding_mode"]).name.lower(),
+            "result_code": FfnResultCode(raw_values["result_code"]).name.lower(),
         }
         records.append({**values, "durations_ns": durations})
     records.sort(key=lambda record: int(record["trace_id"]))
+    acknowledged = sum(1 for record in records if record["acknowledged"] != 0)
+    closed = sum(1 for record in records if record["closed"] != 0)
+    if any(record["acknowledged"] != 0 and record["closed"] != 0 for record in records):
+        raise RuntimeError("xpool Transport trace record cannot be both acknowledged and closed")
+    incomplete = len(records) - acknowledged - closed
     payload = {
-        "schema_version": 1,
         "pid": os.getpid(),
         "instance_id": instance_id,
         "rank": rank,
         "arena_handle_suffix": handle.handle[-16:],
         "sequence": snapshot.sequence,
         "dropped": snapshot.dropped,
-        "incomplete": sum(1 for record in records if record["slot_recycled"] == 0),
         "phase_summary": transport_phase_summary(records),
+        "record_counts": {
+            "retained": len(records),
+            "acknowledged": acknowledged,
+            "closed": closed,
+            "incomplete": incomplete,
+        },
         "records": records,
     }
     filename_instance_id = instance_id.replace("/", "--")

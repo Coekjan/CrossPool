@@ -1,15 +1,19 @@
+"""Build concrete pinned-SGLang objects with controlled lightweight state."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import cast
 
 import torch
+from sglang.srt.layers.communicator import LayerScatterModes, ScatterMode
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.server_args import ServerArgs
 from torch import nn
 from transformers import PretrainedConfig
 
-from xpool.integrations.sglang.adapter import XpoolModelBinding
+from xpool.integrations.sglang.adapter import XpoolModelRuntime
 
 
 def fake_hf_config() -> PretrainedConfig:
@@ -45,7 +49,7 @@ class FakeModelRunner:
     """Minimal SGLang ModelRunner fake shared by integration tests."""
 
     model_config: FakeModelConfig = field(default_factory=FakeModelConfig)
-    server_args: ServerArgs | None = field(default_factory=server_args)
+    server_args: ServerArgs = field(default_factory=server_args)
     gpu_id: int = 0
     tp_rank: int = 0
     tp_size: int = 1
@@ -56,12 +60,34 @@ class FakeModelRunner:
     max_running_requests: int = 1
     model: nn.Module | None = None
     xpool_ffn_shim_count: int = 0
-    xpool_model_binding: XpoolModelBinding | None = None
+    xpool_runtime: XpoolModelRuntime | None = None
 
     def as_model_runner(self) -> ModelRunner:
         """Cast this fake runner to SGLang's ``ModelRunner`` type."""
 
         return cast(ModelRunner, self)
+
+
+class FakeDecoderLayer(nn.Module):
+    """Minimal loaded decoder layer exposing SGLang's MLP boundary facts."""
+
+    def __init__(
+        self,
+        mlp: nn.Module,
+        *,
+        mlp_mode: ScatterMode = ScatterMode.FULL,
+        allow_reduce_scatter: bool,
+    ) -> None:
+        super().__init__()
+        self.mlp = mlp
+        self.layer_scatter_modes = LayerScatterModes(
+            layer_input_mode=ScatterMode.TP_ATTN_FULL,
+            attn_mode=ScatterMode.TP_ATTN_FULL,
+            mlp_mode=mlp_mode,
+            middle_residual_mode=ScatterMode.TP_ATTN_FULL,
+            layer_output_mode=ScatterMode.TP_ATTN_FULL,
+        )
+        self.layer_communicator = SimpleNamespace(allow_reduce_scatter=allow_reduce_scatter)
 
 
 def runner_with_architecture(

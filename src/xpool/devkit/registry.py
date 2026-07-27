@@ -8,9 +8,9 @@ import pkgutil
 from collections.abc import Callable, Iterable
 from typing import cast
 
-from xpool.abi import RuntimeRole
 from xpool.bootstrap import get_runtime_role
 from xpool.config import get_global_config
+from xpool.runtime import RuntimeRole
 
 DEVKIT_PACKAGE = "xpool.devkit"
 logger = logging.getLogger(__name__)

@@ -26,11 +26,6 @@ class ConfigDumpCommand(RunnableCliCommand):
     order = 10
     parent = "config"
 
-    def configure_parser(self, parser: argparse.ArgumentParser) -> None:
-        """Add config-dump arguments to ``parser``."""
-
-        XpoolConfig.add_cli_args(parser)
-
     def run(self, args: argparse.Namespace, config: XpoolConfig) -> int:
         """Dump resolved config and value provenance."""
 

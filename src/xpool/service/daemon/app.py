@@ -3,55 +3,104 @@
 from __future__ import annotations
 
 import asyncio
-import time
+import logging
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from http import HTTPStatus
 from importlib.metadata import version
-from typing import Annotated
+from time import monotonic
 
-from fastapi import FastAPI, Query, Request, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
+from xpool import bootstrap
 from xpool.config import XpoolConfig, get_global_config
-from xpool.service.daemon.mps import MpsStatusProvider, probe_mps_controller
-from xpool.service.daemon.state import (
+from xpool.fabric import FabricPlan
+from xpool.runtime import RuntimeRole
+from xpool.service.daemon.control import ControlPlane
+from xpool.service.daemon.registration import (
     AtnAgentRegistrationState,
+    FfnAgentRegistrationState,
+    InstanceRankId,
     InstanceRegistrationState,
-    InstanceUniqId,
-    XpoolDaemonState,
 )
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
     AtnAgentRegistration,
-    AtnAgentTransportArenaDrainResponse,
     AtnAgentTransportArenaUpsertRequest,
+    AtnAgentTransportLeaseQuiesceResponse,
+    FabricParticipantReport,
+    FabricQuiesceRequest,
+    FfnAgentRegistration,
     HeartbeatResponse,
+    InstanceInitializedPublication,
     InstanceRegistration,
-    ProcessHeartbeat,
     ProcessRef,
-    ReadinessScope,
     ReadinessSnapshot,
-    TransportArenaHandleRecord,
     XpoolDaemonErrorDetail,
 )
+from xpool.transport import TransportArenaHandle
+
+logger = logging.getLogger(__name__)
 
 
-def create_daemon(
-    *,
-    mps_status_provider: MpsStatusProvider = probe_mps_controller,
-) -> FastAPI:
+@dataclass(slots=True)
+class DaemonFailure:
+    """Retain the first unrecoverable daemon-local background failure."""
+
+    exception: BaseException | None = None
+
+    @property
+    def failed(self) -> bool:
+        """Return whether an unrecoverable daemon failure was recorded."""
+
+        return self.exception is not None
+
+    def record(self, exception: BaseException) -> None:
+        """Retain ``exception`` unless an earlier failure already won."""
+
+        if self.exception is None:
+            self.exception = exception
+
+
+def create_daemon() -> FastAPI:
     """Create the FastAPI daemon application for the process-global config.
-
-    Args:
-        mps_status_provider: Bounded CUDA MPS controller probe used by
-            readiness evaluation.
 
     Returns:
         Configured daemon application.
+
+    Side Effects:
+        Initializes the process-wide native daemon role.
     """
 
-    state = XpoolDaemonState(mps_status_provider=mps_status_provider)
-    app = FastAPI(title="xpool daemon", version=version("xpool"))
-    app.state.xpool_daemon_state = state
+    bootstrap.init(None, RuntimeRole.DAEMON)
+    control_plane = ControlPlane()
+    daemon_failure = DaemonFailure()
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
+        async def run_watchdog() -> None:
+            try:
+                while True:
+                    await asyncio.to_thread(control_plane.watchdog)
+                    await asyncio.sleep(1.0)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exception:
+                logger.exception("xpool daemon watchdog failed")
+                daemon_failure.record(exception)
+
+        task = asyncio.create_task(run_watchdog(), name="xpool-daemon-watchdog")
+        try:
+            yield
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    app = FastAPI(title="xpool daemon", version=version("xpool"), lifespan=lifespan)
+    app.state.control_plane = control_plane
+    app.state.daemon_failure = daemon_failure
 
     @app.exception_handler(XpoolDaemonError)
     async def daemon_error_handler(request: Request, exc: XpoolDaemonError) -> JSONResponse:
@@ -69,100 +118,296 @@ def create_daemon(
 
     @app.get("/health")
     async def health() -> Response:
+        """Report that the daemon HTTP process is responsive."""
+
         return Response(status_code=HTTPStatus.OK)
 
     @app.get("/ready")
-    async def ready(
-        scope: Annotated[list[ReadinessScope] | None, Query()] = None,
-    ) -> ReadinessSnapshot:
-        selected = tuple(dict.fromkeys(scope or ())) or tuple(ReadinessScope)
-        return await asyncio.to_thread(state.readiness_snapshot, selected)
+    async def ready() -> ReadinessSnapshot:
+        """Return the projected readiness of MPS, registrations, Transport, and Fabric."""
+
+        return await asyncio.to_thread(control_plane.readiness_snapshot)
 
     @app.get("/config")
     async def get_config() -> XpoolConfig:
+        """Return the daemon's validated process-global configuration."""
+
         return get_global_config()
+
+    @app.get("/fabric/plan")
+    async def get_fabric_plan() -> FabricPlan:
+        """Return the retained Fabric plan once a complete generation exists.
+
+        Raises:
+            503: No complete Fabric generation has been planned.
+        """
+
+        return await asyncio.to_thread(control_plane.require_fabric_plan)
+
+    @app.post("/fabric/quiesce")
+    async def request_fabric_quiesce(request: FabricQuiesceRequest) -> Response:
+        """Authenticate an Agent participant and stop new Fabric admission.
+
+        Returns:
+            Empty 204 response after quiesce is accepted.
+
+        Raises:
+            404: The retained generation or participant does not exist.
+            409: Generation identity or participant ownership conflicts.
+            503: The generation cannot enter quiesce from its current phase.
+        """
+
+        await asyncio.to_thread(control_plane.request_fabric_quiesce, request)
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @app.post("/fabric/participant-reports")
+    async def report_fabric_participant(request: FabricParticipantReport) -> Response:
+        """Commit one owner-authenticated Fabric participant phase report.
+
+        Returns:
+            Empty 204 response after the report is committed.
+
+        Raises:
+            404: The reported generation or participant does not exist.
+            409: Owner identity, report sequence, or phase transition conflicts.
+            503: The generation is unavailable for participant reports.
+        """
+
+        await asyncio.to_thread(control_plane.record_fabric_participant, request)
+        return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @app.post("/config/check")
     async def check_config(request: XpoolConfig) -> Response:
-        await asyncio.to_thread(state.check_config, request)
+        """Require a participant's effective configuration to match the daemon.
+
+        Returns:
+            Empty 204 response when the configurations match.
+
+        Raises:
+            409: The participant configuration differs from the daemon.
+        """
+
+        await asyncio.to_thread(control_plane.check_config, request)
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @app.get("/atnagents")
     async def list_atnagents() -> list[AtnAgentRegistration]:
-        return await asyncio.to_thread(state.atnagent_registrations.views)
+        """List retained AtnAgent registrations."""
+
+        return await asyncio.to_thread(control_plane.list_atnagents)
 
     @app.get("/instances")
     async def list_instances() -> list[InstanceRegistration]:
-        return await asyncio.to_thread(state.instance_registrations.views)
+        """List retained Instance-rank registrations."""
+
+        return await asyncio.to_thread(control_plane.list_instances)
+
+    @app.get("/ffnagents")
+    async def list_ffnagents() -> list[FfnAgentRegistration]:
+        """List retained FfnAgent registrations."""
+
+        return await asyncio.to_thread(control_plane.list_ffnagents)
 
     @app.post("/atnagent/register")
     async def register_atnagent(request: AtnAgentRegistration) -> Response:
+        """Register one live AtnAgent as the owner of a configured CUDA device.
+
+        Returns:
+            Empty 204 response after registration.
+
+        Raises:
+            409: ABI, placement, or existing process ownership conflicts.
+            503: A predecessor owner has not completed replacement cleanup.
+        """
+
         await asyncio.to_thread(
-            state.register_atnagent,
+            control_plane.register_atnagent,
             AtnAgentRegistrationState(
                 cuda_device=request.cuda_device,
                 abi_version=request.abi_version,
                 pid=request.pid,
-                now=time.monotonic(),
+                now=monotonic(),
             ),
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @app.post("/atnagent/{cuda_device}/heartbeat")
-    async def heartbeat_atnagent(cuda_device: int, request: ProcessHeartbeat) -> HeartbeatResponse:
-        return await asyncio.to_thread(state.heartbeat_atnagent, cuda_device, request)
+    async def heartbeat_atnagent(cuda_device: int, request: ProcessRef) -> HeartbeatResponse:
+        """Refresh one authenticated AtnAgent registration and return desired state.
+
+        Raises:
+            404: No AtnAgent owns the requested CUDA device.
+            409: The process identity does not own that registration.
+        """
+
+        return await asyncio.to_thread(control_plane.heartbeat_atnagent, cuda_device, request)
+
+    @app.post("/ffnagent/register")
+    async def register_ffnagent(request: FfnAgentRegistration) -> Response:
+        """Register one live FfnAgent as the owner of a configured CUDA device.
+
+        Returns:
+            Empty 204 response after registration.
+
+        Raises:
+            409: ABI, placement, or existing process ownership conflicts.
+            503: A predecessor owner has not completed replacement cleanup.
+        """
+
+        await asyncio.to_thread(
+            control_plane.register_ffnagent,
+            FfnAgentRegistrationState(
+                cuda_device=request.cuda_device,
+                abi_version=request.abi_version,
+                pid=request.pid,
+                now=monotonic(),
+            ),
+        )
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @app.post("/ffnagent/{cuda_device}/heartbeat")
+    async def heartbeat_ffnagent(cuda_device: int, request: ProcessRef) -> HeartbeatResponse:
+        """Refresh one authenticated FfnAgent registration and return desired state.
+
+        Raises:
+            404: No FfnAgent owns the requested CUDA device.
+            409: The process identity does not own that registration.
+        """
+
+        return await asyncio.to_thread(control_plane.heartbeat_ffnagent, cuda_device, request)
 
     @app.post("/atnagent/{cuda_device}/transport-arenas")
     async def upsert_atnagent_transport_arenas(
         cuda_device: int,
         request: AtnAgentTransportArenaUpsertRequest,
     ) -> Response:
+        """Merge immutable Transport arena publications for one AtnAgent.
+
+        Returns:
+            Empty 204 response after publications are committed.
+
+        Raises:
+            404: The publishing AtnAgent is not registered.
+            409: Publisher ownership or an immutable arena binding conflicts.
+            503: The AtnAgent is unavailable for Transport publication.
+        """
+
         await asyncio.to_thread(
-            state.upsert_atnagent_transport_arenas,
+            control_plane.upsert_atnagent_transport_arenas,
             cuda_device,
             request.bindings,
             request.publisher,
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
-    @app.post("/atnagent/{cuda_device}/transport-arenas/drain")
-    async def drain_atnagent_transport_arenas(
+    @app.post("/atnagent/{cuda_device}/transport-leases/quiesce")
+    async def quiesce_atnagent_transport_leases(
         cuda_device: int,
         request: ProcessRef,
-    ) -> AtnAgentTransportArenaDrainResponse:
-        return await asyncio.to_thread(state.drain_atnagent_transport_arenas, cuda_device, request)
+    ) -> AtnAgentTransportLeaseQuiesceResponse:
+        """Stop admission and return the current lease-drain state for one AtnAgent.
+
+        Raises:
+            404: The AtnAgent registration does not exist.
+            409: The process identity does not own the registration.
+            503: Transport lease quiesce cannot currently progress.
+        """
+
+        return await asyncio.to_thread(control_plane.quiesce_atnagent_transport_leases, cuda_device, request)
 
     @app.post("/instance/register")
     async def register_instance(request: InstanceRegistration) -> Response:
+        """Register one live Instance rank and its Transport and FFN workload contracts.
+
+        Returns:
+            Empty 204 response after registration.
+
+        Raises:
+            404: The configured Instance identity or rank is unknown.
+            409: ABI, workload, placement, or process ownership conflicts.
+            503: A predecessor registration has not completed cleanup.
+        """
+
         await asyncio.to_thread(
-            state.register_instance,
+            control_plane.register_instance,
             InstanceRegistrationState(
-                instance=InstanceUniqId(instance_id=request.instance_id, rank=request.rank),
+                instance=InstanceRankId(instance_id=request.instance_id, rank=request.rank),
                 abi_version=request.abi_version,
                 pid=request.pid,
                 transport=request.transport,
-                now=time.monotonic(),
+                workload=request.workload,
+                now=monotonic(),
             ),
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @app.post("/instance/{instance_id:path}/deregister")
     async def deregister_instance(instance_id: str, rank: int, request: ProcessRef) -> Response:
-        await asyncio.to_thread(state.deregister_instance, instance_id, rank, request)
+        """Remove one authenticated Instance-rank registration.
+
+        Returns:
+            Empty 204 response after deregistration.
+
+        Raises:
+            404: The Instance rank is not registered.
+            409: The process identity does not own that registration.
+        """
+
+        await asyncio.to_thread(control_plane.deregister_instance, instance_id, rank, request)
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @app.post("/instance/{instance_id:path}/initialized")
+    async def publish_instance_initialized(
+        instance_id: str,
+        rank: int,
+        request: InstanceInitializedPublication,
+    ) -> Response:
+        """Publish that one Instance rank initialized against the retained Fabric plan.
+
+        Returns:
+            Empty 204 response after initialization is published.
+
+        Raises:
+            404: The Instance rank or Fabric generation does not exist.
+            409: Owner, generation, or initialization facts conflict.
+            503: Fabric is not ready to accept Instance initialization.
+        """
+
+        await asyncio.to_thread(
+            control_plane.publish_instance_initialized,
+            instance_id,
+            rank=rank,
+            publication=request,
+        )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @app.post("/instance/{instance_id:path}/heartbeat")
-    async def heartbeat_instance(instance_id: str, rank: int, request: ProcessHeartbeat) -> HeartbeatResponse:
-        return await asyncio.to_thread(state.heartbeat_instance, instance_id, rank, request)
+    async def heartbeat_instance(instance_id: str, rank: int, request: ProcessRef) -> HeartbeatResponse:
+        """Refresh one authenticated Instance-rank registration and return desired state.
+
+        Raises:
+            404: The Instance rank is not registered.
+            409: The process identity does not own that registration.
+        """
+
+        return await asyncio.to_thread(control_plane.heartbeat_instance, instance_id, rank, request)
 
     @app.post("/instance/{instance_id:path}/transport-arena/acquire")
     async def acquire_instance_transport_arena(
         instance_id: str,
         rank: int,
         request: ProcessRef,
-    ) -> TransportArenaHandleRecord:
+    ) -> TransportArenaHandle:
+        """Acquire the admitted rank-local Transport arena lease for one Instance.
+
+        Raises:
+            404: The configured Instance or its Transport publication is unknown.
+            409: Process, generation, or publication ownership conflicts.
+            503: Registration, Fabric, or Transport admission is not ready.
+        """
+
         return await asyncio.to_thread(
-            state.acquire_instance_transport_arena,
+            control_plane.acquire_instance_transport_arena,
             instance_id,
             rank=rank,
             owner=request,

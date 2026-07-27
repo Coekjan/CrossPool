@@ -34,8 +34,6 @@ class CliCommand(ABC):
             Mutates ``parser`` by adding command arguments.
         """
 
-        return None
-
 
 class CliCommandGroup(CliCommand):
     """CLI command that owns nested subcommands instead of a direct handler.

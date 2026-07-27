@@ -12,6 +12,7 @@ from types import ModuleType
 from typing import cast
 
 from xpool.cli.command import CliCommand, CliCommandGroup, RunnableCliCommand
+from xpool.config import XpoolConfig
 
 CLI_PACKAGE = "xpool.cli.subcommands"
 logger = logging.getLogger(__name__)
@@ -65,6 +66,8 @@ def register_cli_commands(subparsers: argparse._SubParsersAction, commands: Sequ
         parent_subparsers = group_subparsers[parent]
         for command in children_by_parent.get(parent, []):
             parser = parent_subparsers.add_parser(command.name, help=command.help)
+            if isinstance(command, RunnableCliCommand):
+                XpoolConfig.add_cli_args(parser)
             command.configure_parser(parser)
             if isinstance(command, CliCommandGroup):
                 group_subparsers[command.name] = parser.add_subparsers(

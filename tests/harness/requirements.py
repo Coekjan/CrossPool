@@ -12,6 +12,7 @@ import torch
 from pydantic import ValidationError
 
 from xpool.config import MissingRequiredConfig, XpoolConfig
+from xpool.service.daemon.mps import probe_mps_controller
 
 R = TypeVar("R")
 
@@ -42,26 +43,16 @@ class ResolvedModelWeights:
 
 @dataclass(frozen=True, slots=True)
 class CudaRequirement:
-    """CUDA resources required by one selected test.
-
-    Attributes:
-        min_devices: Minimum number of visible CUDA devices.
-        bf16: Whether the first required device must support BF16.
-    """
+    """Minimum visible CUDA device count required by one selected test."""
 
     min_devices: int = 1
-    bf16: bool = False
 
 
 class RequirementResolver:
     """Resolve test resources without depending on pytest."""
 
-    def __init__(self) -> None:
-        self.cached_config_path: Path | None = None
-        self.cached_config: ResolvedConfig | None = None
-
     def require_cuda(self, requirement: CudaRequirement) -> None:
-        """Validate visible CUDA device count and optional BF16 support."""
+        """Validate the visible CUDA device count."""
 
         if requirement.min_devices < 1:
             raise RequirementMisconfigured("requires_cuda min_devices must be at least 1")
@@ -72,33 +63,30 @@ class RequirementResolver:
             raise RequirementUnavailable(
                 f"requires {requirement.min_devices} visible CUDA devices, found {device_count}"
             )
-        if requirement.bf16 and not torch.cuda.is_bf16_supported():
-            raise RequirementUnavailable("CUDA device does not support BF16")
+
+    def require_mps(self) -> None:
+        """Require the CUDA MPS controller selected by the process environment."""
+
+        result = probe_mps_controller()
+        if not result.online:
+            raise RequirementUnavailable(result.diagnostic)
 
     def require_config(self) -> ResolvedConfig:
         """Load the E2E config named by the exact ``XPOOL_CONFIG`` variable."""
 
         configured_path = os.environ.get("XPOOL_CONFIG")
         if not configured_path:
-            self.cached_config_path = None
-            self.cached_config = None
             raise RequirementUnavailable("set XPOOL_CONFIG to an xpool TOML file")
         path = Path(configured_path).expanduser()
         if not path.is_absolute():
             path = Path.cwd() / path
         path = path.resolve()
-        if self.cached_config_path == path and self.cached_config is not None:
-            return self.cached_config
-        self.cached_config_path = None
-        self.cached_config = None
         if not path.is_file():
             raise RequirementMisconfigured(f"XPOOL_CONFIG does not name a readable file: {path}")
         try:
             resolved = ResolvedConfig(path=path, config=XpoolConfig.from_file(path))
         except (OSError, ValueError, ValidationError) as exc:
             raise RequirementMisconfigured(f"invalid XPOOL_CONFIG file {path}: {exc}") from exc
-        self.cached_config_path = path
-        self.cached_config = resolved
         return resolved
 
     def require_model_weights(self, model_id: str) -> ResolvedModelWeights:

@@ -1,27 +1,25 @@
+"""Provide pinned DeepSeek-V2 model fixtures for SGLang integration tests."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
 
 import pytest
-from sglang.srt.model_executor.forward_batch_info import ForwardMode as SglangForwardMode
+from sglang.srt.model_executor import forward_batch_info
 from transformers import PretrainedConfig
 
-from xpool.config import (
-    XpoolConfig,
-    init_global_config,
-)
-from xpool.integrations.sglang.shim import (
-    FfnLayerKind,
-    FfnShimModule,
-)
+from tests.harness.config import install_test_config
+from xpool.config import XpoolConfig
+from xpool.fabric import FfnLayerKind
+from xpool.integrations.sglang.shim import FfnShimModule
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def install_adapter_config(
     reset_global_config: None,
 ) -> Iterator[None]:
-    init_global_config(
-        config=XpoolConfig.from_mapping(
+    install_test_config(
+        XpoolConfig.from_mapping(
             {
                 "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
@@ -40,15 +38,15 @@ def deepseek_config() -> PretrainedConfig:
     return config
 
 
-def bound_shim(*, layer_id: int = 0, instance_index: int = 0, sglang_rank: int = 0) -> FfnShimModule:
+def bound_shim(*, layer_id: int = 0, atn_dp_size: int = 1) -> FfnShimModule:
     shim = FfnShimModule(layer_id=layer_id, hidden_size=2048, layer_kind=FfnLayerKind.DENSE)
-    shim.bind_identity(
-        instance_index=instance_index,
-        sglang_rank=sglang_rank,
+    shim.bind_runtime(
+        layer_ordinal=0,
         model_architecture="DeepseekV2ForCausalLM",
+        atn_dp_size=atn_dp_size,
     )
     return shim
 
 
 def decode_forward_batch() -> object:
-    return type("FakeForwardBatch", (), {"forward_mode": SglangForwardMode.DECODE})()
+    return type("FakeForwardBatch", (), {"forward_mode": forward_batch_info.ForwardMode.DECODE})()

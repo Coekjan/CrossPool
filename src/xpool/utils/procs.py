@@ -1,4 +1,4 @@
-"""Process identity helpers."""
+"""Host process identity and lifecycle helpers."""
 
 from __future__ import annotations
 
@@ -11,7 +11,9 @@ from typing import NoReturn, Self
 
 import psutil
 
-__all__ = ["ProcUniqId", "bail"]
+__all__ = ["ProcUniqId", "bail", "set_process_title"]
+
+PROCESS_KILL_WAIT_S = 1.0
 
 
 def bail(
@@ -38,6 +40,25 @@ def bail(
     if message is not None:
         (logger or logging.getLogger(__name__)).critical(message, *args)
     os._exit(code)
+
+
+def set_process_title(title: str) -> None:
+    """Set the current Linux process title without hiding its environment.
+
+    Args:
+        title: Complete process title exposed through ``ps`` and ``/proc``.
+
+    Side Effects:
+        Sets the setproctitle import option that preserves
+        ``/proc/<pid>/environ``, imports its native extension, and replaces the
+        current process title.
+    """
+
+    # setproctitle reads this option while importing its native extension.
+    os.environ["SPT_NOENV"] = "1"
+    import setproctitle
+
+    setproctitle.setproctitle(title)
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -106,6 +127,28 @@ class ProcUniqId:
         for target in targets:
             target.send_signal(signal.SIGKILL)
         return not self.is_alive()
+
+    def kill_tree(self) -> bool:
+        """Directly kill this exact process tree and report whether it exited.
+
+        Returns:
+            Whether every captured process identity is gone after the bounded
+            confirmation interval.
+
+        Side Effects:
+            Sends SIGKILL to live descendants and then the root process. It
+            never sends SIGTERM or runs target cleanup handlers.
+        """
+
+        if not self.is_alive():
+            return True
+        targets = [*self.child_process_ids(), self]
+        for target in targets:
+            target.send_signal(signal.SIGKILL)
+        deadline = time.monotonic() + PROCESS_KILL_WAIT_S
+        while any(target.is_alive() for target in targets) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return not any(target.is_alive() for target in targets)
 
     def send_signal(self, sig: signal.Signals) -> None:
         """Send a signal only if this exact process identity remains alive."""

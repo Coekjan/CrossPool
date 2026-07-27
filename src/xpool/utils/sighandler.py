@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import signal
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from types import FrameType
 
@@ -12,7 +12,7 @@ from types import FrameType
 def sighandle(
     signum: signal.Signals | int,
     handler: signal.Handlers | Callable[[int, FrameType | None], object],
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Temporarily install a signal handler and restore the previous handler.
 
     Args:

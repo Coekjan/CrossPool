@@ -4,81 +4,41 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Sequence
 from http import HTTPStatus
 from typing import Literal
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from xpool.abi import TransportArenaHandle
 from xpool.config import get_global_config
+from xpool.fabric import FabricPlan
 from xpool.service.errors import XpoolClientError, XpoolDaemonError
 from xpool.service.wire import (
     AtnAgentRegistration,
     AtnAgentTransportArenaBinding,
-    AtnAgentTransportArenaDrainResponse,
     AtnAgentTransportArenaUpsertRequest,
+    AtnAgentTransportLeaseQuiesceResponse,
     ControlPlaneWarning,
+    FabricParticipantReport,
+    FabricQuiesceRequest,
+    FfnAgentRegistration,
     HeartbeatResponse,
+    InstanceInitializedPublication,
     InstanceRegistration,
-    ProcessHeartbeat,
     ProcessRef,
-    ReadinessScope,
     ReadinessSnapshot,
-    TransportArenaHandleRecord,
     XpoolDaemonErrorDetail,
 )
+from xpool.transport import TransportArenaHandle
 
 __all__ = ["XpoolClient"]
 
 DAEMON_HTTP_TIMEOUT_S = 5.0
-ATNAGENT_TRANSPORT_DRAIN_TIMEOUT_S = 20.0
+ATNAGENT_TRANSPORT_LEASE_QUIESCE_TIMEOUT_S = 20.0
 DAEMON_HEALTH_RETRY_ATTEMPTS = 3
 DAEMON_HEALTH_RETRY_DELAY_S = 0.5
 logger = logging.getLogger(__name__)
-
-
-def daemon_error_detail(response: httpx.Response) -> XpoolDaemonErrorDetail | None:
-    """Decode a structured daemon error detail when one is present."""
-
-    try:
-        payload = response.json()
-    except ValueError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    detail = payload.get("detail")
-    if not isinstance(detail, dict):
-        return None
-    try:
-        return XpoolDaemonErrorDetail.model_validate(detail)
-    except ValidationError:
-        return None
-
-
-def error_from_status(response: httpx.Response) -> XpoolClientError | XpoolDaemonError:
-    """Translate one failed HTTP response into an xpool client-domain error."""
-
-    try:
-        status_code = HTTPStatus(response.status_code)
-        status_text = f"{status_code.value} {status_code.phrase}"
-    except ValueError:
-        status_code = None
-        status_text = str(response.status_code)
-    daemon_error = daemon_error_detail(response)
-    if daemon_error is None:
-        return XpoolClientError(
-            "status",
-            f"xpool daemon returned HTTP {status_text}",
-            status_code=status_code,
-        )
-    return XpoolDaemonError(
-        daemon_error.kind,
-        daemon_error.message,
-        status_code=status_code,
-    )
 
 
 class XpoolClient:
@@ -87,15 +47,11 @@ class XpoolClient:
     def __init__(
         self,
         *,
-        http_client: httpx.Client | None = None,
         timeout_s: float = DAEMON_HTTP_TIMEOUT_S,
     ) -> None:
         """Create a daemon API client from process-global configuration.
 
         Args:
-            http_client: Optional preconfigured client used by test harnesses.
-                The xpool client assumes ownership and closes it with
-                :meth:`close`.
             timeout_s: Per-request HTTP timeout in seconds.
 
         Raises:
@@ -103,14 +59,12 @@ class XpoolClient:
                 non-OK after bounded retries.
         """
 
-        if http_client is None:
-            config = get_global_config()
-            daemon_host = f"[{config.daemon.host}]" if ":" in config.daemon.host else config.daemon.host
-            http_client = httpx.Client(
-                base_url=f"http://{daemon_host}:{config.daemon.port}",
-                timeout=timeout_s,
-            )
-        self.http_client = http_client
+        config = get_global_config()
+        daemon_host = f"[{config.daemon.host}]" if ":" in config.daemon.host else config.daemon.host
+        self.http_client = httpx.Client(
+            base_url=f"http://{daemon_host}:{config.daemon.port}",
+            timeout=timeout_s,
+        )
         try:
             health_error: XpoolClientError | XpoolDaemonError | None = None
             for attempt in range(DAEMON_HEALTH_RETRY_ATTEMPTS):
@@ -144,6 +98,34 @@ class XpoolClient:
 
         self.http_client.close()
 
+    @staticmethod
+    def error_from_response(response: httpx.Response) -> XpoolClientError | XpoolDaemonError:
+        """Translate one failed HTTP response into an xpool client-domain error."""
+
+        try:
+            status_code = HTTPStatus(response.status_code)
+            status_text = f"{status_code.value} {status_code.phrase}"
+        except ValueError:
+            status_code = None
+            status_text = str(response.status_code)
+        try:
+            payload = response.json()
+            detail = payload.get("detail") if isinstance(payload, dict) else None
+            daemon_error = XpoolDaemonErrorDetail.model_validate(detail) if isinstance(detail, dict) else None
+        except (ValueError, ValidationError):
+            daemon_error = None
+        if daemon_error is None:
+            return XpoolClientError(
+                "status",
+                f"xpool daemon returned HTTP {status_text}",
+                status_code=status_code,
+            )
+        return XpoolDaemonError(
+            daemon_error.kind,
+            daemon_error.message,
+            status_code=status_code,
+        )
+
     def log_warnings(self, warnings: list[ControlPlaneWarning]) -> None:
         """Log warnings returned by a daemon control-plane operation."""
 
@@ -174,7 +156,7 @@ class XpoolClient:
         except httpx.HTTPError as exc:
             raise XpoolClientError("transport", f"xpool daemon request failed: {exc}") from exc
         if response.is_error:
-            raise error_from_status(response)
+            raise self.error_from_response(response)
         return response
 
     def decode_json(self, response: httpx.Response, context: str) -> object:
@@ -208,18 +190,10 @@ class XpoolClient:
         self.request("GET", "/health")
         return HTTPStatus.OK
 
-    def readiness(self, scopes: Sequence[ReadinessScope] = ()) -> ReadinessSnapshot:
-        """Return daemon readiness details for selected participant scopes.
+    def readiness(self) -> ReadinessSnapshot:
+        """Return the single global daemon readiness snapshot."""
 
-        Args:
-            scopes: Participant scopes to query. An empty sequence selects all
-                scopes on the daemon.
-        """
-
-        params: dict[str, int | str | list[str]] | None = (
-            None if not scopes else {"scope": [scope.value for scope in scopes]}
-        )
-        response = self.request("GET", "/ready", params=params)
+        response = self.request("GET", "/ready")
         return self.decode_model(response, ReadinessSnapshot, "readiness")
 
     def check_config(self) -> None:
@@ -237,6 +211,22 @@ class XpoolClient:
             json=get_global_config().model_dump(mode="json"),
         )
 
+    def fabric_plan(self) -> FabricPlan:
+        """Return the immutable allocation and execution plan for the generation."""
+
+        response = self.request("GET", "/fabric/plan")
+        return self.decode_model(response, FabricPlan, "fabric plan")
+
+    def request_fabric_quiesce(self, request: FabricQuiesceRequest) -> None:
+        """Ask the daemon to stop admission for one retained generation."""
+
+        self.request("POST", "/fabric/quiesce", json=request.model_dump(mode="json"))
+
+    def report_fabric_participant(self, report: FabricParticipantReport) -> None:
+        """Commit one self-contained Fabric participant report."""
+
+        self.request("POST", "/fabric/participant-reports", json=report.model_dump(mode="json"))
+
     def register_atnagent(self, registration: AtnAgentRegistration) -> None:
         """Register one AtnAgent process with the daemon.
 
@@ -253,7 +243,30 @@ class XpoolClient:
         self.check_config()
         self.request("POST", "/atnagent/register", json=registration.model_dump(mode="json"))
 
-    def heartbeat_atnagent(self, cuda_device: int, heartbeat: ProcessHeartbeat) -> HeartbeatResponse:
+    def register_ffnagent(self, registration: FfnAgentRegistration) -> None:
+        """Register one FfnAgent process with the daemon.
+
+        Args:
+            registration: FfnAgent registration payload to send.
+
+        Raises:
+            XpoolClientError: If config validation or registration cannot reach
+                the daemon or receives an invalid response.
+            XpoolDaemonError: If the daemon rejects the registration.
+        """
+
+        self.check_config()
+        self.request("POST", "/ffnagent/register", json=registration.model_dump(mode="json"))
+
+    def heartbeat_ffnagent(self, cuda_device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
+        """Refresh one FfnAgent heartbeat and return daemon warnings."""
+
+        response = self.request("POST", f"/ffnagent/{cuda_device}/heartbeat", json=heartbeat.model_dump(mode="json"))
+        heartbeat_response = self.decode_model(response, HeartbeatResponse, "ffnagent heartbeat")
+        self.log_warnings(heartbeat_response.warnings)
+        return heartbeat_response
+
+    def heartbeat_atnagent(self, cuda_device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
         """Refresh one AtnAgent heartbeat and return daemon warnings.
 
         Args:
@@ -308,13 +321,13 @@ class XpoolClient:
             ).model_dump(mode="json"),
         )
 
-    def drain_atnagent_transport_arenas(
+    def quiesce_atnagent_transport_leases(
         self,
         cuda_device: int,
         *,
         publisher: ProcessRef,
-    ) -> AtnAgentTransportArenaDrainResponse:
-        """Drain one AtnAgent's transport arenas and return active leases.
+    ) -> AtnAgentTransportLeaseQuiesceResponse:
+        """Close one AtnAgent's lease admission and return active leases.
 
         Args:
             cuda_device: CUDA device owned by the publishing AtnAgent.
@@ -324,22 +337,26 @@ class XpoolClient:
             Instance ranks that still hold fresh arena leases.
 
         Raises:
-            XpoolClientError: If the bounded drain request fails or its
+            XpoolClientError: If the bounded quiesce request fails or its
                 response is invalid.
-            XpoolDaemonError: If the daemon rejects the drain request.
+            XpoolDaemonError: If the daemon rejects the quiesce request.
 
         Side Effects:
-            Marks the published arena generation as terminating and may stop
+            Closes lease admission for the arena generation and may stop
             processes that retain stale leases.
         """
 
         response = self.request(
             "POST",
-            f"/atnagent/{cuda_device}/transport-arenas/drain",
+            f"/atnagent/{cuda_device}/transport-leases/quiesce",
             json=publisher.model_dump(mode="json"),
-            timeout_s=ATNAGENT_TRANSPORT_DRAIN_TIMEOUT_S,
+            timeout_s=ATNAGENT_TRANSPORT_LEASE_QUIESCE_TIMEOUT_S,
         )
-        return self.decode_model(response, AtnAgentTransportArenaDrainResponse, "atnagent transport arena drain")
+        return self.decode_model(
+            response,
+            AtnAgentTransportLeaseQuiesceResponse,
+            "atnagent transport lease quiesce",
+        )
 
     def list_instances(self) -> list[InstanceRegistration]:
         """Return instance-rank registrations from the daemon."""
@@ -386,7 +403,24 @@ class XpoolClient:
             json=owner.model_dump(mode="json"),
         )
 
-    def heartbeat_instance(self, instance_id: str, *, rank: int, heartbeat: ProcessHeartbeat) -> HeartbeatResponse:
+    def publish_instance_initialized(
+        self,
+        instance_id: str,
+        *,
+        rank: int,
+        publication: InstanceInitializedPublication,
+    ) -> None:
+        """Publish one SGLang rank's post-initialize startup barrier."""
+
+        instance_path = quote(instance_id, safe="/")
+        self.request(
+            "POST",
+            f"/instance/{instance_path}/initialized",
+            params={"rank": rank},
+            json=publication.model_dump(mode="json"),
+        )
+
+    def heartbeat_instance(self, instance_id: str, *, rank: int, heartbeat: ProcessRef) -> HeartbeatResponse:
         """Refresh one instance-rank heartbeat and log daemon warnings."""
 
         instance_path = quote(instance_id, safe="/")
@@ -428,4 +462,9 @@ class XpoolClient:
             params={"rank": rank},
             json=owner.model_dump(mode="json"),
         )
-        return self.decode_model(response, TransportArenaHandleRecord, "transport arena handle").to_handle()
+        try:
+            return TypeAdapter(TransportArenaHandle).validate_python(
+                self.decode_json(response, "transport arena handle")
+            )
+        except ValidationError as exc:
+            raise XpoolClientError("protocol", "xpool daemon returned invalid transport arena handle") from exc

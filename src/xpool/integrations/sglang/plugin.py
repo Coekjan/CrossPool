@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Callable, Sequence
 from functools import partial
-from typing import Concatenate, cast
+from typing import Concatenate
 
 import torch
 from sglang.srt.model_executor.model_runner import ModelRunner
@@ -13,24 +14,24 @@ from sglang.srt.plugins.hook_registry import HookRegistry, HookType
 from sglang.srt.server_args import ServerArgs
 
 from xpool import bootstrap, devkit
-from xpool.abi import RuntimeRole
+from xpool.abi import TensorDType
 from xpool.config import LoopbackSite, get_global_config, init_global_config
+from xpool.fabric import FfnLayerSpec, FfnWorkload
 from xpool.integrations.sglang.adapter import (
     SglangModelAdapter,
     XpoolModelBinding,
-    attach_model_binding,
-    clear_model_binding,
-    inject_shim_identity,
+    XpoolModelRuntime,
     model_runner_architectures,
-    resolve_model_binding,
 )
 from xpool.integrations.sglang.registry import MODELS_PACKAGE, discover_sglang_model_adapters
 from xpool.integrations.sglang.server_args import validate_sglang_server_args
 from xpool.integrations.sglang.shim import iter_ffn_shims
-from xpool.runtime.instance import init_instance
+from xpool.runtime import RuntimeRole
+from xpool.runtime.instance import Instance
 from xpool.runtime.transport import InstanceTransportAttributes
 
 MODEL_RUNNER_LOAD_MODEL = "sglang.srt.model_executor.model_runner.ModelRunner.load_model"
+MODEL_RUNNER_INITIALIZE = "sglang.srt.model_executor.model_runner.ModelRunner.initialize"
 MODEL_RUNNER_INIT_MEMORY_POOL = "sglang.srt.model_executor.model_runner.ModelRunner.init_memory_pool"
 XPOOL_REQUIRED_HOOK_TARGETS: set[str] = set()
 logger = logging.getLogger(__name__)
@@ -70,7 +71,12 @@ def install() -> None:
             after_model_runner_init_memory_pool,
             HookType.AFTER,
         )
-        required_targets.update((MODEL_RUNNER_LOAD_MODEL, MODEL_RUNNER_INIT_MEMORY_POOL))
+        HookRegistry.register(
+            MODEL_RUNNER_INITIALIZE,
+            after_model_runner_initialize,
+            HookType.AFTER,
+        )
+        required_targets.update((MODEL_RUNNER_LOAD_MODEL, MODEL_RUNNER_INIT_MEMORY_POOL, MODEL_RUNNER_INITIALIZE))
         XPOOL_REQUIRED_HOOK_TARGETS.update(required_targets)
         install_apply_hooks_guard()
     except Exception as exc:
@@ -154,11 +160,11 @@ def around_model_runner_load_model[**P, R](
         every FFN shim with identity, and runs adapter postconditions.
     """
 
-    server_args = model_runner_server_args(model_runner)
+    server_args = model_runner.server_args
     validate_sglang_server_args(server_args)
 
     matching_adapters = tuple(adapter for adapter in adapters if adapter.matches(model_runner))
-    binding = resolve_model_binding(model_runner)
+    binding = XpoolModelBinding.resolve(model_runner, server_args)
     if not matching_adapters:
         architectures = ", ".join(sorted(model_runner_architectures(model_runner))) or "<unknown>"
         raise RuntimeError(
@@ -166,24 +172,25 @@ def around_model_runner_load_model[**P, R](
             f"matches its architecture ({architectures}); add a model adapter under "
             "xpool.integrations.sglang.models or remove the [[models]] entry from XPOOL_CONFIG."
         )
-    validate_sglang_parallel_args(server_args, binding)
+    if len(matching_adapters) != 1:
+        names = ", ".join(adapter.name for adapter in matching_adapters)
+        raise RuntimeError(f"xpool requires exactly one model adapter match, got {len(matching_adapters)}: {names}")
+    adapter = matching_adapters[0]
+    binding.validate_server_args(server_args)
     bootstrap.init(int(binding.cuda_device), RuntimeRole.INSTANCE)
     devkit.install()
-    for adapter in matching_adapters:
-        adapter.validate_before_load(model_runner)
+    adapter.validate_before_load(model_runner)
 
-    attach_model_binding(model_runner, binding)
+    runtime = XpoolModelRuntime.attach(model_runner, binding)
     try:
-        for adapter in matching_adapters:
-            adapter.bind_runtime(model_runner)
+        adapter.bind_runtime(model_runner)
 
         result = original_fn(model_runner, *args, **kwargs)
 
-        inject_shim_identity(model_runner, binding)
-        for adapter in matching_adapters:
-            adapter.validate_after_load(model_runner)
+        binding.bind_shim_runtime(model_runner)
+        adapter.validate_after_load(model_runner)
     except Exception:
-        clear_model_binding(model_runner, binding)
+        runtime.detach(model_runner)
         raise
     return result
 
@@ -213,138 +220,189 @@ def after_model_runner_init_memory_pool[R](
         runtime unless instance loopback is enabled.
     """
 
-    binding = getattr(model_runner, "xpool_model_binding", None)
-    if not isinstance(binding, XpoolModelBinding):
-        raise RuntimeError("xpool ModelRunner.init_memory_pool hook requires an attached model binding")
+    runtime = XpoolModelRuntime.require(model_runner)
+    binding = runtime.binding
     config = get_global_config()
     if config.debug.loopback.site is LoopbackSite.INSTANCE:
         return result
     try:
-        if config.debug.loopback.site is LoopbackSite.FFNAGENT:
-            raise RuntimeError("xpool FfnAgent loopback runtime is not implemented yet")
-        server_args = model_runner_server_args(model_runner)
-        transport = derive_transport_attributes(model_runner, binding, server_args)
-        init_instance(
+        server_args = model_runner.server_args
+        workload = derive_workload(model_runner, binding, server_args)
+        transport = derive_transport_attributes(binding, workload)
+        runtime.instance = Instance.start(
             instance_id=binding.instance_id,
             rank=binding.sglang_rank,
             transport=transport,
+            workload=workload,
         )
+        if config.debug.loopback.site in {None, LoopbackSite.FFNAGENT}:
+            runtime.instance.wait_for_fabric_executable()
+        runtime.instance.attach_arena_from_daemon()
+        runtime.instance.start_failure_monitor()
     except Exception:
-        clear_model_binding(model_runner, binding)
+        runtime.detach(model_runner)
         raise
     return result
 
 
-def validate_sglang_parallel_args(server_args: ServerArgs, binding: XpoolModelBinding) -> None:
-    """Validate SGLang TP/DP launch dimensions against xpool config.
+def after_model_runner_initialize[R](
+    result: R,
+    model_runner: ModelRunner,
+    pre_model_load_memory: float,
+) -> R:
+    """Publish SGLang's post-initialize barrier for production execution.
 
     Args:
-        server_args: Resolved SGLang server arguments from the active model runner.
-        binding: xpool model binding derived from ``XPOOL_CONFIG``.
-
-    Raises:
-        RuntimeError: If SGLang ``tp_size`` or ``dp_size`` does not match the
-    dimensions and rank placement xpool derives for the bound instance.
-    """
-
-    for label, actual, expected in (
-        ("tp_size", server_args.tp_size, binding.sglang_tp_size),
-        ("dp_size", server_args.dp_size, binding.sglang_dp_size),
-        ("base_gpu_id", server_args.base_gpu_id, binding.sglang_base_gpu_id),
-        ("gpu_id_step", server_args.gpu_id_step, binding.sglang_gpu_id_step),
-        ("enable_dp_attention", server_args.enable_dp_attention, binding.enable_dp_atn),
-    ):
-        if actual != expected:
-            raise RuntimeError(
-                f"xpool config expects SGLang {label}={expected} for {binding.instance_id}, got {actual}"
-            )
-    expected_cuda_device = binding.sglang_base_gpu_id + binding.sglang_rank * binding.sglang_gpu_id_step
-    if binding.cuda_device != expected_cuda_device:
-        raise RuntimeError(
-            f"xpool config expects SGLang rank {binding.sglang_rank} to run on CUDA device {expected_cuda_device}, "
-            f"got {binding.cuda_device}"
-        )
-
-
-def model_runner_server_args(model_runner: ModelRunner) -> ServerArgs:
-    """Return resolved SGLang server arguments from a model runner.
-
-    Args:
-        model_runner: SGLang model runner expected to expose ``server_args``.
+        result: Return value from SGLang's original ``initialize`` method.
+        model_runner: Runner whose model and CUDA graphs are fully initialized.
+        pre_model_load_memory: Memory sample already consumed by SGLang.
 
     Returns:
-        Resolved ``ServerArgs`` object for compatibility validation.
+        The original ``initialize`` return value unchanged.
 
     Raises:
-        RuntimeError: If SGLang did not attach ``server_args`` to the runner.
+        RuntimeError: If production startup did not retain the executable plan.
+
+    Side Effects:
+        Publishes this rank's initialized barrier to the daemon and waits for
+        generation-wide readiness.
     """
 
-    server_args = getattr(model_runner, "server_args", None)
-    if server_args is None:
-        raise RuntimeError("xpool SGLang plugin requires ModelRunner.server_args for compatibility validation")
-    return cast(ServerArgs, server_args)
+    config = get_global_config()
+    if config.debug.loopback.site in {LoopbackSite.INSTANCE, LoopbackSite.ATNAGENT}:
+        return result
+    runtime = XpoolModelRuntime.require(model_runner)
+    if runtime.instance is None:
+        raise RuntimeError("xpool ModelRunner.initialize hook requires a started Instance runtime")
+    runtime.instance.publish_initialized()
+    runtime.instance.wait_for_ready()
+    return result
 
 
-def derive_transport_attributes(
+def derive_workload(
     model_runner: ModelRunner,
     binding: XpoolModelBinding,
     server_args: ServerArgs,
+) -> FfnWorkload:
+    """Derive the complete FFN executor workload from resolved SGLang state.
+
+    Args:
+        model_runner: Loaded runner with memory-pool concurrency and installed
+            FFN shims.
+        binding: Validated xpool instance and parallel identity.
+        server_args: Resolved SGLang graph and eager workload settings.
+
+    Returns:
+        Strict rank-independent workload registered with the daemon.
+
+    Raises:
+        RuntimeError: If dtype, layers, bucket ceilings, or model config bytes
+            cannot be resolved without guessing.
+        OSError: If the model's config file cannot be read.
+    """
+
+    dtype = getattr(model_runner.model_config, "dtype", None)
+    dtype_by_torch = {
+        torch.bfloat16: TensorDType.BF16,
+        torch.float16: TensorDType.FP16,
+        torch.float32: TensorDType.FP32,
+    }
+    tensor_dtype = dtype_by_torch.get(dtype)
+    if tensor_dtype is None:
+        raise RuntimeError(f"xpool FFN workload does not support SGLang dtype {dtype!r}")
+
+    model = getattr(model_runner, "model", None)
+    if model is None:
+        raise RuntimeError("xpool cannot derive an FFN workload before SGLang installs the model")
+    shims = tuple(sorted(iter_ffn_shims(model), key=lambda shim: shim.layer_id))
+    if not shims:
+        raise RuntimeError("xpool cannot derive an FFN workload without installed FFN shims")
+    hidden_sizes = {shim.hidden_size for shim in shims}
+    if len(hidden_sizes) != 1:
+        raise RuntimeError(f"xpool FFN shims disagree on hidden size: {sorted(hidden_sizes)}")
+    layers = tuple(FfnLayerSpec(layer_id=shim.layer_id, kind=shim.layer_kind) for shim in shims)
+
+    max_running_requests = model_runner.max_running_requests
+    max_prefill_tokens = getattr(server_args, "max_prefill_tokens", None)
+    if not isinstance(max_running_requests, int) or isinstance(max_running_requests, bool) or max_running_requests <= 0:
+        raise RuntimeError("xpool cannot derive positive eager decode rows from ModelRunner.max_running_requests")
+    if not isinstance(max_prefill_tokens, int) or isinstance(max_prefill_tokens, bool) or max_prefill_tokens <= 0:
+        raise RuntimeError("xpool cannot derive positive eager prefill rows from ServerArgs.max_prefill_tokens")
+    max_decode_rows = resolved_graph_capacity(
+        eager_capacity=max_running_requests,
+        enabled=not server_args.disable_cuda_graph,
+        buckets=getattr(server_args, "cuda_graph_bs", None),
+        maximum=getattr(server_args, "cuda_graph_max_bs", None),
+        label="decode CUDA graph",
+    )
+    max_prefill_rows = resolved_graph_capacity(
+        eager_capacity=max_prefill_tokens,
+        enabled=not server_args.disable_piecewise_cuda_graph,
+        buckets=getattr(server_args, "piecewise_cuda_graph_tokens", None),
+        maximum=getattr(server_args, "piecewise_cuda_graph_max_tokens", None),
+        label="piecewise prefill CUDA graph",
+    )
+
+    model_config_path = binding.model_path / "config.json"
+    return FfnWorkload(
+        model_config_digest=hashlib.sha256(model_config_path.read_bytes()).hexdigest(),
+        dtype=tensor_dtype,
+        hidden_size=hidden_sizes.pop(),
+        layers=layers,
+        max_decode_rows=max_decode_rows,
+        max_prefill_rows=max_prefill_rows,
+    )
+
+
+def resolved_graph_capacity(
+    *,
+    eager_capacity: int,
+    enabled: bool,
+    buckets: object,
+    maximum: object,
+    label: str,
+) -> int:
+    """Resolve one workload capacity from eager and enabled graph geometry.
+
+    Disabled graph paths contribute no capacity even when SGLang retains stale
+    bucket fields. Enabled paths accept the concrete bucket list and resolved
+    maximum exposed by the pinned ``ServerArgs`` object.
+    """
+
+    if not enabled:
+        return eager_capacity
+    candidates = [eager_capacity]
+    if buckets is not None:
+        if not isinstance(buckets, (list, tuple)):
+            raise RuntimeError(f"xpool cannot derive positive {label} buckets from resolved ServerArgs")
+        for row in buckets:
+            if not isinstance(row, int) or isinstance(row, bool) or row <= 0:
+                raise RuntimeError(f"xpool cannot derive positive {label} buckets from resolved ServerArgs")
+            candidates.append(row)
+    if maximum is not None:
+        if not isinstance(maximum, int) or isinstance(maximum, bool) or maximum <= 0:
+            raise RuntimeError(f"xpool cannot derive a positive {label} maximum from resolved ServerArgs")
+        candidates.append(maximum)
+    return max(candidates)
+
+
+def derive_transport_attributes(
+    binding: XpoolModelBinding,
+    workload: FfnWorkload,
 ) -> InstanceTransportAttributes:
     """Derive daemon registration transport attributes for one SGLang rank.
 
     Args:
-        model_runner: Loaded runner providing dtype, model shims, hidden size,
-            and resolved eager request concurrency.
         binding: Validated xpool attention TP/DP rank binding.
-        server_args: Resolved SGLang prefill and CUDA graph limits.
+        workload: Rank-independent hidden geometry and row coverage.
 
     Returns:
-        Transport geometry whose token capacity covers eager decode, prefill,
-        full CUDA graph, and piecewise CUDA graph execution.
-
-    Raises:
-        RuntimeError: If dtype, hidden size, eager request concurrency, or all
-            positive token-capacity limits cannot be resolved.
+        Transport geometry covering every eager and captured workload shape.
     """
 
-    dtype = getattr(model_runner.model_config, "dtype", None)
-    if not isinstance(dtype, torch.dtype):
-        raise RuntimeError("xpool cannot derive SGLang transport element size from ModelRunner.model_config.dtype")
-
-    model = getattr(model_runner, "model", None)
-    hidden_size: int | None = None
-    if model is not None:
-        hidden_sizes = {shim.hidden_size for shim in iter_ffn_shims(model)}
-        if len(hidden_sizes) == 1:
-            hidden_size = hidden_sizes.pop()
-        elif hidden_sizes:
-            raise RuntimeError(f"xpool FFN shims disagree on hidden size: {sorted(hidden_sizes)}")
-    if hidden_size is None:
-        candidate_hidden_size = getattr(getattr(model_runner.model_config, "hf_config", None), "hidden_size", None)
-        if isinstance(candidate_hidden_size, int) and candidate_hidden_size > 0:
-            hidden_size = candidate_hidden_size
-    if hidden_size is None:
-        raise RuntimeError("xpool cannot derive SGLang transport hidden size from installed FFN shims or hf_config")
-
-    max_running_requests = model_runner.max_running_requests
-    if max_running_requests is None or max_running_requests <= 0:
-        raise RuntimeError("xpool cannot derive a positive SGLang eager decode request capacity")
-    max_token_candidates = [max_running_requests]
-    for name in ("max_prefill_tokens", "cuda_graph_max_bs", "piecewise_cuda_graph_max_tokens"):
-        value = getattr(server_args, name, None)
-        if isinstance(value, int) and value > 0:
-            max_token_candidates.append(value)
-    for name in ("cuda_graph_bs", "piecewise_cuda_graph_tokens"):
-        value = getattr(server_args, name, None)
-        if isinstance(value, (list, tuple)):
-            max_token_candidates.extend(item for item in value if isinstance(item, int) and item > 0)
-    if not max_token_candidates:
-        raise RuntimeError("xpool cannot derive a positive SGLang transport max token capacity")
-
     return InstanceTransportAttributes(
-        element_size=torch.empty((), dtype=dtype).element_size(),
-        hidden_size=hidden_size,
-        max_tokens=max(max_token_candidates),
+        hidden_size=workload.hidden_size,
+        max_tokens=max(workload.max_decode_rows, workload.max_prefill_rows),
         atn_tp_rank=binding.atn_tp_rank,
         atn_tp_size=binding.atn_tp_size,
         atn_dp_rank=binding.atn_dp_rank,

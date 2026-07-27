@@ -28,6 +28,9 @@ __all__ = [
     "ConfigSourceRecord",
     "DebugConfig",
     "DevicesConfig",
+    "FabricObserverDebugConfig",
+    "FfnAgentConfig",
+    "FfnSchedulingPolicy",
     "GraphObserverDebugConfig",
     "InstanceConfig",
     "LoopbackDebugConfig",
@@ -101,6 +104,19 @@ class LoopbackSite(StrEnum):
     FFNAGENT = "ffnagent"
 
 
+class FfnSchedulingPolicy(StrEnum):
+    """Device-side policy used to admit ready FFN steps to executors.
+
+    Attributes:
+        FIFO: Admit the ready invocation with the smallest monotonic ticket.
+        RANDOM: Select a ready invocation with the generation's deterministic
+            random seed.
+    """
+
+    FIFO = "fifo"
+    RANDOM = "random"
+
+
 @dataclass(frozen=True, slots=True)
 class ConfigSetting:
     """Registry entry for one TOML, CLI, or defaulted setting.
@@ -126,6 +142,134 @@ class ConfigSetting:
     required: bool = False
     cli: str | None = None
     env_var: str | None = None
+
+    def parse(self, value: object) -> object:
+        """Parse one raw value using this setting's declared parser.
+
+        Args:
+            value: Raw selected value.
+
+        Returns:
+            Parsed config value.
+
+        Raises:
+            ConfigError: If the parser rejects the value or is unknown.
+        """
+
+        match self.parser:
+            case "bool":
+                if isinstance(value, bool):
+                    return value
+                normalized = str(value).strip()
+                if normalized == "1":
+                    return True
+                if normalized == "0":
+                    return False
+                raise ConfigError(f"expected boolean flag value '0' or '1', got {value!r}")
+            case "int":
+                try:
+                    return int(str(value).strip())
+                except ValueError as exc:
+                    raise ConfigError(f"expected integer config value for {self.name}, got {value!r}") from exc
+            case "raw":
+                return value
+            case "str":
+                return str(value)
+            case _:
+                raise ConfigError(f"unknown parser for {self.name}: {self.parser}")
+
+    def resolve(
+        self,
+        payload: Mapping[str, object],
+        cli_overrides: Mapping[str, object],
+        env: Mapping[str, str],
+    ) -> tuple[object, ConfigSource | None]:
+        """Resolve this setting according to xpool source precedence.
+
+        Args:
+            payload: Config-file payload.
+            cli_overrides: Explicit CLI values keyed by setting name.
+            env: Allowlisted environment values.
+
+        Returns:
+            Resolved value and source, or ``(None, None)`` when optional and unset.
+
+        Raises:
+            MissingRequiredConfig: If this required setting has no value.
+            ConfigError: If the selected value cannot be parsed.
+        """
+
+        if ConfigSource.CLI in self.allowed_sources and self.name in cli_overrides:
+            return self.parse(cli_overrides[self.name]), ConfigSource.CLI
+        if ConfigSource.ENV in self.allowed_sources and self.env_var is not None and self.env_var in env:
+            return self.parse(env[self.env_var]), ConfigSource.ENV
+        if ConfigSource.CONFIG in self.allowed_sources:
+            found, config_value = get_nested(payload, self.path or ())
+            if found:
+                return self.parse(config_value), ConfigSource.CONFIG
+        if ConfigSource.DEFAULT in self.allowed_sources:
+            return self.parse(self.default), ConfigSource.DEFAULT
+        if self.required:
+            raise MissingRequiredConfig(f"missing required config setting: {self.name}")
+        return None, None
+
+    def source_records(self, payload: Mapping[str, object]) -> list[ConfigSourceRecord]:
+        """Expand this setting's wildcard path into concrete source records.
+
+        Args:
+            payload: Original config mapping before overrides are applied.
+
+        Returns:
+            Source records for every concrete wildcard path.
+
+        Raises:
+            ConfigError: If the payload shape does not match the wildcard path.
+        """
+
+        path = self.path or ()
+        records: list[ConfigSourceRecord] = []
+
+        def walk(value: object, remaining_path: tuple[str, ...], concrete_path: tuple[str | int, ...]) -> None:
+            if not remaining_path:
+                records.append(
+                    {
+                        "name": format_source_record_name(concrete_path),
+                        "value": value,
+                        "source": ConfigSource.CONFIG,
+                    }
+                )
+                return
+
+            segment = remaining_path[0]
+            rest = remaining_path[1:]
+            if segment == "*":
+                if not isinstance(value, list):
+                    raise ConfigError(
+                        f"expected list config value at {format_source_record_name(concrete_path)} "
+                        f"for wildcard setting {self.name}"
+                    )
+                for index, item in enumerate(value):
+                    walk(item, rest, (*concrete_path, index))
+                return
+
+            if not isinstance(value, Mapping):
+                raise ConfigError(f"expected mapping config value at {format_source_record_name(concrete_path)}")
+            mapping = cast(Mapping[str, object], value)
+            if segment not in mapping:
+                if "*" in rest:
+                    return
+                records.append(
+                    {
+                        "name": format_source_record_name((*concrete_path, segment, *rest)),
+                        "value": None,
+                        "source": ConfigSource.UNSET,
+                    }
+                )
+                return
+            walk(mapping[segment], rest, (*concrete_path, segment))
+
+        walk(payload, path, ())
+        return records
 
 
 TOP_LEVEL_SOURCES = (
@@ -200,6 +344,42 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Directory used by the native transport observer for JSON output.",
     ),
     ConfigSetting(
+        name="debug_transport_observer_trace_capacity",
+        path=("debug", "transport_observer", "trace_capacity"),
+        parser="int",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=8192,
+        env_var="XPOOL_DEBUG_TRANSPORT_OBSERVER_TRACE_CAPACITY",
+        description="Positive number of native transport trace records retained per arena.",
+    ),
+    ConfigSetting(
+        name="debug_fabric_observer_enable",
+        path=("debug", "fabric_observer", "enable"),
+        parser="bool",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=False,
+        env_var="XPOOL_DEBUG_FABRIC_OBSERVER_ENABLE",
+        description="Development-only switch that records cross-Agent Fabric phases.",
+    ),
+    ConfigSetting(
+        name="debug_fabric_observer_outdir",
+        path=("debug", "fabric_observer", "outdir"),
+        parser="raw",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=None,
+        env_var="XPOOL_DEBUG_FABRIC_OBSERVER_OUTDIR",
+        description="Directory used by the fabric observer for structured snapshots.",
+    ),
+    ConfigSetting(
+        name="debug_fabric_observer_trace_capacity",
+        path=("debug", "fabric_observer", "trace_capacity"),
+        parser="int",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=8192,
+        env_var="XPOOL_DEBUG_FABRIC_OBSERVER_TRACE_CAPACITY",
+        description="Positive number of native fabric trace records retained per PE.",
+    ),
+    ConfigSetting(
         name="vendor_model_base_uri",
         path=("vendor", "model_base_uri"),
         parser="str",
@@ -241,6 +421,22 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         default=1,
         cli="--ffn-concurrency",
         description="Maximum FFN-side execution concurrency budget.",
+    ),
+    ConfigSetting(
+        name="scheduler_ffn_policy",
+        path=("scheduler", "ffn_policy"),
+        parser="str",
+        allowed_sources=TOP_LEVEL_SOURCES,
+        default=FfnSchedulingPolicy.FIFO.value,
+        cli="--ffn-policy",
+        description="Device-side policy used to admit ready FFN steps to distributed executors.",
+    ),
+    ConfigSetting(
+        name="scheduler_ffn_random_seed",
+        path=("scheduler", "ffn_random_seed"),
+        parser="int",
+        allowed_sources=(ConfigSource.CONFIG,),
+        description="Optional nonzero uint64 seed used only by the random FFN scheduler.",
     ),
     ConfigSetting(
         name="devices",
@@ -328,6 +524,23 @@ class SchedulerConfig(BaseModel):
         ge=1,
         description="Maximum FFN-side execution concurrency budget.",
     )
+    ffn_policy: FfnSchedulingPolicy = Field(
+        description="Device-side policy used to admit ready FFN steps to executors.",
+    )
+    ffn_random_seed: int | None = Field(
+        default=None,
+        ge=1,
+        le=2**64 - 1,
+        description="Explicit generation seed for the random FFN scheduler.",
+    )
+
+    @model_validator(mode="after")
+    def validate_ffn_scheduler(self) -> SchedulerConfig:
+        """Reject policy-specific state on the FIFO scheduler."""
+
+        if self.ffn_policy is FfnSchedulingPolicy.FIFO and self.ffn_random_seed is not None:
+            raise ValueError("scheduler.ffn_random_seed is valid only when scheduler.ffn_policy is random")
+        return self
 
 
 class DevicesConfig(BaseModel):
@@ -410,6 +623,15 @@ class AtnAgentConfig(BaseModel):
 
     cuda_device: int = Field(ge=0, description="CUDA device index owned by this AtnAgent.")
     rank: int = Field(ge=0, description="Rank in the configured attention-device list.")
+
+
+class FfnAgentConfig(BaseModel):
+    """Derived placement for one configured FfnAgent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cuda_device: int = Field(ge=0, description="CUDA device index owned by this FfnAgent.")
+    rank: int = Field(ge=0, description="Rank in the configured FFN-device list.")
 
 
 class InstanceConfig(BaseModel):
@@ -495,6 +717,12 @@ class TransportObserverDebugConfig(BaseModel):
 
     enable: bool = Field(default=False, description="Whether native transport device-phase timing is enabled.")
     outdir: Path | None = Field(default=None, description="Directory where transport timing snapshots are written.")
+    trace_capacity: int = Field(
+        default=8192,
+        gt=0,
+        le=2**63 - 1,
+        description="Maximum transport trace records retained in each native arena.",
+    )
 
     @model_validator(mode="after")
     def validate_transport_observer(self) -> TransportObserverDebugConfig:
@@ -510,6 +738,41 @@ class TransportObserverDebugConfig(BaseModel):
         if self.enable != (self.outdir is not None):
             raise ValueError(
                 "debug.transport_observer.enable and debug.transport_observer.outdir must be set or unset together"
+            )
+        if self.outdir is not None:
+            outdir = self.outdir.expanduser()
+            self.outdir = outdir.resolve() if outdir.is_absolute() else (Path.cwd() / outdir).resolve()
+        return self
+
+
+class FabricObserverDebugConfig(BaseModel):
+    """Debug-only cross-Agent Fabric observer settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enable: bool = Field(default=False, description="Whether cross-Agent Fabric timing is enabled.")
+    outdir: Path | None = Field(default=None, description="Directory where fabric snapshots are written.")
+    trace_capacity: int = Field(
+        default=8192,
+        gt=0,
+        le=2**63 - 1,
+        description="Maximum fabric trace records retained by each native PE.",
+    )
+
+    @model_validator(mode="after")
+    def validate_fabric_observer(self) -> FabricObserverDebugConfig:
+        """Normalize and validate fabric observer output settings.
+
+        Returns:
+            The validated debug config.
+
+        Raises:
+            ValueError: If enablement and output directory presence differ.
+        """
+
+        if self.enable != (self.outdir is not None):
+            raise ValueError(
+                "debug.fabric_observer.enable and debug.fabric_observer.outdir must be set or unset together"
             )
         if self.outdir is not None:
             outdir = self.outdir.expanduser()
@@ -533,6 +796,10 @@ class DebugConfig(BaseModel):
     transport_observer: TransportObserverDebugConfig = Field(
         default_factory=TransportObserverDebugConfig,
         description="Native transport device-phase observer settings.",
+    )
+    fabric_observer: FabricObserverDebugConfig = Field(
+        default_factory=FabricObserverDebugConfig,
+        description="Cross-Agent Fabric observer settings.",
     )
 
 
@@ -684,9 +951,9 @@ class XpoolConfig(BaseModel):
         sources: list[ConfigSourceRecord] = []
         for setting in CONFIG_REGISTRY:
             if setting.path is not None and "*" in setting.path:
-                sources.extend(wildcard_source_records(setting, source_payload))
+                sources.extend(setting.source_records(source_payload))
                 continue
-            value, source = resolve_setting(setting, source_payload, effective_cli, effective_env)
+            value, source = setting.resolve(source_payload, effective_cli, effective_env)
             if setting.path is not None and setting.name not in {"devices", "models"}:
                 sources.append(
                     {
@@ -732,6 +999,25 @@ class XpoolConfig(BaseModel):
         """Return AtnAgent placements keyed by CUDA device index."""
 
         return MappingProxyType({agent.cuda_device: agent for agent in self.atnagents})
+
+    @cached_property
+    def ffnagents(self) -> tuple[FfnAgentConfig, ...]:
+        """Return FfnAgent placements in FFN-rank order.
+
+        Returns:
+            Immutable FfnAgent placement tuple.
+        """
+
+        return tuple(
+            FfnAgentConfig(cuda_device=cuda_device, rank=rank)
+            for rank, cuda_device in enumerate(self.devices.ffn_cuda_devices)
+        )
+
+    @cached_property
+    def ffnagent_by_cuda_device(self) -> Mapping[int, FfnAgentConfig]:
+        """Return FfnAgent placements keyed by CUDA device index."""
+
+        return MappingProxyType({agent.cuda_device: agent for agent in self.ffnagents})
 
     @cached_property
     def instances(self) -> tuple[InstanceConfig, ...]:
@@ -820,28 +1106,22 @@ global_config_lock = Lock()
 
 def init_global_config(
     *,
-    config: XpoolConfig | None = None,
     config_path: str | Path | None = None,
-    env: Mapping[str, str] | None = None,
     cli: Mapping[str, object] | None = None,
 ) -> XpoolConfig:
     """Initialize the process-global xpool config.
 
     Args:
-        config: Optional already validated config to install directly. This is
-            intended for tests and narrow internal setup paths.
         config_path: Explicit TOML config path. When provided, it takes
-            precedence over ``env["XPOOL_CONFIG"]``.
-        env: Environment mapping used by the registry. Defaults to ``os.environ``.
+            precedence over ``XPOOL_CONFIG`` in the process environment.
         cli: Optional CLI-derived setting overrides.
 
     Returns:
         The config object now returned by :func:`get_global_config`.
 
     Raises:
-        ConfigError: If direct ``config`` injection is mixed with file/env/CLI
-            inputs, registry resolution fails, or a different effective config
-            was already installed in this process.
+        ConfigError: If registry resolution fails or a different effective
+            config was already installed in this process.
         MissingRequiredConfig: If no config path is available.
         OSError: If the config file cannot be opened.
         tomllib.TOMLDecodeError: If the config file is not valid TOML.
@@ -853,27 +1133,19 @@ def init_global_config(
         equal effective values returns the first installed object unchanged.
     """
 
-    if config is not None and (config_path is not None or env is not None or cli is not None):
-        raise ConfigError("init_global_config(config=...) cannot be combined with config_path, env, or cli_overrides")
-    if config is not None:
-        resolved = config
-    else:
-        effective_env = os.environ if env is None else env
-        effective_cli: dict[str, object] = dict(cli or {})
-        if config_path is not None:
-            effective_cli["config_path"] = str(config_path)
+    effective_cli: dict[str, object] = dict(cli or {})
+    if config_path is not None:
+        effective_cli["config_path"] = str(config_path)
 
-        config_path_setting = next(setting for setting in CONFIG_REGISTRY if setting.name == "config_path")
-        effective_path_value, effective_path_source = resolve_setting(
-            config_path_setting, {}, effective_cli, effective_env
+    config_path_setting = next(setting for setting in CONFIG_REGISTRY if setting.name == "config_path")
+    effective_path_value, effective_path_source = config_path_setting.resolve({}, effective_cli, os.environ)
+    if effective_path_source is None:
+        raise MissingRequiredConfig(
+            "xpool config path is required: set the XPOOL_CONFIG environment variable "
+            "(or pass --config). Instance identity is derived from the "
+            "one-model-one-instance mapping in this config."
         )
-        if effective_path_source is None:
-            raise MissingRequiredConfig(
-                "xpool config path is required: set the XPOOL_CONFIG environment variable "
-                "(or pass --config). Instance identity is derived from the "
-                "one-model-one-instance mapping in this config."
-            )
-        resolved = XpoolConfig.from_file(cast(str, effective_path_value), cli=effective_cli, env=effective_env)
+    resolved = XpoolConfig.from_file(cast(str, effective_path_value), cli=effective_cli, env=os.environ)
 
     global global_config
     with global_config_lock:
@@ -915,146 +1187,6 @@ def format_source_record_name(path: tuple[str | int, ...]) -> str:
         f"[{segment}]" if isinstance(segment, int) else f"{'.' if index else ''}{segment}"
         for index, segment in enumerate(path)
     )
-
-
-def wildcard_source_records(
-    setting: ConfigSetting,
-    payload: Mapping[str, object],
-) -> list[ConfigSourceRecord]:
-    """Expand one wildcard config setting into concrete source records.
-
-    Args:
-        setting: Registry setting whose path may contain wildcard segments.
-        payload: Original config mapping before overrides are applied.
-
-    Returns:
-        Source records for every concrete wildcard path.
-
-    Raises:
-        ConfigError: If the payload shape does not match the wildcard path.
-    """
-
-    path = setting.path or ()
-    records: list[ConfigSourceRecord] = []
-
-    def append_unset(concrete_path: tuple[str | int, ...]) -> None:
-        records.append(
-            {
-                "name": format_source_record_name(concrete_path),
-                "value": None,
-                "source": ConfigSource.UNSET,
-            }
-        )
-
-    def walk(value: object, remaining_path: tuple[str, ...], concrete_path: tuple[str | int, ...]) -> None:
-        if not remaining_path:
-            records.append(
-                {
-                    "name": format_source_record_name(concrete_path),
-                    "value": value,
-                    "source": ConfigSource.CONFIG,
-                }
-            )
-            return
-
-        segment = remaining_path[0]
-        rest = remaining_path[1:]
-        if segment == "*":
-            if not isinstance(value, list):
-                raise ConfigError(
-                    f"expected list config value at {format_source_record_name(concrete_path)} "
-                    f"for wildcard setting {setting.name}"
-                )
-            for index, item in enumerate(value):
-                walk(item, rest, (*concrete_path, index))
-            return
-
-        if not isinstance(value, Mapping):
-            raise ConfigError(f"expected mapping config value at {format_source_record_name(concrete_path)}")
-        mapping = cast(Mapping[str, object], value)
-        if segment not in mapping:
-            if "*" in rest:
-                return
-            append_unset((*concrete_path, segment, *rest))
-            return
-        walk(mapping[segment], rest, (*concrete_path, segment))
-
-    walk(payload, path, ())
-    return records
-
-
-def resolve_setting(
-    setting: ConfigSetting,
-    payload: Mapping[str, object],
-    cli_overrides: Mapping[str, object],
-    env: Mapping[str, str],
-) -> tuple[object, ConfigSource | None]:
-    """Resolve one setting according to xpool source precedence.
-
-    Args:
-        setting: Registry setting to resolve.
-        payload: Config-file payload.
-        cli_overrides: Explicit CLI values keyed by setting name.
-        env: Allowlisted environment values.
-
-    Returns:
-        Resolved value and its source, or ``(None, None)`` when optional and unset.
-
-    Raises:
-        MissingRequiredConfig: If a required setting has no value.
-        ConfigError: If the selected value cannot be parsed.
-    """
-
-    if ConfigSource.CLI in setting.allowed_sources and setting.name in cli_overrides:
-        return parse_setting(setting, cli_overrides[setting.name]), ConfigSource.CLI
-    if ConfigSource.ENV in setting.allowed_sources and setting.env_var is not None and setting.env_var in env:
-        return parse_setting(setting, env[setting.env_var]), ConfigSource.ENV
-    if ConfigSource.CONFIG in setting.allowed_sources:
-        found, config_value = get_nested(payload, setting.path or ())
-        if found:
-            return parse_setting(setting, config_value), ConfigSource.CONFIG
-    if ConfigSource.DEFAULT in setting.allowed_sources:
-        return parse_setting(setting, setting.default), ConfigSource.DEFAULT
-    if setting.required:
-        raise MissingRequiredConfig(f"missing required config setting: {setting.name}")
-    return None, None
-
-
-def parse_setting(setting: ConfigSetting, value: object) -> object:
-    """Parse one raw config value using its registry parser.
-
-    Args:
-        setting: Registry setting that defines the parser.
-        value: Raw selected value.
-
-    Returns:
-        Parsed config value.
-
-    Raises:
-        ConfigError: If the parser rejects the value or is unknown.
-    """
-
-    match setting.parser:
-        case "bool":
-            if isinstance(value, bool):
-                return value
-            normalized = str(value).strip()
-            if normalized == "1":
-                return True
-            if normalized == "0":
-                return False
-            raise ConfigError(f"expected boolean flag value '0' or '1', got {value!r}")
-        case "int":
-            try:
-                return int(str(value).strip())
-            except ValueError as exc:
-                raise ConfigError(f"expected integer config value for {setting.name}, got {value!r}") from exc
-        case "raw":
-            return value
-        case "str":
-            return str(value)
-        case _:
-            raise ConfigError(f"unknown parser for {setting.name}: {setting.parser}")
 
 
 def get_nested(payload: Mapping[str, object], path: tuple[str, ...]) -> tuple[bool, object]:

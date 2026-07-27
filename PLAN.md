@@ -1,920 +1,761 @@
-# xpool Project Plan
+# xpool Architecture And Plan
 
-This document is the canonical design for the xpool rebuild. It is
-self-contained and replaces chat history or the v2 worktree as the source of
-truth for new implementation work.
+This document is the canonical architecture and implementation plan for xpool.
+It describes the current supported design and the only remaining feature gate.
+Source declarations, generated native stubs, and the E2E manifest are the
+authoritative detailed interfaces for implemented code; this document records
+cross-module architecture, protocol invariants, ownership, and support limits.
 
-## Mission
+## Status
 
-xpool implements intra-node colocated serving with the smallest practical
-intrusion into SGLang. SGLang remains the attention-side serving program and
-request scheduler. xpool replaces FFN calls with a graph-safe shim, arbitrates
-shared GPU and communication-slot resources across multiple SGLang instances,
-and owns the FFN transport/execution path.
+| Phase | Status | Implemented capability | Core source |
+| --- | --- | --- | --- |
+| 0. Canonical documentation | Implemented | `PLAN.md` owns architecture and `docs/code-style.md` owns code conventions. | `PLAN.md`, `docs/code-style.md` |
+| 1. ABI and native boundary | Implemented | ABI 54, typed pybind lifecycle, focused headers, generated stubs, and a sole Tensor dispatcher operation. | `src/cext-include/xpool/`, `src/cext-bindings/` |
+| 2. Transport mailbox | Implemented | One rank-local CUDA IPC mailbox with device readiness, bounded drain, failure propagation, and optional tracing. | `src/cext/transport/`, `src/cext-include/xpool/transport/` |
+| 3. Fabric core | Implemented | All-AtnAgent invocation formation, FfnAgent coordination, scheduling, publication, failure, and trace protocols. | `src/cext/fabric/`, `src/cext-include/xpool/fabric/` |
+| 4. Python control plane | Implemented | Generation lifecycle, owner-authenticated control, readiness, and watchdog fail-stop. | `src/xpool/service/daemon/`, `src/xpool/runtime/` |
+| 5. SGLang integration | Implemented | DeepSeek-V2 and Qwen3 adapters, workload derivation, topology checks, and eager/full/piecewise graph-safe shim paths. | `src/xpool/integrations/sglang/` |
+| 6. Test orchestration | Implemented | Resource-aware CTest/pytest scheduling, descendant supervision, GPU lease proof, and explicit MPS-pipe ownership. | `tests/__main__.py`, `tests/harness/` |
+| 7. Loopback evidence | Implemented | Installed-command serving, graph, topology, observer, parity, multi-model, and shutdown evidence with debug loopback. | `tests/suites/e2e/`, `tests/harness/sglang/manifest.toml` |
+| 8. Real FFN execution | Blocked | No production weight loading or FFN calculation is claimed. | `src/cext/ffnagent/executor.cu` |
 
-The first production target is `deepseek-ai/DeepSeek-V2-Lite-Chat`. The project
-is SGLang-only.
+Implemented status requires both the code and its validation gate. Symbol
+presence alone is not evidence. Phase 8 remains blocked until its independent
+design is accepted and merged into this document.
 
-## Non-Goals
+## Mission And Boundaries
 
-- Do not restore the v2 source architecture wholesale.
-- Do not use SGLang to execute FFN work.
-- Do not implement expert parallelism in the first design; FFN execution uses
-  tensor parallelism.
-- Do not make KV cache sharing part of the first runnable FFN-shim closure.
-- Do not add Python NVSHMEM bindings unless a later accepted design requires
-  Python-side NVSHMEM calls.
+xpool separates attention-side serving from FFN execution within one host.
+SGLang owns request scheduling, attention, KV cache, graph selection, and output
+postprocessing. xpool intercepts supported FFN calls, transports rank-local
+requests through CUDA IPC, forms one distributed invocation across AtnAgents,
+coordinates execution across FfnAgents, and returns the contribution expected
+by SGLang.
 
-## Runtime Model
+The current E2E validation targets are `deepseek-ai/DeepSeek-V2-Lite-Chat` and
+`Qwen/Qwen3-14B`. Their IDs are evidence identities, not production adapter
+allowlists. SGLang is the sole serving engine.
 
-xpool currently has three runtime placements:
+The current milestone does not:
 
-1. `xpool daemon` is a single global host control plane. It owns registration,
-   policy configuration, readiness, health reporting, and global state for
-   attention-side SGLang instance arbitration. It must not participate in
-   request-time FFN progress or captured CUDA graph execution. Registration
-   readiness is process-liveness aware: stale SGLang instance or agent
-   pids do not satisfy `/ready`, and a restarted participant may replace a dead
-   registration without restarting the daemon.
-2. `xpool atnagent` is launched once per configured attention GPU. Each
-   AtnAgent owns the rank-local CUDA IPC ingress/egress arenas and the local
-   transport progress runtime.
-3. SGLang instances are normal SGLang server processes. Each instance loads the
-   xpool SGLang plugin from `xpool.integrations.sglang`. The plugin is
-   model-neutral: public adapter contracts live in
-   `xpool.integrations.sglang.adapter`, automatic adapter discovery lives in
-   `xpool.integrations.sglang.registry`, and model-specific implementations
-   live under `xpool.integrations.sglang.models`. The plugin loads the registry,
-   registers adapter hooks, runs model lifecycle checks around
-   `ModelRunner.load_model`, and starts transport after
-   `ModelRunner.init_memory_pool` resolves request concurrency. Model-specific hook targets, construction
-   compatibility, weight filtering, and post-load invariants live inside the
-   owning adapter. For the first DeepSeek adapter, SGLang's original
-   `ForCausalLM`, model body, decoder layer, attention module, communicator,
-   logits, and attention weight-loading logic remain the program skeleton.
+- implement real FFN weight loading or production FFN kernels;
+- infer FFN tensor or expert parallelism from the number of FfnAgents;
+- support expert parallelism, attention context parallelism greater than one,
+  non-`FULL` SGLang scatter modes, or multi-publisher input assembly;
+- support one model with both attention TP greater than one and attention DP
+  greater than one;
+- support attention DP greater than one for dense Qwen3; the current Qwen3
+  boundary is attention TP in `{1, 2}` with attention DP fixed to one;
+- claim DP-attention piecewise Prefill graph support;
+- add vLLM integration, Python NVSHMEM bindings, or compatibility aliases for
+  superseded greenfield contracts;
+- deliberately exercise device traps in routine tests, because a trap can
+  invalidate the shared MPS server and subsequent evidence.
 
-xpool requires a responsive CUDA MPS control daemon before transport execution.
-`/health` reports only daemon process liveness. `/ready` reports MPS status and
-accepts the current `atn` scope, which is also the default. The final result is
-the logical AND of MPS readiness and ATN readiness. ATN readiness requires the
-configured AtnAgents and instance ranks to be online and every rank to have a
-matching published transport arena. FfnAgent readiness is deferred with the
-rest of the FfnAgent control plane.
+## Domain Language
 
-## Shim Component
+- **Instance**: one SGLang model process and one rank-local FFN request
+  producer.
+- **AtnAgent**: the process role bridging rank-local Transport arenas into the
+  generation Fabric.
+- **FfnAgent**: one NVSHMEM participant owning FFN execution resources for one
+  GPU.
+- **Coordinator**: the first FfnAgent PE. It forms Invocations, schedules
+  Executors, publishes admissions, and aggregates completion. It is not a
+  separate process.
+- **Request**: one rank-local Transport mailbox operation.
+- **Submission**: one AtnAgent publication for one model-layer step.
+- **Invocation**: the distributed operation formed from matching Submissions
+  from every configured AtnAgent.
+- **Execution**: one cooperative FFN evaluation across all FfnAgents.
+- **Executor**: one aligned distributed execution slot present on every
+  FfnAgent. It is independent of FfnAgent count.
+- **Input Publisher**: the sole AtnAgent that publishes replicated `FULL`
+  input. It is PE zero in the current milestone.
+- **Result Handoff**: placement of the returned rank-local contribution for
+  SGLang postprocessing.
+- **Fail-Stop**: the owning process emits bounded, ownership-safe diagnostics
+  and exits nonzero instead of continuing from an untrusted state.
 
-The shim component is not a single Python object. It is a coordinated ABI and
-runtime path with two placements:
+## System Architecture
 
-- **Shim frontend** lives inside each SGLang instance. It is installed by the
-  SGLang plugin through a model adapter, replaces target FFN/MLP/MoE classes
-  during model construction, and calls a CUDA extension op. The frontend writes
-  a fixed-address request descriptor into IPC-mapped device memory and waits for
-  completion/result state. The DeepSeek adapter's FFN shim classes inherit the
-  original SGLang FFN classes for `isinstance` compatibility but do not call the
-  original FFN constructors, so dense FFN weights, MoE experts, and shared
-  experts are never allocated in the attention-side SGLang process.
-- **Shim agent** lives in each local AtnAgent. It is a
-  persistent kernel that polls rank-local queues, arbitrates resources,
-  advances attention-to-FFN transport, and writes grants/results.
+### Processes And Native Boundary
 
-Both eager execution and CUDA graph capture/replay use the same device ABI.
-Captured execution must not allocate memory, call host control-plane APIs,
-perform Python control flow, or change descriptor addresses.
+xpool has four process roles:
 
-CUDA graph shape compatibility is derived from SGLang's actual graph capture
-configuration and shim descriptors. xpool does not maintain an independent
-decode-bucket list in repository config.
+1. `xpool daemon` owns registration, process identity, generation planning,
+   Transport leases, readiness, and shutdown selection. It initializes
+   `xpool.native` as the daemon role but never initializes CUDA or joins
+   NVSHMEM. Its only business-level native operation is Fabric UID creation.
+2. `xpool atnagent` owns CUDA IPC Transport arenas and one AtnAgent NVSHMEM PE.
+3. `xpool ffnagent` owns one FfnAgent NVSHMEM PE and its resident execution
+   path. The first FfnAgent PE also hosts the Coordinator.
+4. SGLang Instance processes attach their Transport arena and invoke
+   `xpool.ops.ffn_shim`.
 
-The first shim contract is deliberately narrow. A shim call represents one
-decoder-layer FFN over a contiguous two-dimensional CUDA tensor
-`[num_tokens, hidden_size]` and returns an out-of-place tensor with the same
-shape and dtype. The first supported forward modes are normal SGLang decode,
-extend/prefill, and data-parallel idle-rank calls with zero live work. The
-SGLang plugin owns a model-neutral server-argument support
-matrix and fails closed for SGLang runtime modes that are not yet represented in
-the xpool shim ABI, including speculative execution, pipeline parallelism,
-LoRA, quantized first-stage loading, expert parallelism, EPLB, DeepEP, expert
-distribution recording, two-batch overlap, context parallel prefill, all-reduce
-fusion, SGLang CPU/layer offload, hierarchical cache offload, decode KV offload,
-mixed chunked prefill, PD disaggregation, diffusion LLM inference,
-PD multiplexing, reduce-scatter FFN output, and SGLang DP Attention. DP
-Attention remains a target capability, but the current integration rejects it
-until the native transport can return the reduce-scattered FFN output SGLang
-expects. Ordinary continuous batching and ordinary chunked prefill remain
-allowed when SGLang presents shim calls as exact `DECODE`, exact `EXTEND`, or
-exact `IDLE`; xpool rejects modes that can surface composite forward modes such
-as `MIXED`,
-`TARGET_VERIFY`, `DRAFT_EXTEND`, `DRAFT_EXTEND_V2`, `SPLIT_PREFILL`,
-`DLLM_EXTEND`, or `PREBUILT`. SGLang server-argument rules intentionally
-reference SGLang's resolved fields directly; an SGLang upgrade that renames or
-changes those fields is an explicit adapter maintenance point.
-Model adapters may add model-construction checks, but they do not own global
-SGLang runtime policy. Server-argument rules remain part of the SGLang plugin
-layer because they describe global plugin ABI support, not model architecture.
-These rules run on SGLang's resolved `ServerArgs`; they are not a replacement
-for SGLang's own CLI parsing, defaults, and server-argument validation.
+Native control and resource lifecycle use typed `xpool.native.fabric` and
+`xpool.native.transport` bindings. `xpool.ops.ffn_shim` is the sole Torch
+dispatcher operation because it is the compile-visible Tensor data path. The
+daemon does not use Torch operators for control-plane lifecycle.
 
-The SGLang shim frontend uses a single concrete `FfnShimModule` base class,
-not a mixin/protocol pair. Model-specific classes inherit
-`FfnShimModule, OriginalSGLangClass`, and `FfnShimModule.__init__` directly
-initializes `nn.Module` to avoid running original FFN constructors. Shim layer
-kinds use symmetric names: `DENSE` and `SPARSE`. The shim's model architecture
-string is diagnostic metadata injected from the actual SGLang/Hugging Face
-model config after load; native routing uses the integer model index, not a
-hard-coded architecture string.
+Native opaque binary identifiers are strong values, not string aliases.
+`FabricUid` and `TransportArenaHandle` are distinct instantiations of one
+trivially-copyable `HexValue<T>` utility with static lowercase-hex `decode()`,
+member `encode()`, byte equality, and byte hashing. Native metadata and
+registries retain those binary values. Pybind accepts and returns Python strings
+at the process boundary and converts exactly once; Python keeps its existing
+validated Fabric UID and Transport-handle domain values rather than exposing a
+second native mirror type.
 
-## Resource Policy
+The immutable generation PE order is:
 
-The daemon configures policy, but the attention-side shim agent performs
-the request-time grant on device.
-
-The initial policy is intentionally conservative:
-
-- For each attention GPU, only one SGLang instance may execute attention at a
-  time.
-- For each attention GPU, only one SGLang instance may own the communication
-  slot at a time.
-- Communication slots are explicit resources used to bound parallelism and
-  enable pipeline scheduling.
-
-## FFN Execution
-
-FfnAgents own xpool FFN execution. The planned execution stack is:
-
-- persistent-kernel scheduler,
-- captured graph execution and lowering,
-- declared host fallback for unsupported shapes,
-- FlashInfer-backed kernels where available,
-- tensor parallelism across participating FfnAgents.
-
-Correctness is first proven against layer-level oracles before serving metrics
-are claimed.
-
-The next execution milestones are ordered and independently gated. First,
-`debug.loopback.site=ffnagent` must prove the complete device-side path from
-the instance CUDA IPC arena through the local AtnAgent, over NVSHMEM to an
-FfnAgent, through the pairwise-rotation debug executor, and back through
-the AtnAgent to the instance. A local FFN kernel or one-way delivery is not
-sufficient evidence. Second, the DeepSeek-V2-Lite executor must replace the
-debug rotation when loopback is disabled and prove dense, routed-expert,
-shared-expert, graph, eager, and FFN-TP correctness against layer-level oracles. Debug
-loopback never acts as a fallback for unsupported production executor shapes.
-
-## NVSHMEM Transport
-
-Every participating GPU owns one NVSHMEM rank through its agent. The
-daemon does not own an NVSHMEM rank. SGLang instances do not initialize NVSHMEM.
-
-NVSHMEM rank assignment is deterministic from configured device order: ATN
-devices precede FFN devices. The daemon brokers opaque bootstrap metadata and
-generation membership but never initializes NVSHMEM or enters the data plane.
-All participants in one generation complete rendezvous before symmetric arenas
-and persistent kernels become ready. Replacing any member invalidates the old
-generation; old and new symmetric heaps must never be mixed. Shutdown stops
-admission, resolves in-flight slots, stops persistent kernels, finalizes the
-collective runtime, and only then removes control-plane ownership.
-
-The transport uses NVSHMEM symmetric memory and device-side signal/put/get or
-collective primitives between agents. Each SGLang shim communicates with its
-local AtnAgent through CUDA IPC-mapped queues and descriptors; all
-other attention and FfnAgents participate only through device-side channels
-owned by the agent runtime.
-
-Agent metadata is the daemon's live transport table, not a readiness bit and
-not request-time routing state. An AtnAgent publishes the transport
-arenas it owns after registering with the daemon and after instance ranks declare
-their transport requirements. The daemon validates those arenas against static
-config-derived placement and the registered rank requirements, stores them with
-the agent's liveness, and returns only filtered per-instance-rank metadata to
-SGLang. The instance-side key is `(instance_id, rank)`; the local attention CUDA
-device is derived from `devices.atn_cuda_devices[rank]`, not repeated in the
-instance response. The daemon brokers only the lowercase CUDA IPC arena handle.
-Arena geometry is native-owned: the agent writes a `TransportArenaLayout`
-header at the beginning of the CUDA IPC allocation, and the instance runtime
-maps the handle and reads that header before installing the arena.
-
-### Control-Plane Ownership And Recovery
-
-The daemon is a trusted same-host broker and binds only to loopback addresses.
-PID and ABI fields are ownership proofs inside that trust boundary, not remote
-authentication. Registration and transport transactions snapshot registry
-state under locks, perform process-liveness probes without locks, then reacquire
-the locks and verify object identity before committing.
-
-Transport arena publications are daemon-internal records keyed by
-`(instance_id, rank)`. Each record stores the opaque handle together with the
-exact transport attributes captured from the matching instance registration.
-Publication fails unless rank placement, TP/DP geometry, dtype size, hidden
-width, token capacity, and cross-rank agreement match current registrations.
-An instance lease is valid only for the exact publishing agent generation.
-
-A replacement agent registration synchronously drains a dead previous
-generation for at most 60 seconds. All live instance owners holding leases to
-that generation are terminated concurrently, receive one shared 15-second
-grace period, and are then killed if necessary. The daemon removes their
-registrations only after process death and installs the new agent generation
-only after every old user is gone. A timed-out replacement returns retryable
-`not_ready`.
-
-Daemon restart does not require recreating native arenas. A published ATN
-agent that loses daemon registration re-registers and republishes each
-original handle as the corresponding instance rank re-registers. Different
-models may load and register at different times: each local rank receives its
-arena without waiting for unrelated configured models, while the agent keeps
-one aggregate lifecycle state over all resources it owns. Each instance
-re-registers and reacquires once per heartbeat; it restores the lease only when
-the daemon returns the same handle already mapped by that process. A different
-handle is fatal because hot-switching an attached CUDA IPC arena is unsupported.
-
-## KV Sharing
-
-KV cache sharing is phase 2. The phase-2 design must audit:
-
-- SGLang 0.5.13 KV allocator and memory-pool internals,
-- kvcached's SGLang autopatch and virtual memory allocator pattern,
-- compatibility with xpool's per-agent worker ownership model.
-
-Until that audit is complete, xpool must not claim cross-model KV sharing.
-
-## Public Commands
-
-The package exposes one `xpool <subcommand>` CLI plus an SGLang general plugin.
-SGLang 0.5.13 loads general plugins from the `sglang.srt.plugins` entry point
-group in `sglang serve` and `python -m sglang.launch_server`; `SGLANG_PLUGINS`
-is SGLang's comma-separated plugin whitelist.
-
-The xpool plugin entry point is
-`xpool.integrations.sglang.plugin:install`. It does not patch generic FFN
-`forward()` functions and does not redirect SGLang `ModelRegistry` entries. The
-plugin loads a model adapter registry, installs adapter hooks, and installs
-generic `ModelRunner.load_model` and `ModelRunner.init_memory_pool` lifecycle
-hooks. The registry auto-discovers all
-zero-argument concrete `SglangModelAdapter` subclasses owned by modules under
-`xpool.integrations.sglang.models`; new model support is added by adding a model
-module, not by editing a global adapter list. Production plugin discovery fails
-closed if any adapter module cannot be imported, because a broken adapter tree
-means the installed SGLang integration is ambiguous. Best-effort skipping exists
-only for explicit non-production discovery calls such as tests. The lifecycle
-hook validates SGLang server arguments, resolves xpool runtime policy only for
-the currently loading model, checks SGLang TP/DP against that policy, and only
-then attaches the model binding to the runner. This ordering keeps rejected
-loads from leaving a half-bound model runner. There is no `XPOOL_INSTANCE_ID`;
-the instance id is derived from the
-one-model-one-instance mapping in TOML.
-
-The daemon `/config` endpoint returns its complete validated process-global
-`XpoolConfig`. Config-derived agent and instance placement remains available
-through that model's properties and is not wrapped in a second response schema.
-The endpoint must not perform expensive model metadata resolution or read model
-`config.json`; SGLang model metadata and full model-derived parallel policy
-remain owned by `xpool.integrations.sglang.topology` and plugin load-time
-validation.
-
-The first DeepSeek adapter directly replaces SGLang's DeepSeek FFN classes with
-xpool shim classes and hooks DeepSeek weight loading to skip
-`model.layers.*.mlp.*` tensors. It does not expose a module-level adapter
-singleton; the registry instantiates `DeepseekV2Adapter` through auto-discovery.
-It does not support DeepSeek-V3/V3.2 until those architectures have explicit
-adapter coverage and validation.
-
-```bash
-uv run xpool config dump --config configs/xpool.example.toml
-uv run xpool daemon check --config configs/xpool.example.toml
-uv run xpool daemon serve --config configs/xpool.example.toml
-uv run xpool atnagent --config configs/xpool.example.toml --cuda-device 0
-UV_ENV_FILE=/path/to/xpool/.env uv run sglang serve ...
+```text
+[all AtnAgent PEs in configured order][all FfnAgent PEs in configured order]
+coordinator_pe = atnagent_count
 ```
 
-`xpool config dump` validates local configuration without starting resident GPU
-work and reports the resolved config with registry setting sources. `xpool
-daemon check` reports daemon readiness through the daemon API client because the
-daemon owns service readiness. Its current scope is `atn`. `xpool daemon serve`
-starts the daemon, and `xpool atnagent` starts one resident process selected
-from the configured attention CUDA devices. FfnAgent CLI, runtime, and
-control-plane APIs are deferred until the NVSHMEM FFN milestone.
+One generation replaces the complete Agent and Instance world. A failed
+participant cannot recover or rejoin the retained generation.
 
-For repeated local development commands, copy `.env.example` to an untracked
-`.env`, edit local values, and set `UV_ENV_FILE=/path/to/.env` before invoking
-`uv run`.
+### Startup And Readiness
 
-## Configuration
+Startup has two control-plane barriers:
 
-The repository configuration is TOML. It defines:
+1. Every Instance rank registers the same model workload after SGLang resolves
+   memory-pool and request-concurrency geometry. AtnAgents publish each
+   available Transport arena incrementally, while Fabric planning waits for
+   complete configured membership and workload agreement.
+2. After graph capture, every Instance rank publishes the same generation and
+   plan digest.
 
-- daemon bind address,
-- scheduler concurrency limits,
-- attention-side CUDA devices,
-- FFN-side CUDA devices,
-- optional vendor model-base URI,
-- target model ids and optional absolute model-path overrides.
+External readiness is the conjunction of:
 
-It does not configure agent records, NVSHMEM ranks, instances, model
-family, hidden size, or attention topology directly. These are derived:
+- all configured Agent and Instance registrations being live;
+- every Instance rank having a geometry-matching, lease-eligible Transport
+  publication;
+- the Fabric generation being `EXECUTABLE`;
+- every Instance rank completing the generation/digest initialization barrier;
+- the externally managed MPS controller being online; and
+- invocation, owner, and protocol failure all being absent.
 
-- one `AtnAgent` per configured attention CUDA device,
-- one future `FfnAgent` per configured FFN CUDA device,
-- future NVSHMEM ranks assigned to attention devices in configured order,
-  followed by FFN devices in configured order,
-- one instance per configured model,
-- SGLang-specific model family, hidden size, KV heads, and attention layout in
-  `xpool.integrations.sglang.topology`, not in `xpool.config`.
+Device-published readiness is authoritative. Host kernel launch return is not
+evidence that a resident kernel crossed its startup barrier.
 
-Runtime policy must be derived from configuration and model metadata, not from
-hard-coded planner decisions.
+## Control Plane
 
-## Code Quality
+`ControlPlane` is the daemon aggregate root and owns the lock protecting
+registration, Transport, Fabric, and readiness invariants. Its subsystem
+registries are caller-synchronized, not lock-free algorithms.
 
-Python checks use Ruff formatting, Ruff linting, Astral ty, and pytest through
-the installed pre-commit hooks. Ruff enables `E`, `F`, `I`, `FAST`, `RUF`, `UP`,
-`W`, and `ANN401`, plus public Python docstring checks for classes, functions,
-methods, constructors, and documented Google-style parameters. The explicit
-documentation quality test checks only Pydantic field descriptions because
-they feed generated JSON Schema and OpenAPI surfaces. Broad `object`
-annotations are not banned with a custom AST test. The SGLang integration layer is allowed and
-expected to import SGLang concrete types directly; use local runtime guards or
-casts only around SGLang attributes that are assigned dynamically and are not
-visible to the type checker.
+Generation lifecycle:
 
-C++ and CUDA public APIs use Doxygen comments. The root `Doxyfile` is a
-warning-as-error gate for public native headers under `src/cext-include`.
-`clang-format` remains the native formatter; Doxygen is the public declaration
-documentation completeness check.
-
-The scheduler section uses concurrency terms, not slot-per-device terms:
-
-```toml
-[scheduler]
-atn_concurrency = 1
-ffn_concurrency = 1
+```text
+JOINING -> EXECUTABLE -> QUIESCING -> DRAINING -> FINALIZING -> STOPPED
+any nonterminal phase -> ABORTING -> STOPPED
 ```
 
-The device section is the source of truth for agent placement:
+Participant lifecycle:
 
-```toml
-[devices]
-atn_cuda_devices = [0]
-ffn_cuda_devices = [1]
+```text
+JOINING -> JOINED -> ACTIVE -> QUIESCED -> DRAINING -> DRAINED -> FINALIZED
 ```
 
-The two device lists must be non-empty, unique, sorted in ascending order, and
-disjoint. A CUDA device may host only one xpool role.
-`devices.atn_cuda_devices` is an ordered physical device list: xpool maps SGLang
-rank `i` to `devices.atn_cuda_devices[i]` without depending on
-`CUDA_VISIBLE_DEVICES` remapping. The current SGLang integration can only launch
-through SGLang's `base_gpu_id + rank * gpu_id_step` form, so it rejects
-non-arithmetic ATN device lists in the SGLang adapter layer rather than in core
-config validation.
+Every configured AtnAgent and FfnAgent PE participates in each generation
+barrier. Instances are generation owners and initialization-barrier members,
+but not Fabric participants. Participant reports commit local progress only
+after daemon acknowledgement. Heartbeats prove liveness and return the latest
+daemon command/failure snapshot; they never commit participant progress.
 
-The vendor section may define the shared local model-cache root:
+The watchdog is the sole periodic driver for owner-loss detection, MPS status,
+lifecycle deadlines, and retrying abort cleanup. Any watchdog exception other
+than normal task cancellation is a daemon-local fail-stop: the application
+preserves the traceback and exits nonzero. It does not restart the watchdog or
+retain a responsive HTTP service with stale control-plane state. A first-error
+application failure latch carries the cause to the CLI-owned Uvicorn server;
+the server observes it in its normal tick loop, performs bounded shutdown, and
+returns a nonzero daemon command status without self-signals or `os._exit`.
 
-```toml
-[vendor]
-model_base_uri = "/absolute/path/to/models"
+Failure and lifecycle remain orthogonal:
+
+- **Invocation failure** is the canonical device-side failure of one
+  distributed invocation.
+- **Owner failure** is daemon-observed process exit, staleness, or replacement.
+- **Protocol failure** is a control/data protocol invariant violation described
+  by a diagnostic string.
+
+Each category is first-writer-wins and may coexist with the others. Invocation
+or Instance-owner failure can select cooperative quiesce while the complete
+Fabric PE world remains live. AtnAgent/FfnAgent owner loss, protocol failure,
+or inability to prove collective convergence selects `ABORTING`; the daemon
+then terminates the generation process trees without invoking unsafe NVSHMEM
+collectives. `STOPPED` remains retained until every original owner exits, then
+the generation is retired.
+
+Transport lease admission stops before Transport drain. Existing leases remain
+owned until explicit quiesce. A racing acquisition must either commit against
+one fully validated executable generation or fail without leaving a partial
+lease. AtnAgent debug loopback is the sole exception: because it terminates in
+the Transport Resident without entering Fabric, the daemon may admit its lease
+before Fabric becomes executable. That exception is selected only from the
+daemon's process-global debug configuration; clients cannot request it. Fabric
+quiescing or terminal phases and the local AtnAgent admission gate still reject
+new leases on every path.
+
+Authoritative Python boundaries are `src/xpool/fabric.py`,
+`src/xpool/service/wire.py`, `src/xpool/service/daemon/`, and
+`src/xpool/runtime/agent.py`.
+
+## Data Plane
+
+### Transport
+
+Each Instance rank and its AtnAgent share one single-producer/single-consumer
+CUDA IPC arena. The immutable layout is stored at offset zero and describes one
+mailbox, fixed input/output payloads, optional DP token counts, mutable arena
+state, and optional trace storage. Process-local resident command state is not
+part of the shared arena.
+
+The normal mailbox cycle is:
+
+```text
+Dormant -> Idle -> Staging -> Published -> Evaluated -> Idle
 ```
 
-Each model entry uses a full `org/name` model id. When `models[].path` is
-omitted, xpool resolves the weight path as
-`vendor.model_base_uri / models[].id`:
+- The AtnAgent Resident publishes `Dormant -> Idle` only after the complete
+  cooperative grid crosses its startup barrier.
+- The Instance owns `Staging`, publishes the complete request, and later owns
+  result acknowledgement.
+- The AtnAgent owns evaluation of `Published` and publishes the result as
+  `Evaluated`.
+- Drain races only for an `Idle` mailbox. In-flight ownership reaches a bounded
+  terminal result before the mailbox closes.
+- `Closed` is terminal and cannot be reused.
 
-```toml
-[[models]]
-id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+`TransportTraceRecord.closed` records the raw GPU timestamp at which a request
+enters the `Closed` terminal state. It does not mean that the mailbox returned
+to `Idle`; acknowledgement and reusable-slot recovery are separate lifecycle
+actions. The pybind documentation and generated stub must preserve this
+distinction without changing trace field order or ABI.
+
+One Instance process issues no concurrent FFN request against the same arena;
+there is no RingQueue, slot count, or free/used queue compatibility path.
+Before launching the request kernel, the native Instance boundary validates a
+two-dimensional contiguous CUDA hidden-state tensor on the attached arena's
+device. Optional DP token counts must be contiguous, one-dimensional, and on
+that same device. Shape, dtype, capacity, and token-count length are also host
+preconditions; invalid inputs fail before device code and never use a trap as a
+recoverable validation mechanism.
+Transport arena handles cross the Python control plane as validated hexadecimal
+identity values, while native code owns binary CUDA IPC representation.
+
+### Fabric
+
+One model-layer operation follows this publication chain:
+
+```text
+Submission -> Invocation -> Admission -> [Prefill InputReady]
+           -> Completion -> Result -> Acknowledgement
 ```
 
-`models[].path` remains available as an explicit absolute local override for
-non-standard layouts or temporary experiments. A model entry must have either
-an explicit absolute `path` or a resolved `vendor.model_base_uri`.
-`vendor.model_base_uri` is config-file only; do not set it through `.env`.
-The config loader must not materialize a vendor-derived path back into
-`models[].path`; that field represents only the explicit model-entry override.
-`ModelConfig.path` remains the schema field, but direct `model.path` access is
-blocked so runtime code must call `XpoolConfig.model_path_of(model_id)`, which
-returns the explicit override first and otherwise derives
-`vendor.model_base_uri / model_id`. Local labs should point `.env` at an
-untracked `configs/dev.local.toml`, and `*.local.toml` files are ignored so
-host-specific device and model-cache paths do not leak into repository
-examples.
+Every AtnAgent publishes a matching Submission. The Coordinator forms one
+Invocation only after all configured AtnAgents agree on model, layer, sequence,
+shape, forward mode, and result semantics. The Scheduler grants one distributed
+Executor lease and publishes Admission. Every FfnAgent publishes Completion;
+the Coordinator publishes Result only after all required completions; every
+AtnAgent acknowledges consumption before the Scheduler entry and Executor are
+reused.
 
-Model entries do not carry tensor-parallel placement. `xpool.config` derives
-only static serving placement: the attention world size is
-`len(devices.atn_cuda_devices)`, and FFN TP is
-`len(devices.ffn_cuda_devices)`. Multiple configured models share the same FFN
-agent pool; the runtime scheduler arbitrates ownership. If future work
-needs model-specific FFN subsets, that should be introduced as an explicit
-placement policy rather than a scalar `models[].tp` knob.
-Derived instances store the explicit `atn_cuda_devices` and
-`ffn_cuda_devices` lists only; `atn_world_size` and `ffn_world_size` are
-properties derived from those lists, not serialized schema fields.
+Decode and Prefill intentionally use different payload ownership:
 
-SGLang runtime policy is owned by `xpool.integrations.sglang.topology`. SGLang's
-`--tp-size` is treated as the attention world size. SGLang's
-`ModelConfig.attention_arch` is the authoritative MLA/non-MLA boundary; xpool
-does not infer MLA from model names or loose fields such as `kv_lora_rank`.
-When SGLang reports MLA, xpool validates the positive MLA dimensions it needs
-for compressed-cache layout and uses `atn_tp = 1`. When SGLang reports a
-regular attention layout, xpool derives MHA/GQA/MQA from SGLang's total
-attention heads and KV heads, then uses
-`atn_tp = min(num_key_value_heads, atn_device_count)`. XPool then derives the
-SGLang attention DP size from the configured attention devices and rejects
-values greater than one until reduce-scatter FFN output is implemented. The
-SGLang plugin validates `--tp-size`, `--dp-size`, `--base-gpu-id`,
-`--gpu-id-step`, and `enable_dp_attention` against this derived policy.
-Reduce-scatter FFN output is still unsupported and remains fail-closed until
-the native ABI defines an explicit partial-result contract.
+- **Decode** uses fixed per-model input/output payloads. The Input Publisher
+  stages the model payload before Submission, and each FfnAgent pulls it after
+  Admission.
+- **Prefill** uses the admitted Executor's reusable input/output payload. The
+  Input Publisher pushes the larger payload after Admission and publishes
+  `InputReady` to every FfnAgent before execution.
 
-All TOML fields, CLI overrides, and xpool process environment variables for
-registered settings are declared in the config registry. Every setting has one
-canonical `XpoolConfig` path; environment variables are only another source for
-that same logical field, never a separate environment subtree. Sources resolve
-in this order:
+This keeps predictable, frequently reused Decode storage independent from
+large Prefill capacity, while Prefill pays admission before consuming a shared
+Executor workspace. A2F and F2A remain distinct because execution may not
+overwrite input before every consumer has finished reading it.
 
-1. CLI arguments,
-2. allowlisted environment variables,
-3. TOML config,
-4. registry defaults.
+The Scheduler is a tagged policy value with FIFO and random implementations.
+Its mutable state is isolated from immutable arena geometry. Executor count
+expresses concurrent distributed execution capacity, not the number of
+FfnAgents.
 
-Required settings without a default must fail fast when none of their allowed
-sources provides a value. Optional paired settings may be absent individually
-when their owning validator can prove the combined contract, such as
-`models[].path` and `vendor.model_base_uri`: each model must resolve to exactly
-one absolute local path, but either the model-specific override or the vendor
-model-cache root may provide it. xpool deployment policy must not be controlled
-by arbitrary environment variables: every accepted `XPOOL_*` variable must
-appear in the registry with `ENV` in its allowed sources, and startup/config
-helpers warn when they see an unknown `XPOOL_*` variable. Every registry setting
-that allows `ENV` must declare an environment-variable name and that name must
-appear in `.env.example`, either enabled as a development default or commented
-as an opt-in switch. `XPOOL_CONFIG` is an
-env-backed bootstrap registry setting used before TOML can be loaded, not a
-runtime `XpoolConfig` field. `SGLANG_PLUGINS` belongs to SGLang's plugin loader
-and is documented in `.env.example`, not in xpool's config registry.
-`XPOOL_DEBUG_LOOPBACK_ENABLE=1` and `XPOOL_DEBUG_LOOPBACK_SITE` are paired
-development-only env sources for `debug.loopback.enable` and
-`debug.loopback.site`. The site is one of `instance`, `atnagent`, or
-`ffnagent`. `instance` routes the Python FFN shim to the direct loopback debug
-op. `atnagent` keeps the production `ffn_shim` route and executes the loopback
-in the local AtnAgent persistent kernel. `ffnagent` is
-reserved for the complete NVSHMEM request/result path and fails explicitly
-until that runtime exists. Enabling loopback requires a site, while disabling
-loopback forbids a site. Both fields allow only `ENV` and `DEFAULT`, so TOML
-attempts fail closed. The corresponding agent process must stay resident and
-continue publishing arena handles as instance ranks register so daemon pid
-liveness never leaves stale handles installed. `XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE` and
-`XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR` are paired development-only env sources for
-`debug.graph_observer.enable` and `debug.graph_observer.outdir`: they must be
-enabled/present together or disabled/absent together. The output directory is
-where the devkit SGLang graph observer writes per-process JSONL capture/replay
-events, and relative paths are resolved against the process working directory
-during config validation. Both graph observer settings are env-only debug
-settings, so TOML attempts to set them fail closed.
-Runtime code must not copy or cache config values outside `xpool.config`; entry
-points install one process-global resolved config through `init_global_config()`,
-and business code reads it through `get_global_config()` when needed. The only
-global config write API is `init_global_config`; test injection uses
-`init_global_config(config=...)` rather than a separate setter.
-Config source provenance is produced during the same resolution pass that
-validates the config and is exposed by the resolved `XpoolConfig` object.
-The loopback site is config-only: daemon registration and metadata payloads do
-not carry loopback policy.
-Loading the xpool SGLang plugin enables the shim; there is no separate xpool
-enable flag or manually configured instance id. The instance id is derived from
-the one-model-one-instance mapping.
+Fabric failure publication is canonical and first-writer-wins. Request result,
+generation failure, shutdown, scheduler state, lifecycle phase, and trace state
+remain separate facts rather than overloaded status values.
 
-## ABI Surfaces
+Fabric symmetric allocation is an explicit collective owner. Normal shutdown
+drains device work, explicitly destroys the arena while NVSHMEM is live,
+unregisters the CUDA module, and only then finalizes the participant host
+library. Its destructor never attempts an implicit `nvshmem_free`; a live owner
+at destruction is a fail-stop lifecycle violation. This differs intentionally
+from independently releasable CUDA and IPC owners, whose destructors may perform
+best-effort local cleanup.
 
-The shared Python/C++ ABI version 24 starts with versioned FFN request/result
-descriptors and structured transport trace records.
-Native debug options use one non-negative 64-bit encoding. Bits 32 through 62
-are feature flags, with bit 32 enabling loopback and bit 33 enabling transport
-observation; bit 63 is reserved so the value remains representable by Torch's
-signed integer schema. Bits 0 through 31 are feature-specific option fields.
-Bits 0 and 1 encode the loopback site as zero for none, one for `instance`, two
-for `atnagent`, and three for `ffnagent`; all remaining low bits are
-reserved. Loopback enablement and its site must agree, and unknown feature or
-reserved option bits fail closed. Future parameterized features receive
-disjoint low-bit fields rather than reinterpreting the whole option word.
-Both descriptors contain:
+Transport and Fabric share generic checked layout, tracing, wait, cooperative,
+and CUDA ownership mechanisms only. Their protocol records, publications,
+arena states, views, and snapshots remain subsystem-owned.
 
-- ABI version and byte size,
-- status/error state,
-- output slot id.
+## SGLang Integration
 
-FFN request descriptors also contain:
+SGLang integration reads concrete pinned-SGLang types. Model binding happens
+during model load; workload geometry is derived after memory-pool
+initialization from the resolved `ModelRunner.server_args`, hidden-state dtype,
+request concurrency, Prefill capacity, and graph capacities. Graph capture then
+uses the installed shim without changing Transport or Fabric geometry.
 
-- instance index,
-- layer id,
-- forward mode,
-- dtype,
-- collective and DP padding policies,
-- input/output/DP-token-count arena offsets,
-- token count,
-- hidden size,
-- communication-slot id,
-- attention TP/DP topology.
+The current supported graph paths are:
 
-FFN result descriptors also contain:
+- eager execution;
+- Decode full CUDA graph replay; and
+- Prefill piecewise CUDA graph replay when attention DP is one.
 
-- error code,
-- output arena offset.
+DeepSeek-V2 supports attention `(TP, DP)` placements `(1, 1)`, `(2, 1)`, and
+`(1, 2)`. With attention DP greater than one, piecewise Prefill is disabled for
+the pinned SGLang behavior and full/eager paths remain eligible. Dense Qwen3
+supports `(1, 1)` and `(2, 1)` only. The topology validator rejects combined
+attention TP greater than one and DP greater than one for every model. Context
+parallelism, expert parallelism, quantization, speculative decoding, offload,
+disaggregation, and other unrepresented modes fail before serving readiness.
 
-Descriptors must not carry raw CUDA pointers across processes. SGLang and the
-local agent may map the same CUDA IPC allocation at different virtual
-addresses, so all cross-process references use arena offsets. Each arena owns two
-device-resident bounded ring queues backed by the generic
-`xpool::utils::queue::RingQueue<uint32_t>` primitive: a free-slot queue
-initialized with every slot id, and a used-slot queue initialized empty.
-Instance-side shim kernels pop the arena slot from the free queue, stage input
-and DP token counts, stamp a descriptor, and push the slot id to the used queue.
-Each instance/rank pair binds one local transport arena. The local transport
-checkpoint defaults to one reusable slot and one resident agent warp that
-consumes its used queue. Queue depth is nevertheless a real native layout
-parameter so shutdown and future microbatching are correct for multiple slots.
-Future FFN-side concurrency belongs to the
-FfnAgent scheduler/executor, not to the local attention arena queue depth.
-The shim copies the completed output before pushing the slot back to the free
-queue, so the agent cannot reuse output storage before the producer has
-consumed it. The shim publish path must split payload staging from queue
-publication so agents cannot
-observe partially staged input, including when CUDA graph replay reuses the same
-graph body. Queue cells use system-scope acquire/release atomics for slot
-ownership publication, while descriptor status fields use the same system-scope
-ordering for request/result state transitions. Descriptor headers do not carry a
-separate request sequence; slot ownership is determined by the free/used queues
-and the descriptor status protocol.
+DeepSeek-V2 and Qwen3 model-specific binding lives under
+`src/xpool/integrations/sglang/models/`. Generic hook installation, topology,
+workload, shim, and server-argument policy live in the parent SGLang integration
+package. Model paths are resolved only through
+`XpoolConfig.model_path_of(model_id)`. Architecture selects the family adapter;
+model ID is configuration identity and path resolution, not adapter evidence.
 
-Transport performance observation is an explicit debug facility configured by
-`debug.transport_observer.enable` and `debug.transport_observer.outdir`. The two
-settings must be present or absent together. When disabled, transport arenas do
-not allocate trace storage and request kernels do not read timers or write trace
-records. `TransportArenaLayout` resolves this process-wide native debug option
-when it constructs the arena geometry; callers provide workload dimensions but
-do not pass a second observer-policy flag. When enabled, every instance request receives a monotonic trace id and
-the instance and agent write device-global timestamps into the same bounded
-arena record for slot acquisition, input staging, publication, agent dequeue,
-descriptor grant, executor entry/exit, result publication/observation, output
-copy, and slot recycling. `TransportTraceRecord` and
-`TransportTraceSnapshot {sequence, dropped, records}` are matching C++ and
-Python ABI structures. The destroy operator transports snapshots as a named
-primitive tuple rather than an opaque tensor, and devkit exports them as
-structured JSON for cross-process analysis. Nsight Systems
-remains the system timeline and host-synchronization authority; Nsight Compute
-provides source-correlated instruction, memory, occupancy, and stall evidence for
-focused native integration workloads. Neither tool replaces the device phase
-timestamps for cross-process request wall time.
+Debug loopback is selected through `debug.loopback.enable` and
+`debug.loopback.site`. Instance and AtnAgent sites bypass progressively more of
+the data plane. Instance loopback acquires no Transport lease. AtnAgent loopback
+uses Transport but does not require an executable Fabric generation. FfnAgent
+loopback traverses the complete orchestration and protocol path and therefore
+requires executable Fabric, but performs only the debug pair rotation. None is
+evidence of real FFN weight execution.
 
-Native transport interfaces use references for required arena state,
-descriptors, atomic targets, and queue outputs. Pointers are reserved for
-nullable observer records, optional payloads, raw device buffers, externally
-owned storage views, and CUDA C API boundaries. Device-only range checking and
-slot-address derivation are private `TransportArena` operations rather than
-free helpers that accept an arena as their first argument.
+## Configuration And Observation
 
-Expected executor failures are device-visible protocol results, not CUDA traps.
-The agent publishes a typed `FfnResultErrorCode`, records the first fatal
-executor error in arena-local sticky state, and lets the instance request kernel
-complete with poison output while preserving the CUDA context. A process-local
-background monitor reads that sticky state outside the request path and
-terminates the instance fail-closed. Device traps are reserved for corrupted
-ABI, range, queue, or descriptor-state invariants where continuing to access the
-shared arena is unsafe.
+Runtime configuration flows through `xpool.config`. Entry points install one
+process-global config and business logic reads it from the global accessor.
+Resolution order is CLI, allowlisted environment, TOML, then defaults. Debug
+settings are environment/default-only and are rejected in TOML.
 
-Host error inspection is exposed as a typed lifecycle snapshot rather than a
-request operator. Transport observation is exported only by the arena destroy
-transaction: destroy requires a live arena handle, drains the resident kernel,
-captures a structured trace snapshot, releases the arena, and returns the
-snapshot. Disabled observation returns zero counters and no records; enabled
-observation returns the complete ring even when no request has run. Unknown or
-repeated destroys are lifecycle errors rather than idempotent operations. Live
-trace-ring snapshots and a second observer-specific destroy path are unsupported.
+Python passes validated debug options directly with Pydantic JSON. Native host
+and device code read target-specific storage through the same
+`debug::options()` interface. Arena layout construction reads observer capacity
+internally; debug options never leak into layout call signatures.
 
-The ordinary shim path is stream ordered and must not synchronize the host after
-each request. Arena detach, replacement, and shutdown are the synchronization
-boundaries: they stop new launches, wait for recorded in-flight completion, and
-only then close the CUDA IPC mapping. CUDA graph capture contains device work
-only and must not create host callbacks or capture host-side event management.
+Transport and Fabric observers use generic bounded trace storage but retain
+subsystem-specific records and event dependency checks. Observer JSON has no
+schema version. Traces are evidence and diagnostics, not control-plane state.
+Native trace state-machine misuse remains fail-stop, while pybind validates
+that a queried Fabric event enum matches the record kind and raises
+`ValueError` for an invalid Python combination before entering native state
+access. Sender-side `Published` timestamps are local publication edges; for a
+fan-out they prove that every destination publication call was issued, not that
+every destination observed it. Receiver-side `Observed` timestamps carry that
+observation meaning. Transport records its sender edge immediately before the
+release-store to preserve the trace event dependency against a racing receiver.
 
-CUDA MPS is a production transport prerequisite. The daemon does not own the
-MPS lifecycle, change GPU compute mode, or repair a missing controller. Its
-readiness snapshot probes the controller selected by
-`CUDA_MPS_PIPE_DIRECTORY`, reports `mps_status`, and combines that status with
-every participant readiness scope. `/health`, registration, heartbeat, and
-configuration endpoints remain available while MPS is offline so the control
-plane can diagnose and recover. The controller may have no server before the
-first CUDA client connects; controller reachability, rather than a non-empty
-server list, is therefore the readiness boundary. Deployment must start the
-controller with every GPU visible to xpool clients and give controller and
-clients the same MPS pipe and log directories.
+## Implementation Map
 
-Shutdown is a bounded drain protocol. The daemon blocks new leases and
-concurrently terminates every live instance owner of the agent's arenas;
-heartbeat freshness is not evidence that a live CUDA IPC mapping is safe to
-free. Once shutdown is observed, producers may not enqueue new work. The
-resident agent marks already-used slots failed with the shutdown error
-instead of executing them and exits after the used queue is empty. A slot held
-by a producer that died before publication is abandoned rather than restored to
-the free queue because the arena is destroyed immediately after the resident
-kernel exits. Host cleanup waits at most 60 seconds and never frees an arena
-whose resident kernel failed to drain.
+- `src/xpool/service/daemon/` and `src/xpool/runtime/` own Python control-plane
+  authority and participant lifecycle.
+- `src/xpool/fabric.py`, `src/xpool/transport.py`, and
+  `src/xpool/service/wire.py` own Python domain and wire values.
+- `src/xpool/integrations/sglang/` owns serving-engine integration and model
+  adapters; `src/xpool/ops.py` owns the sole Tensor dispatcher facade.
+- `src/cext-include/xpool/transport/` with `src/cext/transport/` owns CUDA IPC
+  layout, protocol, resident, request, and trace behavior.
+- `src/cext-include/xpool/fabric/` with `src/cext/fabric/` owns NVSHMEM layout,
+  publication, scheduling, resident, lifecycle, and trace behavior.
+- `src/cext-bindings/` owns pybind and dispatcher registration; core native
+  implementation does not depend on pybind or `torch/library.h`.
+- `src/xpool/native/*.pyi` is generated from the built extension and is the
+  detailed Python binding contract.
 
-Current Python tests check descriptor packing and native byte-size parity before
-native runtime work is extended. Explicit enum, field-offset, and alignment
-parity tests must be added before xpool relies on those properties as stable ABI
-guarantees.
+Public-boundary documentation covers semantics that callers cannot derive from
+a signature: state-machine meanings for exported domain enums, protocol-event
+meanings for pybind trace values, and route-specific success and principal
+failure behavior for daemon HTTP endpoints. It does not duplicate internal
+control-plane branches or add ceremonial documentation to private helpers. The
+generated native stub receives binding documentation from pybind definitions;
+it is never edited by hand. Documentation must distinguish the CUDA-only native
+submit boundary from the dispatcher fake path, list every accepted DP token
+count dtype, and use current Request, Agent, and CTest terminology.
 
-## Implementation Order
+## Test Architecture
 
-1. Land this plan and the repository skeleton.
-2. Add Python package, `xpool <subcommand>` CLI, config validation, and daemon API
-   skeleton.
-3. Add agent launcher and runtime preflight checks.
-4. Add model-neutral SGLang plugin registration and DeepSeek FFN class adapter.
-5. Add shared ABI headers and Python packing tests.
-6. Close review-gate correctness gaps in SGLang plugin policy, model binding,
-   and daemon readiness/config snapshots before adding native runtime state.
-7. Prove single-GPU eager shim dispatch with a devkit loopback executor that
-   performs a non-identity pairwise hidden-state 45-degree rotation through
-   build-time `libxpool_cext.so` Torch ops.
-8. Prove the same debug loopback op under direct eager execution, direct CUDA
-   graph capture/replay, and isolated SGLang offline inference for eager,
-   decode full CUDA graph, and prefill piecewise CUDA graph modes.
-9. Implement the production `ffn_shim` publish/wait path with communication-slot
-   ownership and replay-safe descriptor side effects.
-10. Prove one NVSHMEM rank per agent transport with device-side progress.
-11. Attach DeepSeek-V2-Lite FFN executor and correctness oracle tests.
-12. Run SGLang E2E with multiple instances on the same attention GPU.
-13. Start phase-2 KV sharing design and implementation.
+`python -m tests` is the canonical complete-suite composition root. Direct
+pytest and CTest commands are focused debugging interfaces.
 
-The loopback executor in step 7 is only an ABI and CUDA graph validation tool.
-It must not be used as serving evidence; SGLang E2E readiness requires the real
-DeepSeek-V2-Lite FFN executor.
+- `tests/suites/cext/` owns C++/CUDA value, protocol, layout, scheduler,
+  resident, trace, and utility behavior.
+- `tests/suites/unit/` owns deterministic Python behavior. It performs no
+  native operation, CUDA initialization, subprocess launch, or weight access;
+  the mandatory session native/dispatcher preflight still runs.
+- `tests/suites/integration/` owns cross-module, pinned-SGLang, native binding,
+  component CUDA subprocess, service, CLI, and process-management contracts.
+- `tests/suites/e2e/` owns installed `xpool` and `sglang serve`, model weights,
+  HTTP inference, graph evidence, observer traces, topology, token parity,
+  multi-model concurrency, and shutdown.
+- `tests/harness/` owns reusable collection, scheduling, process, GPU, native,
+  and SGLang infrastructure and does not import collected test modules.
 
-Native Torch ops are produced during package build/install as Linux-only
-`libxpool_cext.so` and loaded from the installed xpool package by `xpool.cext`
-through an idempotent startup preflight that checks only the native
-`torch.ops.xpool.abi_version()` result against Python's `xpool.abi.ABI_VERSION`
-and then imports `xpool.ops` so Python graph wrappers are registered before
-serving code calls them.
-Runtime shim code calls the compile-friendly `xpool.ops.instance.ffn_shim`
-Python custom-op wrapper. The wrapper preserves SGLang's symbolic token
-dimension during piecewise CUDA graph compilation and dispatches at runtime to
-`torch.ops.xpool.instance.ffn_shim`. Agent-owned arena operations are exposed
-through `xpool.ops.atnagent` and dispatch to `torch.ops.xpool.atnagent.*`;
-instance-owned arena and shim operations are exposed through
-`xpool.ops.instance` and dispatch to `torch.ops.xpool.instance.*`.
-This two-layer shape contract avoids per-capture-bucket whole-model
-recompilation while keeping decode CUDA graph capture and SGLang piecewise CUDA
-graph prefill on the same native execution ABI. Runtime JIT extension builds
-are not part of the XPool serving design.
+`tests/README.md` is the user-facing testing guide: it describes suite layers,
+placement rules, requirements, artifacts, and canonical commands without
+enumerating individual cases. `tests/harness/README.md` is the harness
+architecture reference. It documents the collection-to-execution pipeline,
+module boundaries, process tree and typed supervision protocol, GPU/MPS lease
+ownership, endpoint-family reservations, result/artifact flow, and extension
+rules. Superseded research notes are not retained as a second source of truth.
 
-The current production `torch.ops.xpool.instance.ffn_shim` is implemented for the
-daemon-brokered transport checkpoint slice. Without a native transport arena handle
-registered for the locally derived `(instance_index, rank)`, it fails closed
-before launching work.
-When `debug.loopback.enable=true` and `debug.loopback.site=atnagent`, the SGLang plugin registers the
-requesting instance rank with the daemon after model load, fetches that rank's
-filtered transport arena handle, and installs a native registry entry. The native op
-publishes descriptors into the CUDA IPC arena, waits for the local attention
-agent arena to complete, and returns the temporary 45-degree rotate executor
-output through the production `ffn_shim` route. This proves registry-driven
-production shim dispatch, CUDA IPC arena handoff, descriptor sequencing, and
-local agent device progress for one same-device arena; attention admission
-arbitration, the NVSHMEM hop to FfnAgents, and the real FFN executor remain
-the next runtime implementation slice.
-Because `debug.loopback.enable` defaults to false, the default shim route is
-still not a serving-capable configuration. When the resolved global config has
-the `instance` loopback site, process initialization installs the matching
-native debug option, so `torch.ops.xpool.instance.ffn_shim` runs the temporary
-loopback executor while preserving the same graph wrapper and native ABI. This lets tests
-cover SGLang's current eager-compiler piecewise CUDA graph prefill path and
-decode full-graph capture mechanics. This is not a serving readiness claim and
-not a blanket torch.compile/Inductor support claim: SGLang's explicit global
-`enable_torch_compile=True` remains rejected while SGLang piecewise CUDA graph
-prefill with the default eager compiler remains accepted. Non-eager piecewise
-CUDA graph compiler modes also remain rejected until XPool defines a compiler
-contract for request publication,
-communication-slot ownership, stream/event ordering, agent progress, and
-replay-safe descriptor side effects.
+The suite collects concrete pytest items into a typed plan, runs CTest before
+Python stages, runs Unit before Integration, and admits E2E only after
+Integration succeeds. GPU tasks are sorted by required GPU count and estimated
+duration, then backfilled over the idle pool. The complete MPS pool-usability
+probe, the complete CTest stage, and every pytest GPU task each run in a
+`SupervisedTaskScope`; CTest retains its internal resource-spec scheduling
+inside that one stage scope. Whole-run GPU locks are released only after every
+scope created by any stage reaches `CLOSED`. An unproven descendant domain
+retains its locks and fails closed even when `SuiteRunner` was never created.
 
-The current daemon control-plane routes are AtnAgent-specific. AtnAgents register with
-`POST /atnagent/register`, each AtnAgent
-publishes rank-local transport arena handles with
-`POST /atnagent/{cuda_device}/transport-arenas` and use an AtnAgent heartbeat
-route. There is no generic agent endpoint and no current FfnAgent route.
-Instance ranks register with
-`POST /instance/register`, and each instance rank acquires its local handle
-through `POST /instance/{instance_id}/transport-arena/acquire?rank={rank}`.
-There is no aggregate fetch on the instance route; each SGLang rank installs
-only its local arena. Runtime participants access these routes through
-`xpool.service.client.XpoolClient`, not ad hoc `httpx.Client` calls. The
-agent publish body contains the publisher process reference and a list of
-`{instance_id, rank, handle}` bindings, where `handle` is the lowercase CUDA IPC
-arena handle. Drain marks the publisher's arenas as terminating for heartbeat
-warnings until every live instance lease owner exits. The instance acquire response is the bare rank-local
-`TransportArenaHandleRecord`, not a wrapper object. The supported startup order
-is agents first, then instance ranks: agents may start resident before
-any rank is registered, then publish arenas as live instance registrations
-appear. The daemon rejects handles for unknown or unregistered instance ranks,
-so an early instance acquire receives a retryable `not_ready` response rather
-than waiting for all ranks.
+The runner-to-supervisor control pipe is also the parent-liveness boundary. If
+the runner exits abruptly, EOF makes the dedicated supervisor drain its task
+root and all adopted descendants before the runner-level subreaper reaps the
+supervisor. This preserves the same empty-domain invariant for graceful
+cancellation, timeout, and parent death.
 
-The daemon process-global `XpoolConfig` is the control-plane configuration
-authority. `GET /config` returns that Pydantic model directly, without a
-separate derived-view wrapper. Before every initial or recovery registration,
-agents and instances submit their complete local effective config to
-`POST /config/check`. The daemon compares it with its own config, including
-env-only debug settings and ordered model/device lists but excluding source
-provenance. A match returns `204 No Content`; a mismatch returns the existing
-`409 Conflict` daemon error with stable dotted/indexed field differences, and
-the client must not send its registration. Config validation stays daemon-side:
-runtime clients submit their local Pydantic JSON but never reconstruct the
-daemon config. The check and registration are separate requests because daemon
-config is immutable for the daemon process lifetime.
+`TaskCompletion` also represents a Supervisor-local infrastructure failure when
+the Supervisor has nevertheless drained the task domain and proved it empty;
+that task contributes suite exit code 2 without cancelling unrelated scopes.
+`TaskStartFailure` represents startup rollback that proved the attempted domain
+empty. `TaskSupervisionFailure` represents loss of the normal Supervisor
+protocol and triggers runner-wide fallback; it is not yet a final emptiness
+result. `TaskScopeFailure` is reserved for fallback that still cannot prove the
+descendant domain empty or close its Supervisor, and only that terminal failure
+quarantines the affected GPU lease and retains whole-run locks.
 
-Agent-published handle bindings carry only control-plane ownership facts.
-They use `(instance_id, rank)` as the route-table key and leave arena geometry
-opaque to Python and the daemon. Instance-scoped responses do not repeat
-`instance_id` because the route already identifies the requester. The instance
-process derives `instance_index` from its local xpool config before installing
-the native runtime. Instance registration stores process identity, local rank,
-and transport requirements including hidden-state element size and attention DP
-size; the daemon uses those requirements to reject undersized or
-topology-mismatched agent arenas before SGLang installs them. The transport
-runtime starts only after SGLang applies its resolved memory-pool configuration.
-The registered transport token capacity is the maximum of SGLang's resolved
-prefill, CUDA-graph batch, piecewise-graph token, and
-`ModelRunner.max_running_requests` limits. The last value covers eager decode
-when a legal running batch is larger than the captured CUDA-graph buckets.
-Every SGLang rank talks only to the local AtnAgent on the same
-physical CUDA device. Non-local agents participate through persistent kernels
-and the on-device/NVSHMEM agent network. The native transport registry is
-keyed by `(instance_index, rank)`.
+Successful runner fallback advances failed scopes to `DRAINED` and returns
+normally without manufacturing task completions. Concurrent `SuiteRunner`
+closes those scopes, releases their leases, stops scheduling, and exits with
+infrastructure code 2. `SupervisedTaskScope.run()` owns the complete serial
+start, wait, fallback, and close lifecycle for MPS pool usability and CTest. It
+returns `INFRASTRUCTURE_FAILED` after resource-safe startup rollback or a
+recovered supervision failure, and otherwise returns only after the scope is
+`CLOSED`.
 
-Daemon registration payloads carry only `pid`; the daemon samples the process
-`create_time` with `psutil` during registration. Liveness checks compare the
-full identity so PID reuse and permission failures cannot refresh old
-registrations. Stale registrations remain visible for observability, but they
-do not satisfy `/ready` and cannot serve transport arena handles. Liveness probing
-must not run while holding daemon state locks. Agent metadata is bound to the
-exact `ProcUniqId` that published it; if that owner no longer matches the live
-agent registration, the daemon returns retryable `not_ready` instead of
-handing stale CUDA IPC handles to an instance rank.
-The `atnagent` loopback site remains an explicit debug checkpoint path: it
-proves daemon-brokered metadata, native registry handoff, CUDA IPC descriptor
-publication, and local agent progress, while warnings make clear that real
-attention admission arbitration, NVSHMEM FFN routing, and FFN execution are not
-implemented by this debug slice. This checkpoint still is not a complete
-serving lifecycle protocol: full graph-replay error propagation and the real
-executor remain part of the production transport work.
+Concurrent task launch performs MPS checks, directory creation, and command
+construction before acquiring a task-local GPU lease. Lease acquisition and
+`SupervisedTaskScope.start()` are the sole launch transaction:
+`TaskStartFailure` returns the lease, while `TaskScopeFailure` quarantines it.
+The final resource-release proof also requires `GpuPool.active_leases` to be
+empty so runner bookkeeping cannot release whole-run locks while a lease is
+still outstanding.
+Supervisors are isolated from terminal signals and normal cancellation uses the
+typed control pipe. A signal sent directly to a Supervisor is owner loss, not a
+local cleanup request; the runner subreaper performs emergency cleanup and stops
+the suite.
 
-SGLang's DP padding mode is an execution hint as well as a distributed-buffer
-description: CUDA graph capture uses `MAX_LEN` even when attention DP size is
-one, and capture placeholders may omit `global_num_tokens_gpu`. The xpool ABI
-uses DP padding mode only to describe a real multi-rank DP buffer. Therefore the
-SGLang shim normalizes every attention-DP-size-one request to
-`DpPaddingMode::kNone`, omits DP token counts, and sets the global DP buffer
-length to the hidden-state row count. Multi-rank requests retain SGLang's
-padding mode, global buffer length, and per-rank token counts; native validation
-continues to reject non-none padding without those counts. SGLang DP attention
-is enabled only after the real FFN executor can aggregate the described DP
-input and return the reduce-scattered output expected by each ATN DP rank. Its
-acceptance gate uses at least two ATN DP ranks and covers unequal rank-local
-batches, idle ranks, `MAX_LEN`, and `SUM_LEN` under eager, decode full-graph,
-and piecewise prefill graph execution. Layer outputs must match the model oracle
-within dtype tolerance and generated token ids must match an unsplit SGLang
-baseline; merely removing the topology rejection is not compatibility evidence.
+The GPU pool is derived only from startup `CUDA_VISIBLE_DEVICES`, normalized to
+physical UUIDs, and locked for the complete run. Every selected GPU must pass
+MPS preflight. `CUDA_MPS_PIPE_DIRECTORY` is mandatory and identifies the
+externally managed controller; xpool does not fall back to NVIDIA's shared
+`/tmp/nvidia-mps` endpoint. Queries to the same explicit controller pipe are
+serialized across processes because its control client does not support
+concurrent commands. Each SGLang process receives an owned endpoint family,
+including HTTP, NCCL, gRPC, and DP-derived ports when needed.
 
-Current loopback validation must cover three compatibility surfaces that SGLang
-uses together in normal high-performance serving:
+`tests/harness/sglang/manifest.toml` is the sole source for E2E model IDs,
+topologies, graph modes, FfnAgent/Executor counts, observer capacities,
+estimates, timeouts, and test-only KV limits. Model paths remain external and
+come only from `XPOOL_CONFIG`. `model_serving_cases` exercise the complete
+serving contract through FfnAgent loopback until Phase 8; separate
+`loopback_serving_cases` sweep all explicit debug sites. Cross-mode token
+parity is evaluated only for complete declared groups. Every successful HTTP
+attempt retains a versionless `*.inference.json` record containing the exact
+model ID, URL, request body, response status/content type, and decoded response;
+the record is written before status and token-shape validation so failed
+inference remains inspectable.
 
-- eager execution,
-- decode full CUDA graph capture/replay,
-- prefill piecewise CUDA graph capture/replay.
+E2E startup treats daemon health and agent registration as distinct phases.
+Daemon HTTP readiness has a 60-second deadline and records its measured startup
+duration in the case artifact; agent registration retains a separate 30-second
+deadline so a slow daemon cannot consume the participant-registration budget.
 
-SGLang graph-mode tests should use `xpool.devkit.sglang.graph_observer` when
-they need proof that SGLang actually entered capture/replay paths, while native
-transport timing belongs to `xpool.devkit.common.transport_observer`. Process
-runtime initialization flows through `xpool.bootstrap.init(cuda_device, role)`,
-which locks one Python process to a CUDA device and `RuntimeRole`, loads and
-initializes the native runtime, and rejects conflicting reinitialization. After
-bootstrap, the SGLang plugin and common agent constructor call
-`xpool.devkit.install()`. Its unified registry recursively discovers observer
-modules under `xpool.devkit`, imports only observers enabled by matching
-`debug.<module_name>` config, and installs only observers declaring support for
-the bootstrapped runtime role. Each observer exposes a zero-argument `install()`
-entry point, declares its supported runtime roles, and reads process-global
-configuration rather than receiving debug policy from production code.
-The graph observer wraps SGLang full CUDA graph and piecewise CUDA graph runner
-methods for recording only and must not change runner arguments, tensors,
-return values, or exception behavior. It records event kinds as
-`full_cuda_graph` and `piecewise_cuda_graph`. Event output is synchronous and
-deliberately simple: first install creates/truncates
-`xpool.graph-observer.<pid>.jsonl` in the configured output directory with
-write mode so stale data is cleared and output-path errors fail early. A repeat
-install updates the target event file without truncating existing events. Each
-runtime event is appended to that file and flushed immediately under a
-process-local lock. Runtime event-recording failures are warnings and must not
-change SGLang graph runner return values or exception behavior. The observer
-belongs to devkit, not the production runtime or model-adapter layer.
+Resource requirements use `requires_cuda`, `requires_config`, `requires_mps`,
+and `requires_model_weights`. Direct pytest skips unavailable resources unless
+strict mode is requested; invalid explicit configuration always fails. The
+canonical suite retains logs, JUnit, parity artifacts, and observer evidence
+under `.xpool-cache/test-runs/`. `XPOOL_TEST_KEEP_RUNS`, when set to a positive
+integer, bounds recognized run-directory retention, including interrupted runs;
+per-run locks protect concurrent active runs, while unset retention never
+removes historical results.
 
-The transport observer follows the same boundary in agent processes.
-Production `AtnArenaResource` owns only instance identity, registration, and the
-native arena handle; destruction returns the ABI-defined trace snapshot without
-consulting debug configuration. When enabled for `RuntimeRole.ATNAGENT`, the
-devkit transport observer patches that destruction method, calls the original
-method exactly once, and serializes the returned snapshot using the output
-directory resolved from global config. Output-directory creation fails during
-observer installation. A later per-snapshot write failure is logged as a
-warning because native destruction has already completed and cannot be rolled
-back.
+Arena allocations use a 256-byte aligned root, but each internal region carries
+its actual requirement: typed metadata and state use `alignof(T)`, cooperative
+hidden-state payloads use 16-byte alignment, and remotely signaled Fabric
+publications retain their explicit 256-byte alignment. ABI 54 is the first ABI
+with this per-region geometry.
 
-The debug loopback op implements a non-identity pairwise 45-degree hidden-state
-rotation so tests can assert that shim output was computed rather than returned
-unchanged. SGLang validation has two explicit levels. Instance loopback runs
-all four `(cuda graph, piecewise CUDA graph)` combinations in isolated
-processes: `(off, off)`, `(off, on)`, `(on, off)`, and `(on, on)`. A separate
-AtnAgent loopback test starts an isolated daemon and every configured ATN
-agent, then runs eager `(off, off)` and combined graph `(on, on)` SGLang
-instances through daemon registration, arena publication/acquisition, CUDA IPC,
-descriptor queues, and the persistent transport kernel. It deliberately does
-not start the unimplemented FfnAgent.
+## Current Verification
 
-Both levels use the normal offline `Engine` API with `SGLANG_PLUGINS=xpool`, a
-short deterministic generation, and SGLang's default graph bucket settings.
-The E2E harness must not reduce SGLang's native graph buckets, even when doing so
-would shorten the test, because graph-construction scaling is part of the
-transport evidence and preserves coverage for future workloads.
-Each graph configuration runs in a fresh process, and each transport probe owns
-a fresh daemon/agent lifecycle on a temporary loopback port. The graph
-observer must record capture and replay for every enabled full or piecewise
-graph path, and no events for disabled paths. Token ids must match the eager
-baseline within and across instance and AtnAgent loopback sites. These tests are
-transport-checkpoint evidence only: production readiness still requires the
-FfnAgent, NVSHMEM routing, and real FFN execution.
+The 2026-07-27 loopback milestone passed the canonical build, complete
+`python -m tests`, and the non-duplicated formatting, lint, type, Doxygen,
+native formatting, and pre-commit non-test quality gates. Exact test counts are
+runtime collection facts and are intentionally not copied into this
+architecture document.
+
+Implemented status must be re-evaluated when a protocol, ownership, support
+boundary, or validation gate changes.
+
+## Phase 8: Real FFN Execution
+
+Phase 8 is blocked. Before implementation, a new design pass must decide:
+
+1. who loads weights, where each Dense/MoE layer is placed, and how layer
+   implementation identity is bound;
+2. the relationship among FfnAgent count, Executor concurrency, FFN tensor
+   parallelism, and expert parallelism;
+3. real Decode and Prefill kernels, workspace ownership, CUDA graph capture,
+   and reuse of the existing Fabric transfer protocol;
+4. output contribution semantics, cross-FfnAgent collectives or reduction, and
+   rank-local Result Handoff;
+5. weight and temporary-memory lifecycle, multi-model isolation, failure
+   propagation, quiesce, drain, and shutdown;
+6. DeepSeek/Qwen numerical oracles across supported TP/DP and graph modes,
+   including concurrent two-model execution; and
+7. performance acceptance criteria and profiler evidence.
+
+The accepted design must be merged into this document with exact new and old
+interfaces, data structures, ownership, lifecycle, failure behavior, and
+compatibility policy before source implementation begins. Until then,
+`src/cext/ffnagent/executor.cu` is an execution extension boundary with debug
+loopback only, not a production FFN body. Its current contract writes a valid
+output only when FfnAgent loopback returns `FfnResultCode::Ok`;
+`ProtocolMismatch` reports invalid Invocation or layer facts, and
+`NotImplemented` reports an unsupported execution policy or geometry. The
+native declaration and `FfnShimModule.forward` documentation must state this
+current capability rather than implying that Dense or MoE weights are
+executed. Device-side failure does not synchronize and raise at the Python
+call: it publishes sticky canonical failure, poisons the asynchronous output
+with NaNs, and is converted into Instance process fail-stop by the native
+failure monitor.
+
+## Completed Phase 4 And Phase 6 Remediation
+
+The final R10-R19 review closed the following bounded implementation work.
+Phases 4 and 6 are `Implemented`; the remediation changed no wire schema, native
+memory layout, public command spelling, or serving topology.
+
+### Daemon Watchdog Fail-Stop
+
+`src/xpool/service/daemon/app.py` keeps
+`create_daemon() -> FastAPI` unchanged and adds the module-internal value:
+
+```python
+@dataclass(slots=True)
+class DaemonFailure:
+    exception: BaseException | None = None
+
+    @property
+    def failed(self) -> bool: ...
+
+    def record(self, exception: BaseException) -> None: ...
+```
+
+`record()` retains only the first non-cancellation exception. The application
+stores one instance as `app.state.daemon_failure`. Its lifespan watchdog
+re-raises `asyncio.CancelledError`, logs every other exception with traceback,
+records it, and returns. It does not restart the watchdog or mutate readiness.
+
+`src/xpool/cli/subcommands/daemon.py` replaces the convenience
+`uvicorn.run(app, ...)` call with the private adapter:
+
+```python
+class DaemonServer(uvicorn.Server):
+    def __init__(self, config: uvicorn.Config, failure: DaemonFailure) -> None: ...
+    async def on_tick(self, counter: int) -> bool: ...
+```
+
+`on_tick()` returns `await super().on_tick(counter) or failure.failed`, thereby
+using Uvicorn's ordinary shutdown path. `DaemonServeCommand.run(...) -> int`
+still owns server construction and returns 1 after a latched watchdog failure,
+or 0 after ordinary shutdown. Neither type is exported from
+`xpool.service.daemon`; no signal, `os._exit`, restart loop, or production test
+injection parameter is added.
+
+Unit coverage in `tests/suites/unit/service/daemon/test_app.py` proves first-error
+latching and application-state ownership. A new
+`tests/suites/integration/service/daemon/test_watchdog.py` starts the real
+Uvicorn server in a child after monkeypatching `ControlPlane.watchdog`, observes
+initial HTTP responsiveness, and proves bounded nonzero process exit after the
+next watchdog call fails.
+
+### Supervised Task And GPU Ownership
+
+`tests/harness/supervisor.py` adds two parent-side exception types while keeping
+`TaskScopeState`, typed Pipe messages, and `TaskCompletion` layouts unchanged:
+
+```python
+class TaskStartFailure(RuntimeError): ...
+class TaskSupervisionFailure(RuntimeError): ...
+
+@classmethod
+def run(
+    cls,
+    name: str,
+    command: list[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    log_path: Path,
+    timeout_seconds: float,
+) -> TaskCompletion: ...
+```
+
+`start()` retains its signature. A failed start whose rollback proves emptiness
+raises `TaskStartFailure`; rollback that remains unproven raises
+`TaskScopeFailure`. After successful start, Pipe loss, premature Supervisor
+exit, invalid messages, and a Supervisor failure message raise
+`TaskSupervisionFailure` and move the scope to `FAILED`. A Supervisor-local
+exception may instead publish `TaskCompletion(INFRASTRUCTURE_FAILED)` only when
+its own cleanup proved the domain empty.
+
+`terminate_all(scopes: Sequence[SupervisedTaskScope]) -> None` retains its
+signature and fans out normal cancellation before runner fallback. Successful
+fallback reaps Supervisors, drains runner-adopted descendants, advances failed
+scopes to `DRAINED`, and returns normally. Only fallback that cannot prove
+emptiness or reap a Supervisor raises `TaskScopeFailure`. `run()` composes
+start, wait, fallback, and close: resource-safe startup rollback or recovered
+supervision failure returns `INFRASTRUCTURE_FAILED`; terminal unproven cleanup
+propagates `TaskScopeFailure`; every live scope is `CLOSED` before return.
+
+`tests/harness/runner.py::SuiteRunner.start_task()` creates directories and the
+command before acquiring a GPU lease. Lease acquisition immediately precedes
+`SupervisedTaskScope.start()`: `TaskStartFailure` releases it,
+`TaskScopeFailure` appends it to `retained_leases`, and successful start installs
+the scope in `active`. A later `TaskSupervisionFailure` stops stage scheduling,
+drains all active scopes concurrently, releases every successfully closed
+lease, and contributes infrastructure exit code 2. The
+`resources_releasable` property additionally requires
+`gpu_pool.active_leases` to be empty.
+
+`tests/__main__.py::execute_test_run()` replaces the `runner is None` proxy with
+one explicit run-level resource-release fact. It remains true for ordinary
+failure, `TaskStartFailure`, and recovered `TaskSupervisionFailure`, but becomes
+false on `TaskScopeFailure`. Whole-run GPU locks close only when that fact and
+the runner/pool lease proofs all hold.
+
+Unit and Integration Supervisor tests cover all three exception levels,
+Supervisor-local infrastructure completion, recovered fallback, terminal
+fallback failure, startup lease release, startup lease quarantine, and the
+pool-backed final release proof. Existing signal isolation, subreaper adoption,
+timeout, leak, TERM/KILL escalation, and concurrent cancellation tests remain.
+
+### Serial MPS And CTest Scopes
+
+`src/xpool/service/daemon/mps.py` removes `MPS_DEFAULT_PIPE_DIRECTORY` and
+changes the private lock helper from `mps_probe_lock_path() -> Path` to:
+
+```python
+def mps_probe_lock_path(pipe_directory: Path) -> Path: ...
+```
+
+`probe_mps_controller() -> MpsProbeResult` keeps its public signature but first
+requires a nonempty `CUDA_MPS_PIPE_DIRECTORY`, returning an offline diagnostic
+when absent. It expands and resolves that explicit directory, derives the
+per-user serialization lock from it, and invokes the controller with the
+process environment. `CUDA_MPS_LOG_DIRECTORY` remains an external deployment
+requirement rather than controller identity. Unit tests cover missing/empty
+configuration, explicit lock identity, serialization, invalid output, timeout,
+and controller failure.
+
+`tests/__main__.py::prove_gpu_pool()` replaces manual `start()`/`wait()`/`close()`
+with `SupervisedTaskScope.run(...)`. `tests/harness/ctest.py::CtestSuite.run()`
+retains its signature and result type but launches its complete CTest command
+through one serial scope; CTest's resource specification and internal parallel
+scheduler remain unchanged. An ordinary nonzero CTest exit with JUnit is code
+1; timeout, leak, Supervisor infrastructure completion, missing JUnit, or the
+existing infrastructure sentinel is code 2. A terminal `TaskScopeFailure`
+escapes to the composition root and retains whole-run locks. CTest unit tests
+mock the scope result rather than `subprocess.run`, and Integration supervision
+proves descendant cleanup around one synthetic serial command.
+
+### Native Trace Boundary And Documentation
+
+`src/cext-bindings/fabric.cpp` keeps the three overloaded Python signatures for
+each of `FabricTraceRecord.recorded(event) -> bool` and
+`FabricTraceRecord.timestamp(event) -> int`. Each binding adapter first checks
+that the event enum family matches `record.kind`; mismatch raises
+`pybind11::value_error` before calling the existing fail-stop native member.
+The native record, enum values, variant, memory layout, and observer JSON remain
+unchanged. A dedicated Native Integration case obtains a real trace snapshot in
+its participant process and proves every mismatched event family raises
+`ValueError` without aborting; it adds no public record constructor or test-only
+native binding.
+
+Documentation-only correction touches the owning declarations and bindings:
+
+- `src/cext-include/xpool/{fabric,transport}/trace.hpp` and
+  `src/cext-bindings/{fabric,transport}.cpp` define sender `Published` as a local
+  publication edge or completed issue of all fan-out calls; only receiver
+  `Observed` proves protocol observation. Transport sender events remain causal
+  markers immediately before release-store, not completed remote transitions.
+- `src/xpool/integrations/sglang/shim.py::FfnShimModule.forward` documents
+  asynchronous sticky device failure, NaN poison, and failure-monitor process
+  exit instead of promising synchronous `RuntimeError` for an unimplemented
+  executor.
+- daemon route docstrings state their actual 204 success responses and current
+  404/409/503 mappings; Transport declarations state `int32 | int64` DP counts,
+  CUDA-only native submit, and local-loopback admission behavior.
+- stale descriptor, devagent, two-loopback-site, and csrc wording is replaced
+  with Request, Agent, all reachable loopback sites, and CTest/native-test
+  terminology. The random Scheduler binding states its nonzero-seed
+  precondition.
+
+Generated `xpool.native` stubs are regenerated from the corrected pybind
+surface; no `.pyi` file is edited manually. R16 makes no source or test change:
+model adapters remain architecture-selected and current manifest model IDs
+remain E2E evidence identities rather than production allowlists.
+
+### Remediation Validation
+
+Development uses focused Unit and Integration selectors for the affected daemon,
+Supervisor, CTest, MPS, Fabric binding, and shim-failure boundaries. Native
+binding changes then rebuild through the canonical uv/scikit-build command.
+Closure was validated by one complete `uv run python -m tests` run followed by
+Ruff format/check, ty, and Doxygen. The complete suite was not repeated through
+pre-commit. Phase 8 remains blocked.
 
 ## Validation
 
-Repository validation uses:
+Build through the canonical uv/scikit-build path:
 
 ```bash
-uv run ruff format
+uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool
+```
+
+Load optional local test configuration before repository commands:
+
+```bash
+if [ -f .env ]; then export UV_ENV_FILE="$PWD/.env"; fi
+```
+
+Run focused checks while developing. The complete milestone gate is:
+
+```bash
+uv run python -m tests
+uv run ruff format --check
 uv run ruff check
 uv run ty check
-uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool
-CMAKE_BUILD_PARALLEL_LEVEL=<jobs> uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool --config-settings-package xpool:cmake.define.XPOOL_EXPORT_COMPILE_COMMANDS=ON
-uv run --no-build-isolation-package xpool ctest --test-dir "$(dirname build/*/CTestTestfile.cmake)" --output-on-failure
-if [ -f .env ]; then export UV_ENV_FILE="$PWD/.env"; fi
-uv run pytest
-uv run pytest tests/e2e -s
-uv run pytest tests/unit --cov=xpool --cov-branch --cov-report=term-missing --cov-report=xml:build/coverage/unit.xml
-find src/cext src/cext-include -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cu' -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.cuh' \) -print0 | xargs -0 clang-format --dry-run --Werror
 doxygen Doxyfile
 ```
 
-Python tests use three execution layers. `tests/unit/` mirrors xpool modules and
-does not exercise native behavior, launch subprocesses, or load model weights.
-`tests/integration/` covers cross-module, pinned SGLang, and Python/native
-contracts, including native CUDA loopback components that do not launch the
-serving engine. Full SGLang Engine and model-weight workflows live under
-`tests/e2e/` and use `test_e2e_*.py` filenames. Every
-pytest session preflights the native operator library before collection; native
-availability is therefore not a marker or a skippable resource. The
-`requires_cuda`, `requires_config`, and `requires_model_weights(model_id)`
-markers are executable requirements. Unavailable resources skip by default and
-fail with `--strict-requirements`; malformed explicit configuration always
-fails. E2E configuration is accepted only through `XPOOL_CONFIG`; pytest does
-not parse dotenv files itself. Canonical pytest commands and the pre-commit hook
-conditionally set `UV_ENV_FILE` to the ignored repository-root `.env`, allowing
-uv to supply `XPOOL_CONFIG` when the file exists. Existing shell variables take
-precedence. Default pytest collection includes unit, integration, and E2E
-tests. E2E runs without strict mode whenever its declared and derived
-requirements are available; use `uv run pytest tests/e2e/sglang -s` after the
-same conditional env setup for a targeted run, and add
-`--strict-requirements` only when unavailable resources must fail instead of
-skip.
-Reusable process and runtime test tools live under `tests/harness/`. Unit
-coverage produces a branch-aware report without enforcing a percentage
-threshold until a stable baseline exists.
-
-C++ and CUDA code is managed by `CMakeLists.txt`, which discovers extension
-sources under `src/cext` and public headers under `src/cext-include`.
-The normal native build entrypoint is uv/scikit-build; use
-`uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool`
-to rebuild `libxpool_cext.so` before running native-op tests, optionally prefixed
-with `CMAKE_BUILD_PARALLEL_LEVEL=<jobs>`. CMake enables `ccache` by default for
-C, C++, and CUDA when it is found and the corresponding compiler launcher is
-not already configured; disable it with
-`--config-settings-package xpool:cmake.define.XPOOL_ENABLE_CCACHE=OFF`. C++/CUDA unit tests
-under `tests/cext` are built by default; disable them only when needed with
-`--config-settings-package xpool:cmake.define.XPOOL_BUILD_CEXT_TESTS=OFF`.
-They use GoogleTest for test cases and assertions, CTest for discovery
-and execution, and run before pytest in the pre-commit sequence. Run CTest
-through `uv run --no-build-isolation-package xpool` so uv sync keeps the same
-stable build paths as native rebuilds. Generate `compile_commands.json` for IDE indexing by passing
-`--config-settings-package xpool:cmake.define.XPOOL_EXPORT_COMPILE_COMMANDS=ON`.
-Native code is
-formatted with `clang-format`.
-
-Performance work must use Nsight Systems before hot-path optimization. TBT and
-TPOT must be measured at generated-token boundaries, not derived from
-end-to-end request latency.
+Do not immediately run the complete suite a second time through a redundant
+pre-commit invocation. Routine commits use the installed hooks.

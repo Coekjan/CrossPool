@@ -19,13 +19,13 @@ from sglang.srt.models.deepseek_v2 import (
 from sglang.srt.plugins.hook_registry import HookType
 from torch import nn
 
+from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.adapter import (
     SglangHook,
     SglangModelAdapter,
-    assert_ffn_shim_coverage,
     model_runner_architectures,
 )
-from xpool.integrations.sglang.shim import FfnLayerKind, FfnShimModule, ShimUnavailableError
+from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError
 
 LAYER_PREFIX_PATTERN = re.compile(r"^model\.layers\.(?P<layer_id>\d+)\.mlp$")
 
@@ -264,12 +264,12 @@ class DeepseekV2Adapter(SglangModelAdapter):
             or expected_layer_count < 1
         ):
             raise RuntimeError("xpool DeepSeek model config has no integer num_hidden_layers")
-        shims = assert_ffn_shim_coverage(
+        shims = self.require_ffn_shims(
             model,
-            adapter_name=self.name,
             expected_layer_count=expected_layer_count,
             allowed_shim_types=(XpoolDeepseekV2MLP, XpoolDeepseekV2MoE),
         )
+        self.require_full_mlp_boundaries(model, shims, allow_reduce_scatter=True)
         setattr(model_runner, "xpool_ffn_shim_count", len(shims))
 
 

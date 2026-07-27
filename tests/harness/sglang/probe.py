@@ -1,203 +1,214 @@
+"""Host-side orchestration for one complete public-command SGLang attempt."""
+
 from __future__ import annotations
 
-import json
-import os
-import subprocess
-import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
-from tests.harness.sglang.graph import read_graph_events
-from tests.harness.sglang.offline_probe import (
-    ProbeResult,
-    SglangGraphSettings,
-)
-from tests.harness.sglang.process import collect_process_output_after_timeout, tail, terminate_process_group
-from xpool.config import LoopbackSite
+import httpx
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-
-type JsonValue = str | int | float | bool | list[int] | None
-
-type GraphEvent = dict[str, JsonValue]
-
-type GraphSettings = tuple[bool, bool]
+from tests.harness.network import TcpEndpointReservation, TcpPortSpace
+from tests.harness.sglang.cluster import DaemonPortConflict, XpoolCluster, daemon_url
+from tests.harness.sglang.e2e import E2eLaunch, materialize
+from tests.harness.sglang.endpoints import SglangEndpointFamilyLease
+from tests.harness.sglang.graph import GraphEvent, SglangGraphSettings, read_graph_events
+from tests.harness.sglang.manifest import E2eManifest, E2eServingCase
+from tests.harness.sglang.parity import TokenOutput, TokenParityArtifact
+from tests.harness.sglang.server import SglangEndpointConflict, SglangServerProcess, SglangServerResult
+from xpool.config import LoopbackSite, XpoolConfig
+from xpool.service.wire import ReadinessSnapshot
 
 PROBE_TIMEOUT_SECONDS = 30 * 60
-
-PROCESS_TERMINATE_TIMEOUT_SECONDS = 30
-
-PROCESS_KILL_TIMEOUT_SECONDS = 30
-
-PROCESS_OUTPUT_DRAIN_TIMEOUT_SECONDS = 30
+POLL_INTERVAL_SECONDS = 0.1
+PROBE_ATTEMPTS = 3
 
 
 @dataclass(frozen=True, slots=True)
 class ProbeRun:
+    """Results and graph evidence from one complete SGLang attempt."""
+
+    launch: E2eLaunch
     graph_settings: SglangGraphSettings
-    result: ProbeResult
+    results: tuple[SglangServerResult, ...]
     events: list[GraphEvent]
-    base_gpu_id: int
-    duration_s: float
+    daemon_startup_seconds: float
+    duration_seconds: float
 
+    def token_parity_artifact(self, group: str) -> TokenParityArtifact:
+        """Project this completed probe to portable token-parity evidence."""
 
-def run_probe_worker(
-    *,
-    graph_settings_list: list[SglangGraphSettings],
-    base_gpu_id: int,
-    config_path: Path,
-    tmp_path: Path,
-    loopback_site: LoopbackSite,
-) -> list[ProbeRun]:
-    runs: list[ProbeRun] = []
-    for graph_settings in graph_settings_list:
-        event_outdir = tmp_path / f"{int(graph_settings.cuda_graph)}-{int(graph_settings.piecewise_cuda_graph)}"
-        started_at = time.perf_counter()
-        result = run_probe(
-            graph_settings=graph_settings,
-            base_gpu_id=base_gpu_id,
-            config_path=config_path,
-            event_outdir=event_outdir,
-            loopback_site=loopback_site,
+        return TokenParityArtifact(
+            group=group,
+            graph_settings=self.graph_settings,
+            outputs=tuple(TokenOutput(result.model_id, result.output_ids) for result in self.results),
         )
-        events = read_graph_events(event_outdir)
-        runs.append(
-            ProbeRun(
-                graph_settings=graph_settings,
-                result=result,
-                events=events,
-                base_gpu_id=base_gpu_id,
-                duration_s=time.perf_counter() - started_at,
-            )
-        )
-    return runs
-
-
-def graph_settings_key(graph_settings: SglangGraphSettings) -> GraphSettings:
-    return (graph_settings.cuda_graph, graph_settings.piecewise_cuda_graph)
 
 
 def run_probe(
+    manifest: E2eManifest,
+    case: E2eServingCase,
     *,
+    base_config: XpoolConfig,
     graph_settings: SglangGraphSettings,
-    base_gpu_id: int,
-    config_path: Path,
-    event_outdir: Path,
+    workdir: Path,
+    loopback_site: LoopbackSite = LoopbackSite.FFNAGENT,
+) -> ProbeRun:
+    """Run one complete rematerialized attempt, retrying bind collisions only."""
+
+    conflicts: list[str] = []
+    for attempt in range(1, PROBE_ATTEMPTS + 1):
+        try:
+            return run_probe_attempt(
+                manifest,
+                case,
+                base_config=base_config,
+                graph_settings=graph_settings,
+                workdir=workdir / f"attempt-{attempt}",
+                loopback_site=loopback_site,
+            )
+        except (DaemonPortConflict, SglangEndpointConflict) as error:
+            conflicts.append(str(error))
+    raise RuntimeError("SGLang E2E endpoint conflicts exhausted:\n" + "\n".join(conflicts))
+
+
+def run_probe_attempt(
+    manifest: E2eManifest,
+    case: E2eServingCase,
+    *,
+    base_config: XpoolConfig,
+    graph_settings: SglangGraphSettings,
+    workdir: Path,
     loopback_site: LoopbackSite,
-) -> ProbeResult:
-    event_outdir.mkdir(parents=True, exist_ok=True)
-    result_path = event_outdir / "result.json"
-    env = probe_env(
-        config_path=config_path,
-        event_outdir=event_outdir,
-        loopback_site=loopback_site,
-    )
-    command = [
-        sys.executable,
-        "-m",
-        "tests.harness.sglang.offline_probe",
-        "--config-path",
-        str(config_path),
-        "--base-gpu-id",
-        str(base_gpu_id),
-        "--result-path",
-        str(result_path),
-    ]
-    if not graph_settings.cuda_graph:
-        command.append("--disable-cuda-graph")
-    if not graph_settings.piecewise_cuda_graph:
-        command.append("--disable-piecewise-cuda-graph")
-    process = subprocess.Popen(
-        command,
-        cwd=REPO_ROOT,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-        text=True,
-    )
-    try:
-        stdout, stderr = process.communicate(timeout=PROBE_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
-        cleanup_status = terminate_process_group(process)
-        stdout, stderr, output_status = collect_process_output_after_timeout(process)
-        raise AssertionError(
-            "SGLang offline probe timed out for "
-            f"cuda_graph={graph_settings.cuda_graph}, piecewise_cuda_graph={graph_settings.piecewise_cuda_graph}, "
-            f"base_gpu_id={base_gpu_id}\n"
-            f"cleanup: {cleanup_status}; output: {output_status}\n"
-            f"stdout:\n{tail(stdout)}\nstderr:\n{tail(stderr)}"
-        ) from None
+) -> ProbeRun:
+    """Own endpoints, xpool roles, servers, requests, and cleanup for one attempt."""
 
-    if process.returncode != 0:
-        raise AssertionError(
-            "SGLang offline probe failed for "
-            f"cuda_graph={graph_settings.cuda_graph}, piecewise_cuda_graph={graph_settings.piecewise_cuda_graph} "
-            f"base_gpu_id={base_gpu_id} with exit code {process.returncode}\n"
-            f"stdout:\n{tail(stdout)}\nstderr:\n{tail(stderr)}"
+    workdir.mkdir(parents=True, exist_ok=False)
+    host = base_config.daemon.host
+    port_space = TcpPortSpace.local()
+    daemon_endpoint = TcpEndpointReservation.reserve(host, port_space=port_space)
+    server_endpoints: list[SglangEndpointFamilyLease] = []
+    cluster: XpoolCluster | None = None
+    servers: list[SglangServerProcess] = []
+    started_at = time.monotonic()
+    try:
+        for placement in case.models:
+            server_endpoints.append(
+                SglangEndpointFamilyLease.acquire(
+                    host,
+                    dp_size=placement.atn_dp_size,
+                    port_space=port_space,
+                )
+            )
+        launch = materialize(
+            manifest,
+            case,
+            base_config=base_config,
+            workdir=workdir,
+            daemon_port=daemon_endpoint.port,
+            loopback_site=loopback_site,
         )
-    return read_probe_result(
-        result_path,
+        cluster = XpoolCluster.start(launch, daemon_endpoint)
+        for model, endpoint in zip(launch.models, server_endpoints, strict=True):
+            servers.append(
+                SglangServerProcess.start(
+                    launch=launch,
+                    model=model,
+                    graph_settings=graph_settings,
+                    endpoint=endpoint,
+                    workdir=workdir,
+                )
+            )
+        wait_for_system_readiness(launch, servers)
+        with ThreadPoolExecutor(max_workers=len(servers)) as executor:
+            results = tuple(executor.map(SglangServerProcess.result, servers))
+    except BaseException as error:
+        diagnostics = attempt_diagnostics(cluster, servers)
+        cleanup_failures = cleanup_attempt(cluster, servers, daemon_endpoint, server_endpoints)
+        if not cleanup_failures and isinstance(error, (DaemonPortConflict, SglangEndpointConflict)):
+            error.add_note(diagnostics)
+            raise
+        details = [str(error)]
+        if cleanup_failures:
+            details.append("cleanup failures: " + "; ".join(cleanup_failures))
+        if diagnostics:
+            details.append(diagnostics)
+        raise AssertionError("SGLang E2E probe failed:\n" + "\n".join(details)) from error
+
+    cleanup_failures = cleanup_attempt(cluster, servers, daemon_endpoint, server_endpoints)
+    if cleanup_failures:
+        raise AssertionError("SGLang E2E cleanup failed: " + "; ".join(cleanup_failures))
+    return ProbeRun(
+        launch=launch,
         graph_settings=graph_settings,
-        base_gpu_id=base_gpu_id,
-        stdout=stdout,
-        stderr=stderr,
+        results=results,
+        events=read_graph_events(launch.observer_outdir),
+        daemon_startup_seconds=cluster.daemon_startup_seconds,
+        duration_seconds=time.monotonic() - started_at,
     )
 
 
-def probe_env(*, config_path: Path, event_outdir: Path, loopback_site: LoopbackSite) -> dict[str, str]:
-    env = dict(os.environ)
-    env.pop("XPOOL_DEBUG_LOOPBACK_ENABLE", None)
-    env.pop("XPOOL_DEBUG_LOOPBACK_SITE", None)
-    current_pythonpath = env.get("PYTHONPATH")
-    pythonpath_entries = [str(REPO_ROOT / "tests"), str(REPO_ROOT)]
-    if current_pythonpath:
-        pythonpath_entries.append(current_pythonpath)
-    env.update(
-        {
-            "HF_HUB_OFFLINE": "1",
-            "TRANSFORMERS_OFFLINE": "1",
-            "SGLANG_PLUGINS": "xpool",
-            "XPOOL_CONFIG": str(config_path),
-            "XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE": "1",
-            "XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR": str(event_outdir),
-            "PYTHONPATH": os.pathsep.join(pythonpath_entries),
-        }
-    )
-    env["XPOOL_DEBUG_LOOPBACK_ENABLE"] = "1"
-    env["XPOOL_DEBUG_LOOPBACK_SITE"] = loopback_site.value
-    if loopback_site is LoopbackSite.ATNAGENT:
-        env["XPOOL_DEBUG_TRANSPORT_OBSERVER_ENABLE"] = "1"
-        env["XPOOL_DEBUG_TRANSPORT_OBSERVER_OUTDIR"] = str(event_outdir)
-    return env
+def wait_for_system_readiness(launch: E2eLaunch, servers: list[SglangServerProcess]) -> None:
+    """Wait for every HTTP server and the loopback site's reachable barrier."""
+
+    deadline = time.monotonic() + PROBE_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if all(server.healthy() for server in servers):
+            break
+        time.sleep(POLL_INTERVAL_SECONDS)
+    else:
+        raise RuntimeError("timed out waiting for every SGLang /health endpoint")
+
+    if launch.loopback_site in {LoopbackSite.INSTANCE, LoopbackSite.ATNAGENT}:
+        return
+    with httpx.Client(base_url=daemon_url(launch), timeout=POLL_INTERVAL_SECONDS) as client:
+        while time.monotonic() < deadline:
+            if not all(server.healthy() for server in servers):
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
+            try:
+                response = client.get("/ready")
+                readiness = ReadinessSnapshot.model_validate(response.json()) if response.is_success else None
+            except (httpx.HTTPError, ValueError):
+                readiness = None
+            if readiness is not None and readiness.ready:
+                return
+            time.sleep(POLL_INTERVAL_SECONDS)
+    raise RuntimeError("timed out waiting for final xpool readiness")
 
 
-def read_probe_result(
-    result_path: Path,
-    *,
-    graph_settings: SglangGraphSettings,
-    base_gpu_id: int,
-    stdout: str,
-    stderr: str,
-) -> ProbeResult:
-    try:
-        result = cast(ProbeResult, json.loads(result_path.read_text(encoding="utf-8")))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise AssertionError(
-            f"SGLang offline probe did not write a valid result JSON at {result_path}\n"
-            f"stdout:\n{tail(stdout)}\nstderr:\n{tail(stderr)}"
-        ) from exc
-    if result["cuda_graph"] != graph_settings.cuda_graph:
-        raise AssertionError(
-            f"probe reported cuda_graph={result['cuda_graph']!r}, expected {graph_settings.cuda_graph!r}"
-        )
-    if result["piecewise_cuda_graph"] != graph_settings.piecewise_cuda_graph:
-        raise AssertionError(
-            "probe reported piecewise_cuda_graph="
-            f"{result['piecewise_cuda_graph']!r}, expected {graph_settings.piecewise_cuda_graph!r}"
-        )
-    if result["base_gpu_id"] != base_gpu_id:
-        raise AssertionError(f"probe reported base_gpu_id={result['base_gpu_id']!r}, expected {base_gpu_id!r}")
-    return result
+def cleanup_attempt(
+    cluster: XpoolCluster | None,
+    servers: list[SglangServerProcess],
+    daemon_endpoint: TcpEndpointReservation,
+    server_endpoints: list[SglangEndpointFamilyLease],
+) -> list[str]:
+    """Close servers together, then xpool roles and unconsumed reservations."""
+
+    failures: list[str] = []
+    with ThreadPoolExecutor(max_workers=max(1, len(servers))) as executor:
+        futures = tuple(executor.submit(server.close) for server in servers)
+        for future in futures:
+            try:
+                future.result()
+            except RuntimeError as error:
+                failures.append(str(error))
+    if cluster is not None:
+        try:
+            cluster.close()
+        except RuntimeError as error:
+            failures.append(str(error))
+    daemon_endpoint.close()
+    for endpoint in server_endpoints:
+        endpoint.close()
+    return failures
+
+
+def attempt_diagnostics(cluster: XpoolCluster | None, servers: list[SglangServerProcess]) -> str:
+    """Return bounded diagnostics for every acquired process."""
+
+    sections = [server.diagnostics() for server in servers]
+    if cluster is not None:
+        sections.append(cluster.diagnostics())
+    return "\n".join(section for section in sections if section)

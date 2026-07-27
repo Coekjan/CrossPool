@@ -1,33 +1,36 @@
+"""Install isolated graph-observer fixtures and inspect their event streams."""
+
 from __future__ import annotations
 
 import json
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 
-import xpool.devkit.sglang.graph_observer as graph_observer
+import xpool.devkit.sglang.graph_observer
 from xpool.config import XpoolConfig
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def reset_graph_observer(
     monkeypatch: pytest.MonkeyPatch,
     reset_global_config: None,
 ) -> Iterator[None]:
-    event_handle = graph_observer.event_handle
+    event_handle = xpool.devkit.sglang.graph_observer.event_handle
     if event_handle is not None and not event_handle.closed:
         event_handle.close()
-    monkeypatch.setattr(graph_observer, "event_file", None)
-    monkeypatch.setattr(graph_observer, "event_handle", None)
-    monkeypatch.setattr(graph_observer, "installed", False)
+    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "event_file", None)
+    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "event_handle", None)
+    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "installed", False)
     yield
-    event_handle = graph_observer.event_handle
+    event_handle = xpool.devkit.sglang.graph_observer.event_handle
     if event_handle is not None and not event_handle.closed:
         event_handle.close()
-    monkeypatch.setattr(graph_observer, "event_file", None)
-    monkeypatch.setattr(graph_observer, "event_handle", None)
-    monkeypatch.setattr(graph_observer, "installed", False)
+    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "event_file", None)
+    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "event_handle", None)
+    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "installed", False)
 
 
 class FakeMode:
@@ -59,13 +62,45 @@ class FakePiecewiseCudaGraphRunnerState:
         self.max_num_tokens = 8
 
 
+class SuccessfulGraphRunner(Protocol):
+    """Call surface exercised after observer installation."""
+
+    def capture(self) -> str: ...
+
+    def replay(self) -> str: ...
+
+
+def successful_runner_classes() -> tuple[type[SuccessfulGraphRunner], type[SuccessfulGraphRunner]]:
+    """Return full and piecewise runner classes with deterministic successful calls."""
+
+    class CudaGraphRunner(FakeCudaGraphRunnerState):
+        def capture(self) -> str:
+            return "captured"
+
+        def replay(self) -> str:
+            return "replayed"
+
+    class PiecewiseCudaGraphRunner(FakePiecewiseCudaGraphRunnerState):
+        def capture(self) -> str:
+            return "pcg-captured"
+
+        def replay(self) -> str:
+            return "pcg-replayed"
+
+    return CudaGraphRunner, PiecewiseCudaGraphRunner
+
+
 def install_fake_sglang_runner_classes(
     monkeypatch: pytest.MonkeyPatch,
     cuda_graph_runner: type[object],
     piecewise_cuda_graph_runner: type[object],
 ) -> None:
-    monkeypatch.setattr(graph_observer, "CudaGraphRunner", cuda_graph_runner)
-    monkeypatch.setattr(graph_observer, "PiecewiseCudaGraphRunner", piecewise_cuda_graph_runner)
+    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "CudaGraphRunner", cuda_graph_runner)
+    monkeypatch.setattr(
+        xpool.devkit.sglang.graph_observer,
+        "PiecewiseCudaGraphRunner",
+        piecewise_cuda_graph_runner,
+    )
 
 
 def read_events(event_dir: Path) -> list[dict[str, object]]:

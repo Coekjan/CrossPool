@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 import inspect
-import logging
 import pkgutil
 from collections.abc import Iterable, Sequence
 from types import ModuleType
@@ -13,7 +12,12 @@ from typing import cast
 from xpool.integrations.sglang.adapter import SglangModelAdapter
 
 MODELS_PACKAGE = "xpool.integrations.sglang.models"
-logger = logging.getLogger(__name__)
+
+
+def fail_model_package_import(package_name: str) -> None:
+    """Fail adapter discovery when a scanned package cannot be imported."""
+
+    raise RuntimeError(f"failed to import SGLang adapter package {package_name}")
 
 
 def discover_sglang_model_adapters(package_name: str) -> tuple[SglangModelAdapter, ...]:
@@ -61,10 +65,7 @@ def iter_model_modules(package_name: str) -> tuple[ModuleType, ...]:
     for module_info in pkgutil.walk_packages(
         package_path,
         package.__name__ + ".",
-        onerror=lambda failed_package: logger.warning(
-            "Skipping SGLang adapter package %s after import failure",
-            failed_package,
-        ),
+        onerror=fail_model_package_import,
     ):
         module_parts = module_info.name.removeprefix(package.__name__ + ".").split(".")
         if any(part.startswith("_") for part in module_parts):

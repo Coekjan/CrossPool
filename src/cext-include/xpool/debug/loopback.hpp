@@ -25,7 +25,6 @@ namespace xpool::debug {
 /// values. \throws c10::Error if CUDA launch configuration or dispatch fails.
 /// \remark Side effect: enqueues work on the current CUDA stream for input's
 /// device.
-void launch_loopback_rotation(const at::Tensor &output,
-                              const at::Tensor &input);
+void launch_loopback_rotation(const at::Tensor &output, const at::Tensor &input);
 
 } // namespace xpool::debug

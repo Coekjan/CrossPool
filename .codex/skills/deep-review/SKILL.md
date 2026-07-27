@@ -40,12 +40,12 @@ memory, commit, or push.
 | C - Code to Comments | Inline comments still describe real concurrency, ordering, shape, hardware behavior, CUDA graph capture, ABI, plugin, native loader, and failure behavior. |
 | D - Stale References | Docs, tests, benchmarks, and readmes do not reference removed or renamed APIs, paths, commands, or phases. |
 | E - Environment Hardcoding | No hardcoded `/home/`, `/data/`, hostnames, ports, model paths, CUDA paths, local build directories, or cluster assumptions bypass config. Local reference paths may appear only as clearly labeled non-runtime evidence. |
-| F - Engineering Quality | Code follows `AGENTS.md` engineering-quality rules: cohesive ownership, typed APIs, no needless private helpers or pass-through wrappers, no config caching outside `xpool.config`, no implementation-mirror tests, concrete SGLang types where available, and testable structure without over-abstraction. |
+| F - Engineering Quality | Code follows `docs/code-style.md`; repository architecture, configuration, testing, and workflow remain consistent with `AGENTS.md` and the accepted `PLAN.md`. |
 
-Axis F prompts must include the repository-specific anti-pattern checklist from
-`AGENTS.md`. Treat implementation-mirror tests and config values cached outside
-`xpool.config` as blocking findings unless the staged diff clearly documents
-and justifies an accepted exception.
+Axis F reviewers must read `docs/code-style.md` and apply its complete current
+rules. Reviewer prompts must reference that file rather than embedding a copied
+checklist. Treat documented blocking requirements as blocking unless the
+accepted design records a scoped exception.
 
 ## Subagent Constraints
 
