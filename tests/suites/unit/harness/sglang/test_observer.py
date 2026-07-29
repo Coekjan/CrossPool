@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import cast
 
-from tests.harness.sglang.observer import (
+from tests.harness.support.sglang.observer import (
     assert_atnagent_records,
     assert_dp_attention_paths,
     assert_fabric_observer_snapshots,

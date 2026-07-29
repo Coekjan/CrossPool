@@ -6,10 +6,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from tests.harness.config import write_minimal_config
+from tests.harness.support.config import reset_global_config, write_minimal_config
 from xpool.config import ConfigError, LoopbackSite, XpoolConfig, init_global_config
 
-pytestmark = pytest.mark.usefixtures("reset_global_config")
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.0.2.1", "daemon.example"])

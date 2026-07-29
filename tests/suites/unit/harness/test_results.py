@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-import tests.harness.results
+import tests.harness.runner.results
 
 
 def test_retention_is_disabled_when_environment_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("XPOOL_TEST_KEEP_RUNS", raising=False)
 
-    assert tests.harness.results.TestResultRetention.from_environment() is None
+    assert tests.harness.runner.results.TestResultRetention.from_environment() is None
 
 
 @pytest.mark.parametrize("value", ["", "0", "-1", "invalid"])
@@ -22,11 +22,11 @@ def test_retention_rejects_nonpositive_values(monkeypatch: pytest.MonkeyPatch, v
     monkeypatch.setenv("XPOOL_TEST_KEEP_RUNS", value)
 
     with pytest.raises(ValueError, match="positive integer"):
-        tests.harness.results.TestResultRetention.from_environment()
+        tests.harness.runner.results.TestResultRetention.from_environment()
 
 
 def test_cleanup_retains_newest_completed_and_interrupted_runs(tmp_path: Path) -> None:
-    store = tests.harness.results.TestResultStore(tmp_path, tests.harness.results.TestResultRetention(2))
+    store = tests.harness.runner.results.TestResultStore(tmp_path, tests.harness.runner.results.TestResultRetention(2))
     run_ids = (
         "20260727-100000-1-1",
         "20260727-100001-1-2",
@@ -50,7 +50,7 @@ def test_cleanup_retains_newest_completed_and_interrupted_runs(tmp_path: Path) -
 
 
 def test_cleanup_ignores_active_unknown_and_symlink_entries(tmp_path: Path) -> None:
-    store = tests.harness.results.TestResultStore(tmp_path, tests.harness.results.TestResultRetention(1))
+    store = tests.harness.runner.results.TestResultStore(tmp_path, tests.harness.runner.results.TestResultRetention(1))
     old_run = store.start("20260727-100000-1-1")
     old_run.complete()
     active_run = store.start("20260727-100001-1-2")

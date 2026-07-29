@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
@@ -18,6 +19,7 @@ from sglang.srt.server_args import ServerArgs
 from torch import nn
 
 from xpool.config import get_global_config
+from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.shim import FfnShimModule, iter_ffn_shims
 from xpool.integrations.sglang.topology import ModelSpec, ParallelPolicy
 from xpool.runtime.instance import Instance
@@ -27,6 +29,16 @@ from xpool.runtime.instance import Instance
 # hatch: SGLang hook handlers are variadic and their argument types are enforced by the
 # SGLang HookRegistry contract, not by xpool's type checker.
 type SglangHookHandler = Callable[..., object] | type
+
+DECODER_FFN_WEIGHT_PATTERN = re.compile(r"^model\.layers\.\d+\.mlp(?:\.|$)")
+
+
+def filter_decoder_ffn_weights[W](weights: Iterable[tuple[str, W]]) -> Iterator[tuple[str, W]]:
+    """Yield checkpoint tensors outside canonical decoder FFN subtrees."""
+
+    for name, tensor in weights:
+        if DECODER_FFN_WEIGHT_PATTERN.match(name) is None:
+            yield name, tensor
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,13 +110,11 @@ class XpoolModelBinding:
         instance_id: Human-readable model/instance id from xpool config.
         model_path: Resolved absolute model path matched against SGLang.
         instance_index: Config-order identity published during transport setup.
-        sglang_rank: SGLang tensor-parallel rank for this model runner.
+        worker_rank: SGLang model-worker rank for this model runner.
         cuda_device: Physical CUDA device used by this SGLang rank.
-        sglang_tp_size: Expected SGLang tensor-parallel size for this instance.
-        sglang_dp_size: Expected SGLang data-parallel size for this instance.
+        worker_world_size: Expected SGLang model-worker world size.
         sglang_base_gpu_id: Required SGLang base_gpu_id.
         sglang_gpu_id_step: Required SGLang gpu_id_step.
-        enable_dp_attention: Whether SGLang DP attention should be enabled.
         atn_tp_rank: Attention tensor-parallel rank for this SGLang rank.
         atn_tp_size: Attention tensor-parallel size for this SGLang rank.
         atn_dp_rank: Attention data-parallel rank for this SGLang rank.
@@ -114,25 +124,30 @@ class XpoolModelBinding:
     instance_id: str
     model_path: Path
     instance_index: int
-    sglang_rank: int
+    worker_rank: int
     cuda_device: int
-    sglang_tp_size: int
-    sglang_dp_size: int
+    worker_world_size: int
     sglang_base_gpu_id: int
     sglang_gpu_id_step: int
-    enable_dp_attention: bool
     atn_tp_rank: int
     atn_tp_size: int
     atn_dp_rank: int
     atn_dp_size: int
 
     @classmethod
-    def resolve(cls, model_runner: ModelRunner, server_args: ServerArgs) -> XpoolModelBinding:
+    def resolve(
+        cls,
+        model_runner: ModelRunner,
+        server_args: ServerArgs,
+        *,
+        supports_dp_attention: bool,
+    ) -> XpoolModelBinding:
         """Resolve an xpool binding for one SGLang model runner.
 
         Args:
             model_runner: Runner whose resolved model path must appear in xpool config.
             server_args: Resolved SGLang launch arguments for this runner.
+            supports_dp_attention: Whether the selected model adapter supports DPA.
 
         Returns:
             Validated runtime identity binding.
@@ -161,17 +176,19 @@ class XpoolModelBinding:
             spec,
             server_args,
             atnagent_count=config.atn_world_size,
+            supports_dp_attention=supports_dp_attention,
         )
         placement = SglangCudaPlacement.derive(config.devices.atn_cuda_devices)
-        sglang_rank = model_runner.tp_rank
+        worker_rank = model_runner.tp_rank
         cuda_device = model_runner.gpu_id
         if (
-            not isinstance(sglang_rank, int)
-            or isinstance(sglang_rank, bool)
-            or not 0 <= sglang_rank < policy.sglang_tp_size
+            not isinstance(worker_rank, int)
+            or isinstance(worker_rank, bool)
+            or not 0 <= worker_rank < policy.worker_world_size
         ):
             raise RuntimeError(
-                f"xpool SGLang plugin requires ModelRunner.tp_rank in [0, {policy.sglang_tp_size}), got {sglang_rank!r}"
+                f"xpool SGLang plugin requires ModelRunner.tp_rank in [0, {policy.worker_world_size}), "
+                f"got {worker_rank!r}"
             )
         attn_cp_size = getattr(model_runner, "attn_cp_size", 1)
         if not isinstance(attn_cp_size, int) or isinstance(attn_cp_size, bool) or attn_cp_size <= 0:
@@ -179,27 +196,25 @@ class XpoolModelBinding:
         if attn_cp_size != 1:
             raise RuntimeError(f"xpool SGLang plugin requires ModelRunner.attn_cp_size=1, got {attn_cp_size}")
         atn_tp_rank, atn_tp_size, atn_dp_rank, atn_dp_size = compute_dp_attention_world_info(
-            policy.enable_dp_attention,
-            sglang_rank,
-            policy.sglang_tp_size,
-            policy.sglang_dp_size,
+            policy.atn_dp_size > 1,
+            worker_rank,
+            policy.worker_world_size,
+            policy.atn_dp_size,
             attn_cp_size,
         )
         if (atn_tp_size, atn_dp_size) != (policy.atn_tp_size, policy.atn_dp_size):
             raise RuntimeError("xpool SGLang rank geometry disagrees with the validated parallel policy")
-        if sglang_rank != atn_dp_rank * atn_tp_size + atn_tp_rank:
+        if worker_rank != atn_dp_rank * atn_tp_size + atn_tp_rank:
             raise RuntimeError("xpool SGLang rank does not use TP-fastest attention coordinates")
         return cls(
             instance_id=instance.id,
             model_path=model_path,
             instance_index=instance.instance_index,
-            sglang_rank=sglang_rank,
+            worker_rank=worker_rank,
             cuda_device=cuda_device,
-            sglang_tp_size=policy.sglang_tp_size,
-            sglang_dp_size=policy.sglang_dp_size,
+            worker_world_size=policy.worker_world_size,
             sglang_base_gpu_id=placement.base_gpu_id,
             sglang_gpu_id_step=placement.gpu_id_step,
-            enable_dp_attention=policy.enable_dp_attention,
             atn_tp_rank=atn_tp_rank,
             atn_tp_size=atn_tp_size,
             atn_dp_rank=atn_dp_rank,
@@ -241,14 +256,16 @@ class XpoolModelBinding:
                 local coordinate differs from the bound TP-fastest world.
         """
 
-        expected_ranks = tuple(range(self.sglang_tp_size))
+        expected_ranks = tuple(range(self.worker_world_size))
         if tuple(group.ranks) != expected_ranks:
             raise RuntimeError(f"xpool requires SGLang result-group ranks {expected_ranks}, got {tuple(group.ranks)}")
-        if group.world_size != self.sglang_tp_size:
-            raise RuntimeError(f"xpool requires SGLang result-group size {self.sglang_tp_size}, got {group.world_size}")
-        if group.rank_in_group != self.sglang_rank or group.rank != self.sglang_rank:
+        if group.world_size != self.worker_world_size:
             raise RuntimeError(
-                f"xpool requires SGLang result-group rank {self.sglang_rank}, got "
+                f"xpool requires SGLang result-group size {self.worker_world_size}, got {group.world_size}"
+            )
+        if group.rank_in_group != self.worker_rank or group.rank != self.worker_rank:
+            raise RuntimeError(
+                f"xpool requires SGLang result-group rank {self.worker_rank}, got "
                 f"global={group.rank}, local={group.rank_in_group}"
             )
 
@@ -263,11 +280,11 @@ class XpoolModelBinding:
         """
 
         for label, actual, expected in (
-            ("tp_size", server_args.tp_size, self.sglang_tp_size),
-            ("dp_size", server_args.dp_size, self.sglang_dp_size),
+            ("tp_size", server_args.tp_size, self.worker_world_size),
+            ("dp_size", server_args.dp_size, self.atn_dp_size),
             ("base_gpu_id", server_args.base_gpu_id, self.sglang_base_gpu_id),
             ("gpu_id_step", server_args.gpu_id_step, self.sglang_gpu_id_step),
-            ("enable_dp_attention", server_args.enable_dp_attention, self.enable_dp_attention),
+            ("enable_dp_attention", server_args.enable_dp_attention, self.atn_dp_size > 1),
         ):
             if actual != expected:
                 raise RuntimeError(
@@ -275,10 +292,10 @@ class XpoolModelBinding:
                 )
         if self.atn_dp_size > 1 and not server_args.disable_piecewise_cuda_graph:
             raise RuntimeError("xpool requires piecewise CUDA graph to resolve disabled with SGLang DP attention")
-        expected_cuda_device = self.sglang_base_gpu_id + self.sglang_rank * self.sglang_gpu_id_step
+        expected_cuda_device = self.sglang_base_gpu_id + self.worker_rank * self.sglang_gpu_id_step
         if self.cuda_device != expected_cuda_device:
             raise RuntimeError(
-                f"xpool config expects SGLang rank {self.sglang_rank} to run on CUDA device "
+                f"xpool config expects SGLang rank {self.worker_rank} to run on CUDA device "
                 f"{expected_cuda_device}, got {self.cuda_device}"
             )
 
@@ -333,6 +350,7 @@ class SglangModelAdapter(ABC):
     """
 
     name: str
+    supports_dp_attention = False
 
     @abstractmethod
     def hooks(self) -> Sequence[SglangHook]:
@@ -395,14 +413,14 @@ class SglangModelAdapter(ABC):
         self,
         model: nn.Module,
         *,
-        expected_layer_count: int,
+        expected_layer_kinds: Sequence[FfnLayerKind],
         allowed_shim_types: tuple[type[FfnShimModule], ...],
     ) -> tuple[FfnShimModule, ...]:
         """Require complete FFN shim coverage after model loading.
 
         Args:
             model: Loaded SGLang model module to inspect.
-            expected_layer_count: Expected decoder-layer count.
+            expected_layer_kinds: Expected FFN kind for each decoder-layer ordinal.
             allowed_shim_types: Concrete shim classes this adapter may install.
 
         Returns:
@@ -412,13 +430,14 @@ class SglangModelAdapter(ABC):
             RuntimeError: If coverage is empty, incomplete, or has an invalid type.
         """
 
-        shims = tuple(iter_ffn_shims(model))
+        shims = tuple(sorted(iter_ffn_shims(model), key=lambda shim: shim.layer_id))
         if not shims:
             raise RuntimeError(f"xpool {self.name} adapter produced no FFN shim modules")
-        if len(shims) != expected_layer_count:
+        expected_layer_ids = tuple(range(len(expected_layer_kinds)))
+        actual_layer_ids = tuple(shim.layer_id for shim in shims)
+        if actual_layer_ids != expected_layer_ids:
             raise RuntimeError(
-                f"xpool {self.name} adapter produced {len(shims)} FFN shim modules but the model "
-                f"has {expected_layer_count} decoder layers; a class-REPLACE likely failed to apply"
+                f"xpool {self.name} adapter requires FFN shim layer ids {expected_layer_ids}, got {actual_layer_ids}"
             )
         non_shim = [type(shim).__name__ for shim in shims if not isinstance(shim, allowed_shim_types)]
         if non_shim:
@@ -426,6 +445,17 @@ class SglangModelAdapter(ABC):
                 f"xpool {self.name} adapter left non-xpool FFN modules ({', '.join(non_shim)}); "
                 "expected every decoder FFN layer to be replaced by an xpool shim"
             )
+        mismatched_kinds = [
+            (shim.layer_id, shim.layer_kind, expected_layer_kinds[shim.layer_id])
+            for shim in shims
+            if shim.layer_kind is not expected_layer_kinds[shim.layer_id]
+        ]
+        if mismatched_kinds:
+            details = ", ".join(
+                f"layer {layer_id}: got {actual.value}, expected {expected.value}"
+                for layer_id, actual, expected in mismatched_kinds
+            )
+            raise RuntimeError(f"xpool {self.name} adapter found mismatched FFN layer kinds ({details})")
         return shims
 
     def require_full_mlp_boundaries(

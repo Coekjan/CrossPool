@@ -7,17 +7,21 @@ from pathlib import Path
 import pytest
 from _pytest.mark.structures import ParameterSet
 
-from tests.harness.sglang.graph import SglangGraphMode, assert_graph_events
+from tests.harness.sglang.attempt import ProbeRun
+from tests.harness.sglang.graph import SglangGraphMode
 from tests.harness.sglang.manifest import E2E_MANIFEST_PATH, E2eLoopbackServingCase, E2eManifest
-from tests.harness.sglang.observer import (
+from tests.harness.sglang.parity import TOKEN_PARITY_ARTIFACT_FILENAME
+from tests.harness.sglang.probe import run_probe
+from tests.harness.support.sglang.graph import assert_run_graph_evidence
+from tests.harness.support.sglang.observer import (
     assert_fabric_observer_snapshots,
     assert_no_fabric_invocations,
     assert_no_transport_observer_snapshots,
     assert_transport_observer_snapshots,
 )
-from tests.harness.sglang.parity import TOKEN_PARITY_ARTIFACT_FILENAME
-from tests.harness.sglang.probe import ProbeRun, run_probe
 from xpool.config import LoopbackSite, XpoolConfig
+
+pytest_plugins = ("tests.harness.support.config",)
 
 MANIFEST = E2eManifest.load(E2E_MANIFEST_PATH)
 
@@ -76,11 +80,7 @@ def test_e2e_loopback_serving(
         loopback_site=site,
     )
     assert_site_evidence(site, run)
-    result = run.results[0]
-    assert result.resolved_graph_settings.cuda_graph is run.graph_settings.cuda_graph
-    resolved_piecewise = result.resolved_graph_settings.piecewise_cuda_graph
-    assert resolved_piecewise is run.graph_settings.piecewise_cuda_graph
-    assert_graph_events(run.graph_settings, run.events, resolved_piecewise_cuda_graph=resolved_piecewise)
+    assert_run_graph_evidence(run)
     if task_artifact_dir is not None and len(case.graph_modes) >= 2:
         run.token_parity_artifact(f"{case.id}-{site.value}").write(task_artifact_dir / TOKEN_PARITY_ARTIFACT_FILENAME)
 

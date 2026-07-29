@@ -11,7 +11,7 @@ import pytest
 
 import xpool.devkit.common.fabric_observer
 import xpool.native
-from tests.harness.config import install_test_config
+from tests.harness.support.config import install_test_config, reset_global_config
 from xpool.config import XpoolConfig
 from xpool.fabric import FabricGeneration, FabricParticipantPhase
 
@@ -60,7 +60,7 @@ def reset_fabric_observer(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
 
 
-pytestmark = pytest.mark.usefixtures(reset_fabric_observer.__name__, "reset_global_config")
+pytestmark = pytest.mark.usefixtures(reset_fabric_observer.__name__, reset_global_config.__name__)
 
 
 def test_write_fabric_snapshot_projects_atnagent_trace(tmp_path: Path) -> None:

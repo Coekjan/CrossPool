@@ -4,7 +4,7 @@ import pytest
 
 import xpool.cli.subcommands.atnagent
 import xpool.cli.subcommands.ffnagent
-from tests.harness.pytest_plugin import reset_global_config
+from tests.harness.support.config import reset_global_config
 from xpool.cli import main
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)

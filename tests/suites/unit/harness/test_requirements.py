@@ -5,7 +5,7 @@ from typing import Never
 
 import pytest
 
-from tests.harness.requirements import (
+from tests.harness.runner.requirements import (
     CudaRequirement,
     RequirementGuard,
     RequirementMisconfigured,
@@ -14,19 +14,21 @@ from tests.harness.requirements import (
 )
 
 
-def write_config(path: Path, model_path: Path) -> None:
+def write_config(path: Path, model_base_uri: Path) -> None:
     """Write the smallest valid xpool config used by requirement tests."""
 
     path.write_text(
         "\n".join(
             (
+                "[vendor]",
+                f'model_base_uri = "{model_base_uri}"',
+                "",
                 "[devices]",
                 "atn_cuda_devices = [0]",
                 "ffn_cuda_devices = [1]",
                 "",
                 "[[models]]",
-                'id = "model-a"',
-                f'path = "{model_path}"',
+                'id = "external/model-not-owned-by-tests"',
             )
         ),
         encoding="utf-8",
@@ -52,7 +54,7 @@ def test_cuda_requirement_checks_count(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_mps_requirement_uses_controller_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "tests.harness.requirements.probe_mps_controller",
+        "tests.harness.runner.requirements.probe_mps_controller",
         lambda: type("Probe", (), {"online": False, "diagnostic": "MPS unavailable"})(),
     )
 
@@ -77,37 +79,52 @@ def test_explicit_invalid_config_is_misconfigured(tmp_path: Path, monkeypatch: p
 
 
 def test_config_reload_observes_same_path_rewrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    first_model = tmp_path / "first-model"
-    second_model = tmp_path / "second-model"
+    first_model_root = tmp_path / "first-model-root"
+    second_model_root = tmp_path / "second-model-root"
     config_path = tmp_path / "xpool.toml"
-    write_config(config_path, first_model)
+    write_config(config_path, first_model_root)
     resolver = RequirementResolver()
 
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
     first = resolver.require_config()
-    write_config(config_path, second_model)
+    write_config(config_path, second_model_root)
     second = resolver.require_config()
 
-    assert first.config.model_path_of("model-a") == first_model
+    assert first.config.vendor.model_base_uri == first_model_root
     assert second.path == config_path
-    assert second.config.model_path_of("model-a") == second_model
+    assert second.config.vendor.model_base_uri == second_model_root
 
 
 def test_model_weights_require_directory_and_config_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    model_path = tmp_path / "model"
+    model_root = tmp_path / "models"
+    model_path = model_root / "model-a"
     config_path = tmp_path / "xpool.toml"
-    write_config(config_path, model_path)
+    write_config(config_path, model_root)
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
     resolver = RequirementResolver()
 
     with pytest.raises(RequirementUnavailable, match="weight directory"):
         resolver.require_model_weights("model-a")
-    model_path.mkdir()
+    model_path.mkdir(parents=True)
     with pytest.raises(RequirementUnavailable, match=r"config\.json"):
         resolver.require_model_weights("model-a")
     (model_path / "config.json").write_text("{}", encoding="utf-8")
 
     assert resolver.require_model_weights("model-a").path == model_path
+
+
+def test_model_weights_ignore_external_config_model_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    model_root = tmp_path / "models"
+    model_path = model_root / "manifest/model"
+    model_path.mkdir(parents=True)
+    (model_path / "config.json").write_text("{}", encoding="utf-8")
+    config_path = tmp_path / "xpool.toml"
+    write_config(config_path, model_root)
+    monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
+
+    resolved = RequirementResolver().require_model_weights("manifest/model")
+
+    assert resolved.path == model_path
 
 
 def test_requirement_guard_skips_unavailable_and_always_fails_misconfiguration() -> None:

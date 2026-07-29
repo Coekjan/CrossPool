@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
 import xpool.native
+from tests.harness.native.case import run_native_case
 from tests.harness.native.debug import native_debug_options
-from tests.harness.native.loopback import expected_loopback_rotation
-from tests.harness.native.process import run_native_case
-from tests.harness.native.transport import atnagent_arena_process
+from tests.harness.native.transport.owner import atnagent_arena_process
+from tests.harness.support.native.loopback import expected_loopback_rotation
 from xpool.abi import TensorDType
 from xpool.config import LoopbackSite
 from xpool.runtime import RuntimeRole
@@ -17,7 +19,7 @@ from xpool.runtime import RuntimeRole
 pytestmark = [pytest.mark.requires_cuda(), pytest.mark.requires_mps, pytest.mark.timeout(180)]
 
 
-def isolated_atnagent_loopback_rotates_hidden_pairs(dtype_name: str) -> None:
+def isolated_atnagent_loopback_rotates_hidden_pairs(dtype_name: str, workdir: str) -> None:
     xpool.native.initialize(
         RuntimeRole.INSTANCE,
         cuda_device=torch.cuda.current_device(),
@@ -30,6 +32,7 @@ def isolated_atnagent_loopback_rotates_hidden_pairs(dtype_name: str) -> None:
         dtype=torch_dtype,
     )
     with atnagent_arena_process(
+        workdir=Path(workdir),
         cuda_device=hidden_states.device.index,
         max_tokens=8,
         hidden_size=4,
@@ -51,5 +54,10 @@ def isolated_atnagent_loopback_rotates_hidden_pairs(dtype_name: str) -> None:
 
 
 @pytest.mark.parametrize("dtype_name", ["float32", "float16", "bfloat16"])
-def test_atnagent_loopback_rotates_hidden_pairs(dtype_name: str) -> None:
-    run_native_case(isolated_atnagent_loopback_rotates_hidden_pairs, dtype_name)
+def test_atnagent_loopback_rotates_hidden_pairs(dtype_name: str, tmp_path: Path) -> None:
+    run_native_case(
+        isolated_atnagent_loopback_rotates_hidden_pairs,
+        dtype_name,
+        str(tmp_path / "owner"),
+        workdir=tmp_path / "case",
+    )

@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 from sglang.srt.server_args import DP_ATTENTION_HANDSHAKE_PORT_DELTA, ZMQ_TCP_PORT_DELTA, PortArgs, ServerArgs
 
-from tests.harness.network import TcpPortSpace
-from tests.harness.process import SpawnedProcess
+from tests.harness.runner.child import PythonChildProcess
+from tests.harness.runner.network import TcpPortSpace
+from tests.harness.runner.supervisor import prepare_task_supervision
 from tests.harness.sglang.endpoints import SglangEndpointFamilyLease, reserve_namespace_lock
-from tests.harness.supervisor import prepare_task_supervision
 
 
 def probe_namespace_lock(connection: Connection, endpoint: tuple[str, int]) -> None:
@@ -63,7 +63,7 @@ def test_endpoint_family_lock_coordinates_independent_interpreters(tmp_path: Pat
     )
     endpoint = (lease.family.host, lease.family.http_port)
     try:
-        occupied = SpawnedProcess.start(
+        occupied = PythonChildProcess.start(
             "occupied-endpoint-lock",
             probe_namespace_lock,
             endpoint,
@@ -74,12 +74,12 @@ def test_endpoint_family_lock_coordinates_independent_interpreters(tmp_path: Pat
             occupied.wait(timeout_seconds=5)
         finally:
             if occupied.process.is_alive():
-                SpawnedProcess.terminate_all((occupied,))
+                PythonChildProcess.terminate_all((occupied,))
             occupied.close()
     finally:
         lease.close()
 
-    available = SpawnedProcess.start(
+    available = PythonChildProcess.start(
         "available-endpoint-lock",
         probe_namespace_lock,
         endpoint,
@@ -90,7 +90,7 @@ def test_endpoint_family_lock_coordinates_independent_interpreters(tmp_path: Pat
         available.wait(timeout_seconds=5)
     finally:
         if available.process.is_alive():
-            SpawnedProcess.terminate_all((available,))
+            PythonChildProcess.terminate_all((available,))
         available.close()
 
 

@@ -5,11 +5,12 @@ from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.server_args import ServerArgs
 
 import xpool.integrations.sglang.plugin
-from tests.harness.sglang.fakes import FakeModelRunner, server_args
-from tests.harness.sglang.plugin import FakeAdapter, reset_plugin_required_hook_targets
+from tests.harness.support.config import reset_global_config
+from tests.harness.support.sglang.fakes import FakeModelRunner, server_args
+from tests.harness.support.sglang.plugin import FakeAdapter, reset_plugin_required_hook_targets
 from xpool.integrations.sglang.server_args import validate_sglang_server_args
 
-pytestmark = pytest.mark.usefixtures(reset_plugin_required_hook_targets.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, reset_plugin_required_hook_targets.__name__)
 
 
 def test_model_runner_hook_rejects_server_args_before_xpool_config(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import xpool.bootstrap
-from tests.harness.pytest_plugin import reset_global_config
+from tests.harness.support.config import reset_global_config
 from xpool.config import DebugConfig
 from xpool.runtime import RuntimeRole
 

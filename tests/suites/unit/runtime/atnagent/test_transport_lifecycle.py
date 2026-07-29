@@ -4,8 +4,8 @@ from typing import cast
 
 import pytest
 
-from tests.harness.config import install_test_config
-from tests.harness.runtime.atnagent import (
+from tests.harness.support.config import install_test_config, reset_global_config
+from tests.harness.support.runtime.atnagent import (
     instance_registration_view,
     patch_native_atnagent_ops,
     reset_agent_runtime,
@@ -25,7 +25,11 @@ from xpool.service.wire import (
 )
 from xpool.transport import TransportArenaHandle
 
-pytestmark = pytest.mark.usefixtures(reset_agent_runtime.__name__, reset_atnagent_runtime.__name__)
+pytestmark = pytest.mark.usefixtures(
+    reset_global_config.__name__,
+    reset_agent_runtime.__name__,
+    reset_atnagent_runtime.__name__,
+)
 
 
 def catalog_config(*model_ids: str) -> XpoolConfig:

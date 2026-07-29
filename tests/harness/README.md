@@ -8,18 +8,20 @@ test infrastructure; they must not import collected modules from
 
 ## Execution Pipeline
 
-1. `collection.py` asks pytest to collect concrete parameterized items and
+1. `runner/collection.py` asks pytest to collect concrete parameterized items and
    records their resource markers and scheduling metadata.
-2. `test_plan.py` validates that metadata and builds the typed suite plan.
-3. `execution_task.py` groups compatible cases into independently supervised
-   tasks. `runner.py` executes CTest, Unit, Integration, and E2E stages in that
-   order, admitting E2E only after Integration succeeds.
+2. `runner/plan.py` validates that metadata and builds the typed suite plan.
+3. `runner/task.py` groups compatible cases into independently supervised
+   tasks. `tests/__main__.py` executes CTest and then creates a `SuiteRunner`
+   for Unit, Integration, and E2E in that order, admitting E2E only after
+   Integration succeeds.
 4. GPU tasks are ordered by GPU count and estimated duration, then backfilled
    over idle devices. CPU tasks use the same supervision boundary without a GPU
    lease.
-5. `pytest_report.py`, `results.py`, and the SGLang parity helpers classify
-   JUnit, inference, timing, observer, and parity artifacts into the final suite
-   result.
+5. `runner/pytest_report.py` and `runner/results.py` classify JUnit and task
+   outcomes. SGLang drivers write inference, timing, and observer evidence;
+   injected artifact-group adapters aggregate cross-task parity into the final
+   suite result.
 
 Direct pytest and CTest commands remain focused debugging interfaces. They do
 not reproduce cross-task scheduling or whole-run parity aggregation.
@@ -45,24 +47,29 @@ targets and diagnostics, not as proof of emptiness.
 
 A Supervisor-local infrastructure exception becomes
 `TaskCompletionKind.INFRASTRUCTURE_FAILED` only after local cleanup proves the
-task domain empty; unrelated scopes may continue and the suite reports
-infrastructure error code 2. `TaskSupervisorFailed` means emptiness is unproven,
-so the runner stops scheduling, retains the affected lease, and performs
-global fallback cleanup. Directly terminating a Supervisor is owner loss, not
-a normal cancellation mechanism.
+task domain empty; the runner cancels active same-stage tasks, does not admit
+pending or later stages, and reports infrastructure error code 2. A
+`TaskSupervisorFailed` message becomes
+`TaskSupervisionFailure`; until fallback proves the domain empty, the runner
+stops scheduling and retains the affected lease. Directly terminating a
+Supervisor is owner loss, not a normal cancellation mechanism.
 
 ## GPU And Endpoint Ownership
 
-`gpu.py` derives the eligible pool once from startup `CUDA_VISIBLE_DEVICES`,
-normalizes it to physical UUIDs, and holds the whole-run lock. Every selected
-device must pass serialized MPS preflight before GPU work starts. A task sees
-only the UUIDs in its lease, and that lease is released only after its complete
-process domain is proved empty.
+`runner/gpu.py` derives the eligible pool once from startup
+`CUDA_VISIBLE_DEVICES` and normalizes it to physical UUIDs. The visible set is
+an externally exclusive test allocation; the harness does not coordinate GPUs
+with another xpool invocation. Every selected device must pass serialized MPS
+preflight before GPU work starts. Within one run, a task sees only the UUIDs in
+its `GpuPool` lease, and that lease is released only after its complete process
+domain is proved empty.
 
-`network.py` reserves endpoint families rather than isolated ports. SGLang
-helpers materialize HTTP, NCCL, gRPC, and DP-derived endpoints from that owned
-family and release them with the supervised task. Tests must not select ports
-with uncoordinated bind-and-close probes.
+`runner/network.py` reserves endpoints by retaining a listener after a complete
+`bind -> listen -> local connect -> accept` qualification. SGLang helpers own
+HTTP, NCCL, gRPC, handshake, and ZMQ-derived endpoints as one family. A bindable
+but locally unreachable member rejects the family; only a post-cleanup
+`EADDRINUSE` is a retryable conflict. Tests must not select ports with
+uncoordinated bind-and-close probes.
 
 ## Artifacts
 
@@ -77,13 +84,13 @@ protected by locks, and unrecognized directories are never cleanup targets.
 
 ## Module Boundaries
 
-- Top-level harness modules own collection, planning, scheduling, supervision,
-  GPU leases, endpoint allocation, requirements, and result aggregation.
-- `native/` owns component-scoped native subprocess setup and assertions.
-- `runtime/` and `service/` own focused reusable fixtures for those Python
-  subsystems.
+- `runner/` owns collection, planning, scheduling, supervision, GPU leases,
+  endpoint allocation, requirements, generic artifact adapters, and results.
+- `native/` owns component-scoped native subprocess drivers.
+- `support/` owns assertions, fixtures, fakes, and focused reusable setup; it
+  does not own scheduling or process topology.
 - `sglang/` owns the declarative manifest, installed-command server topology,
-  probes, graph evidence, observers, and token parity.
+  attempt ownership, readiness evidence, graph evidence, and token parity.
 
 Add reusable machinery here only when more than one behavioral test needs it.
 Put assertions and concrete scenarios in the lowest suitable suite. Avoid

@@ -6,7 +6,7 @@ import socket
 import pytest
 from sglang.srt.server_args import DP_ATTENTION_HANDSHAKE_PORT_DELTA, ZMQ_TCP_PORT_DELTA
 
-from tests.harness.network import TcpEndpointReservation, TcpPortSpace
+from tests.harness.runner.network import TcpEndpointReservation, TcpPortSpace
 from tests.harness.sglang.endpoints import (
     SglangEndpointFamily,
     SglangEndpointFamilyLease,
@@ -67,6 +67,63 @@ def test_endpoint_namespace_lock_survives_tcp_release() -> None:
         with pytest.raises(OSError) as error:
             reserve_namespace_lock(lease.family.host, lease.family.http_port)
         assert error.value.errno == errno.EADDRINUSE
+    finally:
+        lease.close()
+
+
+def test_endpoint_family_reacquires_all_released_ports_and_reports_conflicts() -> None:
+    lease = SglangEndpointFamilyLease.acquire(
+        "127.0.0.1",
+        dp_size=2,
+        port_space=TcpPortSpace.local(),
+    )
+    occupied_ports = (lease.family.ports[1], lease.family.ports[-1])
+    competitors: list[socket.socket] = []
+    try:
+        lease.release_tcp_for_spawn()
+        for port in occupied_ports:
+            competitor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            competitor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            competitor.bind((lease.family.host, port))
+            competitor.listen()
+            competitors.append(competitor)
+
+        assert lease.reacquire_tcp() == occupied_ports
+        for reservation in lease.tcp_reservations:
+            if reservation.port in occupied_ports:
+                assert reservation.listener is None
+            else:
+                assert reservation.listener is not None
+    finally:
+        for competitor in competitors:
+            competitor.close()
+        lease.close()
+
+
+def test_endpoint_family_reacquire_propagates_non_conflict_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = SglangEndpointFamilyLease.acquire(
+        "127.0.0.1",
+        dp_size=1,
+        port_space=TcpPortSpace.local(),
+    )
+    failed_port = lease.family.nccl_port
+    original_reacquire = TcpEndpointReservation.reacquire
+
+    def reacquire(reservation: TcpEndpointReservation) -> None:
+        if reservation.port == failed_port:
+            raise OSError(errno.EACCES, "permission denied")
+        original_reacquire(reservation)
+
+    monkeypatch.setattr(TcpEndpointReservation, "reacquire", reacquire)
+    try:
+        with pytest.raises(RuntimeError, match="were not released"):
+            lease.reacquire_tcp()
+        lease.release_tcp_for_spawn()
+        with pytest.raises(OSError) as error:
+            lease.reacquire_tcp()
+        assert error.value.errno == errno.EACCES
     finally:
         lease.close()
 

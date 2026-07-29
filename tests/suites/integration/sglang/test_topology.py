@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from sglang.srt.server_args import ServerArgs
 
-from tests.harness.sglang.fakes import server_args
+from tests.harness.support.sglang.fakes import server_args
 from xpool.config import ConfigError, TopologyError
 from xpool.integrations.sglang.topology import (
     AtnKind,
@@ -41,15 +41,17 @@ def test_gqa_atn_policy_retains_resolved_sglang_topology(
     )
 
     spec = ModelSpec.load(model_dir, model_id="qwen")
-    policy = ParallelPolicy.from_server_args(spec, server_args(tp_size=2), atnagent_count=2)
+    policy = ParallelPolicy.from_server_args(
+        spec,
+        server_args(tp_size=2),
+        atnagent_count=2,
+        supports_dp_attention=False,
+    )
 
     assert spec.atn_kind is AtnKind.GQA
-    assert policy.atn_kind is AtnKind.GQA
-    assert policy.sglang_tp_size == 2
-    assert policy.sglang_dp_size == 1
+    assert policy.worker_world_size == 2
     assert policy.atn_tp_size == 2
     assert policy.atn_dp_size == 1
-    assert policy.enable_dp_attention is False
 
 
 @pytest.mark.parametrize(
@@ -92,11 +94,11 @@ def test_mla_atn_policy_accepts_independent_tp_or_dp(
         spec,
         server_args(tp_size=tp_size, dp_size=dp_size, enable_dp_attention=dp_size > 1),
         atnagent_count=atnagent_count,
+        supports_dp_attention=True,
     )
 
     assert policy.atn_tp_size == expected_atn_tp_size
     assert policy.atn_dp_size == dp_size
-    assert policy.enable_dp_attention is (dp_size > 1)
 
 
 def test_mla_atn_policy_rejects_combined_tp_by_dp(
@@ -127,6 +129,7 @@ def test_mla_atn_policy_rejects_combined_tp_by_dp(
             spec,
             server_args(tp_size=4, dp_size=2, enable_dp_attention=True),
             atnagent_count=4,
+            supports_dp_attention=True,
         )
 
 
@@ -155,7 +158,12 @@ def test_regular_mqa_when_sglang_reports_non_mla(
     )
 
     spec = ModelSpec.load(model_dir, model_id="synthetic-mqa")
-    policy = ParallelPolicy.from_server_args(spec, server_args(), atnagent_count=1)
+    policy = ParallelPolicy.from_server_args(
+        spec,
+        server_args(),
+        atnagent_count=1,
+        supports_dp_attention=False,
+    )
 
     assert spec.atn_kind is AtnKind.MQA
     assert policy.atn_tp_size == 1
@@ -213,7 +221,12 @@ def test_attention_head_divisibility_is_checked_against_resolved_tp(
     spec = ModelSpec.load(model_dir, model_id="bad-ffn")
 
     with pytest.raises(TopologyError, match="does not divide query heads"):
-        ParallelPolicy.from_server_args(spec, server_args(tp_size=3), atnagent_count=3)
+        ParallelPolicy.from_server_args(
+            spec,
+            server_args(tp_size=3),
+            atnagent_count=3,
+            supports_dp_attention=False,
+        )
 
 
 def test_policy_rejects_sglang_world_that_does_not_cover_atnagents(
@@ -241,7 +254,12 @@ def test_policy_rejects_sglang_world_that_does_not_cover_atnagents(
     spec = ModelSpec.load(model_dir, model_id=model_dir.name)
 
     with pytest.raises(TopologyError, match="must equal configured AtnAgent count"):
-        ParallelPolicy.from_server_args(spec, server_args(tp_size=1), atnagent_count=2)
+        ParallelPolicy.from_server_args(
+            spec,
+            server_args(tp_size=1),
+            atnagent_count=2,
+            supports_dp_attention=False,
+        )
 
 
 @pytest.mark.parametrize(
@@ -276,7 +294,110 @@ def test_policy_rejects_inconsistent_dp_attention_flag(
     spec = ModelSpec.load(model_dir, model_id="deepseek")
 
     with pytest.raises(TopologyError, match="enable_dp_attention"):
-        ParallelPolicy.from_server_args(spec, args, atnagent_count=args.tp_size)
+        ParallelPolicy.from_server_args(
+            spec,
+            args,
+            atnagent_count=args.tp_size,
+            supports_dp_attention=True,
+        )
+
+
+@pytest.mark.parametrize("atn_kind", [AtnKind.GQA, AtnKind.MLA])
+def test_policy_rejects_dp_attention_without_adapter_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    atn_kind: AtnKind,
+) -> None:
+    patch_sglang_metadata(
+        monkeypatch,
+        family="unsupported",
+        hidden_size=2048,
+        atn_heads=16,
+        kv_heads=4,
+        atn_kind=atn_kind,
+    )
+    model_dir = write_model_config(tmp_path / "unsupported", {"model_type": "unsupported"})
+    spec = ModelSpec.load(model_dir, model_id="unsupported")
+
+    with pytest.raises(TopologyError, match="adapter does not support"):
+        ParallelPolicy.from_server_args(
+            spec,
+            server_args(tp_size=2, dp_size=2, enable_dp_attention=True),
+            atnagent_count=2,
+            supports_dp_attention=False,
+        )
+
+
+def test_gqa_policy_accepts_dp_attention_with_adapter_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    patch_sglang_metadata(
+        monkeypatch,
+        family="qwen3_moe",
+        hidden_size=2048,
+        atn_heads=32,
+        kv_heads=4,
+        atn_kind=AtnKind.GQA,
+    )
+    model_dir = write_model_config(tmp_path / "qwen3-moe", {"model_type": "qwen3_moe"})
+    spec = ModelSpec.load(model_dir, model_id="qwen3-moe")
+
+    policy = ParallelPolicy.from_server_args(
+        spec,
+        server_args(tp_size=2, dp_size=2, enable_dp_attention=True),
+        atnagent_count=2,
+        supports_dp_attention=True,
+    )
+
+    assert policy.worker_world_size == 2
+    assert policy.atn_tp_size == 1
+    assert policy.atn_dp_size == 2
+
+
+@pytest.mark.parametrize("size", [1, 2, 4, 8])
+def test_gqa_attention_tp_accepts_kv_sharding_and_replication(size: int) -> None:
+    spec = ModelSpec(
+        model_id="qwen3-moe",
+        family="qwen3_moe",
+        hidden_size=2048,
+        num_atn_heads=32,
+        num_key_value_heads=4,
+        atn_kind=AtnKind.GQA,
+        raw_config_path=Path("/models/qwen3-moe/config.json"),
+    )
+
+    spec.validate_attention_tp(size)
+
+
+@pytest.mark.parametrize("size", [3, 6])
+def test_gqa_attention_tp_rejects_invalid_head_geometry(size: int) -> None:
+    spec = ModelSpec(
+        model_id="qwen3-moe",
+        family="qwen3_moe",
+        hidden_size=2048,
+        num_atn_heads=32,
+        num_key_value_heads=4,
+        atn_kind=AtnKind.GQA,
+        raw_config_path=Path("/models/qwen3-moe/config.json"),
+    )
+
+    with pytest.raises(TopologyError):
+        spec.validate_attention_tp(size)
+
+
+def test_mla_attention_tp_ignores_ordinary_kv_head_geometry() -> None:
+    spec = ModelSpec(
+        model_id="deepseek",
+        family="deepseek_v2",
+        hidden_size=2048,
+        num_atn_heads=16,
+        num_key_value_heads=3,
+        atn_kind=AtnKind.MLA,
+        raw_config_path=Path("/models/deepseek/config.json"),
+    )
+
+    spec.validate_attention_tp(2)
 
 
 def test_model_config_preserves_explicit_zero_num_experts(

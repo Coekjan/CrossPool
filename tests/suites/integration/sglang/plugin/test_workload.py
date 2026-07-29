@@ -9,8 +9,8 @@ import torch
 from sglang.srt.server_args import ServerArgs
 from torch import nn
 
-from tests.harness.sglang.fakes import FakeModelConfig, FakeModelRunner, server_args
-from tests.harness.sglang.plugin import binding
+from tests.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner, server_args
+from tests.harness.support.sglang.plugin import binding
 from xpool.abi import TensorDType
 from xpool.fabric import FfnLayerKind, FfnLayerSpec
 from xpool.integrations.sglang.adapter import XpoolModelBinding

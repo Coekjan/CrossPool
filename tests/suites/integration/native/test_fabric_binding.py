@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
 import xpool.native
-from tests.harness.native.fabric import create_fabric_uid, fabric_bootstrap, run_fabric_topology
-from tests.harness.native.process import run_native_case
+from tests.harness.native.case import run_native_case
+from tests.harness.native.fabric.bootstrap import create_fabric_uid, fabric_bootstrap
+from tests.harness.native.fabric.topology import run_fabric_topology
 from xpool.abi import TensorDType, XPoolForwardMode
 from xpool.fabric import FABRIC_UID_HEX_LENGTH
 from xpool.runtime import RuntimeRole
 
 
-def test_fabric_uid_is_opaque_unique_hex() -> None:
-    first = create_fabric_uid()
-    second = create_fabric_uid()
+def test_fabric_uid_is_opaque_unique_hex(tmp_path: Path) -> None:
+    first = create_fabric_uid(workdir=tmp_path / "first")
+    second = create_fabric_uid(workdir=tmp_path / "second")
     assert len(first.value) == FABRIC_UID_HEX_LENGTH
     assert set(first.value) <= set("0123456789abcdef")
     assert first != second
@@ -62,24 +65,25 @@ def isolated_fabric_role_guard() -> None:
 
 
 @pytest.mark.requires_cuda()
-def test_fabric_join_validates_metadata_before_collective_initialization() -> None:
-    run_native_case(isolated_fabric_binding_validation)
+def test_fabric_join_validates_metadata_before_collective_initialization(tmp_path: Path) -> None:
+    run_native_case(isolated_fabric_binding_validation, workdir=tmp_path / "case")
 
 
 @pytest.mark.requires_cuda()
-def test_fabric_binding_rejects_wrong_runtime_role() -> None:
-    run_native_case(isolated_fabric_role_guard)
+def test_fabric_binding_rejects_wrong_runtime_role(tmp_path: Path) -> None:
+    run_native_case(isolated_fabric_role_guard, workdir=tmp_path / "case")
 
 
 @pytest.mark.requires_cuda(min_devices=2)
 @pytest.mark.requires_mps
 @pytest.mark.timeout(180)
-def test_fabric_trace_binding_rejects_mismatched_event_families() -> None:
+def test_fabric_trace_binding_rejects_mismatched_event_families(tmp_path: Path) -> None:
     """Read real records without allowing Python misuse to trigger fail-stop."""
 
-    with fabric_bootstrap() as uid:
+    with fabric_bootstrap(workdir=tmp_path / "bootstrap") as uid:
         report = run_fabric_topology(
             uid,
+            workdir=tmp_path / "topology",
             atnagent_count=1,
             ffnagent_count=1,
             executor_count=1,

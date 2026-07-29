@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 from sglang.srt.model_executor import forward_batch_info
 
 import xpool.config
 import xpool.native
-from tests.harness.config import install_test_config
+from tests.harness.native.case import run_native_case
 from tests.harness.native.debug import native_debug_options
-from tests.harness.native.loopback import expected_loopback_rotation
-from tests.harness.native.process import run_native_case
+from tests.harness.support.config import install_test_config
+from tests.harness.support.native.loopback import expected_loopback_rotation
 from xpool.config import LoopbackSite, XpoolConfig
 from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.shim import FfnShimModule
@@ -109,19 +111,23 @@ def isolated_case_instance_loopback_cuda_graph_replay_rotates_updated_inputs() -
         torch.bfloat16,
     ],
 )
-def test_instance_loopback_eager_rotates_hidden_pairs(dtype: torch.dtype) -> None:
+def test_instance_loopback_eager_rotates_hidden_pairs(dtype: torch.dtype, tmp_path: Path) -> None:
     run_native_case(
         isolated_case_instance_loopback_eager_rotates_hidden_pairs,
         str(dtype).removeprefix("torch."),
+        workdir=tmp_path / "case",
     )
 
 
-def test_instance_loopback_rejects_odd_hidden_size() -> None:
-    run_native_case(isolated_case_instance_loopback_rejects_odd_hidden_size)
+def test_instance_loopback_rejects_odd_hidden_size(tmp_path: Path) -> None:
+    run_native_case(isolated_case_instance_loopback_rejects_odd_hidden_size, workdir=tmp_path / "case")
 
 
-def test_instance_loopback_cuda_graph_replay_rotates_updated_inputs() -> None:
-    run_native_case(isolated_case_instance_loopback_cuda_graph_replay_rotates_updated_inputs)
+def test_instance_loopback_cuda_graph_replay_rotates_updated_inputs(tmp_path: Path) -> None:
+    run_native_case(
+        isolated_case_instance_loopback_cuda_graph_replay_rotates_updated_inputs,
+        workdir=tmp_path / "case",
+    )
 
 
 def loopback_shim(*, hidden_size: int) -> FfnShimModule:

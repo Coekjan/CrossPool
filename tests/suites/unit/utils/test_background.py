@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from tests.harness.wait import wait_until
+from tests.harness.support.wait import wait_until
 from xpool.utils.background import BackgroundThread
 
 

@@ -8,7 +8,8 @@ import pytest
 from fastapi import FastAPI
 
 import xpool.service.daemon.control
-from tests.harness.service.daemon import (
+from tests.harness.support.config import reset_global_config
+from tests.harness.support.service.daemon import (
     FakeMonotonicClock,
     atnagent_registration,
     atnagent_transport_arenas,
@@ -33,7 +34,7 @@ from xpool.fabric import (
 )
 from xpool.utils.procs import ProcUniqId
 
-pytestmark = pytest.mark.usefixtures(deterministic_daemon_dependencies.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
 
 
 def register_world(

@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 
-import tests.harness.ctest_launcher
-from tests.harness.ctest_launcher import configure_cuda_visibility, decode_ctest_gpu_id
+import tests.harness.runner.ctest_launcher
+from tests.harness.runner.ctest_launcher import configure_cuda_visibility, decode_ctest_gpu_id
 from xpool.service.daemon.mps import MpsProbeResult
 
 
 def test_launch_prepends_native_dependency_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     paths = (Path("/torch/lib"), Path("/nvshmem/lib"))
-    monkeypatch.setattr(tests.harness.ctest_launcher, "native_library_paths", lambda: paths)
+    monkeypatch.setattr(tests.harness.runner.ctest_launcher, "native_library_paths", lambda: paths)
     monkeypatch.delenv("XPOOL_CTEST_CANONICAL", raising=False)
     monkeypatch.setenv("LD_LIBRARY_PATH", "/existing")
     captured: tuple[str, list[str], dict[str, str]] | None = None
@@ -24,7 +24,7 @@ def test_launch_prepends_native_dependency_paths(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(os, "execvpe", capture)
     with pytest.raises(SystemExit):
-        tests.harness.ctest_launcher.launch(["native-test", "--gtest_filter=Suite.Case"])
+        tests.harness.runner.ctest_launcher.launch(["native-test", "--gtest_filter=Suite.Case"])
 
     assert captured is not None
     executable, arguments, environment = captured
@@ -35,7 +35,7 @@ def test_launch_prepends_native_dependency_paths(monkeypatch: pytest.MonkeyPatch
 
 def test_launch_requires_an_executable() -> None:
     with pytest.raises(RuntimeError, match="requires an executable"):
-        tests.harness.ctest_launcher.launch([])
+        tests.harness.runner.ctest_launcher.launch([])
 
 
 def test_ctest_launcher_hides_cuda_from_canonical_cpu_test() -> None:
@@ -55,7 +55,7 @@ def test_ctest_launcher_projects_one_gpu_and_preflights_mps(monkeypatch: pytest.
         "CTEST_RESOURCE_GROUP_0_GPUS": f"id:{identifier},slots:1",
     }
     monkeypatch.setattr(
-        tests.harness.ctest_launcher,
+        tests.harness.runner.ctest_launcher,
         "probe_mps_controller",
         lambda: MpsProbeResult(True, "online"),
     )

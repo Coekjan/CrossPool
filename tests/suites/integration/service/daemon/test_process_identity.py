@@ -4,8 +4,8 @@ from http import HTTPStatus
 
 import pytest
 
-from tests.harness.config import TEST_MODEL_ID, synthetic_config
-from tests.harness.service.daemon import (
+from tests.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
+from tests.harness.support.service.daemon import (
     ProcUniqId,
     atnagent_registration,
     atnagent_transport_arenas,
@@ -23,7 +23,7 @@ from tests.harness.service.daemon import (
 from xpool.abi import ABI_VERSION
 from xpool.config import LoopbackSite
 
-pytestmark = pytest.mark.usefixtures(deterministic_daemon_dependencies.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
 
 
 def test_daemon_deregisters_instance_rank_owned_by_process() -> None:

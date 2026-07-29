@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 import xpool.config
-from tests.harness.config import (
+from tests.harness.support.config import (
+    reset_global_config,
     source_record,
     write_minimal_config,
 )
@@ -19,7 +20,7 @@ from xpool.config import (
     init_global_config,
 )
 
-pytestmark = pytest.mark.usefixtures("reset_global_config")
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
 
 def test_cli_config_default_precedence_without_config_field_env(

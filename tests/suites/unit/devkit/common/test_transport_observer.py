@@ -10,8 +10,8 @@ import pytest
 
 import xpool.devkit.common.transport_observer
 import xpool.native
-from tests.harness.config import install_test_config
-from tests.harness.runtime.atnagent import transport_entry
+from tests.harness.support.config import install_test_config, reset_global_config
+from tests.harness.support.runtime.atnagent import transport_entry
 from xpool.abi import ABI_VERSION, DpPaddingMode, FfnResultCode, FfnResultHandoff, XPoolForwardMode
 from xpool.config import XpoolConfig
 from xpool.devkit.common.transport_observer import write_transport_snapshot
@@ -32,7 +32,7 @@ def reset_transport_observer(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
 
 
-pytestmark = pytest.mark.usefixtures(reset_transport_observer.__name__, "reset_global_config")
+pytestmark = pytest.mark.usefixtures(reset_transport_observer.__name__, reset_global_config.__name__)
 
 
 def trace_record(**overrides: int) -> SimpleNamespace:

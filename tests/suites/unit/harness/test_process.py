@@ -8,9 +8,9 @@ from typing import cast
 
 import pytest
 
-import tests.harness.process
-import tests.harness.supervisor
-from tests.harness.process import (
+import tests.harness.runner.process
+import tests.harness.runner.supervisor
+from tests.harness.runner.process import (
     OwnedProcess,
     OwnedProcessGroup,
 )
@@ -24,7 +24,7 @@ def test_terminate_escalates_and_requires_live_group_exit(monkeypatch: pytest.Mo
     signals: list[int] = []
     waits = iter((False, True))
     monkeypatch.setattr(os, "killpg", lambda pid, signal_number: signals.append(signal_number))
-    monkeypatch.setattr(tests.harness.process, "wait_for_process_group", lambda process, timeout: next(waits))
+    monkeypatch.setattr(tests.harness.runner.process, "wait_for_process_group", lambda process, timeout: next(waits))
 
     OwnedProcessGroup(name="fake", process=cast(subprocess.Popen[str], process)).terminate()
 
@@ -37,7 +37,7 @@ def test_terminate_reports_group_that_survives_sigkill(monkeypatch: pytest.Monke
 
     process = FakeProcess()
     monkeypatch.setattr(os, "killpg", lambda pid, signal_number: None)
-    monkeypatch.setattr(tests.harness.process, "wait_for_process_group", lambda process, timeout: False)
+    monkeypatch.setattr(tests.harness.runner.process, "wait_for_process_group", lambda process, timeout: False)
     owner = OwnedProcessGroup(name="fake", process=cast(subprocess.Popen[str], process))
 
     with pytest.raises(RuntimeError, match="retained live members after SIGKILL"):

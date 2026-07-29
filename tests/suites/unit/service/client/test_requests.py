@@ -4,7 +4,8 @@ from http import HTTPStatus
 
 import pytest
 
-from tests.harness.service.client import (
+from tests.harness.support.config import reset_global_config
+from tests.harness.support.service.client import (
     arena_record,
     config,
     initialize_client_config,
@@ -24,7 +25,7 @@ from xpool.service.wire import (
     ProcessRef,
 )
 
-pytestmark = pytest.mark.usefixtures(initialize_client_config.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, initialize_client_config.__name__)
 
 
 @pytest.mark.parametrize("participant", ["atnagent", "ffnagent", "instance"])

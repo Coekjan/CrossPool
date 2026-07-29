@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import errno
 import signal
-import socket
 import time
 from pathlib import Path
 from types import TracebackType
 
 import httpx
 
-from tests.harness.network import TcpEndpointReservation
-from tests.harness.process import OwnedProcessGroup, signal_process_group, wait_for_process_group
-from tests.harness.sglang.e2e import E2eLaunch
+from tests.harness.runner.network import TcpEndpointConflict, TcpEndpointReservation
+from tests.harness.runner.process import OwnedProcessGroup, signal_process_group, wait_for_process_group
+from tests.harness.sglang.launch import E2eLaunch
+from tests.harness.sglang.readiness import ReadinessEvidence, ReadinessTimeout
 from xpool.service.wire import ReadinessSnapshot, ReadinessStatus
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -22,10 +22,7 @@ AGENT_REGISTRATION_TIMEOUT_SECONDS = 30.0
 AGENT_SHUTDOWN_TIMEOUT_SECONDS = 75.0
 DAEMON_SHUTDOWN_TIMEOUT_SECONDS = 15.0
 POLL_INTERVAL_SECONDS = 0.1
-
-
-class DaemonPortConflict(RuntimeError):
-    """Raised when a failed daemon attempt leaves its endpoint occupied."""
+CONTROL_PLANE_HTTP_TIMEOUT_SECONDS = 1.0
 
 
 class XpoolCluster:
@@ -49,13 +46,19 @@ class XpoolCluster:
         """Start one healthy daemon and complete live Agent registration set."""
 
         processes: list[OwnedProcessGroup] = []
-        client = httpx.Client(base_url=daemon_url(launch), timeout=POLL_INTERVAL_SECONDS)
+        client = httpx.Client(base_url=daemon_url(launch), timeout=CONTROL_PLANE_HTTP_TIMEOUT_SECONDS)
         daemon_healthy = False
         daemon_started_at = time.monotonic()
         try:
             endpoint.release_for_spawn()
             processes.append(spawn_process("daemon", ["daemon", "serve"], launch=launch))
-            wait_for_daemon_health(client, processes)
+            readiness_directory = launch.config_path.parent / "readiness"
+            wait_for_daemon_health(
+                client,
+                processes,
+                url=f"{daemon_url(launch)}/health",
+                evidence_path=readiness_directory / "daemon-health.json",
+            )
             daemon_startup_seconds = time.monotonic() - daemon_started_at
             daemon_healthy = True
             for agent in launch.config.atnagents:
@@ -74,28 +77,31 @@ class XpoolCluster:
                         launch=launch,
                     )
                 )
-            wait_for_agent_registrations(client, processes, launch=launch)
+            wait_for_agent_registrations(
+                client,
+                processes,
+                launch=launch,
+                url=f"{daemon_url(launch)}/ready",
+                evidence_path=readiness_directory / "agent-registration.json",
+            )
         except BaseException as error:
             diagnostics = process_diagnostics(processes)
             client.close()
             cleanup_failures = terminate_processes(processes)
             close_process_logs(processes)
-            endpoint_diagnostic: str | None = None
-            endpoint_is_occupied = False
             if not daemon_healthy and not cleanup_failures:
                 try:
-                    endpoint_is_occupied = endpoint_occupied(launch)
+                    endpoint.reacquire()
                 except OSError as endpoint_error:
-                    endpoint_diagnostic = f"daemon endpoint probe failed: {endpoint_error}"
-            if endpoint_is_occupied:
-                raise DaemonPortConflict(
-                    f"daemon endpoint remained occupied after failed startup: {daemon_url(launch)}\n{diagnostics}"
-                ) from error
+                    if endpoint_error.errno == errno.EADDRINUSE:
+                        conflict = TcpEndpointConflict(((endpoint.host, endpoint.port),))
+                        conflict.add_note(diagnostics)
+                        raise conflict from error
+                    endpoint_error.add_note("failed to reacquire the daemon endpoint after startup failure")
+                    raise endpoint_error from error
             details = [str(error)]
             if cleanup_failures:
                 details.append("cleanup failures: " + "; ".join(cleanup_failures))
-            if endpoint_diagnostic is not None:
-                details.append(endpoint_diagnostic)
             if diagnostics:
                 details.append(diagnostics)
             raise RuntimeError("failed to start xpool E2E cluster:\n" + "\n".join(details)) from error
@@ -157,22 +163,38 @@ def spawn_process(name: str, arguments: list[str], *, launch: E2eLaunch) -> Owne
     )
 
 
-def wait_for_daemon_health(client: httpx.Client, processes: list[OwnedProcessGroup]) -> None:
+def wait_for_daemon_health(
+    client: httpx.Client,
+    processes: list[OwnedProcessGroup],
+    *,
+    url: str,
+    evidence_path: Path,
+) -> None:
     """Wait until the daemon health endpoint responds successfully."""
 
     started_at = time.monotonic()
     deadline = started_at + DAEMON_STARTUP_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        raise_for_exited_process(processes)
-        try:
-            response = client.get("/health")
-            if response.is_success:
-                return
-        except httpx.HTTPError:
-            pass
-        time.sleep(POLL_INTERVAL_SECONDS)
-    elapsed = time.monotonic() - started_at
-    raise RuntimeError(f"timed out waiting for daemon health after {elapsed:.3f}s")
+    evidence = ReadinessEvidence("daemon health", url)
+    try:
+        while time.monotonic() < deadline:
+            raise_for_exited_process(processes)
+            try:
+                response = client.get("/health")
+                evidence.record_response(response)
+                if response.is_success:
+                    return
+            except httpx.HTTPError as error:
+                evidence.record_error(error)
+            time.sleep(POLL_INTERVAL_SECONDS)
+        evidence.finish(elapsed_seconds=time.monotonic() - started_at, processes=processes)
+        raise ReadinessTimeout(evidence)
+    except BaseException as error:
+        if not isinstance(error, ReadinessTimeout):
+            evidence.record_error(error)
+        raise
+    finally:
+        evidence.finish(elapsed_seconds=time.monotonic() - started_at, processes=processes)
+        evidence.write(evidence_path)
 
 
 def wait_for_agent_registrations(
@@ -180,30 +202,44 @@ def wait_for_agent_registrations(
     processes: list[OwnedProcessGroup],
     *,
     launch: E2eLaunch,
+    url: str,
+    evidence_path: Path,
 ) -> None:
     """Wait for every configured AtnAgent and FfnAgent registration to be live."""
 
     expected_atn_devices = {agent.cuda_device for agent in launch.config.atnagents}
     expected_ffn_devices = {agent.cuda_device for agent in launch.config.ffnagents}
-    deadline = time.monotonic() + AGENT_REGISTRATION_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        raise_for_exited_process(processes)
-        try:
-            response = client.get("/ready")
-            if response.is_success:
-                readiness = ReadinessSnapshot.model_validate(response.json())
-                online_atn_devices = {
-                    entry.cuda_device for entry in readiness.atnagents if entry.status is ReadinessStatus.ONLINE
-                }
-                online_ffn_devices = {
-                    entry.cuda_device for entry in readiness.ffnagents if entry.status is ReadinessStatus.ONLINE
-                }
-                if online_atn_devices == expected_atn_devices and online_ffn_devices == expected_ffn_devices:
-                    return
-        except (httpx.HTTPError, ValueError):
-            pass
-        time.sleep(POLL_INTERVAL_SECONDS)
-    raise RuntimeError("timed out waiting for complete Agent registration")
+    started_at = time.monotonic()
+    deadline = started_at + AGENT_REGISTRATION_TIMEOUT_SECONDS
+    evidence = ReadinessEvidence("agent registration", url)
+    try:
+        while time.monotonic() < deadline:
+            raise_for_exited_process(processes)
+            try:
+                response = client.get("/ready")
+                evidence.record_response(response)
+                if response.is_success:
+                    readiness = ReadinessSnapshot.model_validate(response.json())
+                    online_atn_devices = {
+                        entry.cuda_device for entry in readiness.atnagents if entry.status is ReadinessStatus.ONLINE
+                    }
+                    online_ffn_devices = {
+                        entry.cuda_device for entry in readiness.ffnagents if entry.status is ReadinessStatus.ONLINE
+                    }
+                    if online_atn_devices == expected_atn_devices and online_ffn_devices == expected_ffn_devices:
+                        return
+            except (httpx.HTTPError, ValueError) as error:
+                evidence.record_error(error)
+            time.sleep(POLL_INTERVAL_SECONDS)
+        evidence.finish(elapsed_seconds=time.monotonic() - started_at, processes=processes)
+        raise ReadinessTimeout(evidence)
+    except BaseException as error:
+        if not isinstance(error, ReadinessTimeout):
+            evidence.record_error(error)
+        raise
+    finally:
+        evidence.finish(elapsed_seconds=time.monotonic() - started_at, processes=processes)
+        evidence.write(evidence_path)
 
 
 def raise_for_exited_process(processes: list[OwnedProcessGroup]) -> None:
@@ -285,19 +321,3 @@ def process_diagnostics(processes: list[OwnedProcessGroup]) -> str:
         status = "running" if returncode is None else f"exited({returncode})"
         sections.append(f"--- {process.name}: {status}; log={process.log_path} ---\n{process.tail()}")
     return "\n".join(sections)
-
-
-def endpoint_occupied(launch: E2eLaunch) -> bool:
-    """Return whether the exact daemon endpoint still rejects rebinding as in use."""
-
-    host = launch.config.daemon.host
-    family = socket.AF_INET6 if ":" in host else socket.AF_INET
-    with socket.socket(family, socket.SOCK_STREAM) as listener:
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            listener.bind((host, launch.config.daemon.port))
-        except OSError as error:
-            if error.errno == errno.EADDRINUSE:
-                return True
-            raise
-    return False

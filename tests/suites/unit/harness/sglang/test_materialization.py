@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.harness.sglang.e2e import materialize
+from tests.harness.sglang.launch import materialize
 from tests.harness.sglang.manifest import E2E_MANIFEST_PATH, E2eManifest
 from xpool.config import LoopbackSite, XpoolConfig
 
@@ -78,7 +78,9 @@ def test_materialize_rejects_wrong_model_architecture(tmp_path: Path) -> None:
     case = manifest.model_serving_cases[0]
     base_config = base_e2e_config(manifest, tmp_path)
     model = manifest.model(case.models[0].model)
-    config_path = base_config.model_path_of(model.model_id) / "config.json"
+    model_base_uri = base_config.vendor.model_base_uri
+    assert model_base_uri is not None
+    config_path = model_base_uri / model.model_id / "config.json"
     config_path.write_text('{"architectures":["WrongArchitecture"]}', encoding="utf-8")
 
     with pytest.raises(ValueError, match=model.architecture):
@@ -123,7 +125,7 @@ def base_e2e_config(manifest: E2eManifest, tmp_path: Path) -> XpoolConfig:
         {
             "vendor": {"model_base_uri": str(model_base_uri)},
             "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1, 2]},
-            "models": [{"id": model.model_id} for model in manifest.models],
+            "models": [{"id": "external/model-not-owned-by-tests"}],
         },
         env={},
     )

@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import errno
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import cast
 
 import pytest
 
+import tests.harness.sglang.attempt
 import tests.harness.sglang.probe
-from tests.harness.sglang.e2e import E2eLaunch, E2eLaunchModel
+from tests.harness.runner.network import TcpEndpointConflict, TcpEndpointReservation
+from tests.harness.sglang.attempt import ProbeAttempt, ProbeRun, wait_for_system_readiness
+from tests.harness.sglang.cluster import XpoolCluster
+from tests.harness.sglang.endpoints import SglangEndpointFamily, SglangEndpointFamilyLease
 from tests.harness.sglang.graph import SglangGraphMode, SglangGraphSettings
+from tests.harness.sglang.launch import E2eLaunch, E2eLaunchModel
 from tests.harness.sglang.manifest import (
     E2eLoopbackServingCase,
     E2eManifest,
@@ -16,22 +22,25 @@ from tests.harness.sglang.manifest import (
     E2eModelPlacement,
     E2eServingCase,
 )
-from tests.harness.sglang.probe import ProbeRun, run_probe, run_probe_attempt, wait_for_system_readiness
-from tests.harness.sglang.server import SglangEndpointConflict, SglangServerProcess
+from tests.harness.sglang.probe import run_probe
+from tests.harness.sglang.server import SglangServerProcess, SglangServerResult
 from xpool.config import LoopbackSite, XpoolConfig
 
 
 def test_probe_retries_only_complete_endpoint_conflicts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    attempts: list[Path] = []
+    workdirs: list[Path] = []
     expected = cast(ProbeRun, object())
 
-    def attempt(*args: object, workdir: Path, **kwargs: object) -> ProbeRun:
-        attempts.append(workdir)
-        if len(attempts) < 3:
-            raise SglangEndpointConflict(20_000 + len(attempts), "metrics_port")
-        return expected
+    class Attempt:
+        def __init__(self, *args: object) -> None:
+            workdirs.append(cast(Path, args[4]))
 
-    monkeypatch.setattr(tests.harness.sglang.probe, "run_probe_attempt", attempt)
+        def run(self) -> ProbeRun:
+            if len(workdirs) < 3:
+                raise TcpEndpointConflict((("127.0.0.1", 20_000 + len(workdirs)),)) from RuntimeError("startup")
+            return expected
+
+    monkeypatch.setattr(tests.harness.sglang.probe, "ProbeAttempt", Attempt)
 
     result = run_probe(
         probe_manifest(),
@@ -42,35 +51,22 @@ def test_probe_retries_only_complete_endpoint_conflicts(tmp_path: Path, monkeypa
     )
 
     assert result is expected
-    assert attempts == [tmp_path / "run" / f"attempt-{attempt}" for attempt in range(1, 4)]
+    assert workdirs == [tmp_path / "run" / f"attempt-{number}" for number in range(1, 4)]
 
 
-@pytest.mark.parametrize("loopback_site", [LoopbackSite.INSTANCE, LoopbackSite.ATNAGENT])
-def test_non_fabric_loopback_readiness_stops_at_http_health(
-    loopback_site: LoopbackSite,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    launch = probe_launch(tmp_path, loopback_site=loopback_site)
-    server = cast(SglangServerProcess, SimpleNamespace(healthy=lambda: True))
-    monkeypatch.setattr(
-        tests.harness.sglang.probe.httpx,
-        "Client",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("daemon final readiness is unreachable")),
-    )
-
-    wait_for_system_readiness(launch, [server])
-
-
-def test_probe_does_not_retry_non_collision_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_probe_does_not_retry_non_conflict_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     attempts = 0
 
-    def fail(*args: object, **kwargs: object) -> ProbeRun:
-        nonlocal attempts
-        attempts += 1
-        raise AssertionError("startup failure")
+    class Attempt:
+        def __init__(self, *args: object) -> None:
+            pass
 
-    monkeypatch.setattr(tests.harness.sglang.probe, "run_probe_attempt", fail)
+        def run(self) -> ProbeRun:
+            nonlocal attempts
+            attempts += 1
+            raise AssertionError("startup failure")
+
+    monkeypatch.setattr(tests.harness.sglang.probe, "ProbeAttempt", Attempt)
 
     with pytest.raises(AssertionError, match="startup failure"):
         run_probe(
@@ -84,43 +80,167 @@ def test_probe_does_not_retry_non_collision_failure(tmp_path: Path, monkeypatch:
     assert attempts == 1
 
 
-def test_probe_attempt_does_not_expose_retryable_conflict_when_cleanup_fails(
+@pytest.mark.parametrize("loopback_site", [LoopbackSite.INSTANCE, LoopbackSite.ATNAGENT])
+def test_non_fabric_loopback_readiness_stops_at_http_health(
+    loopback_site: LoopbackSite,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    launch = probe_launch(tmp_path, loopback_site=loopback_site)
+    owner = SimpleNamespace(name="sglang-model", process=SimpleNamespace(poll=lambda: None))
+    model = SimpleNamespace(model_id="model-a")
+    server = cast(
+        SglangServerProcess,
+        SimpleNamespace(
+            model=model,
+            owner=owner,
+            url=lambda: "http://127.0.0.1:20000",
+            healthy=lambda evidence: True,
+        ),
+    )
+    monkeypatch.setattr(
+        tests.harness.sglang.attempt.httpx,
+        "Client",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("daemon readiness is unreachable")),
+    )
+
+    wait_for_system_readiness(launch, [server])
+
+    assert (tmp_path / "readiness" / "sglang-model-a-health.json").is_file()
+    assert (tmp_path / "readiness" / "system-readiness.json").is_file()
+
+
+def test_attempt_classifies_released_family_and_reports_only_occupied_ports(tmp_path: Path) -> None:
+    attempt = probe_attempt(tmp_path)
+    family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 1)
+    endpoint = cast(
+        SglangEndpointFamilyLease,
+        SimpleNamespace(family=family, tcp_released=True, reacquire_tcp=lambda: (family.nccl_port,)),
+    )
+    attempt.server_endpoints.append(endpoint)
+
+    assert attempt.classify_released_endpoints() == ((family.host, family.nccl_port),)
+
+
+def test_attempt_propagates_non_conflict_classification_failure(tmp_path: Path) -> None:
+    attempt = probe_attempt(tmp_path)
+    family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 1)
+
+    def fail() -> tuple[int, ...]:
+        raise OSError(errno.EACCES, "inspection denied")
+
+    attempt.server_endpoints.append(
+        cast(SglangEndpointFamilyLease, SimpleNamespace(family=family, tcp_released=True, reacquire_tcp=fail))
+    )
+
+    with pytest.raises(OSError) as error:
+        attempt.classify_released_endpoints()
+
+    assert error.value.errno == errno.EACCES
+
+
+def test_attempt_closes_processes_before_endpoint_reservations(tmp_path: Path) -> None:
+    attempt = probe_attempt(tmp_path)
+    events: list[str] = []
+    attempt.servers.append(cast(SglangServerProcess, SimpleNamespace(close=lambda: events.append("server"))))
+    attempt.cluster = cast(XpoolCluster, SimpleNamespace(close=lambda: events.append("cluster")))
+    attempt.daemon_endpoint = cast(
+        TcpEndpointReservation,
+        SimpleNamespace(close=lambda: events.append("daemon-endpoint")),
+    )
+    attempt.server_endpoints.append(
+        cast(SglangEndpointFamilyLease, SimpleNamespace(close=lambda: events.append("server-endpoint")))
+    )
+
+    attempt.close()
+
+    assert events == ["server", "cluster", "daemon-endpoint", "server-endpoint"]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_error"),
+    [
+        ("startup", RuntimeError),
+        ("inference", AssertionError),
+        ("success", None),
+    ],
+)
+def test_attempt_terminal_paths_cleanup_classify_and_release_endpoints(
+    outcome: str,
+    expected_error: type[BaseException] | None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt = probe_attempt(tmp_path)
     launch = probe_launch(tmp_path)
-    cluster = SimpleNamespace(
-        close=lambda: (_ for _ in ()).throw(RuntimeError("cluster cleanup failed")),
-        diagnostics=lambda: "cluster diagnostics",
-    )
-    server = SimpleNamespace(close=lambda: None, diagnostics=lambda: "server diagnostics")
+    events: list[str] = []
+    endpoint = SimpleNamespace()
+    cluster = SimpleNamespace(daemon_startup_seconds=0.5)
+    server = SimpleNamespace()
 
-    monkeypatch.setattr(tests.harness.sglang.probe, "materialize", lambda *args, **kwargs: launch)
     monkeypatch.setattr(
-        tests.harness.sglang.probe.XpoolCluster,
-        "start",
-        classmethod(lambda cls, launch, endpoint: cluster),
+        TcpEndpointReservation,
+        "reserve",
+        classmethod(lambda cls, host, *, port_space: SimpleNamespace(port=launch.config.daemon.port)),
     )
     monkeypatch.setattr(
-        tests.harness.sglang.probe.SglangServerProcess,
-        "start",
-        classmethod(lambda cls, **kwargs: server),
+        SglangEndpointFamilyLease,
+        "acquire",
+        classmethod(lambda cls, host, *, dp_size, port_space: endpoint),
+    )
+    monkeypatch.setattr(tests.harness.sglang.attempt, "materialize", lambda *args, **kwargs: launch)
+    monkeypatch.setattr(XpoolCluster, "start", classmethod(lambda cls, launch, daemon_endpoint: cluster))
+    monkeypatch.setattr(SglangServerProcess, "start", classmethod(lambda cls, **kwargs: server))
+
+    def wait_for_readiness(launch: E2eLaunch, servers: list[SglangServerProcess]) -> None:
+        if outcome == "startup":
+            raise RuntimeError("startup failed")
+
+    def server_result(server: SglangServerProcess) -> SglangServerResult:
+        if outcome == "inference":
+            raise RuntimeError("inference failed")
+        return cast(SglangServerResult, object())
+
+    monkeypatch.setattr(tests.harness.sglang.attempt, "wait_for_system_readiness", wait_for_readiness)
+    monkeypatch.setattr(SglangServerProcess, "result", server_result)
+    monkeypatch.setattr(tests.harness.sglang.attempt, "read_graph_events", lambda path: [])
+    monkeypatch.setattr(ProbeAttempt, "diagnostics", lambda self: "")
+    monkeypatch.setattr(
+        ProbeAttempt,
+        "close_processes",
+        lambda self: events.append("process-cleanup") or (),
+    )
+    monkeypatch.setattr(
+        ProbeAttempt,
+        "classify_released_endpoints",
+        lambda self: events.append("endpoint-classification") or (),
+    )
+    monkeypatch.setattr(
+        ProbeAttempt,
+        "close_endpoints",
+        lambda self: events.append("endpoint-release"),
     )
 
-    def fail_readiness(launch: E2eLaunch, servers: list[SglangServerProcess]) -> None:
-        raise SglangEndpointConflict(20_000, "metrics_port")
+    if expected_error is None:
+        assert isinstance(attempt.run(), ProbeRun)
+    else:
+        with pytest.raises(expected_error):
+            attempt.run()
 
-    monkeypatch.setattr(tests.harness.sglang.probe, "wait_for_system_readiness", fail_readiness)
+    assert events == ["process-cleanup", "endpoint-classification", "endpoint-release"]
+    assert attempt.closed
 
-    with pytest.raises(AssertionError, match="cleanup failures: cluster cleanup failed"):
-        run_probe_attempt(
-            probe_manifest(),
-            probe_case(),
-            base_config=launch.config,
-            graph_settings=SglangGraphSettings(False, False),
-            workdir=tmp_path / "attempt",
-            loopback_site=LoopbackSite.FFNAGENT,
-        )
+
+def probe_attempt(tmp_path: Path) -> ProbeAttempt:
+    launch = probe_launch(tmp_path)
+    return ProbeAttempt(
+        probe_manifest(),
+        probe_case(),
+        launch.config,
+        SglangGraphSettings(False, False),
+        tmp_path / "attempt",
+        LoopbackSite.FFNAGENT,
+    )
 
 
 def probe_launch(tmp_path: Path, *, loopback_site: LoopbackSite = LoopbackSite.FFNAGENT) -> E2eLaunch:
@@ -137,16 +257,7 @@ def probe_launch(tmp_path: Path, *, loopback_site: LoopbackSite = LoopbackSite.F
     )
     return E2eLaunch(
         case_id="probe",
-        models=(
-            E2eLaunchModel(
-                alias="model",
-                model_id="model-a",
-                architecture="SyntheticForCausalLM",
-                max_total_tokens=16_384,
-                atn_tp_size=1,
-                atn_dp_size=1,
-            ),
-        ),
+        models=(E2eLaunchModel("model", "model-a", "SyntheticForCausalLM", 16_384, 1, 1),),
         config=config,
         config_path=config_path,
         environment=MappingProxyType({"XPOOL_CONFIG": str(config_path)}),
@@ -156,12 +267,7 @@ def probe_launch(tmp_path: Path, *, loopback_site: LoopbackSite = LoopbackSite.F
 
 
 def probe_manifest() -> E2eManifest:
-    model = E2eModel(
-        alias="model",
-        model_id="model-a",
-        architecture="SyntheticForCausalLM",
-        max_total_tokens=16_384,
-    )
+    model = E2eModel(alias="model", model_id="model-a", architecture="SyntheticForCausalLM", max_total_tokens=16_384)
     case = probe_case()
     return E2eManifest(models=(model,), model_serving_cases=(case,), loopback_serving_cases=(loopback_case(),))
 

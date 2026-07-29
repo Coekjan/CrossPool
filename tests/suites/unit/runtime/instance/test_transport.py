@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 
 import xpool.runtime.instance
-from tests.harness.runtime.instance import (
+from tests.harness.support.config import reset_global_config
+from tests.harness.support.runtime.instance import (
     install_offline_instance_client,
     patch_native_instance_ops,
     runtime_config,
@@ -17,7 +18,7 @@ from xpool.runtime.instance import InstanceError, InstanceFailureMonitor
 from xpool.service.wire import InstanceRegistration, ProcessRef
 from xpool.transport import TransportArenaHandle
 
-pytestmark = pytest.mark.usefixtures(install_offline_instance_client.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_offline_instance_client.__name__)
 
 
 def test_failure_monitor_keeps_polling_healthy_arena(monkeypatch: pytest.MonkeyPatch) -> None:

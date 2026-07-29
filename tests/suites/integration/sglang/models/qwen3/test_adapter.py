@@ -3,14 +3,14 @@ from __future__ import annotations
 import pytest
 import torch
 from sglang.srt.layers.communicator import ScatterMode
+from sglang.srt.models.qwen3 import Qwen3ForCausalLM
 from sglang.srt.plugins.hook_registry import HookType
-from torch import nn
 
-from tests.harness.sglang.fakes import FakeDecoderLayer, runner_with_architecture
+from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
+from xpool.integrations.sglang.adapter import filter_decoder_ffn_weights
 from xpool.integrations.sglang.models.qwen3 import (
     Qwen3Adapter,
     XpoolQwen3MLP,
-    filter_ffn_weights,
 )
 
 
@@ -23,15 +23,17 @@ def qwen_shim(layer_id: int) -> XpoolQwen3MLP:
     )
 
 
-def loaded_qwen_model(*, mlp_mode: ScatterMode = ScatterMode.FULL) -> nn.Module:
-    model = nn.Module()
-    model.layers = nn.ModuleList(
+def loaded_qwen_model(*, mlp_mode: ScatterMode = ScatterMode.FULL) -> Qwen3ForCausalLM:
+    config = runner_with_architecture("Qwen3ForCausalLM").model_config.hf_config
+    assert config is not None
+    return loaded_model(
+        Qwen3ForCausalLM,
+        config,
         [
             FakeDecoderLayer(qwen_shim(0), mlp_mode=mlp_mode, allow_reduce_scatter=False),
             FakeDecoderLayer(qwen_shim(1), mlp_mode=mlp_mode, allow_reduce_scatter=False),
-        ]
+        ],
     )
-    return model
 
 
 def test_qwen3_adapter_declares_dense_sglang_hooks() -> None:
@@ -57,7 +59,7 @@ def test_qwen3_weight_filter_removes_only_decoder_mlp_tensors() -> None:
         ("model.norm.weight", torch.empty(1)),
     ]
 
-    assert [name for name, tensor in filter_ffn_weights(weights)] == [
+    assert [name for name, tensor in filter_decoder_ffn_weights(weights)] == [
         "model.layers.0.self_attn.q_proj.weight",
         "model.norm.weight",
     ]

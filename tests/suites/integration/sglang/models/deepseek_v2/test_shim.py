@@ -7,19 +7,19 @@ import pytest
 import torch
 from sglang.srt.layers import dp_attention
 from sglang.srt.model_executor import forward_batch_info
-from sglang.srt.models.deepseek_v2 import DeepseekV2MLP, DeepseekV2MoE
+from sglang.srt.models.deepseek_v2 import DeepseekV2ForCausalLM, DeepseekV2MLP, DeepseekV2MoE
 from torch import nn
 
 import xpool.config
 import xpool.ops
-from tests.harness.config import install_test_config
-from tests.harness.sglang.deepseek import (
+from tests.harness.support.config import install_test_config, reset_global_config
+from tests.harness.support.sglang.deepseek import (
     bound_shim,
     decode_forward_batch,
     deepseek_config,
     install_adapter_config,
 )
-from tests.harness.sglang.fakes import FakeDecoderLayer, runner_with_architecture
+from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 from xpool.abi import DpPaddingMode, FfnResultHandoff
 from xpool.config import XpoolConfig
 from xpool.fabric import FfnLayerKind
@@ -28,7 +28,7 @@ from xpool.integrations.sglang.models.deepseek_v2 import DeepseekV2Adapter, Xpoo
 from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError, iter_ffn_shims
 from xpool.transport import FfnRequestMetadata
 
-pytestmark = pytest.mark.usefixtures(install_adapter_config.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_adapter_config.__name__)
 
 
 def test_ffn_shim_module_reports_identity() -> None:
@@ -339,8 +339,9 @@ def test_shim_forward_rejects_missing_attention_dp_token_counts() -> None:
 
 
 def test_deepseek_loaded_model_validation_counts_xpool_shims() -> None:
-    model = nn.Module()
-    model.layers = nn.ModuleList(
+    model = loaded_model(
+        DeepseekV2ForCausalLM,
+        deepseek_config(),
         [
             FakeDecoderLayer(
                 XpoolDeepseekV2MLP(
@@ -359,7 +360,7 @@ def test_deepseek_loaded_model_validation_counts_xpool_shims() -> None:
                 ),
                 allow_reduce_scatter=True,
             ),
-        ]
+        ],
     )
     runner = runner_with_architecture("DeepseekV2ForCausalLM")
     runner.model = model
@@ -372,7 +373,7 @@ def test_deepseek_loaded_model_validation_counts_xpool_shims() -> None:
 
 def test_deepseek_loaded_model_validation_requires_shims() -> None:
     runner = runner_with_architecture("DeepseekV2ForCausalLM")
-    runner.model = nn.Module()
+    runner.model = loaded_model(DeepseekV2ForCausalLM, deepseek_config(), [])
 
     with pytest.raises(RuntimeError, match="produced no FFN shim"):
         DeepseekV2Adapter().validate_after_load(runner.as_model_runner())
@@ -401,13 +402,11 @@ def test_bind_shim_runtime_binds_loaded_deepseek_shims() -> None:
         instance_id="test/model",
         model_path=Path("/models/test/model"),
         instance_index=2,
-        sglang_rank=3,
+        worker_rank=3,
         cuda_device=6,
-        sglang_tp_size=1,
-        sglang_dp_size=1,
+        worker_world_size=1,
         sglang_base_gpu_id=0,
         sglang_gpu_id_step=2,
-        enable_dp_attention=False,
         atn_tp_rank=0,
         atn_tp_size=1,
         atn_dp_rank=0,

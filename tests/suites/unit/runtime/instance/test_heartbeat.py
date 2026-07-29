@@ -8,7 +8,8 @@ import pytest
 import xpool.runtime.instance
 import xpool.utils.background
 import xpool.utils.procs
-from tests.harness.runtime.instance import (
+from tests.harness.support.config import reset_global_config
+from tests.harness.support.runtime.instance import (
     install_offline_instance_client,
     install_scripted_instance_client,
     patch_native_instance_ops,
@@ -31,7 +32,7 @@ from xpool.service.wire import (
 )
 from xpool.transport import TransportArenaHandle
 
-pytestmark = pytest.mark.usefixtures(install_offline_instance_client.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_offline_instance_client.__name__)
 
 
 def test_instance_deregister_stops_heartbeat_worker(monkeypatch: pytest.MonkeyPatch) -> None:

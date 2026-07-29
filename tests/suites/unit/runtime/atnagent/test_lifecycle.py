@@ -6,8 +6,8 @@ import pytest
 
 import xpool.native
 import xpool.runtime.agent
-from tests.harness.config import install_test_config, synthetic_config
-from tests.harness.runtime.atnagent import (
+from tests.harness.support.config import install_test_config, reset_global_config, synthetic_config
+from tests.harness.support.runtime.atnagent import (
     create_atnagent,
     reset_agent_runtime,
     reset_atnagent_runtime,
@@ -34,7 +34,11 @@ from xpool.runtime.ffnagent import FfnAgent
 from xpool.service.client import XpoolClient, XpoolClientError
 from xpool.service.wire import FabricParticipantReport
 
-pytestmark = pytest.mark.usefixtures(reset_agent_runtime.__name__, reset_atnagent_runtime.__name__)
+pytestmark = pytest.mark.usefixtures(
+    reset_global_config.__name__,
+    reset_agent_runtime.__name__,
+    reset_atnagent_runtime.__name__,
+)
 
 
 @pytest.mark.parametrize(

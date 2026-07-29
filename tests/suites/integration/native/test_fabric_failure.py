@@ -3,22 +3,25 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pytest
 
-from tests.harness.native.fabric import fabric_bootstrap, run_fabric_topology
+from tests.harness.native.fabric.bootstrap import fabric_bootstrap
+from tests.harness.native.fabric.topology import run_fabric_topology
 from xpool.abi import FfnResultCode, TensorDType, XPoolForwardMode
 
 pytestmark = [pytest.mark.requires_mps, pytest.mark.timeout(180)]
 
 
 @pytest.mark.requires_cuda(min_devices=3)
-def test_fabric_failure_uses_one_canonical_first_writer() -> None:
+def test_fabric_failure_uses_one_canonical_first_writer(tmp_path: Path) -> None:
     """Converge two failing FfnAgents on one canonical failure payload."""
 
-    with fabric_bootstrap() as uid:
+    with fabric_bootstrap(workdir=tmp_path / "bootstrap") as uid:
         report = run_fabric_topology(
             uid,
+            workdir=tmp_path / "topology",
             atnagent_count=1,
             ffnagent_count=2,
             executor_count=1,
@@ -60,12 +63,13 @@ def test_fabric_failure_uses_one_canonical_first_writer() -> None:
 
 
 @pytest.mark.requires_cuda(min_devices=2)
-def test_fabric_rejects_over_capacity_before_resident_launch() -> None:
+def test_fabric_rejects_over_capacity_before_resident_launch(tmp_path: Path) -> None:
     """Reject an impossible cooperative grid and retain legal cleanup."""
 
-    with fabric_bootstrap() as uid:
+    with fabric_bootstrap(workdir=tmp_path / "bootstrap") as uid:
         report = run_fabric_topology(
             uid,
+            workdir=tmp_path / "topology",
             atnagent_count=1,
             ffnagent_count=1,
             executor_count=4096,

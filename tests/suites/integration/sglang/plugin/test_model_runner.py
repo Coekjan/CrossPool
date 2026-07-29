@@ -7,9 +7,9 @@ from sglang.srt.model_executor.model_runner import ModelRunner
 
 import xpool.config
 import xpool.integrations.sglang.plugin
-from tests.harness.config import TEST_MODEL_ID
-from tests.harness.sglang.fakes import FakeModelConfig, FakeModelRunner
-from tests.harness.sglang.plugin import (
+from tests.harness.support.config import TEST_MODEL_ID, reset_global_config
+from tests.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner
+from tests.harness.support.sglang.plugin import (
     FailingAfterLoadAdapter,
     FakeAdapter,
     configure_xpool_model,
@@ -21,7 +21,7 @@ from xpool.integrations.sglang.topology import AtnKind, SglangModelMetadata
 from xpool.runtime import RuntimeRole
 from xpool.runtime.transport import InstanceTransportAttributes
 
-pytestmark = pytest.mark.usefixtures(reset_plugin_required_hook_targets.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, reset_plugin_required_hook_targets.__name__)
 
 
 def test_model_runner_hook_delegates_to_matching_adapters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -44,8 +44,8 @@ def test_model_runner_hook_delegates_to_matching_adapters(tmp_path: Path, monkey
     assert runner.xpool_runtime is not None
     binding = runner.xpool_runtime.binding
     assert binding.instance_id == TEST_MODEL_ID
-    assert binding.sglang_tp_size == 1
-    assert binding.sglang_dp_size == 1
+    assert binding.worker_world_size == 1
+    assert binding.atn_dp_size == 1
 
 
 def test_model_runner_hook_resolves_only_the_matching_model(

@@ -10,7 +10,8 @@ from typing import Self
 
 from pydantic import TypeAdapter
 
-from tests.harness.pytest_report import PytestCaseReport, PytestCaseStatus
+from tests.harness.runner.artifact import ArtifactGroupRef, ArtifactGroupResult
+from tests.harness.runner.pytest_report import PytestCaseReport, PytestCaseStatus
 from tests.harness.sglang.graph import SglangGraphSettings
 
 TOKEN_PARITY_ARTIFACT_FILENAME = "token-parity.json"
@@ -162,3 +163,32 @@ def evaluate_token_parity_group(
     except (AssertionError, ValueError) as error:
         return TokenParityGroupResult(group, TokenParityGroupStatus.INCONSISTENT, str(error))
     return TokenParityGroupResult(group, TokenParityGroupStatus.COMPARED, None)
+
+
+class TokenParityAdapter:
+    """Evaluate SGLang token-parity artifacts for the generic suite runner."""
+
+    kind = "token_parity"
+
+    def evaluate(
+        self,
+        group: ArtifactGroupRef,
+        reports: Sequence[PytestCaseReport],
+        artifact_directories: Sequence[Path],
+    ) -> ArtifactGroupResult:
+        """Classify one complete group using component-owned artifacts."""
+
+        artifacts: tuple[TokenParityArtifact, ...] = ()
+        if all(report.status is PytestCaseStatus.PASSED for report in reports):
+            try:
+                artifacts = tuple(
+                    TokenParityArtifact.read(directory / TOKEN_PARITY_ARTIFACT_FILENAME)
+                    for directory in artifact_directories
+                )
+            except (OSError, ValueError) as error:
+                return ArtifactGroupResult(group.name, 1, f"inconsistent: {error}")
+        result = evaluate_token_parity_group(group.name, reports, artifacts)
+        detail = result.status.value
+        if result.detail is not None:
+            detail += f": {result.detail}"
+        return ArtifactGroupResult(group.name, result.result_code, detail)

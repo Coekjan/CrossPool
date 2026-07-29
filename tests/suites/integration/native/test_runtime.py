@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
 import xpool.native
+from tests.harness.native.case import run_native_case
 from tests.harness.native.debug import native_debug_options
-from tests.harness.native.process import run_native_case
 from xpool.runtime import RuntimeRole
 
 
@@ -56,24 +58,24 @@ def isolated_daemon_runtime() -> None:
 
 
 @pytest.mark.requires_cuda()
-def test_runtime_initialization_is_idempotent_and_role_immutable() -> None:
-    run_native_case(isolated_runtime_identity)
+def test_runtime_initialization_is_idempotent_and_role_immutable(tmp_path: Path) -> None:
+    run_native_case(isolated_runtime_identity, workdir=tmp_path / "case")
 
 
 @pytest.mark.requires_cuda()
-def test_runtime_rejects_invalid_role() -> None:
-    run_native_case(isolated_invalid_runtime_values)
+def test_runtime_rejects_invalid_role(tmp_path: Path) -> None:
+    run_native_case(isolated_invalid_runtime_values, workdir=tmp_path / "case")
 
 
 @pytest.mark.requires_cuda()
-def test_runtime_rejects_negative_cuda_device() -> None:
-    run_native_case(isolated_negative_cuda_device)
+def test_runtime_rejects_negative_cuda_device(tmp_path: Path) -> None:
+    run_native_case(isolated_negative_cuda_device, workdir=tmp_path / "case")
 
 
 @pytest.mark.requires_cuda()
-def test_runtime_locks_role_after_cuda_configuration_failure() -> None:
-    run_native_case(isolated_cuda_configuration_failure)
+def test_runtime_locks_role_after_cuda_configuration_failure(tmp_path: Path) -> None:
+    run_native_case(isolated_cuda_configuration_failure, workdir=tmp_path / "case")
 
 
-def test_daemon_runtime_owns_uid_creation_without_cuda() -> None:
-    run_native_case(isolated_daemon_runtime)
+def test_daemon_runtime_owns_uid_creation_without_cuda(tmp_path: Path) -> None:
+    run_native_case(isolated_daemon_runtime, workdir=tmp_path / "case")

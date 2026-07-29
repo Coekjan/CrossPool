@@ -10,13 +10,14 @@ import time
 from contextlib import ExitStack
 from pathlib import Path
 
-from tests.harness.collection import CollectionFailure, CollectionWorker
-from tests.harness.ctest import CtestSuite
-from tests.harness.gpu import GpuLease, GpuPool
-from tests.harness.results import TestResultStore
-from tests.harness.runner import SuiteRunner
-from tests.harness.supervisor import SupervisedTaskScope, TaskCompletionKind, TaskScopeFailure
-from tests.harness.test_plan import TestPlan
+from tests.harness.runner.collection import CollectionFailure, CollectionWorker
+from tests.harness.runner.ctest import CtestSuite
+from tests.harness.runner.gpu import GpuLease, GpuPool
+from tests.harness.runner.plan import TestPlan
+from tests.harness.runner.results import TestResultStore
+from tests.harness.runner.suite import SuiteRunner
+from tests.harness.runner.supervisor import SupervisedTaskScope, TaskCompletionKind, TaskScopeFailure
+from tests.harness.sglang.parity import TokenParityAdapter
 from xpool.service.daemon.mps import probe_mps_controller
 from xpool.utils.sighandler import sighandle
 
@@ -136,6 +137,7 @@ def execute_test_run(
             repository_root=REPOSITORY_ROOT,
             run_directory=run_directory,
             strict_requirements=strict_requirements,
+            artifact_group_adapters=(TokenParityAdapter(),),
             gpu_pool=gpu_pool,
         )
         with ExitStack() as stack:
@@ -144,7 +146,7 @@ def execute_test_run(
             return runner.run()
     except TaskScopeFailure as error:
         gpu_resources_releasable = False
-        print(f"xpool test retained whole-run GPU locks after unproven task cleanup: {error}", file=sys.stderr)
+        print(f"xpool test cannot release GPU resources after unproven task cleanup: {error}", file=sys.stderr)
         return 2
     except (OSError, RuntimeError, ValueError) as error:
         print(f"xpool test infrastructure failure: {error}", file=sys.stderr)
@@ -155,7 +157,7 @@ def execute_test_run(
             if gpu_resources_releasable and runner_resources_releasable and not gpu_pool.active_leases:
                 gpu_pool.close()
             else:
-                print("xpool test retained whole-run GPU locks after unproven task cleanup", file=sys.stderr)
+                print("xpool test could not prove GPU resources releasable", file=sys.stderr)
 
 
 def prove_gpu_pool(gpu_pool: GpuPool, run_directory: Path) -> None:

@@ -7,21 +7,23 @@ from typing import cast
 
 import pytest
 
-import tests.harness.execution_task
-import tests.harness.pytest_report
-import tests.harness.runner
+import tests.harness.runner.artifact
+import tests.harness.runner.gpu
+import tests.harness.runner.plan
+import tests.harness.runner.pytest_report
+import tests.harness.runner.suite
+import tests.harness.runner.task
 import tests.harness.sglang.parity
-import tests.harness.test_plan
-from tests.harness.gpu import GpuPool
-from tests.harness.sglang.graph import SglangGraphMode
-from tests.harness.sglang.parity import TOKEN_PARITY_ARTIFACT_FILENAME, TokenOutput, TokenParityArtifact
-from tests.harness.supervisor import (
+from tests.harness.runner.gpu import GpuPool
+from tests.harness.runner.supervisor import (
     TaskCompletion,
     TaskCompletionKind,
     TaskScopeFailure,
     TaskScopeState,
     TaskStartFailure,
 )
+from tests.harness.sglang.graph import SglangGraphMode
+from tests.harness.sglang.parity import TOKEN_PARITY_ARTIFACT_FILENAME, TokenOutput, TokenParityArtifact
 from xpool.service.daemon.mps import MpsProbeResult
 
 
@@ -29,7 +31,7 @@ def test_compiler_builds_stage_tasks_with_exact_gpu_batching() -> None:
     cpu_requirements = requirements()
     gpu_one = requirements(cuda_count=1, requires_mps=True)
     gpu_two = requirements(cuda_count=2, requires_mps=True)
-    plan = tests.harness.test_plan.TestPlan(
+    plan = tests.harness.runner.plan.TestPlan(
         (
             case("tests/suites/unit/test_alpha.py", "test_alpha", requirements=cpu_requirements),
             case("tests/suites/unit/test_beta.py", "test_beta", requirements=cpu_requirements, timeout=20),
@@ -43,16 +45,16 @@ def test_compiler_builds_stage_tasks_with_exact_gpu_batching() -> None:
         )
     )
 
-    tasks = tests.harness.execution_task.compile_execution_tasks(plan)
+    tasks = tests.harness.runner.task.compile_execution_tasks(plan)
 
     assert tuple(task.stage for task in tasks) == (
-        tests.harness.test_plan.TestStage.UNIT,
-        tests.harness.test_plan.TestStage.INTEGRATION,
-        tests.harness.test_plan.TestStage.INTEGRATION,
-        tests.harness.test_plan.TestStage.INTEGRATION,
-        tests.harness.test_plan.TestStage.INTEGRATION,
-        tests.harness.test_plan.TestStage.E2E,
-        tests.harness.test_plan.TestStage.E2E,
+        tests.harness.runner.plan.TestStage.UNIT,
+        tests.harness.runner.plan.TestStage.INTEGRATION,
+        tests.harness.runner.plan.TestStage.INTEGRATION,
+        tests.harness.runner.plan.TestStage.INTEGRATION,
+        tests.harness.runner.plan.TestStage.INTEGRATION,
+        tests.harness.runner.plan.TestStage.E2E,
+        tests.harness.runner.plan.TestStage.E2E,
     )
     assert tuple(len(task.cases) for task in tasks) == (2, 1, 2, 1, 1, 1, 1)
     assert tasks[0].key == "unit"
@@ -61,11 +63,11 @@ def test_compiler_builds_stage_tasks_with_exact_gpu_batching() -> None:
     assert tasks[2].estimated_duration_seconds == 10
     assert tasks[2].timeout_seconds == 20
     assert len({task.key for task in tasks}) == len(tasks)
-    assert all(not tests.harness.execution_task.TASK_KEY_CHARACTER_PATTERN.search(task.key) for task in tasks)
+    assert all(not tests.harness.runner.task.TASK_KEY_CHARACTER_PATTERN.search(task.key) for task in tasks)
 
 
 def test_compiler_uses_timeout_when_estimate_is_absent_and_merges_cpu_requirements() -> None:
-    plan = tests.harness.test_plan.TestPlan(
+    plan = tests.harness.runner.plan.TestPlan(
         (
             case(
                 "tests/suites/integration/test_alpha.py",
@@ -83,7 +85,7 @@ def test_compiler_uses_timeout_when_estimate_is_absent_and_merges_cpu_requiremen
         )
     )
 
-    (task,) = tests.harness.execution_task.compile_execution_tasks(plan)
+    (task,) = tests.harness.runner.task.compile_execution_tasks(plan)
 
     assert task.key == "integration-cpu"
     assert task.estimated_duration_seconds == 15
@@ -95,9 +97,9 @@ def test_execution_task_rejects_requirement_drift() -> None:
     collected = case("tests/suites/integration/test_gpu.py", "test_gpu", requirements=requirements(cuda_count=1))
 
     with pytest.raises(ValueError, match="requirements"):
-        tests.harness.execution_task.ExecutionTask(
+        tests.harness.runner.task.ExecutionTask(
             key="invalid",
-            stage=tests.harness.test_plan.TestStage.INTEGRATION,
+            stage=tests.harness.runner.plan.TestStage.INTEGRATION,
             cases=(collected,),
             requirements=requirements(cuda_count=2),
             estimated_duration_seconds=10,
@@ -113,10 +115,10 @@ def test_pytest_task_report_matches_exact_parametrized_nodeids(tmp_path: Path) -
     path = tmp_path / "pytest.xml"
     write_pytest_junit([case.nodeid for case in expected], path)
 
-    report = tests.harness.pytest_report.PytestTaskReport.read(path, expected)
+    report = tests.harness.runner.pytest_report.PytestTaskReport.read(path, expected)
 
     assert tuple(case.nodeid for case in report.cases) == tuple(case.nodeid for case in expected)
-    assert all(case.status is tests.harness.pytest_report.PytestCaseStatus.PASSED for case in report.cases)
+    assert all(case.status is tests.harness.runner.pytest_report.PytestCaseStatus.PASSED for case in report.cases)
 
 
 def test_pytest_task_report_rejects_summary_drift_and_xfail(tmp_path: Path) -> None:
@@ -129,7 +131,7 @@ def test_pytest_task_report_rejects_summary_drift_and_xfail(tmp_path: Path) -> N
     suite.set("tests", "2")
     tree.write(path, encoding="utf-8", xml_declaration=True)
     with pytest.raises(ValueError, match="summary counts"):
-        tests.harness.pytest_report.PytestTaskReport.read(path, expected)
+        tests.harness.runner.pytest_report.PytestTaskReport.read(path, expected)
 
     write_pytest_junit([expected[0].nodeid], path)
     tree = xml.etree.ElementTree.parse(path)
@@ -145,35 +147,35 @@ def test_pytest_task_report_rejects_summary_drift_and_xfail(tmp_path: Path) -> N
     suite.set("skipped", "1")
     tree.write(path, encoding="utf-8", xml_declaration=True)
     with pytest.raises(ValueError, match=r"pytest\.xfail"):
-        tests.harness.pytest_report.PytestTaskReport.read(path, expected)
+        tests.harness.runner.pytest_report.PytestTaskReport.read(path, expected)
 
 
 def test_task_outcome_composes_lifecycle_and_pytest_facts(tmp_path: Path) -> None:
-    task = tests.harness.execution_task.build_task(
+    task = tests.harness.runner.task.build_task(
         "unit",
         (case("tests/suites/unit/test_alpha.py", "test_alpha", requirements=requirements()),),
     )
-    passed = tests.harness.pytest_report.PytestTaskReport(
+    passed = tests.harness.runner.pytest_report.PytestTaskReport(
         (
-            tests.harness.pytest_report.PytestCaseReport(
+            tests.harness.runner.pytest_report.PytestCaseReport(
                 task.cases[0].nodeid,
-                tests.harness.pytest_report.PytestCaseStatus.PASSED,
+                tests.harness.runner.pytest_report.PytestCaseStatus.PASSED,
                 None,
             ),
         )
     )
-    failed = tests.harness.pytest_report.PytestTaskReport(
+    failed = tests.harness.runner.pytest_report.PytestTaskReport(
         (
-            tests.harness.pytest_report.PytestCaseReport(
+            tests.harness.runner.pytest_report.PytestCaseReport(
                 task.cases[0].nodeid,
-                tests.harness.pytest_report.PytestCaseStatus.FAILED,
+                tests.harness.runner.pytest_report.PytestCaseStatus.FAILED,
                 "assertion failed",
             ),
         )
     )
 
     assert (
-        tests.harness.runner.TaskOutcome(
+        tests.harness.runner.suite.TaskOutcome(
             task,
             TaskCompletion(TaskCompletionKind.EXITED, 0, None),
             passed,
@@ -182,7 +184,7 @@ def test_task_outcome_composes_lifecycle_and_pytest_facts(tmp_path: Path) -> Non
         == 0
     )
     assert (
-        tests.harness.runner.TaskOutcome(
+        tests.harness.runner.suite.TaskOutcome(
             task,
             TaskCompletion(TaskCompletionKind.EXITED, 1, None),
             failed,
@@ -191,7 +193,7 @@ def test_task_outcome_composes_lifecycle_and_pytest_facts(tmp_path: Path) -> Non
         == 1
     )
     assert (
-        tests.harness.runner.TaskOutcome(
+        tests.harness.runner.suite.TaskOutcome(
             task,
             TaskCompletion(TaskCompletionKind.INFRASTRUCTURE_FAILED, None, "internal failure"),
             None,
@@ -200,7 +202,7 @@ def test_task_outcome_composes_lifecycle_and_pytest_facts(tmp_path: Path) -> Non
         == 2
     )
     assert (
-        tests.harness.runner.TaskOutcome(
+        tests.harness.runner.suite.TaskOutcome(
             task,
             TaskCompletion(TaskCompletionKind.EXITED, 0, None),
             failed,
@@ -209,13 +211,13 @@ def test_task_outcome_composes_lifecycle_and_pytest_facts(tmp_path: Path) -> Non
         == 2
     )
     assert (
-        tests.harness.runner.TaskOutcome(
+        tests.harness.runner.suite.TaskOutcome(
             task,
             TaskCompletion(TaskCompletionKind.TIMED_OUT, None, "deadline"),
             None,
             tmp_path,
         ).result_code
-        == 1
+        == 2
     )
 
 
@@ -242,14 +244,14 @@ def test_suite_runner_stops_after_failed_unit_gate(
             write_pytest_junit(command, log_path.parent / "pytest.xml", failed=returncode == 1)
             return FakeScope(TaskCompletion(TaskCompletionKind.EXITED, returncode, None))
 
-    monkeypatch.setattr(tests.harness.runner, "SupervisedTaskScope", ScopeFactory)
-    plan = tests.harness.test_plan.TestPlan(
+    monkeypatch.setattr(tests.harness.runner.suite, "SupervisedTaskScope", ScopeFactory)
+    plan = tests.harness.runner.plan.TestPlan(
         (
             case("tests/suites/unit/test_alpha.py", "test_alpha", requirements=requirements()),
             case("tests/suites/integration/test_beta.py", "test_beta", requirements=requirements()),
         )
     )
-    runner = tests.harness.runner.SuiteRunner(
+    runner = tests.harness.runner.suite.SuiteRunner(
         plan,
         repository_root=tmp_path,
         run_directory=tmp_path / "run",
@@ -283,14 +285,14 @@ def test_suite_runner_completes_e2e_stage_after_ordinary_failure(
             write_pytest_junit(command, log_path.parent / "pytest.xml", failed=failed)
             return FakeScope(TaskCompletion(TaskCompletionKind.EXITED, int(failed), None))
 
-    monkeypatch.setattr(tests.harness.runner, "SupervisedTaskScope", ScopeFactory)
-    plan = tests.harness.test_plan.TestPlan(
+    monkeypatch.setattr(tests.harness.runner.suite, "SupervisedTaskScope", ScopeFactory)
+    plan = tests.harness.runner.plan.TestPlan(
         (
             case("tests/suites/e2e/test_e2e_alpha.py", "test_alpha", requirements=requirements()),
             case("tests/suites/e2e/test_e2e_beta.py", "test_beta", requirements=requirements()),
         )
     )
-    runner = tests.harness.runner.SuiteRunner(
+    runner = tests.harness.runner.suite.SuiteRunner(
         plan,
         repository_root=tmp_path,
         run_directory=tmp_path / "run",
@@ -328,13 +330,13 @@ def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
                 polls_before_completion=poll_counts[case_name(command)],
             )
 
-    monkeypatch.setattr(tests.harness.runner, "SupervisedTaskScope", ScopeFactory)
+    monkeypatch.setattr(tests.harness.runner.suite, "SupervisedTaskScope", ScopeFactory)
     monkeypatch.setattr(
-        tests.harness.runner,
+        tests.harness.runner.suite,
         "probe_mps_controller",
         lambda: MpsProbeResult(True, "online"),
     )
-    plan = tests.harness.test_plan.TestPlan(
+    plan = tests.harness.runner.plan.TestPlan(
         (
             case(
                 "tests/suites/integration/test_wide_a.py",
@@ -356,7 +358,7 @@ def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
             ),
         )
     )
-    runner = tests.harness.runner.SuiteRunner(
+    runner = tests.harness.runner.suite.SuiteRunner(
         plan,
         repository_root=tmp_path,
         run_directory=tmp_path / "run",
@@ -407,13 +409,13 @@ def test_suite_runner_classifies_gpu_lease_after_start_failure(
             del args, kwargs
             raise failure
 
-    monkeypatch.setattr(tests.harness.runner, "SupervisedTaskScope", ScopeFactory)
+    monkeypatch.setattr(tests.harness.runner.suite, "SupervisedTaskScope", ScopeFactory)
     monkeypatch.setattr(
-        tests.harness.runner,
+        tests.harness.runner.suite,
         "probe_mps_controller",
         lambda: MpsProbeResult(True, "online"),
     )
-    plan = tests.harness.test_plan.TestPlan(
+    plan = tests.harness.runner.plan.TestPlan(
         (
             case(
                 "tests/suites/integration/test_gpu.py",
@@ -422,7 +424,7 @@ def test_suite_runner_classifies_gpu_lease_after_start_failure(
             ),
         )
     )
-    runner = tests.harness.runner.SuiteRunner(
+    runner = tests.harness.runner.suite.SuiteRunner(
         plan,
         repository_root=tmp_path,
         run_directory=tmp_path / "run",
@@ -444,13 +446,13 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
 ) -> None:
     fake_pool = FakeGpuPool(("GPU-a",))
     monkeypatch.setattr(
-        tests.harness.runner,
+        tests.harness.runner.suite,
         "probe_mps_controller",
         lambda: MpsProbeResult(True, "online"),
     )
     blocked_run_directory = tmp_path / "blocked"
     blocked_run_directory.write_text("not a directory", encoding="utf-8")
-    plan = tests.harness.test_plan.TestPlan(
+    plan = tests.harness.runner.plan.TestPlan(
         (
             case(
                 "tests/suites/integration/test_gpu.py",
@@ -459,7 +461,7 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
             ),
         )
     )
-    runner = tests.harness.runner.SuiteRunner(
+    runner = tests.harness.runner.suite.SuiteRunner(
         plan,
         repository_root=tmp_path,
         run_directory=blocked_run_directory,
@@ -478,67 +480,81 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
     ("statuses", "details", "expected_status"),
     (
         (
-            (tests.harness.pytest_report.PytestCaseStatus.PASSED, tests.harness.pytest_report.PytestCaseStatus.PASSED),
+            (
+                tests.harness.runner.pytest_report.PytestCaseStatus.PASSED,
+                tests.harness.runner.pytest_report.PytestCaseStatus.PASSED,
+            ),
             (None, None),
             tests.harness.sglang.parity.TokenParityGroupStatus.COMPARED,
         ),
         (
             (
-                tests.harness.pytest_report.PytestCaseStatus.SKIPPED,
-                tests.harness.pytest_report.PytestCaseStatus.SKIPPED,
+                tests.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
+                tests.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
             ),
             ("missing config", "missing config"),
             tests.harness.sglang.parity.TokenParityGroupStatus.SKIPPED,
         ),
         (
             (
-                tests.harness.pytest_report.PytestCaseStatus.SKIPPED,
-                tests.harness.pytest_report.PytestCaseStatus.SKIPPED,
+                tests.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
+                tests.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
             ),
             ("missing config", "missing weights"),
             tests.harness.sglang.parity.TokenParityGroupStatus.INCONSISTENT,
         ),
         (
-            (tests.harness.pytest_report.PytestCaseStatus.PASSED, tests.harness.pytest_report.PytestCaseStatus.SKIPPED),
+            (
+                tests.harness.runner.pytest_report.PytestCaseStatus.PASSED,
+                tests.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
+            ),
             (None, "missing config"),
             tests.harness.sglang.parity.TokenParityGroupStatus.INCONSISTENT,
         ),
         (
-            (tests.harness.pytest_report.PytestCaseStatus.FAILED, tests.harness.pytest_report.PytestCaseStatus.PASSED),
+            (
+                tests.harness.runner.pytest_report.PytestCaseStatus.FAILED,
+                tests.harness.runner.pytest_report.PytestCaseStatus.PASSED,
+            ),
             ("assertion failed", None),
             tests.harness.sglang.parity.TokenParityGroupStatus.FAILED,
         ),
     ),
 )
 def test_token_parity_group_results_follow_case_outcomes(
-    statuses: tuple[tests.harness.pytest_report.PytestCaseStatus, tests.harness.pytest_report.PytestCaseStatus],
+    statuses: tuple[
+        tests.harness.runner.pytest_report.PytestCaseStatus, tests.harness.runner.pytest_report.PytestCaseStatus
+    ],
     details: tuple[str | None, str | None],
     expected_status: tests.harness.sglang.parity.TokenParityGroupStatus,
     tmp_path: Path,
 ) -> None:
     runner = parity_runner(tmp_path, statuses, details)
 
-    (result,) = runner.token_parity_results()
+    (result,) = runner.artifact_group_results()
 
-    assert result.group == "example"
-    assert result.status is expected_status
+    assert result.name == "example"
+    assert result.detail is not None and result.detail.startswith(expected_status.value)
 
 
 def test_token_parity_omits_group_without_complete_ordinary_outcomes(tmp_path: Path) -> None:
     runner = parity_runner(
         tmp_path,
-        (tests.harness.pytest_report.PytestCaseStatus.PASSED, tests.harness.pytest_report.PytestCaseStatus.PASSED),
+        (
+            tests.harness.runner.pytest_report.PytestCaseStatus.PASSED,
+            tests.harness.runner.pytest_report.PytestCaseStatus.PASSED,
+        ),
         (None, None),
     )
     first = runner.tasks[0]
-    runner.outcomes[first.key] = tests.harness.runner.TaskOutcome(
+    runner.outcomes[first.key] = tests.harness.runner.suite.TaskOutcome(
         first,
         TaskCompletion(TaskCompletionKind.TIMED_OUT, None, "deadline"),
         None,
         runner.outcomes[first.key].directory,
     )
 
-    assert runner.token_parity_results() == ()
+    assert runner.artifact_group_results() == ()
 
 
 @dataclass(slots=True)
@@ -566,7 +582,7 @@ class FakeGpuPool:
     def __init__(self, uuids: tuple[str, ...]) -> None:
         self.uuids = uuids
         self.available = list(uuids)
-        self.active: set[tests.harness.runner.GpuLease] = set()
+        self.active: set[tests.harness.runner.gpu.GpuLease] = set()
         self.closed = False
 
     @property
@@ -574,18 +590,18 @@ class FakeGpuPool:
         return len(self.available)
 
     @property
-    def active_leases(self) -> set[tests.harness.runner.GpuLease]:
+    def active_leases(self) -> set[tests.harness.runner.gpu.GpuLease]:
         return self.active
 
-    def try_lease(self, count: int) -> tests.harness.runner.GpuLease | None:
+    def try_lease(self, count: int) -> tests.harness.runner.gpu.GpuLease | None:
         if count > len(self.available):
             return None
-        lease = tests.harness.runner.GpuLease(tuple(self.available[:count]))
+        lease = tests.harness.runner.gpu.GpuLease(tuple(self.available[:count]))
         del self.available[:count]
         self.active.add(lease)
         return lease
 
-    def release(self, lease: tests.harness.runner.GpuLease) -> None:
+    def release(self, lease: tests.harness.runner.gpu.GpuLease) -> None:
         self.active.remove(lease)
         leased = set(lease.uuids)
         self.available = [uuid for uuid in self.uuids if uuid in leased or uuid in self.available]
@@ -615,7 +631,7 @@ def write_pytest_junit(command: list[str], path: Path, *, failed: bool = False) 
         },
     )
     for index, nodeid in enumerate(nodeids):
-        classname, name = tests.harness.pytest_report.PytestTaskReport.junit_identity(nodeid)
+        classname, name = tests.harness.runner.pytest_report.PytestTaskReport.junit_identity(nodeid)
         testcase = xml.etree.ElementTree.SubElement(suite, "testcase", {"classname": classname, "name": name})
         if failed and index == 0:
             xml.etree.ElementTree.SubElement(testcase, "failure", {"message": "assertion failed"})
@@ -628,19 +644,19 @@ def case(
     path: str,
     name: str,
     *,
-    requirements: tests.harness.test_plan.TestRequirements,
+    requirements: tests.harness.runner.plan.TestRequirements,
     timeout: float = 10,
     estimate: float | None = None,
-    token_parity_group: tests.harness.test_plan.TokenParityGroupRef | None = None,
-) -> tests.harness.test_plan.CollectedTestCase:
-    return tests.harness.test_plan.CollectedTestCase(
+    artifact_group: tests.harness.runner.artifact.ArtifactGroupRef | None = None,
+) -> tests.harness.runner.plan.CollectedTestCase:
+    return tests.harness.runner.plan.CollectedTestCase(
         path=path,
         nodeid=f"{path}::{name}",
-        stage=tests.harness.test_plan.TestStage.from_path(path),
+        stage=tests.harness.runner.plan.TestStage.from_path(path),
         requirements=requirements,
         estimated_duration_seconds=estimate,
         timeout_seconds=timeout,
-        token_parity_group=token_parity_group,
+        artifact_group=artifact_group,
     )
 
 
@@ -650,8 +666,8 @@ def requirements(
     requires_mps: bool = False,
     requires_config: bool = False,
     model_ids: tuple[str, ...] = (),
-) -> tests.harness.test_plan.TestRequirements:
-    return tests.harness.test_plan.TestRequirements(
+) -> tests.harness.runner.plan.TestRequirements:
+    return tests.harness.runner.plan.TestRequirements(
         cuda_count=cuda_count,
         requires_mps=requires_mps,
         requires_config=requires_config,
@@ -661,50 +677,53 @@ def requirements(
 
 def parity_runner(
     root: Path,
-    statuses: tuple[tests.harness.pytest_report.PytestCaseStatus, tests.harness.pytest_report.PytestCaseStatus],
+    statuses: tuple[
+        tests.harness.runner.pytest_report.PytestCaseStatus, tests.harness.runner.pytest_report.PytestCaseStatus
+    ],
     details: tuple[str | None, str | None],
-) -> tests.harness.runner.SuiteRunner:
+) -> tests.harness.runner.suite.SuiteRunner:
     """Build one fully classified two-mode parity group without subprocesses."""
 
-    group = tests.harness.test_plan.TokenParityGroupRef("example", 2)
-    plan = tests.harness.test_plan.TestPlan(
+    group = tests.harness.runner.artifact.ArtifactGroupRef("token_parity", "example", 2)
+    plan = tests.harness.runner.plan.TestPlan(
         (
             case(
                 "tests/suites/e2e/test_e2e_model.py",
                 "test_model[eager]",
                 requirements=requirements(),
-                token_parity_group=group,
+                artifact_group=group,
             ),
             case(
                 "tests/suites/e2e/test_e2e_model.py",
                 "test_model[full]",
                 requirements=requirements(),
-                token_parity_group=group,
+                artifact_group=group,
             ),
         )
     )
-    runner = tests.harness.runner.SuiteRunner(
+    runner = tests.harness.runner.suite.SuiteRunner(
         plan,
         repository_root=root,
         run_directory=root / "run",
         strict_requirements=False,
+        artifact_group_adapters=(tests.harness.sglang.parity.TokenParityAdapter(),),
     )
     graph_modes = (SglangGraphMode.EAGER, SglangGraphMode.FULL)
     for task, status, detail, graph_mode in zip(runner.tasks, statuses, details, graph_modes, strict=True):
         directory = root / task.key
         artifact_directory = directory / "artifacts"
         artifact_directory.mkdir(parents=True)
-        report = tests.harness.pytest_report.PytestTaskReport(
-            (tests.harness.pytest_report.PytestCaseReport(task.cases[0].nodeid, status, detail),)
+        report = tests.harness.runner.pytest_report.PytestTaskReport(
+            (tests.harness.runner.pytest_report.PytestCaseReport(task.cases[0].nodeid, status, detail),)
         )
-        returncode = 1 if status is tests.harness.pytest_report.PytestCaseStatus.FAILED else 0
-        runner.outcomes[task.key] = tests.harness.runner.TaskOutcome(
+        returncode = 1 if status is tests.harness.runner.pytest_report.PytestCaseStatus.FAILED else 0
+        runner.outcomes[task.key] = tests.harness.runner.suite.TaskOutcome(
             task,
             TaskCompletion(TaskCompletionKind.EXITED, returncode, None),
             report,
             directory,
         )
-        if status is tests.harness.pytest_report.PytestCaseStatus.PASSED:
+        if status is tests.harness.runner.pytest_report.PytestCaseStatus.PASSED:
             TokenParityArtifact(
                 group="example",
                 graph_settings=graph_mode.settings(),

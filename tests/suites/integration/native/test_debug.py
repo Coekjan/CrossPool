@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 import torch
 
 import xpool.native
+from tests.harness.native.case import run_native_case
 from tests.harness.native.debug import native_debug_options
-from tests.harness.native.process import run_native_case
 from xpool.config import LoopbackSite
 from xpool.runtime import RuntimeRole
 
@@ -41,15 +42,15 @@ def isolated_debug_parse_failure() -> None:
 
 
 @pytest.mark.requires_cuda()
-def test_debug_allows_first_explicit_configuration_after_none() -> None:
-    run_native_case(isolated_first_explicit_debug_options)
+def test_debug_allows_first_explicit_configuration_after_none(tmp_path: Path) -> None:
+    run_native_case(isolated_first_explicit_debug_options, workdir=tmp_path / "case")
 
 
 @pytest.mark.requires_cuda()
-def test_debug_binding_propagates_representative_schema_failure() -> None:
-    run_native_case(isolated_unknown_debug_field)
+def test_debug_binding_propagates_representative_schema_failure(tmp_path: Path) -> None:
+    run_native_case(isolated_unknown_debug_field, workdir=tmp_path / "case")
 
 
 @pytest.mark.requires_cuda()
-def test_debug_parse_failure_preserves_runtime_role() -> None:
-    run_native_case(isolated_debug_parse_failure)
+def test_debug_parse_failure_preserves_runtime_role(tmp_path: Path) -> None:
+    run_native_case(isolated_debug_parse_failure, workdir=tmp_path / "case")

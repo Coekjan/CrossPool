@@ -6,7 +6,8 @@ import pytest
 
 import xpool.config
 import xpool.service.client
-from tests.harness.service.client import (
+from tests.harness.support.config import reset_global_config
+from tests.harness.support.service.client import (
     initialize_client_config,
     install_scripted_http_client,
     response,
@@ -15,7 +16,7 @@ from xpool.config import XpoolConfig
 from xpool.service.client import XpoolClient
 from xpool.service.errors import XpoolClientError
 
-pytestmark = pytest.mark.usefixtures(initialize_client_config.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, initialize_client_config.__name__)
 
 
 def test_client_health_requires_ok_daemon(monkeypatch: pytest.MonkeyPatch) -> None:

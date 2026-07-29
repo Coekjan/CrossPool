@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 import torch
@@ -16,14 +17,17 @@ from sglang.srt.model_executor import forward_batch_info
 from torch import nn
 
 import xpool.native
-from tests.harness.config import install_test_config
-from tests.harness.native.transport import transport_arena_handles
+from tests.harness.native.transport.owner import transport_arena_handles
+from tests.harness.support.config import install_test_config, reset_global_config
 from xpool.config import XpoolConfig
 from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.shim import FfnShimModule
 from xpool.runtime import RuntimeRole
 
-pytestmark = pytest.mark.requires_cuda()
+pytestmark = [
+    pytest.mark.requires_cuda(),
+    pytest.mark.usefixtures(reset_global_config.__name__),
+]
 
 
 class ShimGraphModule(nn.Module):
@@ -39,7 +43,7 @@ class ShimGraphModule(nn.Module):
 
 
 @contextmanager
-def attached_shim_runtime() -> Generator[None, None, None]:
+def attached_shim_runtime(*, workdir: Path) -> Generator[None, None, None]:
     """Install one Instance runtime, Transport attachment, and shim config."""
 
     xpool.native.initialize(RuntimeRole.INSTANCE, torch.cuda.current_device(), None)
@@ -52,7 +56,7 @@ def attached_shim_runtime() -> Generator[None, None, None]:
             }
         )
     )
-    with transport_arena_handles() as create_arena:
+    with transport_arena_handles(workdir=workdir) as create_arena:
         handle = create_arena(instance_index=1, instance_rank=0)
         xpool.native.transport.attach_arena(1, 0, handle)
         try:
@@ -61,8 +65,8 @@ def attached_shim_runtime() -> Generator[None, None, None]:
             xpool.native.transport.detach_arena()
 
 
-def test_ffn_shim_is_fullgraph_traceable_with_meta_dispatch(reset_global_config: None) -> None:
-    with attached_shim_runtime():
+def test_ffn_shim_is_fullgraph_traceable_with_meta_dispatch(tmp_path: Path) -> None:
+    with attached_shim_runtime(workdir=tmp_path / "owners"):
         shim = FfnShimModule(layer_id=7, hidden_size=4, layer_kind=FfnLayerKind.DENSE)
         shim.bind_runtime(layer_ordinal=0, model_architecture="trace-smoke")
         forward_batch = type("FakeForwardBatch", (), {"forward_mode": forward_batch_info.ForwardMode.DECODE})()
@@ -77,8 +81,10 @@ def test_ffn_shim_is_fullgraph_traceable_with_meta_dispatch(reset_global_config:
         assert output.device.type == "meta"
 
 
-def test_ffn_shim_piecewise_compile_reuses_dynamic_token_dimension(reset_global_config: None) -> None:
-    with attached_shim_runtime():
+def test_ffn_shim_piecewise_compile_reuses_dynamic_token_dimension(
+    tmp_path: Path,
+) -> None:
+    with attached_shim_runtime(workdir=tmp_path / "owners"):
         shim = FfnShimModule(layer_id=7, hidden_size=4, layer_kind=FfnLayerKind.DENSE)
         shim.bind_runtime(layer_ordinal=0, model_architecture="pcg-dynamic")
         forward_batch = type("FakeForwardBatch", (), {"forward_mode": forward_batch_info.ForwardMode.EXTEND})()

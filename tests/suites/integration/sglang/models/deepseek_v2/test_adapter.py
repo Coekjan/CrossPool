@@ -5,22 +5,26 @@ from pathlib import Path
 import pytest
 import torch
 from sglang.srt.layers.communicator import ScatterMode
+from sglang.srt.models.deepseek_v2 import DeepseekV2ForCausalLM
 from sglang.srt.plugins.hook_registry import HookType
-from torch import nn
 
 import xpool.config
-from tests.harness.sglang.deepseek import deepseek_config, install_adapter_config
-from tests.harness.sglang.fakes import FakeDecoderLayer, runner_with_architecture
-from xpool.integrations.sglang.adapter import XpoolModelBinding, XpoolModelRuntime
+from tests.harness.support.config import reset_global_config
+from tests.harness.support.sglang.deepseek import deepseek_config, install_adapter_config
+from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
+from xpool.integrations.sglang.adapter import (
+    XpoolModelBinding,
+    XpoolModelRuntime,
+    filter_decoder_ffn_weights,
+)
 from xpool.integrations.sglang.models.deepseek_v2 import (
     DeepseekV2Adapter,
     XpoolDeepseekV2MLP,
     XpoolDeepseekV2MoE,
-    filter_ffn_weights,
 )
 from xpool.integrations.sglang.topology import AtnKind, SglangModelMetadata
 
-pytestmark = pytest.mark.usefixtures(install_adapter_config.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_adapter_config.__name__)
 
 
 def test_deepseek_adapter_declares_its_sglang_hooks() -> None:
@@ -48,7 +52,7 @@ def test_deepseek_ffn_weight_filter_skips_mlp_subtree() -> None:
         ("model.norm.weight", torch.empty(1)),
     ]
 
-    kept = [name for name, tensor in filter_ffn_weights(weights)]
+    kept = [name for name, tensor in filter_decoder_ffn_weights(weights)]
 
     assert kept == [
         "model.layers.0.self_attn.q_proj.weight",
@@ -58,16 +62,18 @@ def test_deepseek_ffn_weight_filter_skips_mlp_subtree() -> None:
 
 def test_deepseek_loaded_model_validation_requires_integer_layer_count() -> None:
     runner = runner_with_architecture("DeepseekV2ForCausalLM")
-    setattr(runner.model_config.hf_config, "num_hidden_layers", None)
-    runner.model = nn.Module()
+    config = deepseek_config()
+    setattr(config, "num_hidden_layers", None)
+    runner.model = loaded_model(DeepseekV2ForCausalLM, config, [])
 
     with pytest.raises(RuntimeError, match="integer num_hidden_layers"):
         DeepseekV2Adapter().validate_after_load(runner.as_model_runner())
 
 
 def test_deepseek_loaded_model_rejects_non_full_mlp_boundary() -> None:
-    model = nn.Module()
-    model.layers = nn.ModuleList(
+    model = loaded_model(
+        DeepseekV2ForCausalLM,
+        deepseek_config(),
         [
             FakeDecoderLayer(
                 XpoolDeepseekV2MLP(
@@ -88,7 +94,7 @@ def test_deepseek_loaded_model_rejects_non_full_mlp_boundary() -> None:
                 mlp_mode=ScatterMode.TP_ATTN_FULL,
                 allow_reduce_scatter=True,
             ),
-        ]
+        ],
     )
     runner = runner_with_architecture("DeepseekV2ForCausalLM")
     runner.model = model
@@ -154,7 +160,11 @@ path = "{model_path}"
     runner = runner_with_architecture("DeepseekV2ForCausalLM")
     runner.model_config.model_path = str(model_path)
 
-    binding = XpoolModelBinding.resolve(runner.as_model_runner(), runner.server_args)
+    binding = XpoolModelBinding.resolve(
+        runner.as_model_runner(),
+        runner.server_args,
+        supports_dp_attention=True,
+    )
     XpoolModelRuntime.attach(runner.as_model_runner(), binding)
 
     assert binding.instance_id == "test/deepseek-v2"

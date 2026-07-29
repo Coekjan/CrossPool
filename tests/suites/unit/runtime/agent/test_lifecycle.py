@@ -10,13 +10,14 @@ from typing import Literal, cast
 import pytest
 
 import xpool.runtime.agent
-from tests.harness.runtime.atnagent import reset_agent_runtime
+from tests.harness.support.config import reset_global_config
+from tests.harness.support.runtime.atnagent import reset_agent_runtime
 from xpool.runtime import RuntimeRole
 from xpool.runtime.agent import Agent
 from xpool.service.client import XpoolClient
 from xpool.service.wire import HeartbeatResponse
 
-pytestmark = pytest.mark.usefixtures(reset_agent_runtime.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, reset_agent_runtime.__name__)
 
 ShutdownPoint = Literal["prepare", "bootstrap", "advance"]
 SignalHandler = Callable[[int, object], object]

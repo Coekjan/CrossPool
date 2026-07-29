@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
 import xpool.native
-from tests.harness.native.loopback import expected_loopback_rotation
-from tests.harness.native.process import run_native_case
-from tests.harness.native.transport import (
+from tests.harness.native.case import run_native_case
+from tests.harness.native.transport.owner import (
     atnagent_arena_process,
-    initialize_instance_transport,
-    instance_transport_runtime,
 )
+from tests.harness.support.config import reset_global_config
+from tests.harness.support.native.loopback import expected_loopback_rotation
+from tests.harness.support.native.transport import initialize_instance_transport, instance_transport_runtime
 from xpool.abi import TensorDType
 
 pytestmark = [
     pytest.mark.requires_cuda(),
     pytest.mark.timeout(180),
+    pytest.mark.usefixtures(reset_global_config.__name__),
 ]
 
 
@@ -56,10 +59,11 @@ def test_transport_request_rejects_cross_device_token_counts() -> None:
         torch.ops.xpool.ffn_shim(hidden_states, token_counts, 0, 2, 1, 1)
 
 
-def isolated_transport_dp_padding_requires_token_count_metadata() -> None:
+def isolated_transport_dp_padding_requires_token_count_metadata(workdir: str) -> None:
     initialize_instance_transport(atnagent_loopback=True)
     hidden_states = torch.ones((2, 4), device="cuda", dtype=torch.float32)
     with atnagent_arena_process(
+        workdir=Path(workdir),
         cuda_device=hidden_states.device.index,
         max_tokens=8,
         hidden_size=4,
@@ -75,11 +79,12 @@ def isolated_transport_dp_padding_requires_token_count_metadata() -> None:
             xpool.native.transport.detach_arena()
 
 
-def isolated_transport_rejects_dp_token_count_size_mismatch() -> None:
+def isolated_transport_rejects_dp_token_count_size_mismatch(workdir: str) -> None:
     initialize_instance_transport(atnagent_loopback=True)
     hidden_states = torch.ones((2, 4), device="cuda", dtype=torch.float32)
     global_num_tokens_gpu = torch.tensor([2], device="cuda", dtype=torch.int32)
     with atnagent_arena_process(
+        workdir=Path(workdir),
         cuda_device=hidden_states.device.index,
         max_tokens=8,
         hidden_size=4,
@@ -95,7 +100,7 @@ def isolated_transport_rejects_dp_token_count_size_mismatch() -> None:
             xpool.native.transport.detach_arena()
 
 
-def isolated_transport_accepts_int64_dp_token_counts() -> None:
+def isolated_transport_accepts_int64_dp_token_counts(workdir: str) -> None:
     initialize_instance_transport(atnagent_loopback=True)
     hidden_states = torch.tensor(
         [[1.0, 2.0, 3.0, 4.0], [8.0, 6.0, 4.0, 2.0]],
@@ -104,6 +109,7 @@ def isolated_transport_accepts_int64_dp_token_counts() -> None:
     )
     global_num_tokens_gpu = torch.tensor([hidden_states.shape[0], 0], device="cuda", dtype=torch.int64)
     with atnagent_arena_process(
+        workdir=Path(workdir),
         cuda_device=hidden_states.device.index,
         max_tokens=8,
         hidden_size=4,
@@ -120,7 +126,7 @@ def isolated_transport_accepts_int64_dp_token_counts() -> None:
     assert torch.allclose(output, expected_loopback_rotation(hidden_states), atol=1e-5, rtol=1e-5)
 
 
-def isolated_transport_reuses_mailbox_across_serial_graphs() -> None:
+def isolated_transport_reuses_mailbox_across_serial_graphs(workdir: str) -> None:
     initialize_instance_transport(atnagent_loopback=True)
     first = torch.tensor(
         [[1.0, 2.0, 3.0, 4.0], [8.0, 6.0, 4.0, 2.0]],
@@ -133,6 +139,7 @@ def isolated_transport_reuses_mailbox_across_serial_graphs() -> None:
         dtype=torch.float32,
     )
     with atnagent_arena_process(
+        workdir=Path(workdir),
         cuda_device=first.device.index,
         max_tokens=8,
         hidden_size=4,
@@ -167,20 +174,36 @@ def isolated_transport_reuses_mailbox_across_serial_graphs() -> None:
 
 
 @pytest.mark.requires_mps
-def test_transport_dp_padding_requires_token_count_metadata() -> None:
-    run_native_case(isolated_transport_dp_padding_requires_token_count_metadata)
+def test_transport_dp_padding_requires_token_count_metadata(tmp_path: Path) -> None:
+    run_native_case(
+        isolated_transport_dp_padding_requires_token_count_metadata,
+        str(tmp_path / "owner"),
+        workdir=tmp_path / "case",
+    )
 
 
 @pytest.mark.requires_mps
-def test_transport_rejects_dp_token_count_size_mismatch() -> None:
-    run_native_case(isolated_transport_rejects_dp_token_count_size_mismatch)
+def test_transport_rejects_dp_token_count_size_mismatch(tmp_path: Path) -> None:
+    run_native_case(
+        isolated_transport_rejects_dp_token_count_size_mismatch,
+        str(tmp_path / "owner"),
+        workdir=tmp_path / "case",
+    )
 
 
 @pytest.mark.requires_mps
-def test_transport_accepts_int64_dp_token_counts() -> None:
-    run_native_case(isolated_transport_accepts_int64_dp_token_counts)
+def test_transport_accepts_int64_dp_token_counts(tmp_path: Path) -> None:
+    run_native_case(
+        isolated_transport_accepts_int64_dp_token_counts,
+        str(tmp_path / "owner"),
+        workdir=tmp_path / "case",
+    )
 
 
 @pytest.mark.requires_mps
-def test_transport_reuses_mailbox_across_serial_graphs() -> None:
-    run_native_case(isolated_transport_reuses_mailbox_across_serial_graphs)
+def test_transport_reuses_mailbox_across_serial_graphs(tmp_path: Path) -> None:
+    run_native_case(
+        isolated_transport_reuses_mailbox_across_serial_graphs,
+        str(tmp_path / "owner"),
+        workdir=tmp_path / "case",
+    )

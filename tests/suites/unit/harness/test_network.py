@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import errno
 import socket
 
 import pytest
 
-import tests.harness.network
-from tests.harness.network import TcpEndpointReservation, TcpPortSpace
+import tests.harness.runner.network
+from tests.harness.runner.network import (
+    TcpEndpointAllocationError,
+    TcpEndpointConflict,
+    TcpEndpointReservation,
+    TcpEndpointUnreachable,
+    TcpPortSpace,
+)
 
 
 def test_endpoint_reservation_holds_port_until_spawn_release() -> None:
@@ -64,7 +71,7 @@ def test_port_space_rejects_malformed_linux_policy(
 def test_port_space_candidates_visit_each_eligible_port_once_from_random_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(tests.harness.network.secrets, "randbelow", lambda count: 1)
+    monkeypatch.setattr(tests.harness.runner.network.secrets, "randbelow", lambda count: 1)
     port_space = TcpPortSpace(
         unprivileged_port_start=65_530,
         ephemeral=range(65_532, 65_534),
@@ -88,6 +95,45 @@ def test_exact_endpoint_reservation_releases_owned_listener() -> None:
         exact.close()
 
 
+def test_endpoint_reservation_reacquires_released_listener() -> None:
+    reservation = TcpEndpointReservation.reserve("127.0.0.1", port_space=TcpPortSpace.local())
+    try:
+        with pytest.raises(RuntimeError, match="already reserved"):
+            reservation.reacquire()
+        reservation.release_for_spawn()
+        reservation.reacquire()
+        assert reservation.listener is not None
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as competitor:
+            with pytest.raises(OSError) as error:
+                competitor.bind(reservation.address)
+            assert error.value.errno == errno.EADDRINUSE
+    finally:
+        reservation.close()
+
+
+def test_endpoint_reservation_remains_released_after_reacquire_conflict() -> None:
+    reservation = TcpEndpointReservation.reserve("127.0.0.1", port_space=TcpPortSpace.local())
+    reservation.release_for_spawn()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as competitor:
+        competitor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        competitor.bind(reservation.address)
+        competitor.listen()
+        with pytest.raises(OSError) as error:
+            reservation.reacquire()
+        assert error.value.errno == errno.EADDRINUSE
+        assert reservation.listener is None
+    reservation.close()
+
+
+def test_endpoint_conflict_preserves_ordered_addresses() -> None:
+    addresses = (("127.0.0.1", 20_001), ("127.0.0.1", 20_002))
+
+    conflict = TcpEndpointConflict(addresses)
+
+    assert conflict.addresses == addresses
+    assert str(conflict).endswith("127.0.0.1:20001, 127.0.0.1:20002")
+
+
 def test_endpoint_reservation_fails_after_finite_candidate_exhaustion() -> None:
     occupied = TcpEndpointReservation.reserve("127.0.0.1", port_space=TcpPortSpace.local())
     port_space = TcpPortSpace(
@@ -96,7 +142,30 @@ def test_endpoint_reservation_fails_after_finite_candidate_exhaustion() -> None:
         administratively_reserved=frozenset(),
     )
     try:
-        with pytest.raises(RuntimeError, match="no eligible TCP endpoint"):
+        with pytest.raises(TcpEndpointAllocationError, match="no eligible TCP endpoint"):
             TcpEndpointReservation.reserve("127.0.0.1", port_space=port_space)
     finally:
         occupied.close()
+
+
+def test_endpoint_reservation_counts_collisions_and_unreachable_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    port_space = TcpPortSpace(65_533, range(1, 65_533), frozenset())
+    monkeypatch.setattr(tests.harness.runner.network.secrets, "randbelow", lambda count: 0)
+
+    def reserve_exact(cls: type[TcpEndpointReservation], host: str, port: int) -> TcpEndpointReservation:
+        if port == 65_533:
+            raise OSError(errno.EADDRINUSE, "occupied")
+        if port == 65_534:
+            raise TcpEndpointUnreachable((host, port))
+        raise OSError(errno.EADDRINUSE, "occupied")
+
+    monkeypatch.setattr(TcpEndpointReservation, "reserve_exact", classmethod(reserve_exact))
+
+    with pytest.raises(TcpEndpointAllocationError) as error:
+        TcpEndpointReservation.reserve("127.0.0.1", port_space=port_space)
+
+    assert error.value.collision_count == 2
+    assert error.value.unreachable_count == 1
+    assert isinstance(error.value.__cause__, OSError)

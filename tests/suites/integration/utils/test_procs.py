@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from tests.harness.process_probe import command
+from tests.harness.support.process_probe import command
 from xpool.utils.procs import PROCESS_KILL_WAIT_S, ProcUniqId
 
 

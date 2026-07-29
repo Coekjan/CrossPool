@@ -10,23 +10,23 @@ from pathlib import Path
 import psutil
 import pytest
 
-import tests.harness.process
-import tests.harness.runner
-import tests.harness.supervisor
-import tests.harness.test_plan
-from tests.harness.execution_task import ExecutionTask
-from tests.harness.process import (
+import tests.harness.runner.plan
+import tests.harness.runner.process
+import tests.harness.runner.suite
+import tests.harness.runner.supervisor
+from tests.harness.runner.child import PythonChildProcess
+from tests.harness.runner.process import (
     OwnedProcessGroup,
-    SpawnedProcess,
 )
-from tests.harness.process_probe import command
-from tests.harness.supervisor import (
+from tests.harness.runner.supervisor import (
     SupervisedTaskScope,
     TaskCompletionKind,
     TaskScopeState,
     prepare_task_supervision,
     unprotected_subreaper_roots,
 )
+from tests.harness.runner.task import ExecutionTask
+from tests.harness.support.process_probe import command
 from xpool.utils.procs import ProcUniqId
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -91,7 +91,7 @@ def run_abandoned_supervised_scope(connection: Connection, workdir: str) -> None
 
 def test_nested_runner_sigint_does_not_reach_isolated_task_session(tmp_path: Path) -> None:
     prepare_task_supervision()
-    runner = SpawnedProcess.start(
+    runner = PythonChildProcess.start(
         "nested-runner",
         run_nested_supervised_scope,
         str(tmp_path),
@@ -106,13 +106,13 @@ def test_nested_runner_sigint_does_not_reach_isolated_task_session(tmp_path: Pat
         runner.wait(timeout_seconds=5)
     finally:
         if runner.process.is_alive():
-            SpawnedProcess.terminate_all((runner,))
+            PythonChildProcess.terminate_all((runner,))
         runner.close()
 
 
 def test_supervisor_drains_task_scope_after_runner_is_killed(tmp_path: Path) -> None:
     prepare_task_supervision()
-    runner = SpawnedProcess.start(
+    runner = PythonChildProcess.start(
         "abandoned-runner",
         run_abandoned_supervised_scope,
         str(tmp_path),
@@ -186,7 +186,7 @@ def test_owned_process_group_leaves_adopted_zombie_reaping_to_scope_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prepare_task_supervision()
-    monkeypatch.setattr(tests.harness.process, "PROCESS_TERMINATE_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(tests.harness.runner.process, "PROCESS_TERMINATE_TIMEOUT_SECONDS", 0.2)
     owner = OwnedProcessGroup.spawn_captured(
         "adopted-zombie",
         command("spawn-ignoring-child", seconds=60),
@@ -279,21 +279,21 @@ def test_supervised_scope_cancels_multiple_tasks_before_closing(tmp_path: Path) 
 
 
 def test_suite_runner_cancellation_reaps_each_supervisor_through_its_scope(tmp_path: Path) -> None:
-    requirements = tests.harness.test_plan.TestRequirements(0, False, False, ())
+    requirements = tests.harness.runner.plan.TestRequirements(0, False, False, ())
     cases = tuple(
-        tests.harness.test_plan.CollectedTestCase(
+        tests.harness.runner.plan.CollectedTestCase(
             path="tests/suites/integration/harness/test_supervisor.py",
             nodeid=f"tests/suites/integration/harness/test_supervisor.py::synthetic_cancel_{index}",
-            stage=tests.harness.test_plan.TestStage.INTEGRATION,
+            stage=tests.harness.runner.plan.TestStage.INTEGRATION,
             requirements=requirements,
             estimated_duration_seconds=1.0,
             timeout_seconds=60.0,
-            token_parity_group=None,
+            artifact_group=None,
         )
         for index in range(2)
     )
-    runner = tests.harness.runner.SuiteRunner(
-        tests.harness.test_plan.TestPlan(cases),
+    runner = tests.harness.runner.suite.SuiteRunner(
+        tests.harness.runner.plan.TestPlan(cases),
         repository_root=REPO_ROOT,
         run_directory=tmp_path,
         strict_requirements=False,
@@ -301,7 +301,7 @@ def test_suite_runner_cancellation_reaps_each_supervisor_through_its_scope(tmp_p
     for index, case in enumerate(cases):
         task = ExecutionTask(
             key=f"cancel-{index}",
-            stage=tests.harness.test_plan.TestStage.INTEGRATION,
+            stage=tests.harness.runner.plan.TestStage.INTEGRATION,
             cases=(case,),
             requirements=requirements,
             estimated_duration_seconds=1.0,
@@ -317,7 +317,7 @@ def test_suite_runner_cancellation_reaps_each_supervisor_through_its_scope(tmp_p
             log_path=directory / "task.log",
             timeout_seconds=60,
         )
-        runner.active[task.key] = tests.harness.runner.RunningTask(task, directory, scope, None)
+        runner.active[task.key] = tests.harness.runner.suite.RunningTask(task, directory, scope, None)
 
     runner.cancel_active_tasks()
 
@@ -357,8 +357,8 @@ def test_supervised_scope_escalates_from_term_to_kill(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("tests.harness.supervisor.PROCESS_TERMINATE_TIMEOUT_SECONDS", 0.2)
-    monkeypatch.setattr("tests.harness.supervisor.PROCESS_KILL_TIMEOUT_SECONDS", 5.0)
+    monkeypatch.setattr("tests.harness.runner.supervisor.PROCESS_TERMINATE_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr("tests.harness.runner.supervisor.PROCESS_KILL_TIMEOUT_SECONDS", 5.0)
     term_path = tmp_path / "term-observed"
     scope = SupervisedTaskScope.start(
         "term-to-kill",

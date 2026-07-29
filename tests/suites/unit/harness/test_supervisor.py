@@ -8,9 +8,9 @@ from typing import cast
 
 import pytest
 
-import tests.harness.process
-import tests.harness.supervisor
-from tests.harness.supervisor import (
+import tests.harness.runner.process
+import tests.harness.runner.supervisor
+from tests.harness.runner.supervisor import (
     SupervisedTaskScope,
     TaskCompletion,
     TaskCompletionKind,
@@ -130,15 +130,15 @@ def test_prepare_task_supervision_protects_only_warmup_child(
             return WarmupProcess()
 
     children = iter(((existing,), (existing, helper)))
-    monkeypatch.setattr(tests.harness.supervisor, "protected_subreaper_process_ids", None)
-    monkeypatch.setattr(tests.harness.supervisor, "set_child_subreaper", lambda: None)
-    monkeypatch.setattr(tests.harness.supervisor, "direct_child_process_ids", lambda: next(children))
-    monkeypatch.setattr(tests.harness.supervisor.multiprocessing, "get_context", lambda method: SpawnContext())
-    monkeypatch.setattr(tests.harness.supervisor, "start_spawn_process", lambda process: None)
+    monkeypatch.setattr(tests.harness.runner.supervisor, "protected_subreaper_process_ids", None)
+    monkeypatch.setattr(tests.harness.runner.supervisor, "set_child_subreaper", lambda: None)
+    monkeypatch.setattr(tests.harness.runner.supervisor, "direct_child_process_ids", lambda: next(children))
+    monkeypatch.setattr(tests.harness.runner.supervisor.multiprocessing, "get_context", lambda method: SpawnContext())
+    monkeypatch.setattr(tests.harness.runner.supervisor, "start_spawn_process", lambda process: None)
 
     prepare_task_supervision()
 
-    assert tests.harness.supervisor.protected_subreaper_process_ids == frozenset((helper,))
+    assert tests.harness.runner.supervisor.protected_subreaper_process_ids == frozenset((helper,))
 
 
 def test_subreaper_drain_signals_each_identity_once_per_phase(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -152,10 +152,10 @@ def test_subreaper_drain_signals_each_identity_once_per_phase(monkeypatch: pytes
     target = cast(ProcUniqId, ProcessIdentity())
     roots = iter(((target,), (target,), ()))
     clock = iter((0.0, 1.0, 2.0, 11.0, 12.0, 13.0, 21.0))
-    monkeypatch.setattr(tests.harness.supervisor, "PROCESS_TERMINATE_TIMEOUT_SECONDS", 10.0)
-    monkeypatch.setattr(tests.harness.supervisor, "PROCESS_KILL_TIMEOUT_SECONDS", 10.0)
-    monkeypatch.setattr(tests.harness.supervisor, "subreaper_direct_roots", lambda excluded: next(roots))
-    monkeypatch.setattr(tests.harness.supervisor, "process_tree_ids", lambda process_roots: (target, target))
+    monkeypatch.setattr(tests.harness.runner.supervisor, "PROCESS_TERMINATE_TIMEOUT_SECONDS", 10.0)
+    monkeypatch.setattr(tests.harness.runner.supervisor, "PROCESS_KILL_TIMEOUT_SECONDS", 10.0)
+    monkeypatch.setattr(tests.harness.runner.supervisor, "subreaper_direct_roots", lambda excluded: next(roots))
+    monkeypatch.setattr(tests.harness.runner.supervisor, "process_tree_ids", lambda process_roots: (target, target))
     monkeypatch.setattr(time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(time, "sleep", lambda seconds: None)
 

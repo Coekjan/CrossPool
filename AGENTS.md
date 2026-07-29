@@ -116,6 +116,12 @@ conditionally run `if [ -f .env ]; then export UV_ENV_FILE="$PWD/.env"; fi` so
 uv supplies optional local test configuration without making pytest parse
 dotenv files.
 
+The SGLang E2E manifest owns test model IDs, placement, and graph modes.
+`XPOOL_CONFIG` supplies the external model root and system settings, while each
+test task materializes a private config containing only its selected manifest
+models. Do not make an E2E case wait for unrelated models listed in the user's
+runtime config.
+
 Shim graph-mode coverage must distinguish eager execution, decode full CUDA
 graph replay, and prefill piecewise CUDA graph replay. SGLang integration
 evidence should compare token ids across the relevant modes and use devkit

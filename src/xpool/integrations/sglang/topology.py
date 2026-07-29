@@ -140,6 +140,28 @@ class ModelSpec(BaseModel):
     num_experts: int | None = Field(default=None, description="MoE routed expert count from config.json, if present.")
     raw_config_path: Path = Field(description="Resolved config.json path used to derive this metadata.")
 
+    def validate_attention_tp(self, size: int) -> None:
+        """Validate effective attention tensor-parallel head geometry."""
+
+        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+            raise TopologyError(f"{self.model_id}: attention TP size must be a positive integer")
+        if self.num_atn_heads % size != 0:
+            raise TopologyError(
+                f"{self.model_id}: attention TP {size} does not divide query heads {self.num_atn_heads}"
+            )
+        if self.atn_kind is AtnKind.MLA:
+            return
+        if self.num_key_value_heads >= size:
+            if self.num_key_value_heads % size != 0:
+                raise TopologyError(
+                    f"{self.model_id}: attention TP {size} does not evenly shard KV heads {self.num_key_value_heads}"
+                )
+            return
+        if size % self.num_key_value_heads != 0:
+            raise TopologyError(
+                f"{self.model_id}: attention TP {size} does not evenly replicate KV heads {self.num_key_value_heads}"
+            )
+
     @classmethod
     def load(cls, model_path: str | Path, *, model_id: str) -> ModelSpec:
         """Load and derive metadata for one configured model.
@@ -210,12 +232,9 @@ class ParallelPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model_id: str = Field(description="Configured model id this topology record applies to.")
-    atn_kind: AtnKind = Field(description="Model attention topology used to derive SGLang placement.")
-    sglang_tp_size: int = Field(ge=1, description="Expected SGLang attention tensor-parallel degree.")
-    sglang_dp_size: int = Field(ge=1, description="Expected SGLang attention data-parallel degree.")
+    worker_world_size: int = Field(ge=1, description="Expected SGLang model-worker world size.")
     atn_tp_size: int = Field(ge=1, description="xpool attention tensor-parallel degree retained for topology audits.")
     atn_dp_size: int = Field(ge=1, description="xpool attention data-parallel degree retained for topology audits.")
-    enable_dp_attention: bool = Field(description="Whether SGLang attention data parallelism is active.")
 
     @classmethod
     def from_server_args(
@@ -224,6 +243,7 @@ class ParallelPolicy(BaseModel):
         server_args: ServerArgs,
         *,
         atnagent_count: int,
+        supports_dp_attention: bool,
     ) -> ParallelPolicy:
         """Validate and retain one resolved SGLang attention topology.
 
@@ -231,6 +251,7 @@ class ParallelPolicy(BaseModel):
             spec: SGLang-derived model metadata.
             server_args: Fully resolved pinned-SGLang launch arguments.
             atnagent_count: Number of configured physical AtnAgents.
+            supports_dp_attention: Whether the selected adapter supports DPA.
 
         Returns:
             Validated TP-by-DP policy with TP-fastest rank geometry.
@@ -242,18 +263,21 @@ class ParallelPolicy(BaseModel):
 
         if not isinstance(atnagent_count, int) or isinstance(atnagent_count, bool) or atnagent_count <= 0:
             raise TopologyError("atnagent_count must be a positive integer")
-        tp_size = positive_runtime_int(server_args.tp_size, "ServerArgs.tp_size", spec.model_id)
+        worker_world_size = positive_runtime_int(server_args.tp_size, "ServerArgs.tp_size", spec.model_id)
         dp_size = positive_runtime_int(server_args.dp_size, "ServerArgs.dp_size", spec.model_id)
         cp_size = positive_runtime_int(server_args.attn_cp_size, "ServerArgs.attn_cp_size", spec.model_id)
-        if tp_size != atnagent_count:
+        if worker_world_size != atnagent_count:
             raise TopologyError(
-                f"{spec.model_id}: SGLang TP size {tp_size} must equal configured AtnAgent count {atnagent_count}"
+                f"{spec.model_id}: SGLang worker world size {worker_world_size} "
+                f"must equal configured AtnAgent count {atnagent_count}"
             )
         if cp_size != 1:
             raise TopologyError(f"{spec.model_id}: attention context parallel size must be one, got {cp_size}")
-        if tp_size % dp_size != 0:
-            raise TopologyError(f"{spec.model_id}: SGLang TP size {tp_size} is not divisible by DP size {dp_size}")
-        atn_tp_size = tp_size // dp_size
+        if worker_world_size % dp_size != 0:
+            raise TopologyError(
+                f"{spec.model_id}: SGLang worker world size {worker_world_size} is not divisible by DP size {dp_size}"
+            )
+        atn_tp_size = worker_world_size // dp_size
         atn_dp_size = dp_size
         if atn_tp_size > 1 and atn_dp_size > 1:
             raise TopologyError(
@@ -261,22 +285,19 @@ class ParallelPolicy(BaseModel):
                 f"resolved TP={atn_tp_size}, DP={atn_dp_size}"
             )
         expected_dp_attention = atn_dp_size > 1
+        if expected_dp_attention and not supports_dp_attention:
+            raise TopologyError(f"{spec.model_id}: selected model adapter does not support SGLang DP attention")
         if server_args.enable_dp_attention is not expected_dp_attention:
             raise TopologyError(
                 f"{spec.model_id}: SGLang enable_dp_attention must be {expected_dp_attention} "
                 f"for attention DP size {atn_dp_size}"
             )
-        for label, width in (("query heads", spec.num_atn_heads), ("KV heads", spec.num_key_value_heads)):
-            if width % atn_tp_size != 0:
-                raise TopologyError(f"{spec.model_id}: attention TP {atn_tp_size} does not divide {label} {width}")
+        spec.validate_attention_tp(atn_tp_size)
         return cls(
             model_id=spec.model_id,
-            atn_kind=spec.atn_kind,
-            sglang_tp_size=tp_size,
-            sglang_dp_size=atn_dp_size,
+            worker_world_size=worker_world_size,
             atn_tp_size=atn_tp_size,
             atn_dp_size=atn_dp_size,
-            enable_dp_attention=expected_dp_attention,
         )
 
 

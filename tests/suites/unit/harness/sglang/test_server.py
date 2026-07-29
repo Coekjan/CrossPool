@@ -5,17 +5,18 @@ from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import cast
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
 import tests.harness.sglang.server
-from tests.harness.process import OwnedProcessGroup
-from tests.harness.sglang.e2e import E2eLaunch, E2eLaunchModel
+from tests.harness.runner.process import OwnedProcessGroup
 from tests.harness.sglang.endpoints import SglangEndpointFamily, SglangEndpointFamilyLease
 from tests.harness.sglang.graph import SglangGraphSettings
+from tests.harness.sglang.launch import E2eLaunch, E2eLaunchModel
+from tests.harness.sglang.readiness import ReadinessEvidence
 from tests.harness.sglang.server import (
     PROMPT,
-    SglangEndpointConflict,
     SglangInferenceRecord,
     SglangServerProcess,
     server_command,
@@ -111,54 +112,100 @@ def test_server_start_projects_process_specific_grpc_environment(
     assert events == ["released", "spawned"]
     assert captured["env"] == {"SGLANG_GRPC_PORT": "19002", "XPOOL_TEST_VALUE": "preserved"}
     assert launch.environment == {"SGLANG_GRPC_PORT": "discarded", "XPOOL_TEST_VALUE": "preserved"}
+    assert server.endpoint is family
     assert server.inference_path == tmp_path / "organization-model.inference.json"
 
 
-@pytest.mark.parametrize(
-    ("log", "expected_name", "expected_port"),
-    [
-        (
-            "ValueError: metrics_port at 20237 is not available in 30 seconds.",
-            "metrics_port",
-            20_237,
+def test_server_startup_blocker_rejects_invalid_owned_tcp_store_peer() -> None:
+    family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 2)
+    owner = cast(
+        OwnedProcessGroup,
+        SimpleNamespace(
+            name="sglang-test",
+            tail=lambda: (
+                "[W TCPStore.cpp:384] TCP client failed to connect/validate to host 127.0.0.1:20237 - "
+                "retrying: Ping failed, invalid value returned from server. Expected: 3058192, Got: 759714643"
+            ),
         ),
-        (
-            "ZMQError: Address already in use (addr='tcp://127.0.0.1:20236')",
-            "tcp_bind",
-            20_236,
+    )
+    server = SglangServerProcess(
+        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 2),
+        owner=owner,
+        endpoint=family,
+        host=family.host,
+        port=family.http_port,
+        inference_path=Path("inference.json"),
+    )
+
+    with pytest.raises(RuntimeError, match=r"retrying an invalid TCPStore peer at 127\.0\.0\.1:20237"):
+        server.raise_for_startup_blocker()
+
+
+def test_server_startup_blocker_ignores_peer_outside_owned_family() -> None:
+    family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 2)
+    owner = cast(
+        OwnedProcessGroup,
+        SimpleNamespace(
+            name="sglang-test",
+            tail=lambda: (
+                "[W TCPStore.cpp:384] TCP client failed to connect/validate to host 127.0.0.1:30000 - "
+                "retrying: Ping failed, invalid value returned from server. Expected: 3058192, Got: 759714643"
+            ),
         ),
-    ],
-)
-def test_endpoint_conflict_parses_only_owned_family_members(
-    log: str,
-    expected_name: str,
-    expected_port: int,
+    )
+    server = SglangServerProcess(
+        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 2),
+        owner=owner,
+        endpoint=family,
+        host=family.host,
+        port=family.http_port,
+        inference_path=Path("inference.json"),
+    )
+
+    server.raise_for_startup_blocker()
+
+
+def test_server_health_records_tcp_store_blocker_as_terminal_evidence(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 2)
+    owner = cast(
+        OwnedProcessGroup,
+        SimpleNamespace(
+            name="sglang-test",
+            process=SimpleNamespace(poll=lambda: None),
+            tail=lambda: (
+                "[W TCPStore.cpp:384] TCP client failed to connect/validate to host 127.0.0.1:20237 - "
+                "retrying: Ping failed, invalid value returned from server. Expected: 3058192, Got: 759714643"
+            ),
+        ),
+    )
+    server = SglangServerProcess(
+        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 2),
+        owner=owner,
+        endpoint=family,
+        host=family.host,
+        port=family.http_port,
+        inference_path=Path("inference.json"),
+    )
 
-    conflict = SglangEndpointConflict.from_log(family, log)
+    def connect_error(*args: object, **kwargs: object) -> None:
+        raise httpx.ConnectError("not ready")
 
-    assert conflict is not None
-    assert conflict.endpoint_name == expected_name
-    assert conflict.port == expected_port
+    monkeypatch.setattr(tests.harness.sglang.server.httpx, "get", connect_error)
+    evidence = ReadinessEvidence("SGLang health", "http://127.0.0.1:20000/health")
 
+    with pytest.raises(RuntimeError, match="retrying an invalid TCPStore peer"):
+        server.healthy(evidence)
 
-@pytest.mark.parametrize(
-    "log",
-    [
-        "ValueError: metrics_port at 30000 is not available in 30 seconds.",
-        "ZMQError: Address already in use (addr='tcp://127.0.0.1:30000')",
-        "SGLang exited during model loading",
-    ],
-)
-def test_endpoint_conflict_rejects_unknown_or_unstructured_diagnostics(log: str) -> None:
-    family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 2)
-
-    assert SglangEndpointConflict.from_log(family, log) is None
+    assert evidence.attempt_count == 2
+    assert evidence.last_error_type == "RuntimeError"
+    assert evidence.last_error_message is not None
+    assert "retrying an invalid TCPStore peer" in evidence.last_error_message
 
 
-def test_server_health_classifies_owned_endpoint_after_early_exit() -> None:
-    family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 2)
+def test_server_health_records_early_exit_before_raising() -> None:
+    family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 1)
     owner = cast(
         OwnedProcessGroup,
         SimpleNamespace(
@@ -168,19 +215,113 @@ def test_server_health_classifies_owned_endpoint_after_early_exit() -> None:
         ),
     )
     server = SglangServerProcess(
-        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 2),
+        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 1),
         owner=owner,
-        endpoint=cast(SglangEndpointFamilyLease, SimpleNamespace(family=family)),
+        endpoint=family,
         host=family.host,
         port=family.http_port,
         inference_path=Path("inference.json"),
     )
+    evidence = ReadinessEvidence("SGLang health", "http://127.0.0.1:20000/health")
 
-    with pytest.raises(SglangEndpointConflict) as error:
-        server.healthy()
+    with pytest.raises(RuntimeError, match="exited before readiness with code 1"):
+        server.healthy(evidence)
 
-    assert error.value.endpoint_name == "metrics_port"
-    assert error.value.port == 20_237
+    assert evidence.attempt_count == 1
+    assert evidence.last_error_type == "RuntimeError"
+    assert evidence.last_error_message is not None
+    assert "exited before readiness with code 1" in evidence.last_error_message
+
+
+def test_server_close_owns_only_process_resources(monkeypatch: pytest.MonkeyPatch) -> None:
+    family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 1)
+    events: list[str] = []
+    owner = cast(
+        OwnedProcessGroup,
+        SimpleNamespace(
+            name="sglang-test",
+            process=SimpleNamespace(poll=lambda: 0),
+            close=lambda: events.append("process-close"),
+        ),
+    )
+    server = SglangServerProcess(
+        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 1),
+        owner=owner,
+        endpoint=family,
+        host=family.host,
+        port=family.http_port,
+        inference_path=Path("inference.json"),
+    )
+    monkeypatch.setattr(tests.harness.sglang.server, "wait_for_process_group", lambda process, timeout: True)
+
+    server.close()
+    server.close()
+
+    assert events == ["process-close"]
+
+
+def test_server_close_signals_only_live_leader_on_orderly_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 1)
+    events: list[str] = []
+    process = SimpleNamespace(
+        pid=123,
+        poll=lambda: None,
+        send_signal=lambda signum: events.append(f"signal:{signum}"),
+    )
+    owner = cast(
+        OwnedProcessGroup,
+        SimpleNamespace(
+            name="sglang-test",
+            process=process,
+            terminate=lambda: events.append("fallback"),
+            close=lambda: events.append("process-close"),
+        ),
+    )
+    server = SglangServerProcess(
+        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 1),
+        owner=owner,
+        endpoint=family,
+        host=family.host,
+        port=family.http_port,
+        inference_path=Path("inference.json"),
+    )
+    monkeypatch.setattr(tests.harness.sglang.server, "wait_for_process_group", lambda process, timeout: True)
+
+    server.close()
+
+    assert events == [f"signal:{tests.harness.sglang.server.signal.SIGTERM}", "process-close"]
+
+
+def test_server_close_falls_back_to_process_group_after_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 1)
+    events: list[str] = []
+    process = SimpleNamespace(
+        pid=123,
+        poll=lambda: None,
+        send_signal=lambda signum: events.append(f"signal:{signum}"),
+    )
+    owner = cast(
+        OwnedProcessGroup,
+        SimpleNamespace(
+            name="sglang-test",
+            process=process,
+            terminate=lambda: events.append("fallback"),
+            close=lambda: events.append("process-close"),
+        ),
+    )
+    server = SglangServerProcess(
+        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 1),
+        owner=owner,
+        endpoint=family,
+        host=family.host,
+        port=family.http_port,
+        inference_path=Path("inference.json"),
+    )
+    monkeypatch.setattr(tests.harness.sglang.server, "wait_for_process_group", lambda process, timeout: False)
+
+    server.close()
+
+    assert events == [f"signal:{tests.harness.sglang.server.signal.SIGTERM}", "fallback", "process-close"]
 
 
 def test_server_result_reads_resolved_modes_and_exact_output_ids(
@@ -195,7 +336,7 @@ def test_server_result_reads_resolved_modes_and_exact_output_ids(
     server = SglangServerProcess(
         model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 1),
         owner=cast(OwnedProcessGroup, SimpleNamespace(name="sglang-test")),
-        endpoint=cast(SglangEndpointFamilyLease, SimpleNamespace(close=lambda: None)),
+        endpoint=SglangEndpointFamily("127.0.0.1", 19_000, 19_001, 19_002, 1),
         host="127.0.0.1",
         port=19000,
         inference_path=tmp_path / "inference.json",
@@ -223,7 +364,7 @@ def test_server_result_rejects_boolean_token_ids(tmp_path: Path, monkeypatch: py
     server = SglangServerProcess(
         model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 1),
         owner=cast(OwnedProcessGroup, SimpleNamespace(name="sglang-test")),
-        endpoint=cast(SglangEndpointFamilyLease, SimpleNamespace(close=lambda: None)),
+        endpoint=SglangEndpointFamily("127.0.0.1", 19_000, 19_001, 19_002, 1),
         host="127.0.0.1",
         port=19000,
         inference_path=tmp_path / "inference.json",

@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Concatenate
 
 import torch
 from sglang.srt.model_executor.model_runner import ModelRunner
@@ -17,12 +16,12 @@ from sglang.srt.models.deepseek_v2 import (
     QuantizationConfig,
 )
 from sglang.srt.plugins.hook_registry import HookType
-from torch import nn
 
 from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.adapter import (
     SglangHook,
     SglangModelAdapter,
+    filter_decoder_ffn_weights,
     model_runner_architectures,
 )
 from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError
@@ -104,13 +103,6 @@ class XpoolDeepseekV2MLP(FfnShimModule, DeepseekV2MLP):
             hidden_size=hidden_size,
             layer_kind=FfnLayerKind.DENSE,
         )
-        self.intermediate_size = intermediate_size
-        self.quant_config = quant_config
-        self.reduce_results = reduce_results
-        self.prefix = prefix
-        self.tp_rank = tp_rank
-        self.tp_size = tp_size
-        self.swiglu_limit = swiglu_limit
 
 
 class XpoolDeepseekV2MoE(FfnShimModule, DeepseekV2MoE):
@@ -165,16 +157,6 @@ class XpoolDeepseekV2MoE(FfnShimModule, DeepseekV2MoE):
             hidden_size=hidden_size,
             layer_kind=FfnLayerKind.SPARSE,
         )
-        self.config = config
-        self.quant_config = quant_config
-        self.prefix = prefix
-        self.alt_stream = alt_stream
-        self.is_nextn = is_nextn
-        self.is_deepseek_v4 = is_deepseek_v4
-        self.dsa_enable_prefill_cp = dsa_enable_prefill_cp
-        self.mla_enable_prefill_cp = mla_enable_prefill_cp
-        self.num_fused_shared_experts = 0
-        self.n_shared_experts = getattr(config, "n_shared_experts", None)
         self.experts = DeepseekShimExperts()
 
     def get_moe_weights(self) -> list[torch.Tensor]:
@@ -198,6 +180,7 @@ class DeepseekV2Adapter(SglangModelAdapter):
     """SGLang hooks and validation policy for DeepSeek-V2 models."""
 
     name = "deepseek_v2"
+    supports_dp_attention = True
 
     def hooks(self) -> tuple[SglangHook, ...]:
         """Return SGLang hook declarations for DeepSeek-V2 FFN replacement.
@@ -252,42 +235,56 @@ class DeepseekV2Adapter(SglangModelAdapter):
         """
 
         model = getattr(model_runner, "model", None)
-        if model is None:
-            raise RuntimeError("xpool DeepSeek model runner has no loaded model after load_model")
-        if not isinstance(model, nn.Module):
-            raise RuntimeError(f"xpool DeepSeek model runner loaded non-module model {type(model).__name__}")
-
-        expected_layer_count = getattr(model_runner.model_config.hf_config, "num_hidden_layers", None)
-        if (
-            isinstance(expected_layer_count, bool)
-            or not isinstance(expected_layer_count, int)
-            or expected_layer_count < 1
-        ):
-            raise RuntimeError("xpool DeepSeek model config has no integer num_hidden_layers")
+        if not isinstance(model, DeepseekV2ForCausalLM):
+            raise RuntimeError("xpool DeepSeek model runner did not load a DeepseekV2ForCausalLM model")
+        config = model.config
+        layer_count = getattr(config, "num_hidden_layers", None)
+        first_sparse_layer = getattr(config, "first_k_dense_replace", None)
+        sparse_frequency = getattr(config, "moe_layer_freq", None)
+        routed_experts = getattr(config, "n_routed_experts", None)
+        if not isinstance(layer_count, int) or isinstance(layer_count, bool) or layer_count <= 0:
+            raise RuntimeError("xpool DeepSeek model config has no positive integer num_hidden_layers")
+        if routed_experts is None:
+            expected_layer_kinds = (FfnLayerKind.DENSE,) * layer_count
+        else:
+            if not isinstance(routed_experts, int) or isinstance(routed_experts, bool) or routed_experts <= 0:
+                raise RuntimeError("xpool DeepSeek model config has invalid n_routed_experts")
+            if (
+                not isinstance(first_sparse_layer, int)
+                or isinstance(first_sparse_layer, bool)
+                or first_sparse_layer < 0
+            ):
+                raise RuntimeError("xpool DeepSeek model config has invalid first_k_dense_replace")
+            if not isinstance(sparse_frequency, int) or isinstance(sparse_frequency, bool) or sparse_frequency <= 0:
+                raise RuntimeError("xpool DeepSeek model config has invalid moe_layer_freq")
+            expected_layer_kinds = tuple(
+                FfnLayerKind.SPARSE
+                if layer_id >= first_sparse_layer and layer_id % sparse_frequency == 0
+                else FfnLayerKind.DENSE
+                for layer_id in range(layer_count)
+            )
         shims = self.require_ffn_shims(
             model,
-            expected_layer_count=expected_layer_count,
+            expected_layer_kinds=expected_layer_kinds,
             allowed_shim_types=(XpoolDeepseekV2MLP, XpoolDeepseekV2MoE),
         )
         self.require_full_mlp_boundaries(model, shims, allow_reduce_scatter=True)
         setattr(model_runner, "xpool_ffn_shim_count", len(shims))
 
 
-def around_load_weights[**P, R](
-    original_fn: Callable[Concatenate[DeepseekV2ForCausalLM, Iterable[tuple[str, torch.Tensor]], P], R],
+def around_load_weights(
+    original_fn: Callable[[DeepseekV2ForCausalLM, Iterable[tuple[str, torch.Tensor]], bool], None],
     model: DeepseekV2ForCausalLM,
     weights: Iterable[tuple[str, torch.Tensor]],
-    *args: P.args,
-    **kwargs: P.kwargs,
-) -> R:
+    is_nextn: bool = False,
+) -> None:
     """Filter DeepSeek FFN weights before invoking SGLang's weight loader.
 
     Args:
         original_fn: Original DeepSeek ``load_weights`` callable.
         model: DeepSeek model being loaded by SGLang.
         weights: Name/tensor pairs yielded by SGLang weight loading.
-        *args: Positional arguments forwarded to ``original_fn``.
-        **kwargs: Keyword arguments forwarded to ``original_fn``.
+        is_nextn: Whether SGLang is loading a draft/NextN model.
 
     Returns:
         Return value from ``original_fn``.
@@ -297,30 +294,6 @@ def around_load_weights[**P, R](
         that the parameter-free xpool shims cannot consume.
     """
 
-    return original_fn(model, filter_ffn_weights(weights), *args, **kwargs)
-
-
-def filter_ffn_weights[W](weights: Iterable[tuple[str, W]]) -> Iterable[tuple[str, W]]:
-    """Drop FFN weight tensors before SGLang's DeepSeek weight loader sees them.
-
-    Args:
-        weights: Original SGLang weight iterator.
-
-    Yields:
-        Non-FFN weight pairs that should still be loaded into the attention-side model.
-
-    Side Effects:
-        Lazily filters the iterator; it does not consume weights until SGLang's
-        original loader iterates the returned iterable.
-
-    The shim FFN modules carry no parameters, so they cannot absorb FFN weights.
-    This filter is not redundant with the parameter-less shim: SGLang's
-    ``DeepseekV2WeightLoaderMixin`` builds MoE expert parameter mappings from
-    ``config.n_routed_experts`` and routes ``model.layers.*.mlp.*`` tensors into
-    expert/shared-expert weight loaders that the shim does not provide. Removing the
-    whole ``mlp`` subtree here keeps that MoE-specific weight-loading branch idle.
-    """
-    for name, tensor in weights:
-        if name.startswith("model.layers.") and ".mlp." in name:
-            continue
-        yield name, tensor
+    if is_nextn:
+        raise ShimUnavailableError("xpool DeepSeek shim does not support next-token draft weight loading")
+    original_fn(model, filter_decoder_ffn_weights(weights), is_nextn)

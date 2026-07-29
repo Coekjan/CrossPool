@@ -55,33 +55,3 @@ def read_graph_events(outdir: Path) -> list[GraphEvent]:
                 if line.strip():
                     events.append(cast(GraphEvent, json.loads(line)))
     return events
-
-
-def assert_graph_events(
-    graph_settings: SglangGraphSettings,
-    events: list[GraphEvent],
-    *,
-    resolved_piecewise_cuda_graph: bool,
-) -> None:
-    """Require capture and replay evidence for every resolved graph mode."""
-
-    full_graph_phases = graph_phases(events, kind="full_cuda_graph")
-    pcg_phases = graph_phases(events, kind="piecewise_cuda_graph")
-    full_graph_phases_expected = {"capture_begin", "capture_end", "replay_begin", "replay_end"}
-    piecewise_graph_phases_expected = {"capture_begin", "capture_end", "replay_begin", "replay_end"}
-    if graph_settings.cuda_graph:
-        assert full_graph_phases_expected <= full_graph_phases
-    else:
-        assert full_graph_phases == set()
-    if resolved_piecewise_cuda_graph:
-        assert piecewise_graph_phases_expected <= pcg_phases
-    else:
-        assert pcg_phases == set()
-
-
-def graph_phases(events: list[GraphEvent], *, kind: str) -> set[str]:
-    phases: set[str] = set()
-    for event in events:
-        if event.get("kind") == kind and isinstance(event.get("phase"), str):
-            phases.add(cast(str, event["phase"]))
-    return phases

@@ -4,14 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import signal
+import threading
 from collections.abc import Callable, Sequence
 from functools import partial
+from types import FrameType
 from typing import Concatenate
 
+import psutil
 import torch
+from sglang.srt.managers.scheduler import Scheduler
+from sglang.srt.managers.tokenizer_manager import SignalHandler
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.plugins.hook_registry import HookRegistry, HookType
 from sglang.srt.server_args import ServerArgs
+from sglang.srt.utils.cudacore_pyspy_dump_utils import collect_scheduler_processes
 
 from xpool import bootstrap, devkit
 from xpool.abi import TensorDType
@@ -29,11 +37,17 @@ from xpool.integrations.sglang.shim import iter_ffn_shims
 from xpool.runtime import RuntimeRole
 from xpool.runtime.instance import Instance
 from xpool.runtime.transport import InstanceTransportAttributes
+from xpool.utils.sighandler import sighandle
 
 MODEL_RUNNER_LOAD_MODEL = "sglang.srt.model_executor.model_runner.ModelRunner.load_model"
 MODEL_RUNNER_INITIALIZE = "sglang.srt.model_executor.model_runner.ModelRunner.initialize"
 MODEL_RUNNER_INIT_MEMORY_POOL = "sglang.srt.model_executor.model_runner.ModelRunner.init_memory_pool"
+SIGNAL_HANDLER_SIGTERM = "sglang.srt.managers.tokenizer_manager.SignalHandler.sigterm_handler"
+SCHEDULER_RUN_EVENT_LOOP = "sglang.srt.managers.scheduler.Scheduler.run_event_loop"
+KILL_PROCESS_TREE = "sglang.cli.serve.kill_process_tree"
+SCHEDULER_SHUTDOWN_TIMEOUT_SECONDS = 20.0
 XPOOL_REQUIRED_HOOK_TARGETS: set[str] = set()
+orderly_shutdown_requested = threading.Event()
 logger = logging.getLogger(__name__)
 
 
@@ -76,11 +90,111 @@ def install() -> None:
             after_model_runner_initialize,
             HookType.AFTER,
         )
-        required_targets.update((MODEL_RUNNER_LOAD_MODEL, MODEL_RUNNER_INIT_MEMORY_POOL, MODEL_RUNNER_INITIALIZE))
+        HookRegistry.register(SIGNAL_HANDLER_SIGTERM, after_sigterm_handler, HookType.AFTER)
+        HookRegistry.register(SCHEDULER_RUN_EVENT_LOOP, around_scheduler_run_event_loop, HookType.AROUND)
+        HookRegistry.register(KILL_PROCESS_TREE, around_kill_process_tree, HookType.AROUND)
+        required_targets.update(
+            (
+                MODEL_RUNNER_LOAD_MODEL,
+                MODEL_RUNNER_INIT_MEMORY_POOL,
+                MODEL_RUNNER_INITIALIZE,
+                SIGNAL_HANDLER_SIGTERM,
+                SCHEDULER_RUN_EVENT_LOOP,
+                KILL_PROCESS_TREE,
+            )
+        )
         XPOOL_REQUIRED_HOOK_TARGETS.update(required_targets)
         install_apply_hooks_guard()
     except Exception as exc:
         raise SystemExit(f"xpool SGLang plugin failed to install: {exc}") from exc
+
+
+class SchedulerShutdown(BaseException):
+    """Interrupt one scheduler event loop for orderly Instance departure."""
+
+
+class SchedulerShutdownFailure(BaseException):
+    """Terminate one scheduler without routing cleanup failure through SIGQUIT."""
+
+
+def after_sigterm_handler(
+    result: object,
+    handler: SignalHandler,
+    signum: int | None = None,
+    frame: FrameType | None = None,
+) -> None:
+    """Mark the parent process's normal request-draining shutdown path."""
+
+    orderly_shutdown_requested.set()
+
+
+def around_scheduler_run_event_loop(
+    original_fn: Callable[[Scheduler], None],
+    scheduler: Scheduler,
+) -> None:
+    """Stop scheduler submission and detach xpool resources on SIGTERM."""
+
+    shutdown_started = False
+
+    def request_shutdown(signum: int, frame: FrameType | None) -> None:
+        nonlocal shutdown_started
+        if shutdown_started:
+            return
+        shutdown_started = True
+        raise SchedulerShutdown
+
+    with sighandle(signal.SIGTERM, request_shutdown):
+        try:
+            original_fn(scheduler)
+        except SchedulerShutdown:
+            model_runner = scheduler.tp_worker.model_runner
+            try:
+                torch.cuda.synchronize(model_runner.device)
+                XpoolModelRuntime.require(model_runner).detach(model_runner)
+            except Exception as error:
+                logger.exception("xpool scheduler failed orderly Instance departure")
+                raise SchedulerShutdownFailure from error
+
+
+def around_kill_process_tree(
+    original_fn: Callable[[int | None, bool, int | None, float | None], None],
+    parent_pid: int | None,
+    include_parent: bool = True,
+    skip_pid: int | None = None,
+    wait_timeout: float | None = None,
+) -> None:
+    """Attempt scheduler departure before always running SGLang cleanup.
+
+    Orderly drain applies only to the marked serve parent. Drain failures are
+    diagnostic because SGLang's original process-tree cleanup remains the
+    authoritative fallback and is always invoked with its original arguments.
+    """
+
+    try:
+        if orderly_shutdown_requested.is_set() and parent_pid == os.getpid():
+            try:
+                schedulers = collect_scheduler_processes()
+                for scheduler in schedulers:
+                    try:
+                        scheduler.send_signal(signal.SIGTERM)
+                    except psutil.NoSuchProcess:
+                        pass
+                exited, alive = psutil.wait_procs(schedulers, timeout=SCHEDULER_SHUTDOWN_TIMEOUT_SECONDS)
+                failed = tuple(process for process in exited if getattr(process, "returncode", None) not in {None, 0})
+                if failed:
+                    logger.error(
+                        "xpool scheduler orderly departure failed for processes: %s",
+                        ", ".join(f"{process.pid}({process.returncode})" for process in failed),
+                    )
+                if alive:
+                    logger.error(
+                        "xpool scheduler orderly departure timed out for processes: %s",
+                        ", ".join(str(process.pid) for process in alive),
+                    )
+            except Exception:
+                logger.exception("xpool scheduler orderly departure failed before SGLang cleanup")
+    finally:
+        original_fn(parent_pid, include_parent, skip_pid, wait_timeout)
 
 
 def install_apply_hooks_guard() -> None:
@@ -164,18 +278,21 @@ def around_model_runner_load_model[**P, R](
     validate_sglang_server_args(server_args)
 
     matching_adapters = tuple(adapter for adapter in adapters if adapter.matches(model_runner))
-    binding = XpoolModelBinding.resolve(model_runner, server_args)
     if not matching_adapters:
         architectures = ", ".join(sorted(model_runner_architectures(model_runner))) or "<unknown>"
         raise RuntimeError(
-            f"xpool config owns SGLang model path {binding.model_path} but no xpool adapter "
-            f"matches its architecture ({architectures}); add a model adapter under "
+            f"no xpool adapter matches SGLang model architecture ({architectures}); add a model adapter under "
             "xpool.integrations.sglang.models or remove the [[models]] entry from XPOOL_CONFIG."
         )
     if len(matching_adapters) != 1:
         names = ", ".join(adapter.name for adapter in matching_adapters)
         raise RuntimeError(f"xpool requires exactly one model adapter match, got {len(matching_adapters)}: {names}")
     adapter = matching_adapters[0]
+    binding = XpoolModelBinding.resolve(
+        model_runner,
+        server_args,
+        supports_dp_attention=adapter.supports_dp_attention,
+    )
     binding.validate_server_args(server_args)
     bootstrap.init(int(binding.cuda_device), RuntimeRole.INSTANCE)
     devkit.install()
@@ -231,7 +348,7 @@ def after_model_runner_init_memory_pool[R](
         transport = derive_transport_attributes(binding, workload)
         runtime.instance = Instance.start(
             instance_id=binding.instance_id,
-            rank=binding.sglang_rank,
+            rank=binding.worker_rank,
             transport=transport,
             workload=workload,
         )

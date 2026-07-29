@@ -7,9 +7,8 @@ import pytest
 
 import xpool.bootstrap
 import xpool.devkit.registry
-from tests.harness.config import install_test_config
-from tests.harness.devkit import create_observer_package, observer_enabled_config, observers_disabled_config
-from tests.harness.pytest_plugin import reset_global_config
+from tests.harness.support.config import install_test_config, reset_global_config
+from tests.harness.support.devkit import create_observer_package, observer_enabled_config, observers_disabled_config
 from xpool.runtime import RuntimeRole
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)

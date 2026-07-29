@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 import xpool.devkit.sglang.graph_observer
-from tests.harness.config import install_test_config
-from tests.harness.sglang.graph_observer import (
+from tests.harness.support.config import install_test_config, reset_global_config
+from tests.harness.support.sglang.graph_observer import (
     FakeCudaGraphRunnerState,
     FakePiecewiseCudaGraphRunnerState,
     graph_observer_config,
@@ -16,7 +16,7 @@ from tests.harness.sglang.graph_observer import (
     successful_runner_classes,
 )
 
-pytestmark = pytest.mark.usefixtures(reset_graph_observer.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, reset_graph_observer.__name__)
 
 
 def test_graph_observer_records_success_events(

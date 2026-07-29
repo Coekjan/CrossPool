@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-import tests.harness.collection
-import tests.harness.test_plan
+import tests.harness.runner.collection
+import tests.harness.runner.plan
 
 
 def test_collection_worker_runs_isolated_pytest_and_reads_plan(
@@ -17,7 +17,7 @@ def test_collection_worker_runs_isolated_pytest_and_reads_plan(
     repository_root = tmp_path / "repo"
     repository_root.mkdir()
     run_directory = tmp_path / "run"
-    expected = tests.harness.test_plan.TestPlan((unit_case(),))
+    expected = tests.harness.runner.plan.TestPlan((unit_case(),))
     observed_command: list[str] = []
     observed_cwd: list[Path] = []
     observed_environment: dict[str, str] = {}
@@ -43,9 +43,9 @@ def test_collection_worker_runs_isolated_pytest_and_reads_plan(
         assert capture_output and not check and text
         return subprocess.CompletedProcess(command, 0, "collected\n", "")
 
-    monkeypatch.setattr(tests.harness.collection.subprocess, "run", run_worker)
+    monkeypatch.setattr(tests.harness.runner.collection.subprocess, "run", run_worker)
 
-    actual = tests.harness.collection.CollectionWorker(
+    actual = tests.harness.runner.collection.CollectionWorker(
         repository_root=repository_root,
         run_directory=run_directory,
         selectors=("tests/suites/unit", "-k", "alpha"),
@@ -74,24 +74,24 @@ def test_collection_worker_preserves_failure_log(tmp_path: Path, monkeypatch: py
     repository_root.mkdir()
     run_directory = tmp_path / "run"
     monkeypatch.setattr(
-        tests.harness.collection.subprocess,
+        tests.harness.runner.collection.subprocess,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 4, "partial\n", "collection failed\n"),
     )
 
-    with pytest.raises(tests.harness.collection.CollectionFailure, match="exited with code 4"):
-        tests.harness.collection.CollectionWorker(repository_root, run_directory, (), False).collect()
+    with pytest.raises(tests.harness.runner.collection.CollectionFailure, match="exited with code 4"):
+        tests.harness.runner.collection.CollectionWorker(repository_root, run_directory, (), False).collect()
 
     assert (run_directory / "collection.log").read_text(encoding="utf-8") == "partial\ncollection failed\n"
 
 
-def unit_case() -> tests.harness.test_plan.CollectedTestCase:
-    return tests.harness.test_plan.CollectedTestCase(
+def unit_case() -> tests.harness.runner.plan.CollectedTestCase:
+    return tests.harness.runner.plan.CollectedTestCase(
         path="tests/suites/unit/test_example.py",
         nodeid="tests/suites/unit/test_example.py::test_example",
-        stage=tests.harness.test_plan.TestStage.UNIT,
-        requirements=tests.harness.test_plan.TestRequirements(0, False, False, ()),
+        stage=tests.harness.runner.plan.TestStage.UNIT,
+        requirements=tests.harness.runner.plan.TestRequirements(0, False, False, ()),
         estimated_duration_seconds=None,
         timeout_seconds=10,
-        token_parity_group=None,
+        artifact_group=None,
     )

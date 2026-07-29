@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,10 +10,10 @@ from typing import cast
 import pytest
 
 import tests.harness.sglang.cluster
-from tests.harness.network import TcpEndpointReservation, TcpPortSpace
-from tests.harness.process import OwnedProcessGroup
-from tests.harness.sglang.cluster import DaemonPortConflict, XpoolCluster
-from tests.harness.sglang.e2e import E2eLaunch
+from tests.harness.runner.network import TcpEndpointConflict, TcpEndpointReservation, TcpPortSpace
+from tests.harness.runner.process import OwnedProcessGroup
+from tests.harness.sglang.cluster import XpoolCluster
+from tests.harness.sglang.launch import E2eLaunch
 from xpool.config import LoopbackSite, XpoolConfig
 
 
@@ -57,6 +58,8 @@ class FakeResponse:
     def __init__(self, payload: dict[str, object] | None = None, *, success: bool = True) -> None:
         self.payload = payload
         self.is_success = success
+        self.status_code = 200 if success else 503
+        self.text = "" if payload is None else str(payload)
 
     def json(self) -> dict[str, object]:
         """Return the configured response payload."""
@@ -98,6 +101,7 @@ def test_cluster_starts_complete_agent_set_and_closes_in_role_order(
     events: list[str] = []
     client = FakeHttpClient(online_readiness())
     launches: list[tuple[str, list[str]]] = []
+    client_options: dict[str, object] = {}
 
     def spawn(
         cls: type[OwnedProcessGroup],
@@ -121,7 +125,12 @@ def test_cluster_starts_complete_agent_set_and_closes_in_role_order(
         return True
 
     monkeypatch.setattr(OwnedProcessGroup, "spawn_logged", classmethod(spawn))
-    monkeypatch.setattr(tests.harness.sglang.cluster.httpx, "Client", lambda **kwargs: client)
+
+    def create_client(**kwargs: object) -> FakeHttpClient:
+        client_options.update(kwargs)
+        return client
+
+    monkeypatch.setattr(tests.harness.sglang.cluster.httpx, "Client", create_client)
     monkeypatch.setattr(tests.harness.sglang.cluster, "signal_process_group", lambda *args: None)
     monkeypatch.setattr(tests.harness.sglang.cluster, "wait_for_process_group", wait)
 
@@ -134,7 +143,10 @@ def test_cluster_starts_complete_agent_set_and_closes_in_role_order(
     assert launches[2][1][-3:] == ["ffnagent", "--cuda-device", "1"]
     assert events == ["close:daemon", "close:atnagent-0", "close:ffnagent-1", "close:ffnagent-2"]
     assert cluster.daemon_startup_seconds >= 0
+    assert client_options["timeout"] == tests.harness.sglang.cluster.CONTROL_PLANE_HTTP_TIMEOUT_SECONDS
+    assert cast(float, client_options["timeout"]) > tests.harness.sglang.cluster.POLL_INTERVAL_SECONDS
     assert client.closed
+    endpoint.close()
 
 
 def test_cluster_classifies_port_conflict_only_after_cleanup(
@@ -154,19 +166,22 @@ def test_cluster_classifies_port_conflict_only_after_cleanup(
             events=events,
         )
 
-    def occupied(launch: E2eLaunch) -> bool:
+    def reacquire(reservation: TcpEndpointReservation) -> None:
         assert events == ["terminate:daemon", "close:daemon"]
-        return True
+        raise OSError(errno.EADDRINUSE, "address in use")
 
     monkeypatch.setattr(OwnedProcessGroup, "spawn_logged", spawn)
     monkeypatch.setattr(tests.harness.sglang.cluster.httpx, "Client", lambda **kwargs: client)
     monkeypatch.setattr(tests.harness.sglang.cluster, "DAEMON_STARTUP_TIMEOUT_SECONDS", 0.0)
-    monkeypatch.setattr(tests.harness.sglang.cluster, "endpoint_occupied", occupied)
+    monkeypatch.setattr(TcpEndpointReservation, "reacquire", reacquire)
 
-    with pytest.raises(DaemonPortConflict, match="remained occupied"):
+    with pytest.raises(TcpEndpointConflict) as error:
         XpoolCluster.start(launch, endpoint)
 
+    assert error.value.addresses == ((endpoint.host, endpoint.port),)
+    assert isinstance(error.value.__cause__, RuntimeError)
     assert client.closed
+    endpoint.close()
 
 
 def test_cluster_preserves_startup_failure_when_endpoint_probe_fails(
@@ -186,18 +201,21 @@ def test_cluster_preserves_startup_failure_when_endpoint_probe_fails(
             log_path=tmp_path / "daemon.log",
         )
 
-    def fail_endpoint_probe(launch: E2eLaunch) -> bool:
-        raise OSError("endpoint inspection denied")
+    def fail_endpoint_probe(reservation: TcpEndpointReservation) -> None:
+        raise OSError(errno.EACCES, "endpoint inspection denied")
 
     monkeypatch.setattr(OwnedProcessGroup, "spawn_logged", spawn)
     monkeypatch.setattr(tests.harness.sglang.cluster.httpx, "Client", lambda **kwargs: client)
     monkeypatch.setattr(tests.harness.sglang.cluster, "DAEMON_STARTUP_TIMEOUT_SECONDS", 0.0)
-    monkeypatch.setattr(tests.harness.sglang.cluster, "endpoint_occupied", fail_endpoint_probe)
+    monkeypatch.setattr(TcpEndpointReservation, "reacquire", fail_endpoint_probe)
 
-    with pytest.raises(RuntimeError, match=r"(?s)timed out waiting for daemon health.*endpoint inspection denied"):
+    with pytest.raises(OSError, match="endpoint inspection denied") as error:
         XpoolCluster.start(launch, endpoint)
 
+    assert error.value.errno == errno.EACCES
+    assert isinstance(error.value.__cause__, RuntimeError)
     assert client.closed
+    endpoint.close()
 
 
 def cluster_launch(tmp_path: Path, *, daemon_port: int = 19810) -> E2eLaunch:

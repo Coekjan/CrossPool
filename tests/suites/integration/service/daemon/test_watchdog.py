@@ -10,9 +10,9 @@ from pathlib import Path
 import httpx
 
 import xpool.service.daemon.control
-from tests.harness.config import write_minimal_config
-from tests.harness.network import TcpEndpointReservation, TcpPortSpace
-from tests.harness.process import SpawnedProcess
+from tests.harness.runner.child import PythonChildProcess
+from tests.harness.runner.network import TcpEndpointReservation, TcpPortSpace
+from tests.harness.support.config import write_minimal_config
 from xpool.cli import main
 
 DAEMON_EXIT_TIMEOUT_SECONDS = 10.0
@@ -43,7 +43,7 @@ def test_daemon_exits_nonzero_after_watchdog_failure(tmp_path: Path) -> None:
     endpoint = TcpEndpointReservation.reserve("127.0.0.1", port_space=TcpPortSpace.local())
     config_path = write_minimal_config(tmp_path / "xpool.toml", daemon_port=endpoint.port)
     endpoint.release_for_spawn()
-    process = SpawnedProcess.start(
+    process = PythonChildProcess.start(
         "failing-watchdog-daemon",
         run_failing_watchdog_daemon,
         FailingWatchdogSpec(config_path),
@@ -66,6 +66,6 @@ def test_daemon_exits_nonzero_after_watchdog_failure(tmp_path: Path) -> None:
         process.wait(timeout_seconds=DAEMON_EXIT_TIMEOUT_SECONDS)
     finally:
         if process.process.is_alive():
-            SpawnedProcess.terminate_all((process,))
+            PythonChildProcess.terminate_all((process,))
         process.close()
         endpoint.close()

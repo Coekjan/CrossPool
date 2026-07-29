@@ -76,3 +76,44 @@ def test_serving_case_allows_fewer_executors_than_ffnagents() -> None:
 
     assert case.ffnagent_count == 2
     assert case.executor_count == 1
+
+
+def test_model_placement_rejects_combined_attention_tp_by_dp() -> None:
+    with pytest.raises(ValidationError, match="combined attention TP-by-DP"):
+        E2eModelPlacement(model="synthetic", atn_tp_size=2, atn_dp_size=2)
+
+
+def test_serving_case_rejects_heterogeneous_attention_topology() -> None:
+    with pytest.raises(ValidationError, match="same attention topology"):
+        serving_case(
+            models=(
+                E2eModelPlacement(model="first", atn_tp_size=1, atn_dp_size=1),
+                E2eModelPlacement(model="second", atn_tp_size=2, atn_dp_size=1),
+            )
+        )
+
+
+def test_serving_case_rejects_piecewise_graph_under_attention_dp() -> None:
+    with pytest.raises(ValidationError, match="attention DP does not support piecewise"):
+        serving_case(
+            models=(E2eModelPlacement(model="synthetic", atn_tp_size=1, atn_dp_size=2),),
+            graph_modes=(SglangGraphMode.PIECEWISE,),
+        )
+
+
+def serving_case(
+    *,
+    models: tuple[E2eModelPlacement, ...],
+    graph_modes: tuple[SglangGraphMode, ...] = (SglangGraphMode.EAGER,),
+) -> E2eServingCase:
+    return E2eServingCase(
+        id="synthetic-case",
+        models=models,
+        ffnagent_count=1,
+        executor_count=1,
+        graph_modes=graph_modes,
+        estimated_duration_seconds=1,
+        timeout_seconds=1,
+        transport_trace_capacity=1,
+        fabric_trace_capacity=1,
+    )

@@ -8,17 +8,20 @@ from pathlib import Path
 import pytest
 from _pytest.mark.structures import ParameterSet
 
-from tests.harness.sglang.graph import SglangGraphMode, assert_graph_events
+from tests.harness.sglang.graph import SglangGraphMode
 from tests.harness.sglang.manifest import E2E_MANIFEST_PATH, E2eManifest, E2eServingCase
-from tests.harness.sglang.observer import (
+from tests.harness.sglang.parity import TOKEN_PARITY_ARTIFACT_FILENAME
+from tests.harness.sglang.probe import run_probe
+from tests.harness.support.sglang.graph import assert_run_graph_evidence
+from tests.harness.support.sglang.observer import (
     assert_dp_attention_paths,
     assert_fabric_observer_snapshots,
     assert_transport_observer_snapshots,
     assert_two_model_executor_overlap,
 )
-from tests.harness.sglang.parity import TOKEN_PARITY_ARTIFACT_FILENAME
-from tests.harness.sglang.probe import ProbeRun, run_probe
 from xpool.config import XpoolConfig
+
+pytest_plugins = ("tests.harness.support.config",)
 
 MANIFEST = E2eManifest.load(E2E_MANIFEST_PATH)
 SGLANG_DURATION_ARTIFACT_FILENAME = "sglang.duration.json"
@@ -91,18 +94,3 @@ def test_e2e_model_serving(
             encoding="utf-8",
         )
     print("XPOOL_SGLANG_MODEL_SERVING_DURATIONS=" + json.dumps(durations, sort_keys=True))
-
-
-def assert_run_graph_evidence(run: ProbeRun) -> None:
-    """Validate resolved modes and matching graph-observer evidence."""
-
-    assert len(run.results) == len(run.launch.models)
-    for result, model in zip(run.results, run.launch.models, strict=True):
-        assert result.model_id == model.model_id
-        assert result.resolved_graph_settings.cuda_graph is run.graph_settings.cuda_graph
-        if run.graph_settings.piecewise_cuda_graph:
-            assert result.resolved_graph_settings.piecewise_cuda_graph is (model.atn_dp_size == 1)
-        else:
-            assert result.resolved_graph_settings.piecewise_cuda_graph is False
-    resolved_piecewise = any(result.resolved_graph_settings.piecewise_cuda_graph for result in run.results)
-    assert_graph_events(run.graph_settings, run.events, resolved_piecewise_cuda_graph=resolved_piecewise)

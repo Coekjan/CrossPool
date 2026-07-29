@@ -9,9 +9,9 @@ import pytest
 import torch
 
 import xpool.native
+from tests.harness.native.case import run_native_case
 from tests.harness.native.debug import native_debug_options
-from tests.harness.native.process import run_native_case
-from tests.harness.native.transport import controlled_atnagent_arena_process
+from tests.harness.native.transport.owner import controlled_atnagent_arena_process
 from xpool.abi import TensorDType
 from xpool.config import LoopbackSite
 from xpool.runtime import RuntimeRole
@@ -19,7 +19,7 @@ from xpool.runtime import RuntimeRole
 pytestmark = [pytest.mark.requires_cuda(), pytest.mark.requires_mps, pytest.mark.timeout(180)]
 
 
-def isolated_transport_observer_records_cross_process_phases(output_path: str) -> None:
+def isolated_transport_observer_records_cross_process_phases(output_path: str, workdir: str) -> None:
     xpool.native.initialize(
         RuntimeRole.INSTANCE,
         cuda_device=torch.cuda.current_device(),
@@ -27,6 +27,7 @@ def isolated_transport_observer_records_cross_process_phases(output_path: str) -
     )
     hidden_states = torch.ones((2, 4), device="cuda", dtype=torch.float32)
     with controlled_atnagent_arena_process(
+        workdir=Path(workdir),
         cuda_device=hidden_states.device.index,
         max_tokens=8,
         hidden_size=4,
@@ -78,4 +79,6 @@ def test_transport_observer_records_cross_process_phases(tmp_path: Path) -> None
     run_native_case(
         isolated_transport_observer_records_cross_process_phases,
         str(tmp_path / "observer.json"),
+        str(tmp_path / "owner"),
+        workdir=tmp_path / "case",
     )

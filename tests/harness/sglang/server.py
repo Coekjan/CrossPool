@@ -3,60 +3,30 @@
 from __future__ import annotations
 
 import re
+import signal
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
 
-from tests.harness.process import OwnedProcessGroup, wait_for_process_group
-from tests.harness.sglang.e2e import E2eLaunch, E2eLaunchModel, model_id_slug
+from tests.harness.runner.process import OwnedProcessGroup, wait_for_process_group
 from tests.harness.sglang.endpoints import SglangEndpointFamily, SglangEndpointFamilyLease
 from tests.harness.sglang.graph import SglangGraphSettings
+from tests.harness.sglang.launch import E2eLaunch, E2eLaunchModel, model_id_slug
+from tests.harness.sglang.readiness import ReadinessEvidence
 
 PROMPT = "The quick brown fox jumps over the lazy dog. " * 8
 NEW_TOKENS = 8
 HTTP_TIMEOUT_SECONDS = 30.0
 PROCESS_EXIT_TIMEOUT_SECONDS = 30.0
-UNAVAILABLE_ENDPOINT_PATTERN = re.compile(
-    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*) at (?P<port>[0-9]{1,5}) is not available\b"
-)
-ADDRESS_IN_USE_PATTERN = re.compile(
-    r"Address already in use.{0,1000}?tcp://(?:\[[^\]]+\]|[^:\s'\"),]+):(?P<port>[0-9]{1,5})",
+TCP_STORE_PROTOCOL_MISMATCH_PATTERN = re.compile(
+    r"TCPStore.{0,2000}?\bto host (?:\[[^\]]+\]|[^:\s]+):(?P<port>[0-9]{1,5})"
+    r".{0,2000}?Ping failed, invalid value returned from server",
     re.DOTALL,
 )
-
-
-class SglangEndpointConflict(RuntimeError):
-    """A pinned-SGLang startup diagnostic for one owned family endpoint.
-
-    Attributes:
-        port: Conflicting TCP port parsed from the SGLang log.
-        endpoint_name: SGLang endpoint label, or ``tcp_bind`` for a raw bind
-            diagnostic.
-    """
-
-    __slots__ = ("endpoint_name", "port")
-
-    def __init__(self, port: int, endpoint_name: str) -> None:
-        self.port = port
-        self.endpoint_name = endpoint_name
-        super().__init__(f"SGLang endpoint conflict: {endpoint_name} at {port}")
-
-    @classmethod
-    def from_log(cls, family: SglangEndpointFamily, log: str) -> SglangEndpointConflict | None:
-        """Parse strict conflict evidence for a member of ``family``."""
-
-        family_ports = frozenset(family.ports)
-        for match in UNAVAILABLE_ENDPOINT_PATTERN.finditer(log):
-            port = int(match.group("port"))
-            if port in family_ports:
-                return cls(port, match.group("name"))
-        for match in ADDRESS_IN_USE_PATTERN.finditer(log):
-            port = int(match.group("port"))
-            if port in family_ports:
-                return cls(port, "tcp_bind")
-        return None
+STARTUP_LOG_SCAN_INTERVAL_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,11 +62,12 @@ class SglangServerProcess:
 
     model: E2eLaunchModel
     owner: OwnedProcessGroup
-    endpoint: SglangEndpointFamilyLease
+    endpoint: SglangEndpointFamily
     host: str
     port: int
     inference_path: Path
     closed: bool = False
+    next_startup_log_scan_at: float = 0.0
 
     @classmethod
     def start(
@@ -130,27 +101,55 @@ class SglangServerProcess:
         return cls(
             model=model,
             owner=owner,
-            endpoint=endpoint,
+            endpoint=endpoint.family,
             host=endpoint.family.host,
             port=endpoint.family.http_port,
             inference_path=workdir / f"{slug}.inference.json",
         )
 
-    def healthy(self) -> bool:
-        """Return HTTP health or fail immediately after an early process exit."""
+    def healthy(self, evidence: ReadinessEvidence | None = None) -> bool:
+        """Record one health observation or raise a recorded terminal error."""
 
         returncode = self.owner.process.poll()
         if returncode is not None:
             log = self.owner.tail()
-            conflict = SglangEndpointConflict.from_log(self.endpoint.family, log)
-            if conflict is not None:
-                raise conflict
-            raise RuntimeError(f"{self.owner.name} exited before readiness with code {returncode}\n{log}")
+            error = RuntimeError(f"{self.owner.name} exited before readiness with code {returncode}\n{log}")
+            if evidence is not None:
+                evidence.record_error(error)
+            raise error
         try:
             response = httpx.get(f"{self.url()}/health", timeout=1.0)
-        except httpx.HTTPError:
-            return False
-        return response.is_success
+        except httpx.HTTPError as error:
+            if evidence is not None:
+                evidence.record_error(error)
+            healthy = False
+        else:
+            if evidence is not None:
+                evidence.record_response(response)
+            healthy = response.is_success
+        if healthy:
+            return True
+        now = time.monotonic()
+        if now >= self.next_startup_log_scan_at:
+            self.next_startup_log_scan_at = now + STARTUP_LOG_SCAN_INTERVAL_SECONDS
+            try:
+                self.raise_for_startup_blocker()
+            except RuntimeError as error:
+                if evidence is not None:
+                    evidence.record_error(error)
+                raise
+        return False
+
+    def raise_for_startup_blocker(self) -> None:
+        """Interrupt a live startup stuck retrying an invalid TCPStore peer."""
+
+        family_ports = frozenset(self.endpoint.ports)
+        for match in TCP_STORE_PROTOCOL_MISMATCH_PATTERN.finditer(self.owner.tail()):
+            port = int(match.group("port"))
+            if port in family_ports:
+                raise RuntimeError(
+                    f"{self.owner.name} is retrying an invalid TCPStore peer at {self.endpoint.host}:{port}"
+                )
 
     def result(self) -> SglangServerResult:
         """Read resolved graph settings and execute one deterministic request."""
@@ -209,19 +208,20 @@ class SglangServerProcess:
         return f"--- {self.owner.name}: {status}; log={self.owner.log_path} ---\n{self.owner.tail()}"
 
     def close(self) -> None:
-        """Terminate the complete server process group and close owned logs."""
+        """Request orderly server shutdown, then close owned process resources."""
 
         if self.closed:
             return
         self.closed = True
         try:
             if self.owner.process.poll() is None:
-                self.owner.terminate()
+                self.owner.process.send_signal(signal.SIGTERM)
+                if not wait_for_process_group(self.owner.process, PROCESS_EXIT_TIMEOUT_SECONDS):
+                    self.owner.terminate()
             elif not wait_for_process_group(self.owner.process, PROCESS_EXIT_TIMEOUT_SECONDS):
                 raise RuntimeError(f"{self.owner.name} left live descendants after exit")
         finally:
             self.owner.close()
-            self.endpoint.close()
 
     def url(self) -> str:
         """Return this server's loopback URL."""

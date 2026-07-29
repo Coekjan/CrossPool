@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 import xpool.runtime.instance
-from tests.harness.config import install_test_config
-from tests.harness.runtime.instance import (
+from tests.harness.support.config import install_test_config, reset_global_config
+from tests.harness.support.runtime.instance import (
     install_offline_instance_client,
     patch_native_instance_ops,
     runtime_config,
@@ -19,7 +19,7 @@ from xpool.runtime.instance import Instance, InstanceError
 from xpool.runtime.transport import InstanceTransportAttributes
 from xpool.service.wire import InstanceRegistration
 
-pytestmark = pytest.mark.usefixtures(install_offline_instance_client.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_offline_instance_client.__name__)
 
 
 def test_instance_register_rejects_unknown_instance() -> None:

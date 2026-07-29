@@ -51,6 +51,10 @@ class FfnShimModule(nn.Module):
             unbound until plugin post-load binding.
         """
 
+        if not isinstance(layer_id, int) or isinstance(layer_id, bool) or layer_id < 0:
+            raise ValueError("xpool FFN shim layer_id must be a non-negative integer")
+        if not isinstance(hidden_size, int) or isinstance(hidden_size, bool) or hidden_size <= 0:
+            raise ValueError("xpool FFN shim hidden_size must be a positive integer")
         nn.Module.__init__(self)
         self.model_architecture = "unknown"
         self.layer_id = layer_id

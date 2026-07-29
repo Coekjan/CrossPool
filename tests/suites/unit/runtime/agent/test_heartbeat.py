@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 
-from tests.harness.wait import wait_until, wait_until_raise
+from tests.harness.support.wait import wait_until, wait_until_raise
 from xpool.runtime.agent import Agent, AgentError, AgentHeartbeat
 from xpool.service.client import XpoolClientError
 from xpool.service.errors import XpoolDaemonError

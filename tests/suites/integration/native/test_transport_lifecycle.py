@@ -4,29 +4,34 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 import torch
 
 import xpool.native
+from tests.harness.native.case import run_native_case
 from tests.harness.native.debug import native_debug_options
-from tests.harness.native.process import run_native_case
-from tests.harness.native.transport import (
+from tests.harness.native.transport.owner import (
     controlled_atnagent_arena_process,
-    initialize_instance_transport,
-    instance_transport_runtime,
     transport_arena_handles,
 )
+from tests.harness.support.config import reset_global_config
+from tests.harness.support.native.transport import initialize_instance_transport, instance_transport_runtime
 from xpool.abi import FfnResultCode, TensorDType
 from xpool.config import LoopbackSite
 from xpool.runtime import RuntimeRole
 
-pytestmark = [pytest.mark.requires_cuda(), pytest.mark.timeout(180)]
+pytestmark = [
+    pytest.mark.requires_cuda(),
+    pytest.mark.timeout(180),
+    pytest.mark.usefixtures(reset_global_config.__name__),
+]
 
 
 @pytest.mark.usefixtures(instance_transport_runtime.__name__)
-def test_transport_attachment_lifecycle() -> None:
-    with transport_arena_handles() as create_arena:
+def test_transport_attachment_lifecycle(tmp_path: Path) -> None:
+    with transport_arena_handles(workdir=tmp_path / "owners") as create_arena:
         first = create_arena(instance_index=1, instance_rank=0)
         xpool.native.transport.attach_arena(1, 0, first)
         assert FfnResultCode(xpool.native.transport.read_generation_failure()) is FfnResultCode.OK
@@ -54,9 +59,10 @@ def isolated_transport_production_activation_requires_joined_fabric() -> None:
         xpool.native.transport.destroy_arenas([arena])
 
 
-def isolated_transport_attach_waits_for_resident_readiness() -> None:
+def isolated_transport_attach_waits_for_resident_readiness(workdir: str) -> None:
     initialize_instance_transport(atnagent_loopback=True)
     with controlled_atnagent_arena_process(
+        workdir=Path(workdir),
         cuda_device=torch.cuda.current_device(),
         max_tokens=8,
         hidden_size=4,
@@ -73,9 +79,10 @@ def isolated_transport_attach_waits_for_resident_readiness() -> None:
         xpool.native.transport.detach_arena()
 
 
-def isolated_transport_attach_rejects_closed_endpoint() -> None:
+def isolated_transport_attach_rejects_closed_endpoint(workdir: str) -> None:
     initialize_instance_transport(atnagent_loopback=True)
     with controlled_atnagent_arena_process(
+        workdir=Path(workdir),
         cuda_device=torch.cuda.current_device(),
         max_tokens=8,
         hidden_size=4,
@@ -140,20 +147,28 @@ def wait_for_transport_drain() -> None:
         time.sleep(0.001)
 
 
-def test_transport_production_activation_requires_joined_fabric() -> None:
-    run_native_case(isolated_transport_production_activation_requires_joined_fabric)
+def test_transport_production_activation_requires_joined_fabric(tmp_path: Path) -> None:
+    run_native_case(isolated_transport_production_activation_requires_joined_fabric, workdir=tmp_path / "case")
 
 
 @pytest.mark.requires_mps
-def test_transport_attach_waits_for_resident_readiness() -> None:
-    run_native_case(isolated_transport_attach_waits_for_resident_readiness)
+def test_transport_attach_waits_for_resident_readiness(tmp_path: Path) -> None:
+    run_native_case(
+        isolated_transport_attach_waits_for_resident_readiness,
+        str(tmp_path / "owner"),
+        workdir=tmp_path / "case",
+    )
 
 
 @pytest.mark.requires_mps
-def test_transport_attach_rejects_closed_endpoint() -> None:
-    run_native_case(isolated_transport_attach_rejects_closed_endpoint)
+def test_transport_attach_rejects_closed_endpoint(tmp_path: Path) -> None:
+    run_native_case(
+        isolated_transport_attach_rejects_closed_endpoint,
+        str(tmp_path / "owner"),
+        workdir=tmp_path / "case",
+    )
 
 
 @pytest.mark.requires_mps
-def test_transport_owner_drains_asynchronously_before_destroy() -> None:
-    run_native_case(isolated_transport_owner_lifecycle)
+def test_transport_owner_drains_asynchronously_before_destroy(tmp_path: Path) -> None:
+    run_native_case(isolated_transport_owner_lifecycle, workdir=tmp_path / "case")

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from tests.harness.native.fabric import fabric_bootstrap, run_fabric_topology
-from tests.harness.native.fabric_assertions import assert_fabric_report, coordinator_records
+from tests.harness.native.fabric.bootstrap import fabric_bootstrap
+from tests.harness.native.fabric.topology import run_fabric_topology
+from tests.harness.support.native.fabric import assert_fabric_report, coordinator_records
 from xpool.abi import TensorDType, XPoolForwardMode
 
 pytestmark = [
@@ -33,12 +36,14 @@ pytestmark = [
 def test_fabric_loopback_round_trips_device_payload_between_agents(
     forward_mode: XPoolForwardMode,
     dtype: TensorDType,
+    tmp_path: Path,
 ) -> None:
     """Round-trip hidden states through distinct AtnAgent and FfnAgent PEs."""
 
-    with fabric_bootstrap() as uid:
+    with fabric_bootstrap(workdir=tmp_path / "bootstrap") as uid:
         report = run_fabric_topology(
             uid,
+            workdir=tmp_path / "topology",
             atnagent_count=1,
             ffnagent_count=1,
             executor_count=1,
@@ -55,12 +60,13 @@ def test_fabric_loopback_round_trips_device_payload_between_agents(
         pytest.param(XPoolForwardMode.EXTEND, id="prefill"),
     ],
 )
-def test_fabric_reuses_released_publications(forward_mode: XPoolForwardMode) -> None:
+def test_fabric_reuses_released_publications(forward_mode: XPoolForwardMode, tmp_path: Path) -> None:
     """Reuse model and Executor publications without stale sequences."""
 
-    with fabric_bootstrap() as uid:
+    with fabric_bootstrap(workdir=tmp_path / "bootstrap") as uid:
         report = run_fabric_topology(
             uid,
+            workdir=tmp_path / "topology",
             atnagent_count=1,
             ffnagent_count=1,
             executor_count=1,

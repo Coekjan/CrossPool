@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.harness.process import SpawnedProcess
-from tests.harness.supervisor import prepare_task_supervision
+from tests.harness.runner.child import PythonChildProcess
+from tests.harness.runner.supervisor import prepare_task_supervision
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -21,7 +21,7 @@ def fail_spawned_process(connection: Connection, value: str) -> None:
 
 def test_spawned_process_exchanges_typed_message_and_closes(tmp_path: Path) -> None:
     prepare_task_supervision()
-    process = SpawnedProcess.start("echo", echo_spawned_value, "hello", log_path=tmp_path / "echo.log")
+    process = PythonChildProcess.start("echo", echo_spawned_value, "hello", log_path=tmp_path / "echo.log")
 
     assert process.receive(str, timeout_seconds=5.0) == "hello"
     process.wait(timeout_seconds=5.0)
@@ -30,7 +30,7 @@ def test_spawned_process_exchanges_typed_message_and_closes(tmp_path: Path) -> N
 
 def test_spawned_process_propagates_child_traceback(tmp_path: Path) -> None:
     prepare_task_supervision()
-    process = SpawnedProcess.start(
+    process = PythonChildProcess.start(
         "failure",
         fail_spawned_process,
         "expected child failure",

@@ -10,7 +10,7 @@ from typing import Self
 
 from sglang.srt.server_args import DP_ATTENTION_HANDSHAKE_PORT_DELTA, ZMQ_TCP_PORT_DELTA
 
-from tests.harness.network import TcpEndpointReservation, TcpPortSpace
+from tests.harness.runner.network import TcpEndpointReservation, TcpEndpointUnreachable, TcpPortSpace
 
 SGLANG_ZMQ_PORT_OFFSETS = range(7)
 
@@ -96,6 +96,12 @@ class SglangEndpointFamilyLease:
                 if error.errno != errno.EADDRINUSE:
                     raise
                 last_collision = error
+            except TcpEndpointUnreachable as error:
+                for reservation in reservations:
+                    reservation.close()
+                for lock in locks:
+                    lock.close()
+                last_collision = error.__cause__ if isinstance(error.__cause__, OSError) else None
             except ValueError:
                 for reservation in reservations:
                     reservation.close()
@@ -117,6 +123,21 @@ class SglangEndpointFamilyLease:
         for reservation in self.tcp_reservations:
             reservation.release_for_spawn()
         self.tcp_released = True
+
+    def reacquire_tcp(self) -> tuple[int, ...]:
+        """Reacquire released listeners and return every externally occupied port."""
+
+        if not self.tcp_released:
+            raise RuntimeError("SGLang endpoint family TCP reservations were not released")
+        occupied: list[int] = []
+        for reservation in self.tcp_reservations:
+            try:
+                reservation.reacquire()
+            except OSError as error:
+                if error.errno != errno.EADDRINUSE:
+                    raise
+                occupied.append(reservation.port)
+        return tuple(occupied)
 
     def close(self) -> None:
         """Release every unconsumed listener and namespace lock idempotently."""

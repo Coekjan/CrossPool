@@ -6,7 +6,8 @@ import httpx
 import pytest
 
 import xpool.service.client
-from tests.harness.service.client import (
+from tests.harness.support.config import reset_global_config
+from tests.harness.support.service.client import (
     config,
     initialize_client_config,
     install_scripted_http_client,
@@ -19,7 +20,7 @@ from xpool.service.client import DAEMON_HEALTH_RETRY_ATTEMPTS, XpoolClient, Xpoo
 from xpool.service.errors import XpoolClientError
 from xpool.service.wire import AtnAgentRegistration, FfnAgentRegistration, InstanceRegistration, ProcessRef
 
-pytestmark = pytest.mark.usefixtures(initialize_client_config.__name__)
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, initialize_client_config.__name__)
 
 
 def test_client_constructor_retries_and_rejects_unhealthy_daemon(

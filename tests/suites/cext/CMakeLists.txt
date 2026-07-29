@@ -81,7 +81,7 @@ foreach(XPOOL_CEXT_TEST_SOURCE IN LISTS XPOOL_CEXT_TEST_SOURCES)
     CUDA_STANDARD 20
     CUDA_STANDARD_REQUIRED ON
     TEST_LAUNCHER
-      "${Python3_EXECUTABLE};${PROJECT_SOURCE_DIR}/tests/harness/ctest_launcher.py"
+      "${Python3_EXECUTABLE};${PROJECT_SOURCE_DIR}/tests/harness/runner/ctest_launcher.py"
   )
   if(XPOOL_CEXT_TEST_SOURCE MATCHES "\\.cu$")
     set_property(TARGET "${XPOOL_CEXT_TEST_TARGET}"
