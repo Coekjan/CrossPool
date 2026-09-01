@@ -1,4 +1,4 @@
-# Ignore every file unless it uses a native extension recognized by CMake.
+# Ignore every file unless it uses a native source or header extension.
 *
 !**/*.c
 !**/*.cc

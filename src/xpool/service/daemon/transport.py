@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from xpool.runtime.transport import InstanceTransportAttributes
+from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.daemon.registration import InstanceRankId
 from xpool.service.errors import XpoolDaemonError
 from xpool.transport import TransportArenaHandle
@@ -27,7 +27,7 @@ class TransportArenaPublication:
 
     instance: InstanceRankId
     handle: TransportArenaHandle
-    transport: InstanceTransportAttributes
+    transport: InstanceRankTransportProfile
 
 
 @dataclass(slots=True)
@@ -127,7 +127,7 @@ class TransportBroker:
         self.leases[instance] = lease
 
     def remove_instance(self, instance: InstanceRankId) -> TransportArenaLease | None:
-        """Release and return daemon lease state when an Instance deregisters."""
+        """Release and return daemon lease state when an Instance rank deregisters."""
 
         return self.leases.pop(instance, None)
 
@@ -152,7 +152,7 @@ class TransportBroker:
         return requested
 
     def termination_requested(self, instance: InstanceRankId) -> bool:
-        """Return whether lease quiesce requested this Instance's termination."""
+        """Return whether lease quiesce requested this Instance rank's termination."""
 
         lease = self.leases.get(instance)
         return lease is not None and lease.termination_requested

@@ -89,8 +89,10 @@ protected by locks, and unrecognized directories are never cleanup targets.
 - `native/` owns component-scoped native subprocess drivers.
 - `support/` owns assertions, fixtures, fakes, and focused reusable setup; it
   does not own scheduling or process topology.
-- `sglang/` owns the declarative manifest, installed-command server topology,
-  attempt ownership, readiness evidence, graph evidence, and token parity.
+- `sglang/` owns the shared declarative manifest. `sglang/serving/` owns the
+  installed-command server topology, attempts, readiness, graph evidence, and
+  token parity; `sglang/reference/` owns isolated original-SGLang FFN execution
+  and does not import the serving workflow.
 
 Add reusable machinery here only when more than one behavioral test needs it.
 Put assertions and concrete scenarios in the lowest suitable suite. Avoid

@@ -6,15 +6,17 @@ import logging
 from dataclasses import dataclass, field
 from typing import NoReturn
 
+from xpool import ffn
 from xpool.config import XpoolConfig
 from xpool.fabric import (
-    FabricGeneration,
+    FabricGenerationId,
     FabricGenerationPhase,
-    FabricModelPlan,
+    FabricInstancePlan,
     FabricParticipantPhase,
     FabricPePlacement,
     FabricPlan,
     FabricRole,
+    InstanceRankTopology,
 )
 from xpool.service.daemon.registration import InstanceRankId, RegistrationBook
 from xpool.service.errors import XpoolDaemonError
@@ -22,7 +24,6 @@ from xpool.service.wire import (
     FabricInvocationFailure,
     FabricOwnerFailure,
     FabricParticipantReport,
-    FabricProtocolFailure,
 )
 from xpool.utils.procs import ProcUniqId
 
@@ -34,7 +35,9 @@ class FabricMembership:
     """Immutable complete membership captured under the control-plane lock."""
 
     revision: int
-    models: tuple[FabricModelPlan, ...]
+    model_specs: tuple[ffn.FfnModelSpec, ...]
+    instance_plans: tuple[FabricInstancePlan, ...]
+    ffnagent_free_memory_bytes: tuple[int, ...]
     pe_placements: tuple[FabricPePlacement, ...]
     agent_owners: tuple[tuple[int, ProcUniqId], ...]
     instance_owners: tuple[tuple[InstanceRankId, ProcUniqId], ...]
@@ -60,19 +63,25 @@ class FabricMembership:
         if any(device not in ffnagent_by_device for device in config.devices.ffn_cuda_devices):
             return None
 
-        models: list[FabricModelPlan] = []
+        model_specs = registrations.ffn_model_specs
+        if model_specs is None:
+            return None
+        instance_plans: list[FabricInstancePlan] = []
         instance_owners: list[tuple[InstanceRankId, ProcUniqId]] = []
         for instance in config.instances:
+            rank_zero = instance_by_rank.get(InstanceRankId(instance_id=instance.id, rank=0))
+            if rank_zero is None:
+                return None
+            rank_count = rank_zero.transport.atn_tp_size * rank_zero.transport.atn_dp_size
             ranks = tuple(
-                instance_by_rank.get(InstanceRankId(instance_id=instance.id, rank=rank))
-                for rank in range(config.atn_world_size)
+                instance_by_rank.get(InstanceRankId(instance_id=instance.id, rank=rank)) for rank in range(rank_count)
             )
             if any(registration is None for registration in ranks):
                 return None
             complete_ranks = tuple(registration for registration in ranks if registration is not None)
-            workload = complete_ranks[0].workload
-            if any(registration.workload != workload for registration in complete_ranks[1:]):
-                raise XpoolDaemonError("conflict", "FFN workload disagrees across instance ranks")
+            ffn_profile = complete_ranks[0].ffn_profile
+            if any(registration.ffn_profile != ffn_profile for registration in complete_ranks[1:]):
+                raise XpoolDaemonError("conflict", "FFN ffn_profile disagrees across instance ranks")
             atn_tp_size = complete_ranks[0].transport.atn_tp_size
             atn_dp_size = complete_ranks[0].transport.atn_dp_size
             expected_coordinates = {
@@ -84,38 +93,45 @@ class FabricMembership:
             }
             if coordinates != expected_coordinates:
                 raise XpoolDaemonError("conflict", "instance ranks do not cover each TP-fastest coordinate once")
-            models.append(
-                FabricModelPlan(
-                    workload=workload,
-                    atn_tp_size=atn_tp_size,
-                    atn_dp_size=atn_dp_size,
+            instance_plans.append(
+                FabricInstancePlan(
+                    instance_id=instance.id,
+                    ffn_profile=ffn_profile,
+                    instance_rank_topology=InstanceRankTopology(
+                        atn_tp_size=atn_tp_size,
+                        atn_dp_size=atn_dp_size,
+                        atnagent_indices=tuple(range(rank_count)),
+                    ),
                 )
             )
             instance_owners.extend((registration.instance, registration.proc) for registration in complete_ranks)
 
         placements = tuple(
-            FabricPePlacement(pe=pe, role=FabricRole.ATNAGENT, cuda_device=cuda_device)
-            for pe, cuda_device in enumerate(config.devices.atn_cuda_devices)
+            FabricPePlacement(role=FabricRole.ATNAGENT, cuda_device=cuda_device)
+            for cuda_device in config.devices.atn_cuda_devices
         ) + tuple(
             FabricPePlacement(
-                pe=len(config.devices.atn_cuda_devices) + rank,
                 role=FabricRole.FFNAGENT,
                 cuda_device=cuda_device,
             )
-            for rank, cuda_device in enumerate(config.devices.ffn_cuda_devices)
+            for cuda_device in config.devices.ffn_cuda_devices
         )
         agent_owners = tuple(
             (
-                placement.pe,
+                pe,
                 atnagent_by_device[placement.cuda_device].proc
                 if placement.role is FabricRole.ATNAGENT
                 else ffnagent_by_device[placement.cuda_device].proc,
             )
-            for placement in placements
+            for pe, placement in enumerate(placements)
         )
         return cls(
             revision=revision,
-            models=tuple(models),
+            model_specs=model_specs,
+            instance_plans=tuple(instance_plans),
+            ffnagent_free_memory_bytes=tuple(
+                ffnagent_by_device[device].cuda_free_memory_bytes for device in config.devices.ffn_cuda_devices
+            ),
             pe_placements=placements,
             agent_owners=agent_owners,
             instance_owners=tuple(instance_owners),
@@ -136,7 +152,7 @@ class FabricGenerationState:
     phase_started_at: float
     invocation_failure: FabricInvocationFailure | None
     owner_failure: FabricOwnerFailure | None
-    protocol_failure: FabricProtocolFailure | None
+    control_failure: str | None
     agent_owners: dict[int, ProcUniqId]
     instance_owners: dict[InstanceRankId, ProcUniqId]
     participants: dict[int, FabricParticipantReport] = field(default_factory=dict)
@@ -148,9 +164,7 @@ class FabricGenerationState:
         if self.invocation_failure is None:
             self.invocation_failure = failure
         elif self.invocation_failure != failure:
-            self.record_protocol_failure(
-                FabricProtocolFailure(message="participants reported conflicting canonical invocation failures")
-            )
+            self.record_control_failure("participants reported conflicting canonical invocation failures")
 
     def record_owner_failure(self, failure: FabricOwnerFailure) -> None:
         """Retain the first daemon-observed owner failure."""
@@ -158,11 +172,13 @@ class FabricGenerationState:
         if self.owner_failure is None:
             self.owner_failure = failure
 
-    def record_protocol_failure(self, failure: FabricProtocolFailure) -> None:
-        """Retain the first control-protocol failure."""
+    def record_control_failure(self, failure: str) -> None:
+        """Retain the first nonempty control or lifecycle diagnostic."""
 
-        if self.protocol_failure is None:
-            self.protocol_failure = failure
+        if not failure:
+            raise ValueError("Fabric control failure must be nonempty")
+        if self.control_failure is None:
+            self.control_failure = failure
 
     def transition(self, phase: FabricGenerationPhase, *, now: float) -> None:
         """Move through one exact generation edge without resetting retries."""
@@ -204,7 +220,7 @@ class FabricController:
 
         plan = self.plan()
         if plan is None:
-            raise XpoolDaemonError("not_ready", "fabric plan requires every configured owner and workload")
+            raise XpoolDaemonError("not_ready", "fabric plan requires every configured owner and ffn_profile")
         return plan
 
     def install(self, generation: FabricGenerationState) -> FabricPlan:
@@ -222,7 +238,12 @@ class FabricController:
         if generation is None:
             raise XpoolDaemonError("conflict", "fabric quiesce requires a retained generation")
         match generation.phase:
-            case FabricGenerationPhase.JOINING:
+            case (
+                FabricGenerationPhase.PREPARING_JOIN
+                | FabricGenerationPhase.JOINING
+                | FabricGenerationPhase.PREPARING_EXECUTION
+                | FabricGenerationPhase.ACTIVATING
+            ):
                 generation.transition(FabricGenerationPhase.ABORTING, now=now)
             case FabricGenerationPhase.EXECUTABLE:
                 generation.transition(FabricGenerationPhase.QUIESCING, now=now)
@@ -254,7 +275,7 @@ class FabricController:
         termination_requested: bool,
         now: float,
     ) -> None:
-        """Remove initialization state and select cleanup for an Instance loss."""
+        """Remove initialization state and select cleanup for an Instance-rank loss."""
 
         generation = self.generation
         if generation is None:
@@ -277,16 +298,15 @@ class FabricController:
         instance: InstanceRankId,
         owner: ProcUniqId,
         *,
-        generation: FabricGeneration,
-        plan_digest: str,
+        generation: FabricGenerationId,
     ) -> None:
-        """Commit one owner-validated Instance initialization barrier."""
+        """Commit one owner-validated Instance-rank initialization barrier."""
 
         current = self.generation
         if current is None:
             raise XpoolDaemonError("not_ready", "fabric generation retired during initialization")
-        if generation != current.plan.generation or plan_digest != current.plan.digest():
-            raise XpoolDaemonError("conflict", "instance initialized generation or plan digest differs")
+        if generation != current.plan.generation:
+            raise XpoolDaemonError("conflict", "instance initialized generation differs")
         if current.phase is not FabricGenerationPhase.EXECUTABLE:
             raise XpoolDaemonError("conflict", "instance initialization requires executable Fabric")
         expected_owner = current.instance_owners.get(instance)
@@ -305,28 +325,47 @@ class FabricController:
             return
         if report.generation != generation.plan.generation:
             self.reject_report("participant reported a different Fabric generation", now=now)
-        if report.plan_digest != generation.plan.digest():
-            self.reject_report("participant reported a different Fabric plan digest", now=now)
         if report.pe < 0 or report.pe >= len(generation.plan.pe_placements):
             self.reject_report("participant reported an unknown Fabric PE", now=now)
         if generation.phase in {FabricGenerationPhase.ABORTING, FabricGenerationPhase.STOPPED}:
             raise XpoolDaemonError("conflict", "terminal Fabric generation accepts only an exact report retry")
 
         if previous is None:
-            if report.phase is not FabricParticipantPhase.JOINING:
-                self.reject_report("first participant report must be joining", now=now)
+            if report.phase is not FabricParticipantPhase.JOIN_READY:
+                self.reject_report("first participant report must be join_ready", now=now)
         elif report.phase is not previous.phase and not previous.phase.allows(report.phase):
             self.reject_report(
                 f"participant phase cannot transition from {previous.phase.value} to {report.phase.value}",
                 now=now,
             )
         self.validate_enrichment(previous, report, now=now)
+        allowed_phases = {
+            FabricGenerationPhase.PREPARING_JOIN: {FabricParticipantPhase.JOIN_READY},
+            FabricGenerationPhase.JOINING: {
+                FabricParticipantPhase.JOINING,
+                FabricParticipantPhase.JOINED,
+            },
+            FabricGenerationPhase.PREPARING_EXECUTION: {FabricParticipantPhase.EXECUTION_READY},
+            FabricGenerationPhase.ACTIVATING: {FabricParticipantPhase.ACTIVE},
+            FabricGenerationPhase.QUIESCING: {FabricParticipantPhase.QUIESCED},
+            FabricGenerationPhase.DRAINING: {
+                FabricParticipantPhase.DRAINING,
+                FabricParticipantPhase.DRAINED,
+            },
+            FabricGenerationPhase.FINALIZING: {FabricParticipantPhase.FINALIZED},
+        }.get(generation.phase, set())
+        phase_changed = previous is None or report.phase is not previous.phase
+        if phase_changed and report.phase not in allowed_phases:
+            self.reject_report(
+                f"participant phase {report.phase.value} is invalid while generation is {generation.phase.value}",
+                now=now,
+            )
 
         generation.participants[report.pe] = report
         if report.invocation_failure is not None:
             generation.record_invocation_failure(report.invocation_failure)
-        if report.protocol_failure is not None:
-            generation.record_protocol_failure(report.protocol_failure)
+        if report.control_failure is not None:
+            generation.record_control_failure(report.control_failure)
         logger.info(
             "Fabric participant PE %s acknowledged %s for generation %s",
             report.pe,
@@ -334,7 +373,7 @@ class FabricController:
             report.generation.format(),
         )
 
-        if generation.protocol_failure is not None:
+        if generation.control_failure is not None:
             self.abort(now=now)
             return
         if generation.invocation_failure is not None and generation.phase not in {
@@ -357,7 +396,7 @@ class FabricController:
 
         if previous is None:
             return
-        for name in ("invocation_failure", "protocol_failure"):
+        for name in ("invocation_failure", "control_failure"):
             old = getattr(previous, name)
             new = getattr(report, name)
             if old is not None and new != old:
@@ -368,7 +407,7 @@ class FabricController:
 
         generation = self.generation
         if generation is not None:
-            generation.record_protocol_failure(FabricProtocolFailure(message=message))
+            generation.record_control_failure(message)
             self.abort(now=now)
         raise XpoolDaemonError("conflict", message)
 
@@ -383,7 +422,19 @@ class FabricController:
             return
         phases = {report.phase for report in generation.participants.values()}
         barrier = {
+            FabricGenerationPhase.PREPARING_JOIN: (
+                FabricParticipantPhase.JOIN_READY,
+                FabricGenerationPhase.JOINING,
+            ),
             FabricGenerationPhase.JOINING: (
+                FabricParticipantPhase.JOINED,
+                FabricGenerationPhase.PREPARING_EXECUTION,
+            ),
+            FabricGenerationPhase.PREPARING_EXECUTION: (
+                FabricParticipantPhase.EXECUTION_READY,
+                FabricGenerationPhase.ACTIVATING,
+            ),
+            FabricGenerationPhase.ACTIVATING: (
                 FabricParticipantPhase.ACTIVE,
                 FabricGenerationPhase.EXECUTABLE,
             ),

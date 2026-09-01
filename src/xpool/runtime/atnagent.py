@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import xpool.native
-from xpool.abi import ABI_VERSION
 from xpool.config import get_global_config
 from xpool.fabric import FabricGenerationPhase, FabricParticipantPhase
-from xpool.runtime import RuntimeRole
+from xpool.native import ABI_VERSION, RuntimeRole
 from xpool.runtime.agent import AGENT_SHUTDOWN_POLL_INTERVAL_S, Agent, AgentError, AgentHeartbeat, logger
 from xpool.service.client import XpoolClient, XpoolClientError
 from xpool.service.errors import XpoolDaemonError
@@ -18,19 +17,19 @@ from xpool.service.wire import (
     AtnAgentRegistration,
     AtnAgentTransportArenaBinding,
     HeartbeatResponse,
-    InstanceRegistration,
+    InstanceRankRegistration,
     ProcessRef,
 )
 from xpool.transport import TransportArenaHandle
 
-__all__ = ["AtnAgent", "AtnTransportCatalog", "AtnTransportEntry"]
+__all__ = ["AtnAgent", "AtnAgentTransportArenaState", "AtnAgentTransportRuntime"]
 
 TRANSPORT_PUBLICATION_RECOVERY_S = 60.0
 TRANSPORT_SHUTDOWN_DEADLINE_S = 60.0
 
 
 @dataclass(slots=True)
-class AtnTransportEntry:
+class AtnAgentTransportArenaState:
     """One native arena and its current daemon publication state.
 
     Attributes:
@@ -41,7 +40,7 @@ class AtnTransportEntry:
     """
 
     instance_id: str
-    registration: InstanceRegistration
+    registration: InstanceRankRegistration
     handle: TransportArenaHandle
     published_epoch: int | None = None
 
@@ -54,7 +53,7 @@ class AtnTransportEntry:
             handle=self.handle,
         )
 
-    def accept_registration(self, registration: InstanceRegistration) -> None:
+    def accept_registration(self, registration: InstanceRankRegistration) -> None:
         """Retain a replacement owner only when native geometry is unchanged."""
 
         if self.registration.transport != registration.transport:
@@ -65,7 +64,7 @@ class AtnTransportEntry:
         self.registration = registration
 
 
-class AtnTransportCatalog:
+class AtnAgentTransportRuntime:
     """Own all rank-local transport arenas for one AtnAgent process."""
 
     def __init__(
@@ -76,17 +75,17 @@ class AtnTransportCatalog:
         local_rank: int,
         publisher: ProcessRef,
     ) -> None:
-        """Create an empty catalog bound to one daemon registration slot."""
+        """Create an empty runtime bound to one daemon registration slot."""
 
         self.client = client
         self.cuda_device = cuda_device
         self.local_rank = local_rank
         self.publisher = publisher
-        self.entries: dict[str, AtnTransportEntry] = {}
+        self.entries: dict[str, AtnAgentTransportArenaState] = {}
         self.publication_deadline: float | None = None
 
     @property
-    def resources(self) -> tuple[AtnTransportEntry, ...]:
+    def resources(self) -> tuple[AtnAgentTransportArenaState, ...]:
         """Return a stable snapshot of currently owned entries."""
 
         return tuple(self.entries.values())
@@ -97,13 +96,13 @@ class AtnTransportCatalog:
 
         return any(entry.published_epoch is not None for entry in self.entries.values())
 
-    def local_registrations(self) -> dict[str, InstanceRegistration]:
-        """Return configured instance registrations for this local ATN rank."""
+    def local_registrations(self, instance_ranks: Mapping[str, int]) -> dict[str, InstanceRankRegistration]:
+        """Return registrations assigned to this AtnAgent by the Fabric Plan."""
 
         return {
             registration.instance_id: registration
             for registration in self.client.list_instances()
-            if registration.rank == self.local_rank and registration.instance_id in get_global_config().instance_by_id
+            if registration.rank == instance_ranks.get(registration.instance_id)
         }
 
     def retry_or_raise(self, error: Exception) -> bool:
@@ -116,12 +115,14 @@ class AtnTransportCatalog:
         logger.warning("waiting to publish atnagent transport arenas: %s", error)
         return False
 
-    def reconcile(self, registration_epoch: int) -> bool:
+    def prepare(self, registration_epoch: int, instance_ranks: Mapping[str, int]) -> bool:
         """Create and publish every currently registered local instance arena.
 
         Args:
             registration_epoch: Monotonic epoch of the current AtnAgent daemon
                 registration. Handles are republished once per epoch.
+            instance_ranks: Instance ranks assigned to this AtnAgent by the
+                current Fabric Plan.
 
         Returns:
             True when every configured instance has a current-epoch publication.
@@ -132,7 +133,7 @@ class AtnTransportCatalog:
         """
 
         try:
-            registrations = self.local_registrations()
+            registrations = self.local_registrations(instance_ranks)
         except (XpoolDaemonError, XpoolClientError) as error:
             if not error.is_recoverable:
                 raise AgentError(f"atnagent instance-list reconcile failed: {error}") from error
@@ -143,7 +144,7 @@ class AtnTransportCatalog:
             if registration is not None:
                 entry.accept_registration(registration)
 
-        created: list[AtnTransportEntry] = []
+        created: list[AtnAgentTransportArenaState] = []
         try:
             for instance_index, instance in enumerate(get_global_config().instances):
                 registration = registrations.get(instance.id)
@@ -153,21 +154,30 @@ class AtnTransportCatalog:
                     handle=xpool.native.transport.create_arena(
                         instance_index,
                         registration.rank,
-                        registration.transport.max_tokens,
+                        registration.transport.payload_row_capacity,
                         registration.transport.hidden_size,
-                        int(registration.workload.dtype),
+                        registration.ffn_profile.payload_dtype,
                         registration.transport.atn_tp_rank,
                         registration.transport.atn_tp_size,
                         registration.transport.atn_dp_rank,
                         registration.transport.atn_dp_size,
                     )
                 )
-                created.append(AtnTransportEntry(instance_id=instance.id, registration=registration, handle=handle))
+                created.append(
+                    AtnAgentTransportArenaState(
+                        instance_id=instance.id,
+                        registration=registration,
+                        handle=handle,
+                    )
+                )
         except Exception as error:
             try:
                 self.rollback(created)
             except Exception as cleanup_error:
-                raise AgentError("failed to release partially created transport arenas") from cleanup_error
+                error.add_note(f"transport arena rollback also failed: {type(cleanup_error).__name__}: {cleanup_error}")
+                raise AgentError(
+                    f"failed to create transport arenas for CUDA device {self.cuda_device} and release partial arenas"
+                ) from error
             raise AgentError(f"failed to create transport arenas for CUDA device {self.cuda_device}") from error
 
         self.entries.update((entry.instance_id, entry) for entry in created)
@@ -191,7 +201,7 @@ class AtnTransportCatalog:
                 entry.published_epoch = registration_epoch
             self.publication_deadline = None
 
-        configured = frozenset(get_global_config().instance_by_id)
+        configured = frozenset(instance_ranks)
         complete = configured == frozenset(registrations) and all(
             entry.published_epoch == registration_epoch for entry in self.entries.values()
         )
@@ -209,6 +219,8 @@ class AtnTransportCatalog:
     def activate(self) -> None:
         """Launch the sole Resident over the immutable local arena set."""
 
+        if not self.entries:
+            return
         try:
             xpool.native.transport.activate()
         except Exception as error:
@@ -217,13 +229,15 @@ class AtnTransportCatalog:
     def check_health(self) -> None:
         """Reject unexpected completion of the process-wide Transport Resident."""
 
+        if not self.entries:
+            return
         try:
             xpool.native.transport.check_health()
         except Exception as error:
             raise AgentError(f"transport Resident failed on CUDA device {self.cuda_device}") from error
 
     def quiesce_leases(self) -> None:
-        """Close lease admission and wait for every live Instance owner."""
+        """Close lease admission and wait for every live Instance-rank owner."""
 
         deadline = time.monotonic() + TRANSPORT_SHUTDOWN_DEADLINE_S
         while time.monotonic() < deadline:
@@ -262,7 +276,7 @@ class AtnTransportCatalog:
                 time.sleep(AGENT_SHUTDOWN_POLL_INTERVAL_S)
         raise AgentError(f"timed out draining Transport Resident on CUDA device {self.cuda_device}")
 
-    def rollback(self, entries: Sequence[AtnTransportEntry]) -> None:
+    def rollback(self, entries: Sequence[AtnAgentTransportArenaState]) -> None:
         """Destroy newly created Dormant arenas before Resident activation."""
 
         if not entries:
@@ -286,7 +300,7 @@ class AtnTransportCatalog:
 
 
 class AtnAgent(Agent):
-    """Attention-side agent owning one rank-local transport catalog."""
+    """Attention-side agent owning one rank-local transport runtime."""
 
     def __init__(self, *, cuda_device: int) -> None:
         """Create an AtnAgent for one configured attention CUDA device."""
@@ -302,7 +316,7 @@ class AtnAgent(Agent):
         except ValueError as error:
             raise AgentError(f"CUDA device {cuda_device} has no local instance-rank arenas") from error
         self.registration_epoch = 0
-        self.catalog = AtnTransportCatalog(
+        self.transport = AtnAgentTransportRuntime(
             client=self.client,
             cuda_device=cuda_device,
             local_rank=self.local_rank,
@@ -329,20 +343,32 @@ class AtnAgent(Agent):
 
         return self.client.heartbeat_atnagent(self.cuda_device, self.process_ref)
 
-    def prepare_fabric(self) -> bool:
+    def prepare_fabric_join(self) -> bool:
         """Reconcile all local arenas before collective Fabric join."""
 
-        return self.catalog.reconcile(self.registration_epoch)
+        if self.fabric_plan is None:
+            raise AgentError("AtnAgent cannot prepare transport before receiving a Fabric Plan")
+        instance_ranks = {
+            instance_plan.instance_id: rank
+            for instance_plan in self.fabric_plan.instance_plans
+            for rank, atnagent_index in enumerate(instance_plan.instance_rank_topology.atnagent_indices)
+            if atnagent_index == self.local_rank
+        }
+        return self.transport.prepare(self.registration_epoch, instance_ranks)
 
-    def activate_fabric_plan(self) -> None:
+    def prepare_fabric_execution(self) -> None:
+        """Require no AtnAgent resource binding between join and activation."""
+
+    def activate_fabric(self) -> None:
         """Launch transport kernels after collective Fabric join."""
 
-        self.catalog.activate()
+        self.transport.activate()
+        self.transport.check_health()
 
     def quiesce_fabric(self) -> None:
         """Drain local leases and transport kernels before Fabric drain."""
 
-        self.catalog.quiesce()
+        self.transport.quiesce()
 
     def poll_fabric_health(self) -> None:
         """Check both Fabric and the process-wide Transport Resident."""
@@ -353,17 +379,17 @@ class AtnAgent(Agent):
             report is not None
             and report.phase is FabricParticipantPhase.ACTIVE
             and report.invocation_failure is None
-            and self.fabric_phase in {FabricGenerationPhase.JOINING, FabricGenerationPhase.EXECUTABLE}
+            and self.fabric_phase in {FabricGenerationPhase.ACTIVATING, FabricGenerationPhase.EXECUTABLE}
         ):
             try:
-                self.catalog.check_health()
+                self.transport.check_health()
             except AgentError as error:
-                self.report_local_protocol_failure(str(error))
+                self.report_local_control_failure(str(error))
                 raise
 
     def close_role(self) -> None:
         """Release every local transport arena."""
 
-        if self.registered and self.catalog.published:
-            self.catalog.quiesce_leases()
-        self.catalog.close()
+        if self.registered and self.transport.published:
+            self.transport.quiesce_leases()
+        self.transport.close()

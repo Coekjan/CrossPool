@@ -24,8 +24,8 @@ from xpool.service.wire import (
     FabricQuiesceRequest,
     FfnAgentRegistration,
     HeartbeatResponse,
-    InstanceInitializedPublication,
-    InstanceRegistration,
+    InstanceRankInitializedPublication,
+    InstanceRankRegistration,
     ProcessRef,
     ReadinessSnapshot,
     XpoolDaemonErrorDetail,
@@ -57,6 +57,8 @@ class XpoolClient:
         Raises:
             XpoolClientError: If the daemon health route remains unreachable or
                 non-OK after bounded retries.
+            XpoolDaemonError: If the daemon reports an unrecoverable health
+                failure.
         """
 
         config = get_global_config()
@@ -66,32 +68,30 @@ class XpoolClient:
             timeout=timeout_s,
         )
         try:
-            health_error: XpoolClientError | XpoolDaemonError | None = None
-            for attempt in range(DAEMON_HEALTH_RETRY_ATTEMPTS):
-                try:
-                    self.health()
-                    health_error = None
-                    break
-                except (XpoolClientError, XpoolDaemonError) as exc:
-                    health_error = exc
-                    if not exc.is_recoverable:
-                        raise
-                    message = str(exc)
+            self.wait_for_health()
+        except Exception:
+            self.http_client.close()
+            raise
+
+    def wait_for_health(self) -> None:
+        """Require daemon health within the bounded retry policy."""
+
+        for attempt in range(DAEMON_HEALTH_RETRY_ATTEMPTS):
+            try:
+                self.health()
+                return
+            except (XpoolClientError, XpoolDaemonError) as error:
+                if not error.is_recoverable:
+                    raise
                 logger.warning(
                     "daemon health check failed on attempt %s/%s: %s",
                     attempt + 1,
                     DAEMON_HEALTH_RETRY_ATTEMPTS,
-                    message,
+                    error,
                 )
-                if attempt + 1 < DAEMON_HEALTH_RETRY_ATTEMPTS:
-                    time.sleep(DAEMON_HEALTH_RETRY_DELAY_S)
-            else:
-                if health_error is None:
-                    raise RuntimeError("daemon health retry loop completed without an error")
-                raise health_error
-        except Exception:
-            self.http_client.close()
-            raise
+                if attempt + 1 == DAEMON_HEALTH_RETRY_ATTEMPTS:
+                    raise
+                time.sleep(DAEMON_HEALTH_RETRY_DELAY_S)
 
     def close(self) -> None:
         """Close the underlying HTTP connection pool."""
@@ -358,7 +358,7 @@ class XpoolClient:
             "atnagent transport lease quiesce",
         )
 
-    def list_instances(self) -> list[InstanceRegistration]:
+    def list_instances(self) -> list[InstanceRankRegistration]:
         """Return instance-rank registrations from the daemon."""
 
         response = self.request("GET", "/instances")
@@ -366,11 +366,11 @@ class XpoolClient:
         if not isinstance(payload, list):
             raise XpoolClientError("protocol", "xpool daemon returned invalid instance list response")
         try:
-            return [InstanceRegistration.model_validate(item) for item in payload]
+            return [InstanceRankRegistration.model_validate(item) for item in payload]
         except (TypeError, ValidationError) as exc:
             raise XpoolClientError("protocol", "xpool daemon returned invalid instance list response") from exc
 
-    def register_instance(self, registration: InstanceRegistration) -> None:
+    def register_instance(self, registration: InstanceRankRegistration) -> None:
         """Register one instance-rank process with the daemon.
 
         Args:
@@ -408,7 +408,7 @@ class XpoolClient:
         instance_id: str,
         *,
         rank: int,
-        publication: InstanceInitializedPublication,
+        publication: InstanceRankInitializedPublication,
     ) -> None:
         """Publish one SGLang rank's post-initialize startup barrier."""
 
@@ -447,6 +447,7 @@ class XpoolClient:
             instance_id: Instance id whose arena should be fetched.
             rank: Local instance rank whose transport arena should be fetched.
             owner: Process identity for the acquiring instance rank.
+
         Returns:
             Transport arena handle for the requested instance rank.
 

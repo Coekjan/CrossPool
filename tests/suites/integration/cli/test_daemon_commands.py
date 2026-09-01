@@ -9,7 +9,7 @@ import xpool.cli.subcommands.atnagent
 import xpool.cli.subcommands.daemon
 from tests.harness.support.config import reset_global_config
 from xpool.cli import main
-from xpool.fabric import FabricGeneration
+from xpool.fabric import FabricGenerationId
 from xpool.service.client import XpoolClientError
 from xpool.service.wire import ReadinessSnapshot
 
@@ -18,7 +18,7 @@ pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
 def ready_snapshot(*, ready: bool) -> ReadinessSnapshot:
     instance_status = "online" if ready else "offline"
-    generation = FabricGeneration(high=1, low=1) if ready else None
+    generation = FabricGenerationId(high=1, low=1) if ready else None
     return ReadinessSnapshot.model_validate(
         {
             "ready": ready,
@@ -26,7 +26,7 @@ def ready_snapshot(*, ready: bool) -> ReadinessSnapshot:
             "fabric_phase": "executable" if ready else None,
             "fabric_invocation_failure": None,
             "fabric_owner_failure": None,
-            "fabric_protocol_failure": None,
+            "fabric_control_failure": None,
             "transport_ready": ready,
             "instances_initialized": ready,
             "mps_status": "online" if ready else "offline",

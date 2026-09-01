@@ -25,7 +25,7 @@ from tests.harness.runner.supervisor import (
     drain_unprotected_subreaper_descendants,
 )
 from tests.harness.runner.task import ExecutionTask, compile_execution_tasks
-from xpool.service.daemon.mps import probe_mps_controller
+from xpool.mps import probe_mps_controller
 
 SCHEDULER_POLL_INTERVAL_SECONDS = 0.05
 

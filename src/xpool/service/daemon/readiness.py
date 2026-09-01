@@ -13,7 +13,7 @@ from xpool.service.wire import (
     ControlPlaneWarning,
     ReadinessAtnAgent,
     ReadinessFfnAgent,
-    ReadinessInstance,
+    ReadinessInstanceRank,
     ReadinessSnapshot,
     ReadinessStatus,
 )
@@ -48,6 +48,7 @@ class ControlPlaneProjection:
             registration.cuda_device: registration for registration in registrations.ffnagents.values()
         }
         instance_by_id = {registration.instance: registration for registration in registrations.instances.values()}
+        generation = fabric.generation
 
         atnagents = [
             ReadinessAtnAgent(
@@ -67,17 +68,33 @@ class ControlPlaneProjection:
             for agent in config.ffnagents
             for registration in (ffnagent_by_device.get(agent.cuda_device),)
         ]
+        instance_slots = (
+            tuple(
+                (instance.id, rank, cuda_device)
+                for instance in config.instances
+                for rank, cuda_device in enumerate(config.devices.atn_cuda_devices)
+            )
+            if generation is None
+            else tuple(
+                (
+                    instance_plan.instance_id,
+                    rank,
+                    config.devices.atn_cuda_devices[atnagent_index],
+                )
+                for instance_plan in generation.plan.instance_plans
+                for rank, atnagent_index in enumerate(instance_plan.instance_rank_topology.atnagent_indices)
+            )
+        )
         instances = [
-            ReadinessInstance(
+            ReadinessInstanceRank(
                 pid=None if registration is None else registration.proc.pid,
-                instance_id=instance.id,
+                instance_id=instance_id,
                 cuda_device=cuda_device,
                 rank=rank,
                 status=ReadinessStatus.OFFLINE if registration is None else registration.readiness_status(now),
             )
-            for instance in config.instances
-            for rank, cuda_device in enumerate(config.devices.atn_cuda_devices)
-            for registration in (instance_by_id.get(InstanceRankId(instance_id=instance.id, rank=rank)),)
+            for instance_id, rank, cuda_device in instance_slots
+            for registration in (instance_by_id.get(InstanceRankId(instance_id=instance_id, rank=rank)),)
         ]
 
         # Warning projection: derive heartbeat and Transport-quiesce diagnostics
@@ -133,20 +150,16 @@ class ControlPlaneProjection:
             and cuda_device not in quiescing_devices
             and (publication := transport.published_for(cuda_device, instance_id)) is not None
             and publication.transport == registration.transport
-            for instance in config.instances
-            for rank, cuda_device in enumerate(config.devices.atn_cuda_devices)
-            for instance_id in (InstanceRankId(instance_id=instance.id, rank=rank),)
+            for configured_instance_id, rank, cuda_device in instance_slots
+            for instance_id in (InstanceRankId(instance_id=configured_instance_id, rank=rank),)
         )
-        generation = fabric.generation
         expected_initialized = {
-            InstanceRankId(instance_id=instance.id, rank=rank)
-            for instance in config.instances
-            for rank in range(config.atn_world_size)
+            InstanceRankId(instance_id=instance_id, rank=rank) for instance_id, rank, _ in instance_slots
         }
         instances_initialized = generation is not None and set(generation.initialized_instances) == expected_initialized
         invocation_failure = None if generation is None else generation.invocation_failure
         owner_failure = None if generation is None else generation.owner_failure
-        protocol_failure = None if generation is None else generation.protocol_failure
+        control_failure = None if generation is None else generation.control_failure
         processes_ready = all(entry.status is ReadinessStatus.ONLINE for entry in (*atnagents, *ffnagents, *instances))
         fabric_executable = generation is not None and generation.phase is FabricGenerationPhase.EXECUTABLE
         ready = (
@@ -157,7 +170,7 @@ class ControlPlaneProjection:
             and mps_online
             and invocation_failure is None
             and owner_failure is None
-            and protocol_failure is None
+            and control_failure is None
         )
         # Wire materialization: copy terminal failure and lifecycle facts into a
         # self-contained response that can outlive the domain lock.
@@ -167,7 +180,7 @@ class ControlPlaneProjection:
             fabric_phase=None if generation is None else generation.phase,
             fabric_invocation_failure=invocation_failure,
             fabric_owner_failure=owner_failure,
-            fabric_protocol_failure=protocol_failure,
+            fabric_control_failure=control_failure,
             transport_ready=transport_ready,
             instances_initialized=instances_initialized,
             mps_status=ReadinessStatus.ONLINE if mps_online else ReadinessStatus.OFFLINE,

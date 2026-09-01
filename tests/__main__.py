@@ -17,8 +17,8 @@ from tests.harness.runner.plan import TestPlan
 from tests.harness.runner.results import TestResultStore
 from tests.harness.runner.suite import SuiteRunner
 from tests.harness.runner.supervisor import SupervisedTaskScope, TaskCompletionKind, TaskScopeFailure
-from tests.harness.sglang.parity import TokenParityAdapter
-from xpool.service.daemon.mps import probe_mps_controller
+from tests.harness.sglang.serving.alignment import ServingGraphAdapter
+from xpool.mps import probe_mps_controller
 from xpool.utils.sighandler import sighandle
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -137,7 +137,7 @@ def execute_test_run(
             repository_root=REPOSITORY_ROOT,
             run_directory=run_directory,
             strict_requirements=strict_requirements,
-            artifact_group_adapters=(TokenParityAdapter(),),
+            artifact_group_adapters=(ServingGraphAdapter(),),
             gpu_pool=gpu_pool,
         )
         with ExitStack() as stack:

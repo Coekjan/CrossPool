@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from tests.harness.sglang.attempt import ProbeRun
-from tests.harness.sglang.graph import GraphEvent, SglangGraphSettings
+from tests.harness.sglang.serving.attempt import ProbeRun
+from tests.harness.sglang.serving.graph import GraphEvent, SglangGraphSettings
 
 
 def assert_run_graph_evidence(run: ProbeRun) -> None:

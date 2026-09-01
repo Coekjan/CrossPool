@@ -29,19 +29,18 @@ Keep design documents self-contained. A new engineer should be able to implement
 from the repository without relying on prior chat context, a separate worktree,
 or host-specific paths.
 
-For implementation work, update or create the canonical design document before
-editing source code when the design is missing, stale, or materially changed.
-Revise canonical sections in place as decisions change; do not keep competing
-old and new designs. The canonical xpool design document is `PLAN.md`; do not
-refer to removed paths such as `docs/plan.md` as current design truth.
+[`docs/designs/README.md`](docs/designs/README.md) maps the current implemented
+and accepted architecture. Active target changes live under
+`docs/plans/<task>/README.md` until their implementation and acceptance are
+complete. A relevant active plan is a scoped delta over the current design;
+source declarations and generated native stubs remain authoritative for exact
+interfaces. The root [`CONTEXT.md`](CONTEXT.md) owns domain terminology.
 
-Implementation plans must be decision-complete. For every interface change,
-list the exact old and new symbols, signatures, ownership and lifecycle
-semantics, failure behavior, and compatibility policy. For every data-structure
-change, list added, removed, renamed, nested, or reordered fields together with
-their types and wire order. Do not use abstract promises such as "align APIs",
-"audit naming", or "update tests" without identifying the affected boundaries
-and expected behavior.
+Use the repo-local `write-plan` skill when a non-trivial change needs a tracked,
+decision-complete target design. Use the repo-local `write-design` skill after
+implementation and acceptance to update current design, fold durable task
+decisions into their owning documents, and remove the completed task directory.
+Read only the current design and active plan documents relevant to the task.
 
 ## Configuration
 
@@ -64,8 +63,7 @@ runtime access pattern. Local development paths belong in ignored
 Every accepted `XPOOL_*` variable must be declared in the config registry. The
 config layer should warn on unknown `XPOOL_*` variables instead of silently
 turning them into policy. Debug settings use nested names such as
-`debug.loopback.enable`, `debug.loopback.site`, and
-`debug.graph_observer.outdir`.
+`debug.graph_observer.enable` and `debug.graph_observer.outdir`.
 
 ## Testing
 
@@ -124,44 +122,10 @@ runtime config.
 
 Shim graph-mode coverage must distinguish eager execution, decode full CUDA
 graph replay, and prefill piecewise CUDA graph replay. SGLang integration
-evidence should compare token ids across the relevant modes and use devkit
-graph-observer evidence when it needs to prove SGLang entered graph paths.
-
-## Native Extension And Shim
-
-The native extension is the Linux build-time, SOABI-tagged `xpool.native`
-module. `xpool.cext` owns one locked ABI preflight against
-`xpool.native.abi_version()`. Native control and resource lifecycle callsites
-use the typed `xpool.native.fabric` and `xpool.native.transport` bindings
-directly. Only the compile-visible Tensor data path is a Torch dispatcher op;
-runtime shim code calls `xpool.ops.ffn_shim`, which dispatches to
-`torch.ops.xpool.ffn_shim` and registers its fake implementation directly.
-Do not model control-plane lifecycle as Torch operators.
-
-Bind native metadata and trace value types at the `xpool.native` root and keep
-Fabric and Transport lifecycle functions in their corresponding native
-submodules. Generate PEP 561 stubs from the built extension with the pinned
-`pybind11-stubgen`; do not hand-maintain a duplicate `.pyi` API.
-
-The daemon loads and initializes the native extension with
-`RuntimeRole.DAEMON`, but it does not initialize CUDA or join an NVSHMEM PE.
-Its only business-level native operation is daemon-only
-`xpool.native.fabric.create_uid`;
-transport, participant Fabric lifecycle, coordinator, and Instance operators
-must reject the daemon role before touching device resources.
-
-Build native code through uv/scikit-build with `CMAKE_BUILD_PARALLEL_LEVEL`;
-do not make direct CMake or `setup.py build_ext` commands the normal developer
-path. The NVSHMEM transport is C++/CUDA-owned and must not introduce Python
-NVSHMEM bindings without an accepted design change.
-
-The production `ffn_shim` path must support eager execution, decode full CUDA
-graph replay, and prefill piecewise CUDA graph replay before serving readiness
-is claimed. There is no separate loopback operator: `xpool.ops.ffn_shim` is the
-sole Tensor dispatcher API, and `debug.loopback.enable` plus
-`debug.loopback.site` select an internal Instance, AtnAgent, or FfnAgent debug
-execution path behind it. Those sites exercise progressively more of the data
-plane, but none is real FFN execution evidence.
+evidence compares token ids between eager and full Decode execution. Prefill
+evidence compares eager and piecewise first-prefill logits with forward KL and
+uses Devkit graph-observer evidence to prove piecewise execution occurred;
+piecewise token ids are diagnostic only.
 
 ## Build Style
 
@@ -175,10 +139,9 @@ integration or dependencies unless an accepted repository design explicitly
 changes that boundary.
 
 CUDA Toolkit 13.2 and CCCL 3.2 are the native build baseline, not an
-optional-dependency dimension. Keep
-SGLang, Torch, FlashInfer, CUDA Python, NVSHMEM runtime libraries, and
-control-plane libraries in the main project dependencies when xpool imports or
-relies on them directly. The NVSHMEM transport is implemented in C++/CUDA and
+optional-dependency dimension. Keep SGLang, Torch, CUDA bindings, NVSHMEM
+runtime libraries, and control-plane libraries in the main project dependencies
+when xpool imports or relies on them directly. The NVSHMEM transport is implemented in C++/CUDA and
 uses the NVIDIA NVSHMEM runtime package; do not add `nvshmem4py-cu13` unless a
 new accepted design requires Python NVSHMEM bindings. Sync the full developer
 environment with:
@@ -206,17 +169,10 @@ and agents cleanly before stopping the controller with
 `printf 'quit\n' | uv run nvidia-cuda-mps-control`. The daemon observes MPS
 readiness but does not own the controller lifecycle or change GPU compute mode.
 
-- Manage native builds with `CMakeLists.txt`; do not reintroduce `setup.py` as
-  the primary native build system. Build and reinstall the extension through
-  the canonical uv/scikit-build command above instead of invoking CMake
-  directly. Prefix it with `CMAKE_BUILD_PARALLEL_LEVEL=<jobs>` when explicit
-  native build concurrency is useful.
 - CMake enables ccache by default for C, C++, and CUDA when `ccache` is found
   and the corresponding compiler launcher is not already configured. Disable
   it explicitly with
   `--config-settings-package xpool:cmake.define.XPOOL_ENABLE_CCACHE=OFF`.
-- Use `CMAKE_BUILD_PARALLEL_LEVEL=<jobs>` for native build concurrency; do not
-  hard-code a repository-wide job count.
 ## Pre-Commit
 
 Keep pre-commit hooks active and installed. Routine commits should use normal
@@ -242,22 +198,8 @@ shell-exported variables retain precedence over values loaded by uv.
   review. The git-commit skill does not invoke deep-review automatically.
 - Use repo-local reviewer agents only when the user explicitly asks for
   delegated review or when an invoked skill requires them.
-- After every successful commit, push the current branch according to the
-  repository push policy. If the branch has no upstream or a normal push is
-  rejected, stop and ask before publishing a new upstream or using
-  `--force-with-lease`.
-- Do not use `git commit --no-verify` unless explicitly requested.
-- Do not change global or local git `user.name` or `user.email`.
 - Do not apply or pop a stash unless explicitly requested.
 - Do not delete ignored or machine-local files such as `.venv/`, `.vscode/`,
   `.ruff_cache/`, or `.codex/self-evolve-last.txt` unless the user explicitly
   asks. These files may contain useful local state even when they are not
   committed.
-
-## Commit Messages
-
-Use concise English commit messages and include:
-
-```text
-Co-authored-by: Codex <codex@openai.com>
-```

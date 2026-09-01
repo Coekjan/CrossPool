@@ -11,14 +11,14 @@ from torch import nn
 
 from tests.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner, server_args
 from tests.harness.support.sglang.plugin import binding
-from xpool.abi import TensorDType
-from xpool.fabric import FfnLayerKind, FfnLayerSpec
-from xpool.integrations.sglang.adapter import XpoolModelBinding
-from xpool.integrations.sglang.plugin import derive_workload
+from xpool.fabric import InstanceFfnLayerProfile
+from xpool.integrations.sglang.adapter import SglangInstanceRankBinding
+from xpool.integrations.sglang.plugin import derive_instance_ffn_profile
 from xpool.integrations.sglang.shim import FfnShimModule
+from xpool.native.ffn import LayerKind
 
 
-def test_workload_includes_only_enabled_graph_capacities(tmp_path: Path) -> None:
+def test_ffn_profile_includes_only_enabled_graph_capacities(tmp_path: Path) -> None:
     args = server_args(
         max_prefill_tokens=48,
         disable_cuda_graph=False,
@@ -35,20 +35,21 @@ def test_workload_includes_only_enabled_graph_capacities(tmp_path: Path) -> None
     )
     config_bytes = (model_binding.model_path / "config.json").read_bytes()
 
-    workload = derive_workload(runner.as_model_runner(), model_binding, args)
+    profile = derive_instance_ffn_profile(runner.as_model_runner(), model_binding, args)
 
-    assert workload.model_config_digest == hashlib.sha256(config_bytes).hexdigest()
-    assert workload.dtype is TensorDType.FP16
-    assert workload.hidden_size == 2048
-    assert workload.layers == (
-        FfnLayerSpec(layer_id=1, kind=FfnLayerKind.SPARSE),
-        FfnLayerSpec(layer_id=3, kind=FfnLayerKind.DENSE),
+    assert profile.model_config_digest == hashlib.sha256(config_bytes).hexdigest()
+    assert profile.payload_dtype is torch.float16
+    assert profile.hidden_size == 2048
+    assert profile.layers == (
+        InstanceFfnLayerProfile(layer_id=1, kind=LayerKind.MOE),
+        InstanceFfnLayerProfile(layer_id=3, kind=LayerKind.DENSE),
     )
-    assert workload.max_decode_rows == 64
-    assert workload.max_prefill_rows == 256
+    assert profile.decode_payload_row_capacity == 64
+    assert profile.prefill_payload_row_capacity == 256
+    assert profile.group_sum_complete_admitted is False
 
 
-def test_workload_ignores_retained_buckets_for_disabled_graph_paths(tmp_path: Path) -> None:
+def test_ffn_profile_ignores_retained_buckets_for_disabled_graph_paths(tmp_path: Path) -> None:
     args = server_args(
         max_prefill_tokens=33,
         disable_cuda_graph=True,
@@ -64,10 +65,10 @@ def test_workload_ignores_retained_buckets_for_disabled_graph_paths(tmp_path: Pa
         max_running_requests=17,
     )
 
-    workload = derive_workload(runner.as_model_runner(), model_binding, args)
+    profile = derive_instance_ffn_profile(runner.as_model_runner(), model_binding, args)
 
-    assert workload.max_decode_rows == 17
-    assert workload.max_prefill_rows == 33
+    assert profile.decode_payload_row_capacity == 17
+    assert profile.prefill_payload_row_capacity == 33
 
 
 @pytest.mark.parametrize(
@@ -80,14 +81,14 @@ def test_workload_ignores_retained_buckets_for_disabled_graph_paths(tmp_path: Pa
         ),
     ],
 )
-def test_workload_rejects_invalid_enabled_graph_geometry(
+def test_ffn_profile_rejects_invalid_enabled_graph_geometry(
     tmp_path: Path,
     args: ServerArgs,
 ) -> None:
     runner, model_binding = workload_inputs(tmp_path, args)
 
     with pytest.raises(RuntimeError, match="positive"):
-        derive_workload(runner.as_model_runner(), model_binding, args)
+        derive_instance_ffn_profile(runner.as_model_runner(), model_binding, args)
 
 
 @pytest.mark.parametrize(
@@ -97,7 +98,7 @@ def test_workload_rejects_invalid_enabled_graph_geometry(
         (16, True, "eager prefill rows"),
     ],
 )
-def test_workload_rejects_boolean_eager_capacity(
+def test_ffn_profile_rejects_boolean_eager_capacity(
     tmp_path: Path,
     max_running_requests: int,
     max_prefill_tokens: int,
@@ -111,7 +112,7 @@ def test_workload_rejects_boolean_eager_capacity(
     )
 
     with pytest.raises(RuntimeError, match=message):
-        derive_workload(runner.as_model_runner(), model_binding, args)
+        derive_instance_ffn_profile(runner.as_model_runner(), model_binding, args)
 
 
 def workload_inputs(
@@ -119,7 +120,7 @@ def workload_inputs(
     args: ServerArgs,
     *,
     max_running_requests: int = 8,
-) -> tuple[FakeModelRunner, XpoolModelBinding]:
+) -> tuple[FakeModelRunner, SglangInstanceRankBinding]:
     model_path = tmp_path / "synthetic-model"
     model_path.mkdir(exist_ok=True)
     config_bytes = b'{"model_type":"synthetic"}'
@@ -128,8 +129,8 @@ def workload_inputs(
     model = nn.Module()
     model.shims = nn.ModuleList(
         [
-            FfnShimModule(layer_id=3, hidden_size=2048, layer_kind=FfnLayerKind.DENSE),
-            FfnShimModule(layer_id=1, hidden_size=2048, layer_kind=FfnLayerKind.SPARSE),
+            FfnShimModule(layer_id=3, hidden_size=2048, layer_kind=LayerKind.DENSE),
+            FfnShimModule(layer_id=1, hidden_size=2048, layer_kind=LayerKind.MOE),
         ]
     )
     runner = FakeModelRunner(

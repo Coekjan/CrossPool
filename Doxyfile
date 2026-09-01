@@ -16,11 +16,12 @@ PREDEFINED             = __CUDACC__=1 \
 EXTRACT_ALL            = NO
 EXTRACT_PRIVATE        = NO
 EXTRACT_STATIC         = NO
+EXCLUDE_SYMBOLS        = operator==
 
 WARNINGS               = YES
 WARN_IF_UNDOCUMENTED   = YES
 WARN_IF_DOC_ERROR      = YES
-WARN_NO_PARAMDOC       = YES
+WARN_NO_PARAMDOC       = NO
 WARN_AS_ERROR          = FAIL_ON_WARNINGS
 
 QUIET                  = YES

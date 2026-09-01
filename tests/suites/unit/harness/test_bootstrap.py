@@ -1,5 +1,3 @@
-"""Tests for mandatory pytest native bootstrap."""
-
 import pytest
 
 import tests.harness.runner.bootstrap

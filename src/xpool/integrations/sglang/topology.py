@@ -16,14 +16,13 @@ from sglang.srt.server_args import ServerArgs
 from xpool.config import ConfigError, TopologyError
 
 __all__ = [
-    "AtnKind",
-    "ModelSpec",
-    "ParallelPolicy",
+    "SglangAttentionKind",
+    "SglangAttentionTopology",
     "SglangModelMetadata",
 ]
 
 
-class AtnKind(StrEnum):
+class SglangAttentionKind(StrEnum):
     """Attention topology kind derived from SGLang model metadata.
 
     Attributes:
@@ -40,7 +39,7 @@ class AtnKind(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class SglangModelMetadata:
+class SglangModelShape:
     """Model shape facts derived through SGLang's config resolution path.
 
     Attributes:
@@ -55,10 +54,10 @@ class SglangModelMetadata:
     hidden_size: int
     num_atn_heads: int
     num_key_value_heads: int
-    atn_kind: AtnKind
+    atn_kind: SglangAttentionKind
 
     @classmethod
-    def load(cls, config_path: Path, *, model_id: str) -> SglangModelMetadata:
+    def load(cls, config_path: Path, *, model_id: str) -> SglangModelShape:
         """Resolve model shape through SGLang's own model-config loader.
 
         Args:
@@ -99,16 +98,16 @@ class SglangModelMetadata:
                 hidden_size=hidden_size,
                 num_atn_heads=atn_heads,
                 num_key_value_heads=kv_heads,
-                atn_kind=AtnKind.MLA,
+                atn_kind=SglangAttentionKind.MLA,
             )
 
         match kv_heads:
             case 1:
-                atn_kind = AtnKind.MQA
+                atn_kind = SglangAttentionKind.MQA
             case _ if kv_heads == atn_heads:
-                atn_kind = AtnKind.MHA
+                atn_kind = SglangAttentionKind.MHA
             case _:
-                atn_kind = AtnKind.GQA
+                atn_kind = SglangAttentionKind.GQA
         return cls(
             family=family,
             hidden_size=hidden_size,
@@ -118,7 +117,7 @@ class SglangModelMetadata:
         )
 
 
-class ModelSpec(BaseModel):
+class SglangModelMetadata(BaseModel):
     """Model metadata resolved from a local config.json through SGLang."""
 
     model_config = ConfigDict(extra="forbid")
@@ -128,7 +127,7 @@ class ModelSpec(BaseModel):
     hidden_size: int = Field(ge=1, description="Hidden-state width consumed by each FFN shim call.")
     num_atn_heads: int = Field(ge=1, description="Total query-head count reported by SGLang.")
     num_key_value_heads: int = Field(ge=1, description="Total KV-head count reported by SGLang.")
-    atn_kind: AtnKind = Field(description="Attention topology derived from SGLang metadata.")
+    atn_kind: SglangAttentionKind = Field(description="Attention topology derived from SGLang metadata.")
     dense_intermediate_size: int | None = Field(
         default=None,
         description="Dense FFN intermediate width from config.json, when present.",
@@ -149,7 +148,7 @@ class ModelSpec(BaseModel):
             raise TopologyError(
                 f"{self.model_id}: attention TP {size} does not divide query heads {self.num_atn_heads}"
             )
-        if self.atn_kind is AtnKind.MLA:
+        if self.atn_kind is SglangAttentionKind.MLA:
             return
         if self.num_key_value_heads >= size:
             if self.num_key_value_heads % size != 0:
@@ -163,7 +162,7 @@ class ModelSpec(BaseModel):
             )
 
     @classmethod
-    def load(cls, model_path: str | Path, *, model_id: str) -> ModelSpec:
+    def load(cls, model_path: str | Path, *, model_id: str) -> SglangModelMetadata:
         """Load and derive metadata for one configured model.
 
         Args:
@@ -181,7 +180,7 @@ class ModelSpec(BaseModel):
         return cls.from_raw(raw, model_id=model_id, config_path=config_path.resolve())
 
     @classmethod
-    def from_raw(cls, raw: Mapping[str, object], *, model_id: str, config_path: Path) -> ModelSpec:
+    def from_raw(cls, raw: Mapping[str, object], *, model_id: str, config_path: Path) -> SglangModelMetadata:
         """Derive model metadata from parsed ``config.json`` content.
 
         Args:
@@ -196,7 +195,7 @@ class ModelSpec(BaseModel):
             ConfigError: If SGLang metadata or raw integer fields are invalid.
         """
 
-        sglang = SglangModelMetadata.load(config_path, model_id=model_id)
+        sglang = SglangModelShape.load(config_path, model_id=model_id)
         for label, value in (
             ("hidden_size", sglang.hidden_size),
             ("num_attention_heads", sglang.num_atn_heads),
@@ -221,7 +220,7 @@ class ModelSpec(BaseModel):
         )
 
 
-class ParallelPolicy(BaseModel):
+class SglangAttentionTopology(BaseModel):
     """SGLang-derived parallelism policy and topology audit record.
 
     The fields preserve SGLang's resolved TP-by-DP topology for rank binding,
@@ -239,12 +238,12 @@ class ParallelPolicy(BaseModel):
     @classmethod
     def from_server_args(
         cls,
-        spec: ModelSpec,
+        spec: SglangModelMetadata,
         server_args: ServerArgs,
         *,
         atnagent_count: int,
         supports_dp_attention: bool,
-    ) -> ParallelPolicy:
+    ) -> SglangAttentionTopology:
         """Validate and retain one resolved SGLang attention topology.
 
         Args:

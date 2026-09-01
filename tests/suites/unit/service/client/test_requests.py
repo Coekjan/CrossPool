@@ -8,20 +8,21 @@ from tests.harness.support.config import reset_global_config
 from tests.harness.support.service.client import (
     arena_record,
     config,
+    ffn_profile,
     initialize_client_config,
     install_scripted_http_client,
     response,
     transport_attributes,
-    workload,
 )
-from xpool.abi import ABI_VERSION
+from tests.harness.support.service.daemon import ffnagent_registration
+from xpool.native import ABI_VERSION
 from xpool.service.client import ATNAGENT_TRANSPORT_LEASE_QUIESCE_TIMEOUT_S, XpoolClient
 from xpool.service.wire import (
     AtnAgentRegistration,
     AtnAgentTransportArenaBinding,
     AtnAgentTransportLeaseQuiesceResponse,
     FfnAgentRegistration,
-    InstanceRegistration,
+    InstanceRankRegistration,
     ProcessRef,
 )
 
@@ -49,17 +50,17 @@ def test_participant_registration_follows_config_check(
             client.register_atnagent(registration)
             expected_path = "/atnagent/register"
         elif participant == "ffnagent":
-            registration = FfnAgentRegistration(pid=12, abi_version=ABI_VERSION, cuda_device=1)
+            registration = FfnAgentRegistration.model_validate(ffnagent_registration(pid=12))
             client.register_ffnagent(registration)
             expected_path = "/ffnagent/register"
         else:
-            registration = InstanceRegistration(
+            registration = InstanceRankRegistration(
                 pid=13,
                 abi_version=ABI_VERSION,
                 instance_id="m",
                 rank=0,
                 transport=transport_attributes(),
-                workload=workload(),
+                ffn_profile=ffn_profile(),
             )
             client.register_instance(registration)
             expected_path = "/instance/register"

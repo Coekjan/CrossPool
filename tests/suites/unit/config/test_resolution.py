@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import xpool.config
 from tests.harness.support.config import (
@@ -59,15 +60,61 @@ def test_defaults_fill_missing_optional_sections() -> None:
         cli={},
     )
 
-    assert config.debug.loopback.enable is False
-    assert config.debug.loopback.site is None
     assert config.debug.graph_observer.enable is False
     assert config.debug.graph_observer.outdir is None
+    assert config.debug.prefill_logit_observer.enable is False
+    assert config.debug.prefill_logit_observer.outdir is None
     assert config.daemon.host == "127.0.0.1"
     assert config.daemon.port == 9810
     assert config.scheduler.atn_concurrency == 1
     assert config.scheduler.ffn_concurrency == 1
+    assert config.ffn.loader.parallelism == 4
+    assert config.memory.calibration_path is None
     assert config.vendor.model_base_uri is None
+
+
+def test_ffn_loader_parallelism_uses_cli_env_config_default_precedence() -> None:
+    payload = {
+        "ffn": {"loader": {"parallelism": 2}},
+        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "models": [{"id": "m", "path": "/models/m"}],
+    }
+
+    assert XpoolConfig.from_mapping(payload).ffn.loader.parallelism == 2
+    assert XpoolConfig.from_mapping(payload, env={"XPOOL_FFN_LOADER_PARALLELISM": "3"}).ffn.loader.parallelism == 3
+    assert (
+        XpoolConfig.from_mapping(
+            payload,
+            cli={"ffn_loader_parallelism": 5},
+            env={"XPOOL_FFN_LOADER_PARALLELISM": "3"},
+        ).ffn.loader.parallelism
+        == 5
+    )
+
+
+def test_memory_calibration_path_uses_env_before_config() -> None:
+    payload = {
+        "memory": {"calibration_path": "/config/memory.json"},
+        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "models": [{"id": "m", "path": "/models/m"}],
+    }
+
+    assert XpoolConfig.from_mapping(payload).memory.calibration_path == Path("/config/memory.json")
+    assert XpoolConfig.from_mapping(
+        payload,
+        env={"XPOOL_MEMORY_CALIBRATION_PATH": "/env/memory.json"},
+    ).memory.calibration_path == Path("/env/memory.json")
+
+
+def test_memory_calibration_path_must_be_absolute() -> None:
+    with pytest.raises(ValidationError, match=r"memory\.calibration_path must be absolute"):
+        XpoolConfig.from_mapping(
+            {
+                "memory": {"calibration_path": "relative.json"},
+                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "models": [{"id": "m", "path": "/models/m"}],
+            }
+        )
 
 
 def test_config_resolution_does_not_mutate_caller_mapping() -> None:
@@ -133,9 +180,7 @@ def test_init_global_config_rejects_different_effective_config(tmp_path: Path) -
 
 
 def test_init_global_config_tracks_effective_sources(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("XPOOL_DEBUG_LOOPBACK_ENABLE", "1")
-    monkeypatch.setenv("XPOOL_DEBUG_LOOPBACK_SITE", "instance")
-    monkeypatch.setenv("XPOOL_DEBUG_TRANSPORT_OBSERVER_TRACE_CAPACITY", "64")
+    monkeypatch.setenv("XPOOL_DEBUG_TRANSPORT_OBSERVER_RECORD_CAPACITY", "64")
     config = init_global_config(
         config_path="configs/xpool.example.toml",
         cli={"daemon_host": "127.0.0.6"},
@@ -143,31 +188,19 @@ def test_init_global_config_tracks_effective_sources(monkeypatch: pytest.MonkeyP
     report = config.sources
 
     assert config.daemon.host == "127.0.0.6"
-    assert config.debug.loopback.enable is True
-    assert config.debug.loopback.site == "instance"
     assert "sources" not in config.model_dump(mode="json")
     assert source_record(report, "daemon.host") == {
         "name": "daemon.host",
         "source": ConfigSource.CLI,
         "value": "127.0.0.6",
     }
-    assert source_record(report, "debug.loopback.enable") == {
-        "name": "debug.loopback.enable",
-        "source": ConfigSource.ENV,
-        "value": True,
-    }
-    assert source_record(report, "debug.loopback.site") == {
-        "name": "debug.loopback.site",
-        "source": ConfigSource.ENV,
-        "value": "instance",
-    }
-    assert source_record(report, "debug.transport_observer.trace_capacity") == {
-        "name": "debug.transport_observer.trace_capacity",
+    assert source_record(report, "debug.transport_observer.record_capacity") == {
+        "name": "debug.transport_observer.record_capacity",
         "source": ConfigSource.ENV,
         "value": 64,
     }
-    assert source_record(report, "debug.fabric_observer.trace_capacity") == {
-        "name": "debug.fabric_observer.trace_capacity",
+    assert source_record(report, "debug.fabric_observer.record_capacity") == {
+        "name": "debug.fabric_observer.record_capacity",
         "source": ConfigSource.DEFAULT,
         "value": 8192,
     }

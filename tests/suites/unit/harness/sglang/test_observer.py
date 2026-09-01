@@ -1,12 +1,10 @@
-"""Behavior tests for SGLang E2E observer evidence assertions."""
-
 from __future__ import annotations
 
 import json
 from pathlib import Path
 from typing import cast
 
-from tests.harness.support.sglang.observer import (
+from tests.harness.support.native.observer import (
     assert_atnagent_records,
     assert_dp_attention_paths,
     assert_fabric_observer_snapshots,
@@ -17,23 +15,24 @@ from tests.harness.support.sglang.observer import (
 )
 
 
-def test_transport_observer_requires_acknowledged_success_records(tmp_path: Path) -> None:
+def test_transport_observer_requires_completed_success_records(tmp_path: Path) -> None:
     """Accept one complete current Transport mailbox snapshot."""
 
     write_json(
-        tmp_path / "xpool.transport-observer.1.model.0.json",
+        tmp_path / "xpool.transport-observer.1.instance.model.0.json",
         {
+            "site": "instance",
             "sequence": 2,
             "dropped": 0,
-            "record_counts": {"retained": 2, "acknowledged": 2, "closed": 0, "incomplete": 0},
+            "record_counts": {"retained": 2, "completed": 2, "closed": 0, "incomplete": 0},
             "records": [
-                {"trace_id": 1, "result_code": "ok", "acknowledged": 10, "closed": 0},
-                {"trace_id": 2, "result_code": "ok", "acknowledged": 20, "closed": 0},
+                {"trace_id": 1, "result_code": "ok", "result_acknowledged": 10, "closed": 0},
+                {"trace_id": 2, "result_code": "ok", "result_acknowledged": 20, "closed": 0},
             ],
         },
     )
 
-    assert_transport_observer_snapshots(tmp_path, expected_count=1)
+    assert_transport_observer_snapshots(tmp_path, expected_count=1, site="instance")
 
 
 def test_fabric_observer_matches_all_trace_alternatives_and_modes(tmp_path: Path) -> None:
@@ -49,11 +48,11 @@ def test_fabric_observer_matches_all_trace_alternatives_and_modes(tmp_path: Path
         for index, mode in enumerate(modes, start=1)
         for record in (
             fabric_record("coordinator", trace_id=index * 2 - 1, invocation_sequence=index, execution_mode=mode),
-            fabric_record("execution", trace_id=index * 2, invocation_sequence=index, execution_mode=mode),
+            fabric_record("ffnagent", trace_id=index * 2, invocation_sequence=index, execution_mode=mode),
         )
     ]
     execution_records = [
-        fabric_record("execution", trace_id=index, invocation_sequence=index, execution_mode=mode)
+        fabric_record("ffnagent", trace_id=index, invocation_sequence=index, execution_mode=mode)
         for index, mode in enumerate(modes, start=1)
     ]
     for pe, records in enumerate((atnagent_records, coordinator_records, execution_records)):
@@ -67,21 +66,20 @@ def test_fabric_observer_matches_all_trace_alternatives_and_modes(tmp_path: Path
     )
 
 
-def test_atnagent_evidence_accepts_idle_publisher_prefill_transition() -> None:
-    """Idle PE zero may stage Decode before a peer makes the invocation Prefill."""
+def test_atnagent_evidence_accepts_a_non_input_source() -> None:
+    """Only an actual Input Source records InputReadyPublished."""
 
     publisher = fabric_record("atnagent", trace_id=1, invocation_sequence=1, execution_mode="prefill")
     publisher_facts = cast(dict[str, object], publisher["facts"])
     publisher_events = cast(dict[str, object], publisher["events_ns"])
     publisher_facts["forward_mode"] = "idle"
-    publisher_events["decode_input_staged"] = 110
+    publisher_events["input_ready_published"] = 110
 
     follower = fabric_record("atnagent", trace_id=2, invocation_sequence=1, execution_mode="prefill")
     follower_facts = cast(dict[str, object], follower["facts"])
     follower_events = cast(dict[str, object], follower["events_ns"])
     follower_facts["forward_mode"] = "idle"
-    follower_events["prefill_input_staged"] = 0
-    follower_events["prefill_input_published"] = 0
+    follower_events["input_ready_published"] = 0
 
     assert_atnagent_records([(0, publisher), (1, follower)], atnagent_count=2)
 
@@ -94,8 +92,8 @@ def test_two_model_overlap_requires_distinct_executors_and_intersecting_interval
         trace_id=1,
         invocation_sequence=1,
         execution_mode="decode",
-        model_index=0,
-        executor_index=0,
+        instance_index=0,
+        executor_lane_index=0,
         active_interval=(100, 300),
     )
     right = fabric_record(
@@ -103,8 +101,8 @@ def test_two_model_overlap_requires_distinct_executors_and_intersecting_interval
         trace_id=2,
         invocation_sequence=1,
         execution_mode="decode",
-        model_index=1,
-        executor_index=1,
+        instance_index=1,
+        executor_lane_index=1,
         active_interval=(200, 400),
     )
     write_fabric_snapshot(tmp_path, pe=1, records=[left, right])
@@ -118,14 +116,13 @@ def test_dp_attention_evidence_requires_both_padding_handoff_and_rank_paths(tmp_
         fabric_record("atnagent", trace_id=2, invocation_sequence=2, execution_mode="decode"),
         fabric_record("atnagent", trace_id=3, invocation_sequence=2, execution_mode="decode"),
     ]
-    records[0]["dp_padding_mode"] = "sum_len"
-    records[1]["dp_padding_mode"] = "max_len"
-    records[1]["result_handoff"] = "reduce_scatter_input"
-    records[2]["dp_padding_mode"] = "max_len"
-    records[2]["result_handoff"] = "reduce_scatter_input"
+    records[0]["dp_row_layout"] = "packed_by_rank"
+    records[1]["dp_row_layout"] = "uniform_by_rank"
+    records[1]["output_requirement"] = "group_sum_complete"
+    records[2]["dp_row_layout"] = "uniform_by_rank"
+    records[2]["output_requirement"] = "group_sum_complete"
     idle_facts = cast(dict[str, object], records[2]["facts"])
     idle_facts["forward_mode"] = "idle"
-    idle_facts["result_contribution"] = "zero"
     write_fabric_snapshot(tmp_path, pe=0, records=records)
 
     assert_dp_attention_paths(tmp_path)
@@ -144,8 +141,8 @@ def fabric_record(
     trace_id: int,
     invocation_sequence: int,
     execution_mode: str,
-    model_index: int = 0,
-    executor_index: int = 0,
+    instance_index: int = 0,
+    executor_lane_index: int = 0,
     active_interval: tuple[int, int] = (110, 230),
 ) -> dict[str, object]:
     """Build one complete current Fabric observer alternative."""
@@ -153,68 +150,63 @@ def fabric_record(
     common: dict[str, object] = {
         "local_trace_id": trace_id,
         "kind": kind,
-        "model_index": model_index,
+        "instance_index": instance_index,
         "invocation_sequence": invocation_sequence,
         "layer_ordinal": 1,
-        "layer_id": 2,
-        "result_handoff": "replicated_full",
-        "dp_padding_mode": "none",
+        "payload_rows": 8,
+        "output_requirement": "per_rank_complete",
+        "dp_row_layout": "none" if kind == "atnagent" else None,
     }
     if kind == "atnagent":
         prefill = execution_mode == "prefill"
         common["facts"] = {
             "submission_payload_rows": 8,
-            "local_token_count": 8,
-            "forward_mode": "extend" if prefill else "decode",
-            "executor_index": executor_index,
-            "execution_mode": execution_mode,
-            "result_contribution": "full",
+            "dp_rank_payload_rows": 8,
+            "forward_mode": "prefill" if prefill else "decode",
+            "executor_lane_index": executor_lane_index,
+            "executor_lease_sequence": invocation_sequence,
         }
         common["events_ns"] = {
             "submission_prepared": 100,
-            "decode_input_staged": 0 if prefill else 110,
             "submission_published": 120,
             "admission_observed": 130,
-            "prefill_input_staged": 140 if prefill else 0,
-            "prefill_input_published": 150 if prefill else 0,
-            "result_observed": 200,
-            "output_prepared": 210,
-            "transport_evaluated_published": 220,
-            "acknowledgement_published": 230,
+            "input_ready_published": 150,
+            "output_commit_observed": 200,
+            "output_acknowledgement_published": 230,
         }
     elif kind == "coordinator":
         common["facts"] = {
-            "invocation_payload_rows": 8,
-            "input_pe": 0,
-            "execution_mode": execution_mode,
-            "executor_index": executor_index,
+            "executor_lane_index": executor_lane_index,
+            "executor_lease_sequence": invocation_sequence,
             "scheduler": {"policy": "fifo", "ready_ticket": invocation_sequence},
         }
         common["events_ns"] = {
             "enqueued": 100,
             "scheduled": active_interval[0],
-            "admissions_published": 120,
-            "invocations_published": 130,
-            "completions_observed": 200,
-            "results_published": 210,
-            "acknowledgements_observed": 220,
-            "scheduler_released": active_interval[1],
+            "admission_published": 120,
+            "lane_execution_published": 130,
+            "ffnagent_completions_observed": 200,
+            "output_commit_published": 210,
+            "output_acknowledgements_observed": 220,
+            "lane_released": active_interval[1],
         }
-    elif kind == "execution":
-        prefill = execution_mode == "prefill"
+    elif kind == "ffnagent":
         common["facts"] = {
-            "invocation_payload_rows": 8,
-            "input_pe": 0,
-            "execution_mode": execution_mode,
-            "executor_index": executor_index,
+            "executor_lane_index": executor_lane_index,
+            "executor_lease_sequence": invocation_sequence,
+            "payload_row_capacity": 8,
+            "delivery": "replicated_complete",
         }
         common["events_ns"] = {
-            "invocation_observed": 130,
-            "decode_input_pull_started": 140 if not prefill else 0,
-            "decode_input_pull_completed": 150 if not prefill else 0,
-            "prefill_input_ready_observed": 150 if prefill else 0,
-            "execution_started": 160,
-            "execution_completed": 190,
+            "lane_execution_observed": 130,
+            "input_ready_observed": 150,
+            "routing_metadata_published": 0,
+            "routing_metadata_observed": 0,
+            "compute_started": 160,
+            "compute_completed": 190,
+            "partial_ready_published": 195,
+            "peer_partials_ready_observed": 196,
+            "peer_partials_validated": 0,
             "completion_published": 200,
         }
     else:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from xpool.abi import DpPaddingMode, FfnResultHandoff, XPoolForwardMode
+from xpool.native.ffn import DpRowLayout, ForwardMode, OutputRequirement
 
 __all__ = ["TRANSPORT_ARENA_HANDLE_HEX_LENGTH", "FfnRequestMetadata", "TransportArenaHandle"]
 
@@ -18,27 +18,27 @@ class FfnRequestMetadata:
 
     Attributes:
         layer_ordinal: Zero-based FFN position in the Fabric workload.
-        forward_mode: Decode, extend, or idle ABI value.
-        result_handoff: SGLang-facing result handoff contract.
-        dp_padding_mode: Data-parallel padding ABI value selected by the producer.
+        forward_mode: Prefill, decode, or idle ABI value.
+        output_requirement: Mathematical output requirement.
+        dp_row_layout: Physical data-parallel row layout selected by the producer.
     """
 
     layer_ordinal: int
-    forward_mode: XPoolForwardMode
-    result_handoff: FfnResultHandoff
-    dp_padding_mode: DpPaddingMode
+    forward_mode: ForwardMode
+    output_requirement: OutputRequirement
+    dp_row_layout: DpRowLayout
 
     def __post_init__(self) -> None:
         """Reject untyped request metadata before dispatcher entry."""
 
         if isinstance(self.layer_ordinal, bool) or not isinstance(self.layer_ordinal, int) or self.layer_ordinal < 0:
             raise ValueError("xpool FFN layer ordinal must be a non-negative integer")
-        if not isinstance(self.forward_mode, XPoolForwardMode):
-            raise TypeError("xpool FFN forward mode must be XPoolForwardMode")
-        if not isinstance(self.result_handoff, FfnResultHandoff):
-            raise TypeError("xpool FFN result handoff must be FfnResultHandoff")
-        if not isinstance(self.dp_padding_mode, DpPaddingMode):
-            raise TypeError("xpool FFN DP padding mode must be DpPaddingMode")
+        if not isinstance(self.forward_mode, ForwardMode):
+            raise TypeError("xpool FFN forward mode must be ForwardMode")
+        if not isinstance(self.output_requirement, OutputRequirement):
+            raise TypeError("xpool FFN output requirement must be OutputRequirement")
+        if not isinstance(self.dp_row_layout, DpRowLayout):
+            raise TypeError("xpool FFN DP row layout must be DpRowLayout")
 
 
 @dataclass(frozen=True, slots=True)

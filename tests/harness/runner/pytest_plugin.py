@@ -63,7 +63,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "estimated_duration(seconds): estimated test runtime used by tests")
     config.addinivalue_line(
         "markers",
-        "token_parity_group(name, expected_case_count): complete cross-task token parity group",
+        "serving_graph_group(name, expected_case_count): complete cross-task serving graph group",
     )
     config.stash[requirement_resolver_key] = RequirementResolver()
 
@@ -94,9 +94,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         cuda_requirement(item)
         model_ids(item)
         estimated_duration(item)
-        parity_group = token_parity_group(item)
-        if parity_group is not None and list(item.iter_markers("xfail")):
-            raise pytest.UsageError(f"{item.nodeid}: token parity cases cannot use xfail")
+        serving_graph_group_ref = serving_graph_group(item)
+        if serving_graph_group_ref is not None and list(item.iter_markers("xfail")):
+            raise pytest.UsageError(f"{item.nodeid}: serving graph cases cannot use xfail")
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
@@ -162,23 +162,23 @@ def estimated_duration(item: pytest.Item) -> float | None:
     return positive_number(item, "estimated_duration", marker.kwargs["seconds"])
 
 
-def token_parity_group(item: pytest.Item) -> ArtifactGroupRef | None:
-    """Return the closest validated complete token-parity group reference."""
+def serving_graph_group(item: pytest.Item) -> ArtifactGroupRef | None:
+    """Return the closest validated complete serving-graph group reference."""
 
-    marker = item.get_closest_marker("token_parity_group")
+    marker = item.get_closest_marker("serving_graph_group")
     if marker is None:
         return None
     if marker.args or set(marker.kwargs) != {"name", "expected_case_count"}:
         raise pytest.UsageError(
-            f"{item.nodeid}: token_parity_group expects name=<non-empty string>, expected_case_count=<integer>"
+            f"{item.nodeid}: serving_graph_group expects name=<non-empty string>, expected_case_count=<integer>"
         )
     name = marker.kwargs["name"]
     expected_case_count = marker.kwargs["expected_case_count"]
     if not isinstance(name, str) or not name:
-        raise pytest.UsageError(f"{item.nodeid}: token_parity_group expects name=<non-empty string>")
+        raise pytest.UsageError(f"{item.nodeid}: serving_graph_group expects name=<non-empty string>")
     if not isinstance(expected_case_count, int) or isinstance(expected_case_count, bool) or expected_case_count < 2:
-        raise pytest.UsageError(f"{item.nodeid}: token_parity_group expected_case_count must be at least two")
-    return ArtifactGroupRef(kind="token_parity", name=name, expected_case_count=expected_case_count)
+        raise pytest.UsageError(f"{item.nodeid}: serving_graph_group expected_case_count must be at least two")
+    return ArtifactGroupRef(kind="serving_graph", name=name, expected_case_count=expected_case_count)
 
 
 def timeout_seconds(item: pytest.Item) -> float:
@@ -242,7 +242,7 @@ def pytest_collection_finish(session: pytest.Session) -> None:
                 ),
                 estimated_duration_seconds=estimated_duration(item),
                 timeout_seconds=timeout_seconds(item),
-                artifact_group=token_parity_group(item),
+                artifact_group=serving_graph_group(item),
             )
         )
     try:

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 import xpool.bootstrap
 from tests.harness.support.config import reset_global_config
 from xpool.config import DebugConfig
-from xpool.runtime import RuntimeRole
+from xpool.native import RuntimeRole
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -20,6 +20,7 @@ def test_bootstrap_initializes_native_runtime_once(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(xpool.bootstrap.xpool.cext, "ensure_native_loaded", lambda: events.append(("load",)))
     monkeypatch.setattr(xpool.bootstrap, "get_global_config", lambda: SimpleNamespace(debug=DebugConfig()))
     monkeypatch.setattr(xpool.bootstrap, "set_process_title", lambda title: events.append(("title", title)))
+    monkeypatch.setattr(torch.cuda, "set_device", lambda device: events.append(("device", device)))
     monkeypatch.setattr(
         xpool.bootstrap.xpool.native,
         "initialize",
@@ -32,12 +33,14 @@ def test_bootstrap_initializes_native_runtime_once(monkeypatch: pytest.MonkeyPat
     assert xpool.bootstrap.get_runtime_role() is RuntimeRole.INSTANCE
     assert events[0] == ("load",)
     assert events[1][:3] == ("init", RuntimeRole.INSTANCE, 2)
-    assert json.loads(str(events[1][3])) == {
-        "loopback": {"enable": False, "site": None},
-        "transport_observer": {"enable": False, "trace_capacity": 8192},
-        "fabric_observer": {"enable": False, "trace_capacity": 8192},
-    }
-    assert len(events) == 2
+    debug_options = events[1][3]
+    assert isinstance(debug_options, xpool.bootstrap.xpool.native.debug.Options)
+    assert debug_options.transport_observer.record_capacity == 8192
+    assert debug_options.fabric_observer.record_capacity == 8192
+    assert debug_options.graph_observer.enable is False
+    assert debug_options.ffn_routing_observer.record_capacity == 8
+    assert events[2] == ("device", 2)
+    assert len(events) == 3
 
 
 @pytest.mark.parametrize(
@@ -66,13 +69,18 @@ def test_bootstrap_sets_resident_process_title_after_native_initialization(
             ("init", native_role, native_device, debug_options)
         ),
     )
+    monkeypatch.setattr(torch.cuda, "set_device", lambda device: events.append(("device", device)))
     monkeypatch.setattr(xpool.bootstrap, "set_process_title", lambda value: events.append(("title", value)))
 
     xpool.bootstrap.init(cuda_device, role)
 
     assert events[0] == ("load",)
     assert events[1][0:3] == ("init", role, cuda_device)
-    assert events[2] == ("title", title)
+    assert isinstance(events[1][3], xpool.bootstrap.xpool.native.debug.Options)
+    if cuda_device is None:
+        assert events[2] == ("title", title)
+    else:
+        assert events[2:] == [("device", cuda_device), ("title", title)]
     assert xpool.bootstrap.get_runtime_role() is role
 
 
@@ -90,6 +98,7 @@ def test_bootstrap_rejects_conflicting_reinitialization(
     monkeypatch.setattr(xpool.bootstrap.xpool.cext, "ensure_native_loaded", lambda: None)
     monkeypatch.setattr(xpool.bootstrap, "get_global_config", lambda: SimpleNamespace(debug=DebugConfig()))
     monkeypatch.setattr(xpool.bootstrap.xpool.native, "initialize", lambda role, cuda_device, debug_options: None)
+    monkeypatch.setattr(torch.cuda, "set_device", lambda device: None)
     xpool.bootstrap.init(2, RuntimeRole.INSTANCE)
 
     with pytest.raises(RuntimeError, match="already initialized"):
@@ -104,7 +113,11 @@ def test_bootstrap_does_not_commit_failed_native_initialization(monkeypatch: pyt
     process_titles: list[str] = []
     monkeypatch.setattr(xpool.bootstrap, "set_process_title", process_titles.append)
 
-    def fail_init(role: RuntimeRole, cuda_device: int, debug_options: str) -> None:
+    def fail_init(
+        role: RuntimeRole,
+        cuda_device: int,
+        debug_options: xpool.bootstrap.xpool.native.debug.Options,
+    ) -> None:
         raise RuntimeError("native init failed")
 
     monkeypatch.setattr(xpool.bootstrap.xpool.native, "initialize", fail_init)

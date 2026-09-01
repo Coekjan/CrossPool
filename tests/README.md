@@ -31,6 +31,11 @@ imports. E2E files use `test_e2e_*.py` names. Model IDs, topology matrices,
 trace capacities, graph modes, and test-only KV limits belong in
 `tests/harness/sglang/manifest.toml`, not Python test code.
 
+One layer should own each expensive behavioral verdict. Higher layers assert
+only their integration seam instead of replaying lower-level protocol details.
+Use a Cartesian matrix only when its dimensions interact; otherwise cover each
+independent dimension once at its lowest observable boundary.
+
 ## Requirements
 
 Pytest resource markers are executable metadata:
@@ -58,7 +63,7 @@ The package runner performs these steps:
    by resource count and estimated duration and backfilled across idle GPUs.
 4. Run each Python GPU task in a `SupervisedTaskScope`; release its lease only
    after the complete descendant process domain is reaped.
-5. Parse JUnit and E2E artifacts, evaluate declared token-parity groups, and
+5. Parse JUnit and E2E artifacts, evaluate declared serving-graph groups, and
    retain logs under `.xpool-cache/test-runs/`.
 
 Set `XPOOL_TEST_KEEP_RUNS` to a positive integer to retain only that many
@@ -69,9 +74,9 @@ never cleanup candidates.
 Each E2E SGLang server writes a versionless `*.inference.json` beside its log.
 It contains the exact public `/generate` request and response and is written
 before HTTP-status and token-shape validation. JUnit describes case outcome,
-`*.duration.json` records timing and resolved graph mode, token-parity artifacts
-compare declared cross-mode groups, and observer files prove internal graph and
-transport/fabric behavior.
+`*.duration.json` records timing and resolved graph mode. Serving-graph
+artifacts compare Eager and Full token output plus Eager and Piecewise prefill
+logits, while observer files prove internal graph and transport/fabric behavior.
 
 ## Commands
 

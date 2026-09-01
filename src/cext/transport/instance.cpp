@@ -14,6 +14,8 @@
 #include <optional>
 #include <utility>
 
+#include <xpool/hooks.hpp>
+#include <xpool/transport/hooks.hpp>
 #include <xpool/transport/instance.hpp>
 #include <xpool/utils/wait.hpp>
 
@@ -24,30 +26,17 @@ namespace {
 constexpr auto kEndpointStartupTimeout = std::chrono::seconds{60};
 constexpr auto kEndpointStartupPollInterval = std::chrono::milliseconds{1};
 
-xpool::abi::TensorDType tensor_dtype(c10::ScalarType scalar_type) {
-  switch (scalar_type) {
-  case c10::ScalarType::BFloat16:
-    return xpool::abi::TensorDType{xpool::abi::TensorDType::Bf16};
-  case c10::ScalarType::Half:
-    return xpool::abi::TensorDType{xpool::abi::TensorDType::Fp16};
-  case c10::ScalarType::Float:
-    return xpool::abi::TensorDType{xpool::abi::TensorDType::Fp32};
-  default:
-    TORCH_CHECK(false, "xpool transport supports only float32, float16, and bfloat16 tensors");
-  }
-}
-
 } // namespace
 
-void InstanceTransportRuntime::Attachment::attach(std::size_t instance_index, std::size_t rank,
-                                                  const TransportArenaHandle &handle) {
+void InstanceRankRuntime::Attachment::attach(std::size_t instance_index, std::size_t rank,
+                                                  const ArenaHandle &handle) {
   if (*this) {
     TORCH_CHECK(matches(instance_index, rank, handle),
                 "xpool instance transport arena is already attached with a different identity or handle");
     return;
   }
 
-  auto arena = TransportArena::from_handle(handle);
+  auto arena = Arena::from_handle(handle);
   const auto &layout = arena.layout();
   TORCH_CHECK(layout.instance_index == instance_index && layout.instance_rank == rank,
               "xpool transport arena identity does not match the attaching instance process");
@@ -58,103 +47,109 @@ void InstanceTransportRuntime::Attachment::attach(std::size_t instance_index, st
         if (status == MailboxStatus::Idle) {
           return true;
         }
-        TORCH_CHECK(
-            status == MailboxStatus::Dormant,
-            "xpool Transport endpoint entered an invalid state before first use");
+        TORCH_CHECK(status == MailboxStatus::Dormant,
+                    "xpool Transport endpoint entered an invalid state before first use");
         return false;
       },
       kEndpointStartupPollInterval);
-  TORCH_CHECK(
-      result == xpool::utils::wait::Result::Ready,
-      "xpool Transport endpoint startup exceeded the bounded deadline");
+  TORCH_CHECK(result == xpool::utils::wait::Status::Ready,
+              "xpool Transport endpoint startup exceeded the bounded deadline");
+  xpool::hooks::TransportEndpointOpenPostEvent::hooks(
+      {.cuda_device = arena.cuda_device(),
+       .arena = arena.view(),
+       .layout = arena.layout(),
+       .site = xpool::hooks::TransportEndpointSite::Instance});
   handle_ = handle;
   arena_ = std::move(arena);
 }
 
-void InstanceTransportRuntime::Attachment::detach() {
+void InstanceRankRuntime::Attachment::detach() {
   if (!*this) {
     return;
   }
   c10::cuda::CUDAGuard device_guard(arena_.cuda_device());
   C10_CUDA_CHECK(cudaDeviceSynchronize());
+  xpool::hooks::TransportEndpointClosePreEvent::hooks(
+      {.cuda_device = arena_.cuda_device(),
+       .arena = arena_.view(),
+       .layout = arena_.layout(),
+       .site = xpool::hooks::TransportEndpointSite::Instance});
   arena_.destroy();
   handle_ = {};
 }
 
-xpool::abi::FfnResultCode
-InstanceTransportRuntime::Attachment::read_generation_failure() const {
+xpool::ffn::ResultCode InstanceRankRuntime::Attachment::read_generation_failure() const {
   c10::cuda::CUDAGuard device_guard(arena_.cuda_device());
   return arena_.read_generation_failure();
 }
 
-at::Tensor InstanceTransportRuntime::Attachment::submit(
-    const at::Tensor &hidden_states, const std::optional<at::Tensor> &global_num_tokens_gpu,
-    const xpool::transport::FfnRequestMetadata &request_metadata) const {
+void InstanceRankRuntime::Attachment::submit(const at::Tensor &hidden_states,
+                                             const std::optional<at::Tensor> &dp_rank_payload_rows,
+                                             const at::Tensor &output,
+                                             const xpool::transport::RequestMetadata &request_metadata) const {
   const auto &layout = arena_.layout();
   const auto payload_rows = c10::checked_convert<std::size_t>(hidden_states.size(0), "hidden-state rows");
-  const auto token_counts_present = global_num_tokens_gpu.has_value() && global_num_tokens_gpu->defined() &&
-                                    global_num_tokens_gpu->numel() != 0;
-  request_metadata.validate(layout, payload_rows, token_counts_present);
+  const auto dp_rank_payload_rows_present =
+      dp_rank_payload_rows.has_value() && dp_rank_payload_rows->defined() && dp_rank_payload_rows->numel() != 0;
+  TORCH_CHECK(request_metadata.valid(), "xpool FFN shim received invalid request metadata");
+  TORCH_CHECK(payload_rows != 0 && payload_rows <= layout.payload_row_capacity,
+              "xpool FFN request row count exceeds Transport capacity");
+  if (layout.atn_dp_size == 1) {
+    TORCH_CHECK(request_metadata.dp_row_layout == xpool::ffn::DpRowLayout::None && !dp_rank_payload_rows_present,
+                "xpool DP-one request must use NONE without a per-rank row vector");
+  } else {
+    TORCH_CHECK(request_metadata.dp_row_layout == xpool::ffn::DpRowLayout::UniformByRank ||
+                    request_metadata.dp_row_layout == xpool::ffn::DpRowLayout::PackedByRank,
+                "xpool DP request requires UNIFORM_BY_RANK or PACKED_BY_RANK");
+    TORCH_CHECK(dp_rank_payload_rows_present,
+                "xpool DP request requires one physical row value per attention DP rank");
+  }
   TORCH_CHECK(c10::checked_convert<std::size_t>(hidden_states.size(1), "hidden-state width") == layout.hidden_size,
               "xpool FFN shim hidden size does not match the attached Transport arena");
-  TORCH_CHECK(tensor_dtype(hidden_states.scalar_type()).value() == layout.dtype,
+  TORCH_CHECK(hidden_states.scalar_type() == layout.payload_dtype,
               "xpool FFN shim dtype does not match the attached Transport arena");
   TORCH_CHECK(hidden_states.get_device() == arena_.cuda_device(),
               "xpool FFN shim hidden states must be on the attached Transport arena device");
 
-  if (token_counts_present) {
-    const auto &token_counts = *global_num_tokens_gpu;
-    TORCH_CHECK(token_counts.is_cuda() && token_counts.is_contiguous() && token_counts.dim() == 1,
-                "xpool FFN shim DP token counts must be a contiguous 1D CUDA tensor");
-    TORCH_CHECK(token_counts.scalar_type() == at::kInt || token_counts.scalar_type() == at::kLong,
-                "xpool FFN shim DP token counts must be int32 or int64");
-    TORCH_CHECK(token_counts.get_device() == hidden_states.get_device(),
-                "xpool FFN shim DP token counts must be on the hidden-state device");
-    TORCH_CHECK(c10::checked_convert<std::size_t>(token_counts.numel(), "DP token count length") ==
+  if (dp_rank_payload_rows_present) {
+    const auto &rank_payload_rows = *dp_rank_payload_rows;
+    TORCH_CHECK(c10::checked_convert<std::size_t>(rank_payload_rows.numel(), "DP-rank row vector length") ==
                     layout.atn_dp_size,
-                "xpool FFN shim DP token counts must have one entry per attention DP rank");
+                "xpool FFN shim DP-rank payload rows must have one entry per attention DP rank");
   }
 
-  auto output = at::empty_like(hidden_states);
-  TORCH_CHECK(hidden_states.is_cuda(), "xpool transport submit expects a CUDA tensor");
   c10::cuda::CUDAGuard device_guard(hidden_states.device());
   const auto stream = at::cuda::getCurrentCUDAStream(hidden_states.device().index());
-  const TransportRequest request{
-      stream,
-      arena_.view(),
-      hidden_states,
-      global_num_tokens_gpu,
-      output,
-      request_metadata,
+  const Request request{
+      stream, arena_.view(), hidden_states, dp_rank_payload_rows, output, request_metadata,
   };
   launch_request_kernel(request);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
-  return output;
 }
 
-void InstanceTransportRuntime::attach_arena(std::size_t instance_index, std::size_t rank,
-                                            const TransportArenaHandle &handle) {
+void InstanceRankRuntime::attach_arena(std::size_t instance_index, std::size_t rank,
+                                       const ArenaHandle &handle) {
   std::lock_guard<std::mutex> lock(mutex_);
   attachment_.attach(instance_index, rank, handle);
 }
 
-void InstanceTransportRuntime::detach_arena() {
+void InstanceRankRuntime::detach_arena() {
   std::lock_guard<std::mutex> lock(mutex_);
   attachment_.detach();
 }
 
-xpool::abi::FfnResultCode InstanceTransportRuntime::read_generation_failure() const {
+xpool::ffn::ResultCode InstanceRankRuntime::read_generation_failure() const {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(attachment_, "xpool transport failure read requires an attached arena");
   return attachment_.read_generation_failure();
 }
 
-at::Tensor InstanceTransportRuntime::submit(const at::Tensor &hidden_states,
-                                            const std::optional<at::Tensor> &global_num_tokens_gpu,
-                                            const xpool::transport::FfnRequestMetadata &request_metadata) {
+void InstanceRankRuntime::submit(const at::Tensor &hidden_states,
+                                 const std::optional<at::Tensor> &dp_rank_payload_rows, const at::Tensor &output,
+                                 const xpool::transport::RequestMetadata &request_metadata) {
   std::lock_guard<std::mutex> lock(mutex_);
   TORCH_CHECK(attachment_, "xpool ffn_shim has no attached instance transport arena");
-  return attachment_.submit(hidden_states, global_num_tokens_gpu, request_metadata);
+  attachment_.submit(hidden_states, dp_rank_payload_rows, output, request_metadata);
 }
 
 } // namespace xpool::transport

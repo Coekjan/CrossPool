@@ -22,7 +22,7 @@ directory.
    To scan from an explicit point in time:
 
    ```bash
-   python3 scripts/summarize_sessions.py --since 2026-06-01
+   uv run python scripts/summarize_sessions.py --since 2026-06-01
    ```
 
    When `--since` is omitted, the script reads the repo-level
@@ -32,7 +32,7 @@ directory.
    normally omit `--since`:
 
    ```bash
-   python3 scripts/summarize_sessions.py
+   uv run python scripts/summarize_sessions.py
    ```
 
    The script first indexes session files from the `sessions/YYYY/MM/DD`
@@ -44,13 +44,13 @@ directory.
    Read-only review mode:
 
    ```bash
-   python3 scripts/summarize_sessions.py --no-update-last
+   uv run python scripts/summarize_sessions.py --no-update-last
    ```
 
    Preference-focused review mode:
 
    ```bash
-   python3 scripts/summarize_sessions.py --mode preferences --no-update-last
+   uv run python scripts/summarize_sessions.py --mode preferences --no-update-last
    ```
 
 3. Treat the script as an index, not as the self-evolve decision. For long or
@@ -62,14 +62,15 @@ directory.
 4. Run an explicit preference extraction pass for user corrections when recent
    history includes code-quality, configuration, testing, review, or workflow
    complaints. Cluster repeated corrections by theme and compare them against
-   `docs/code-style.md`, `AGENTS.md`, `PLAN.md`, `.codex/skills/`,
-   `.codex/agents/`, and existing memory before deciding whether they are new,
-   covered, or conflicting.
+   `docs/code-style.md`, `AGENTS.md`, `CONTEXT.md`, relevant current design and
+   active plan documents, `.codex/skills/`, `.codex/agents/`, and existing
+   memory before deciding whether they are new, covered, or conflicting.
 5. Extract only lessons that are durable beyond the current patch:
    user preferences, workflow rules, tool availability, validation standards,
    recurring failure modes, and instruction conflicts.
-6. Drop lessons already covered by `docs/code-style.md`, `AGENTS.md`, `PLAN.md`,
-   `.codex/skills/`, `.codex/agents/`, or existing memory.
+6. Drop lessons already covered by `docs/code-style.md`, `AGENTS.md`,
+   `CONTEXT.md`, relevant design or plan documents, `.codex/skills/`,
+   `.codex/agents/`, or existing memory.
 7. Report candidate lessons and exact instruction conflicts. Do not write memory
    or edit files from a delegated reviewer/self-evolve subagent.
 
@@ -87,13 +88,12 @@ The main session owns persistence. For each accepted lesson:
   repository's current workflow.
 - If a code-quality, configuration, or testing correction appears at least twice
   in the same conversation or across recent excerpts, explicitly route it by
-  ownership: code-level naming, typing, abstraction, documentation, formatting,
-  or native-language rules belong in `docs/code-style.md`; repository
-  architecture, configuration, testing layers, build environment, and workflow
-  belong in `AGENTS.md`; reusable task procedures belong in their owning skill;
-  design-specific runtime behavior belongs in `PLAN.md`; and personal or
-  session-only context belongs in memory when authorized. Do not leave repeated
-  corrections as only transient chat context.
+  ownership: code-level rules belong in `docs/code-style.md`; repository
+  workflow in `AGENTS.md`; domain language in `CONTEXT.md`; implemented
+  architecture in the relevant `docs/designs/` document; unimplemented target
+  changes in the relevant `docs/plans/` task; reusable procedures in their
+  owning skill; and personal or session-only context in memory when authorized.
+  Do not leave repeated corrections as only transient chat context.
 - Persist memory according to the active git-commit workflow.
 - Add `Self-Evolved: <lesson>` to the commit message only when the lesson was
   actually persisted.

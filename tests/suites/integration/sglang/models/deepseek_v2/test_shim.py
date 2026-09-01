@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 from sglang.srt.layers import dp_attention
-from sglang.srt.model_executor import forward_batch_info
+from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.srt.models.deepseek_v2 import DeepseekV2ForCausalLM, DeepseekV2MLP, DeepseekV2MoE
 from torch import nn
 
@@ -15,17 +15,15 @@ import xpool.ops
 from tests.harness.support.config import install_test_config, reset_global_config
 from tests.harness.support.sglang.deepseek import (
     bound_shim,
-    decode_forward_batch,
     deepseek_config,
     install_adapter_config,
 )
-from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
-from xpool.abi import DpPaddingMode, FfnResultHandoff
+from tests.harness.support.sglang.fakes import FakeDecoderLayer, forward_batch, loaded_model, runner_with_architecture
 from xpool.config import XpoolConfig
-from xpool.fabric import FfnLayerKind
-from xpool.integrations.sglang.adapter import XpoolModelBinding
-from xpool.integrations.sglang.models.deepseek_v2 import DeepseekV2Adapter, XpoolDeepseekV2MLP, XpoolDeepseekV2MoE
+from xpool.integrations.sglang.adapter import SglangInstanceRankBinding
+from xpool.integrations.sglang.models.deepseek_v2 import DeepseekV2ShimAdapter, XpoolDeepseekV2MLP, XpoolDeepseekV2MoE
 from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError, iter_ffn_shims
+from xpool.native.ffn import DpRowLayout, LayerKind, OutputRequirement
 from xpool.transport import FfnRequestMetadata
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_adapter_config.__name__)
@@ -35,7 +33,7 @@ def test_ffn_shim_module_reports_identity() -> None:
     shim = FfnShimModule(
         layer_id=3,
         hidden_size=2048,
-        layer_kind=FfnLayerKind.SPARSE,
+        layer_kind=LayerKind.MOE,
     )
 
     assert "layer_id=3" in shim.extra_repr()
@@ -53,7 +51,7 @@ def test_deepseek_dense_shim_preserves_mlp_isinstance_only() -> None:
     assert not isinstance(dense, DeepseekV2MoE)
     assert list(dense.parameters()) == []
     assert dense.layer_id == 3
-    assert dense.layer_kind is FfnLayerKind.DENSE
+    assert dense.layer_kind is LayerKind.DENSE
 
 
 @pytest.mark.parametrize("prefix", ["model.decoder.mlp", "model.draft.layers.0.mlp"])
@@ -78,7 +76,7 @@ def test_deepseek_moe_shim_preserves_moe_isinstance_and_minimal_attrs() -> None:
     assert not isinstance(moe, DeepseekV2MLP)
     assert list(moe.parameters()) == []
     assert moe.layer_id == 4
-    assert moe.layer_kind is FfnLayerKind.SPARSE
+    assert moe.layer_kind is LayerKind.MOE
     assert moe.experts.moe_runner_config.inplace is True
     assert moe.get_moe_weights() == []
 
@@ -134,18 +132,18 @@ def test_shim_forward_maps_sglang_reduce_scatter_handoff(
 
     def fake_ffn_shim(
         hidden_states: torch.Tensor,
-        global_num_tokens_gpu: torch.Tensor | None,
+        dp_rank_payload_rows: torch.Tensor | None,
         request_metadata: FfnRequestMetadata,
     ) -> torch.Tensor:
-        assert global_num_tokens_gpu is None
-        assert request_metadata.result_handoff is FfnResultHandoff.REDUCE_SCATTER_INPUT
+        assert dp_rank_payload_rows is None
+        assert request_metadata.output_requirement is OutputRequirement.GROUP_SUM_COMPLETE
         return hidden_states.clone()
 
     shim = bound_shim()
     hidden_states = torch.zeros((1, 2048), dtype=torch.bfloat16)
     monkeypatch.setattr(xpool.ops, "ffn_shim", fake_ffn_shim)
 
-    output = shim(hidden_states, decode_forward_batch(), use_reduce_scatter=True)
+    output = shim(hidden_states, forward_batch(ForwardMode.DECODE), use_reduce_scatter=True)
 
     assert torch.equal(output, hidden_states)
 
@@ -153,7 +151,7 @@ def test_shim_forward_maps_sglang_reduce_scatter_handoff(
 def test_shim_forward_accepts_idle_forward_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_ffn_shim(
         hidden_states: torch.Tensor,
-        global_num_tokens_gpu: torch.Tensor | None,
+        dp_rank_payload_rows: torch.Tensor | None,
         request_metadata: FfnRequestMetadata,
     ) -> torch.Tensor:
         assert request_metadata.forward_mode == 4
@@ -171,10 +169,10 @@ def test_shim_forward_accepts_idle_forward_mode(monkeypatch: pytest.MonkeyPatch)
         model_architecture="DeepseekV2ForCausalLM",
     )
     hidden_states = torch.empty((0, 2048), dtype=torch.bfloat16)
-    forward_batch = type("FakeForwardBatch", (), {"forward_mode": forward_batch_info.ForwardMode.IDLE})()
+    batch = forward_batch(ForwardMode.IDLE)
     monkeypatch.setattr(xpool.ops, "ffn_shim", fake_ffn_shim)
 
-    assert torch.equal(shim(hidden_states, forward_batch), hidden_states)
+    assert torch.equal(shim(hidden_states, batch), hidden_states)
 
 
 def test_shim_forward_rejects_integer_forward_mode() -> None:
@@ -189,20 +187,17 @@ def test_shim_forward_rejects_integer_forward_mode() -> None:
         model_architecture="DeepseekV2ForCausalLM",
     )
     hidden_states = torch.empty((0, 2048), dtype=torch.bfloat16)
-    forward_batch = type(
-        "FakeForwardBatch",
-        (),
-        {"forward_mode": int(forward_batch_info.ForwardMode.DECODE)},
-    )()
+    batch = forward_batch(ForwardMode.DECODE)
+    setattr(batch, "forward_mode", int(ForwardMode.DECODE))
 
     with pytest.raises(ShimUnavailableError, match="forward mode"):
-        shim(hidden_states, forward_batch)
+        shim(hidden_states, batch)
 
 
 def test_shim_forward_preserves_native_runtime_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_ffn_shim(
         hidden_states: torch.Tensor,
-        global_num_tokens_gpu: torch.Tensor | None,
+        dp_rank_payload_rows: torch.Tensor | None,
         request_metadata: FfnRequestMetadata,
     ) -> torch.Tensor:
         assert request_metadata.forward_mode == 2
@@ -214,16 +209,16 @@ def test_shim_forward_preserves_native_runtime_errors(monkeypatch: pytest.Monkey
     monkeypatch.setattr(xpool.ops, "ffn_shim", fake_ffn_shim)
 
     with pytest.raises(RuntimeError, match="native detail"):
-        shim(hidden_states, decode_forward_batch())
+        shim(hidden_states, forward_batch(ForwardMode.DECODE))
 
 
 def test_shim_forward_passes_structured_native_request(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_ffn_shim(
         hidden_states: torch.Tensor,
-        global_num_tokens_gpu: torch.Tensor | None,
+        dp_rank_payload_rows: torch.Tensor | None,
         request_metadata: FfnRequestMetadata,
     ) -> torch.Tensor:
-        assert global_num_tokens_gpu is None
+        assert dp_rank_payload_rows is None
         assert request_metadata.layer_ordinal == 0
         assert request_metadata.forward_mode == 2
         return hidden_states + 1
@@ -235,14 +230,13 @@ def test_shim_forward_passes_structured_native_request(monkeypatch: pytest.Monke
                 "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
-            env={"XPOOL_DEBUG_LOOPBACK_ENABLE": "1", "XPOOL_DEBUG_LOOPBACK_SITE": "instance"},
         )
     )
     shim = bound_shim(layer_id=4)
     hidden_states = torch.zeros((1, 2048), dtype=torch.bfloat16)
     monkeypatch.setattr(xpool.ops, "ffn_shim", fake_ffn_shim)
 
-    output = shim(hidden_states, decode_forward_batch())
+    output = shim(hidden_states, forward_batch(ForwardMode.DECODE))
 
     assert torch.equal(output, hidden_states + 1)
 
@@ -257,27 +251,23 @@ def test_shim_forward_normalizes_single_rank_dp_metadata(
 ) -> None:
     def fake_ffn_shim(
         hidden_states: torch.Tensor,
-        global_num_tokens_gpu: torch.Tensor | None,
+        dp_rank_payload_rows: torch.Tensor | None,
         request_metadata: FfnRequestMetadata,
     ) -> torch.Tensor:
-        assert global_num_tokens_gpu is None
+        assert dp_rank_payload_rows is None
         assert request_metadata.layer_ordinal == 0
-        assert request_metadata.dp_padding_mode is DpPaddingMode.NONE
+        assert request_metadata.dp_row_layout is DpRowLayout.NONE
         return hidden_states.clone()
 
     hidden_states = torch.zeros((3, 2048), dtype=torch.bfloat16)
-    forward_batch = type(
-        "FakeForwardBatch",
-        (),
-        {
-            "forward_mode": forward_batch_info.ForwardMode.DECODE,
-            "dp_padding_mode": padding_mode,
-            "global_num_tokens_gpu": torch.tensor([3], dtype=torch.int32),
-        },
-    )()
+    batch = forward_batch(
+        ForwardMode.DECODE,
+        dp_padding_mode=padding_mode,
+        global_num_tokens_gpu=torch.tensor([3], dtype=torch.int32),
+    )
     monkeypatch.setattr(xpool.ops, "ffn_shim", fake_ffn_shim)
 
-    output = bound_shim()(hidden_states, forward_batch)
+    output = bound_shim()(hidden_states, batch)
 
     assert torch.equal(output, hidden_states)
 
@@ -285,57 +275,48 @@ def test_shim_forward_normalizes_single_rank_dp_metadata(
 @pytest.mark.parametrize(
     ("sglang_padding_mode", "request_padding_mode"),
     [
-        (dp_attention.DpPaddingMode.MAX_LEN, DpPaddingMode.MAX_LEN),
-        (dp_attention.DpPaddingMode.SUM_LEN, DpPaddingMode.SUM_LEN),
+        (dp_attention.DpPaddingMode.MAX_LEN, DpRowLayout.UNIFORM_BY_RANK),
+        (dp_attention.DpPaddingMode.SUM_LEN, DpRowLayout.PACKED_BY_RANK),
     ],
 )
-def test_shim_forward_publishes_attention_dp_token_counts(
+def test_shim_forward_publishes_attention_dp_rank_payload_rows(
     monkeypatch: pytest.MonkeyPatch,
     sglang_padding_mode: dp_attention.DpPaddingMode,
-    request_padding_mode: DpPaddingMode,
+    request_padding_mode: DpRowLayout,
 ) -> None:
-    token_counts = torch.tensor([3, 2], dtype=torch.int32)
+    dp_rank_rows = torch.tensor([3, 2], dtype=torch.int32)
 
     def fake_ffn_shim(
         hidden_states: torch.Tensor,
-        global_num_tokens_gpu: torch.Tensor | None,
+        dp_rank_payload_rows: torch.Tensor | None,
         request_metadata: FfnRequestMetadata,
     ) -> torch.Tensor:
-        assert global_num_tokens_gpu is token_counts
-        assert request_metadata.dp_padding_mode is request_padding_mode
+        assert dp_rank_payload_rows is dp_rank_rows
+        assert request_metadata.dp_row_layout is request_padding_mode
         return hidden_states.clone()
 
-    forward_batch = type(
-        "FakeForwardBatch",
-        (),
-        {
-            "forward_mode": forward_batch_info.ForwardMode.DECODE,
-            "dp_padding_mode": sglang_padding_mode,
-            "global_num_tokens_gpu": token_counts,
-        },
-    )()
+    batch = forward_batch(
+        ForwardMode.DECODE,
+        dp_padding_mode=sglang_padding_mode,
+        global_num_tokens_gpu=dp_rank_rows,
+    )
     hidden_states = torch.zeros((3, 2048), dtype=torch.bfloat16)
     monkeypatch.setattr(xpool.ops, "ffn_shim", fake_ffn_shim)
 
-    output = bound_shim(atn_dp_size=2)(hidden_states, forward_batch)
+    output = bound_shim(atn_dp_size=2)(hidden_states, batch)
 
     assert torch.equal(output, hidden_states)
 
 
-def test_shim_forward_rejects_missing_attention_dp_token_counts() -> None:
-    forward_batch = type(
-        "FakeForwardBatch",
-        (),
-        {
-            "forward_mode": forward_batch_info.ForwardMode.DECODE,
-            "dp_padding_mode": dp_attention.DpPaddingMode.MAX_LEN,
-            "global_num_tokens_gpu": None,
-        },
-    )()
+def test_shim_forward_rejects_missing_attention_dp_rank_payload_rows() -> None:
+    batch = forward_batch(
+        ForwardMode.DECODE,
+        dp_padding_mode=dp_attention.DpPaddingMode.MAX_LEN,
+    )
     hidden_states = torch.zeros((3, 2048), dtype=torch.bfloat16)
 
     with pytest.raises(ShimUnavailableError, match="global_num_tokens_gpu"):
-        bound_shim(atn_dp_size=2)(hidden_states, forward_batch)
+        bound_shim(atn_dp_size=2)(hidden_states, batch)
 
 
 def test_deepseek_loaded_model_validation_counts_xpool_shims() -> None:
@@ -365,7 +346,7 @@ def test_deepseek_loaded_model_validation_counts_xpool_shims() -> None:
     runner = runner_with_architecture("DeepseekV2ForCausalLM")
     runner.model = model
 
-    DeepseekV2Adapter().validate_after_load(runner.as_model_runner())
+    DeepseekV2ShimAdapter().validate_after_load(runner.as_model_runner())
 
     assert runner.xpool_ffn_shim_count == 2
     assert [shim.layer_id for shim in iter_ffn_shims(model)] == [0, 1]
@@ -376,7 +357,7 @@ def test_deepseek_loaded_model_validation_requires_shims() -> None:
     runner.model = loaded_model(DeepseekV2ForCausalLM, deepseek_config(), [])
 
     with pytest.raises(RuntimeError, match="produced no FFN shim"):
-        DeepseekV2Adapter().validate_after_load(runner.as_model_runner())
+        DeepseekV2ShimAdapter().validate_after_load(runner.as_model_runner())
 
 
 def test_bind_shim_runtime_binds_loaded_deepseek_shims() -> None:
@@ -398,7 +379,7 @@ def test_bind_shim_runtime_binds_loaded_deepseek_shims() -> None:
     )
     runner = runner_with_architecture("DeepseekV2ForCausalLM")
     runner.model = model
-    binding = XpoolModelBinding(
+    binding = SglangInstanceRankBinding(
         instance_id="test/model",
         model_path=Path("/models/test/model"),
         instance_index=2,

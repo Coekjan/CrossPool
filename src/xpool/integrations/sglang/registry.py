@@ -2,29 +2,20 @@
 
 from __future__ import annotations
 
-import importlib
-import inspect
-import pkgutil
-from collections.abc import Iterable, Sequence
-from types import ModuleType
-from typing import cast
+from collections.abc import Sequence
 
-from xpool.integrations.sglang.adapter import SglangModelAdapter
+from xpool.integrations.sglang.adapter import SglangShimAdapter
+from xpool.utils.discovery import discover_concrete_subclasses
 
 MODELS_PACKAGE = "xpool.integrations.sglang.models"
 
 
-def fail_model_package_import(package_name: str) -> None:
-    """Fail adapter discovery when a scanned package cannot be imported."""
-
-    raise RuntimeError(f"failed to import SGLang adapter package {package_name}")
-
-
-def discover_sglang_model_adapters(package_name: str) -> tuple[SglangModelAdapter, ...]:
+def discover_sglang_model_adapters(package_name: str) -> tuple[SglangShimAdapter, ...]:
     """Discover and instantiate SGLang model adapters from a package.
 
     Args:
         package_name: Importable package containing model adapter modules.
+
     Returns:
         Stable, name-validated adapter instances.
 
@@ -34,76 +25,18 @@ def discover_sglang_model_adapters(package_name: str) -> tuple[SglangModelAdapte
             or if an adapter cannot be constructed or duplicates a name.
     """
 
-    adapters: list[SglangModelAdapter] = []
-    for module in iter_model_modules(package_name):
-        for adapter_class in adapter_classes_in_module(module):
-            try:
-                adapters.append(adapter_class())
-            except TypeError as exc:
-                raise RuntimeError(
-                    f"SGLang adapter {adapter_class.__module__}.{adapter_class.__name__} must be zero-argument"
-                ) from exc
+    adapters: list[SglangShimAdapter] = []
+    for adapter_class in discover_concrete_subclasses(package_name, SglangShimAdapter):
+        try:
+            adapters.append(adapter_class())
+        except TypeError as error:
+            raise RuntimeError(
+                f"SGLang adapter {adapter_class.__module__}.{adapter_class.__name__} must be zero-argument"
+            ) from error
     return sort_and_validate_adapters(adapters)
 
 
-def iter_model_modules(package_name: str) -> tuple[ModuleType, ...]:
-    """Import non-private model adapter modules from a package tree.
-
-    Args:
-        package_name: Importable package whose children should be scanned recursively.
-    Returns:
-        Imported module objects for non-private children and subpackages.
-
-    Raises:
-        ImportError: If the package itself cannot be imported.
-        RuntimeError: If a child module cannot be imported in strict mode.
-    """
-
-    package = importlib.import_module(package_name)
-    package_path = cast(Iterable[str], getattr(package, "__path__"))
-    modules: list[ModuleType] = []
-    for module_info in pkgutil.walk_packages(
-        package_path,
-        package.__name__ + ".",
-        onerror=fail_model_package_import,
-    ):
-        module_parts = module_info.name.removeprefix(package.__name__ + ".").split(".")
-        if any(part.startswith("_") for part in module_parts):
-            continue
-        try:
-            modules.append(importlib.import_module(module_info.name))
-        except Exception as exc:
-            raise RuntimeError(f"failed to import SGLang adapter module {module_info.name}: {exc}") from exc
-    return tuple(modules)
-
-
-def adapter_classes_in_module(module: ModuleType) -> tuple[type[SglangModelAdapter], ...]:
-    """Return concrete adapter classes defined by one module.
-
-    Args:
-        module: Imported module to inspect.
-
-    Returns:
-        Concrete ``SglangModelAdapter`` subclasses whose ``__module__`` is the
-        inspected module.
-    """
-
-    classes: list[type[SglangModelAdapter]] = []
-    for member in inspect.getmembers(module, inspect.isclass):
-        value = member[1]
-        if value is SglangModelAdapter:
-            continue
-        if value.__module__ != module.__name__:
-            continue
-        if not issubclass(value, SglangModelAdapter):
-            continue
-        if inspect.isabstract(value):
-            continue
-        classes.append(cast(type[SglangModelAdapter], value))
-    return tuple(classes)
-
-
-def sort_and_validate_adapters(adapters: Sequence[SglangModelAdapter]) -> tuple[SglangModelAdapter, ...]:
+def sort_and_validate_adapters(adapters: Sequence[SglangShimAdapter]) -> tuple[SglangShimAdapter, ...]:
     """Sort adapters deterministically and reject duplicate adapter names.
 
     Args:
@@ -117,7 +50,7 @@ def sort_and_validate_adapters(adapters: Sequence[SglangModelAdapter]) -> tuple[
     """
 
     sorted_adapters = tuple(sorted(adapters, key=lambda adapter: (type(adapter).__module__, type(adapter).__name__)))
-    seen: dict[str, SglangModelAdapter] = {}
+    seen: dict[str, SglangShimAdapter] = {}
     for adapter in sorted_adapters:
         if adapter.name in seen:
             previous = seen[adapter.name]

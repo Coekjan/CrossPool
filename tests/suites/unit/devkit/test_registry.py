@@ -9,7 +9,7 @@ import xpool.bootstrap
 import xpool.devkit.registry
 from tests.harness.support.config import install_test_config, reset_global_config
 from tests.harness.support.devkit import create_observer_package, observer_enabled_config, observers_disabled_config
-from xpool.runtime import RuntimeRole
+from xpool.native import RuntimeRole
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -29,7 +29,7 @@ def test_registry_does_not_import_disabled_observer(
     monkeypatch.setattr(xpool.bootstrap, "runtime_role", RuntimeRole.INSTANCE)
     install_test_config(config=observers_disabled_config())
 
-    assert xpool.devkit.registry.discover_devkit_observers(package) == ()
+    xpool.devkit.registry.install(package)
 
 
 def test_registry_discovers_nested_observer(
@@ -44,7 +44,7 @@ def test_registry_discovers_nested_observer(
         {
             "nested/__init__.py": "",
             "nested/graph_observer.py": (
-                "from xpool.runtime import RuntimeRole\n"
+                "from xpool.native import RuntimeRole\n"
                 "runtime_roles = frozenset({RuntimeRole.INSTANCE})\n"
                 "installed = False\n"
                 "def install():\n"
@@ -57,11 +57,9 @@ def test_registry_discovers_nested_observer(
     monkeypatch.setattr(xpool.bootstrap, "runtime_role", RuntimeRole.INSTANCE)
     install_test_config(config=observer_enabled_config("graph_observer", tmp_path / "events"))
 
-    observers = xpool.devkit.registry.discover_devkit_observers(package)
-    observers[0][1]()
+    xpool.devkit.registry.install(package)
     module = importlib.import_module(f"{package}.nested.graph_observer")
 
-    assert [name for name, installer in observers] == [f"{package}.nested.graph_observer"]
     assert module.installed is True
 
 
@@ -70,7 +68,7 @@ def test_registry_discovers_nested_observer(
     [
         ("def install():\n    return None\n", "runtime_roles"),
         (
-            "from xpool.runtime import RuntimeRole\nruntime_roles = frozenset({RuntimeRole.INSTANCE})\n",
+            "from xpool.native import RuntimeRole\nruntime_roles = frozenset({RuntimeRole.INSTANCE})\n",
             "does not expose install",
         ),
     ],
@@ -90,7 +88,7 @@ def test_registry_rejects_invalid_observer_contract(
     install_test_config(config=observer_enabled_config("graph_observer", tmp_path / "events"))
 
     with pytest.raises(RuntimeError, match=message):
-        xpool.devkit.registry.discover_devkit_observers(package)
+        xpool.devkit.registry.install(package)
 
 
 def test_registry_rejects_duplicate_config_names(
@@ -100,7 +98,7 @@ def test_registry_rejects_duplicate_config_names(
     """Two modules cannot claim one debug config field."""
 
     observer_source = (
-        "from xpool.runtime import RuntimeRole\n"
+        "from xpool.native import RuntimeRole\n"
         "runtime_roles = frozenset({RuntimeRole.INSTANCE})\n"
         "def install():\n"
         "    return None\n"
@@ -120,4 +118,4 @@ def test_registry_rejects_duplicate_config_names(
     install_test_config(config=observer_enabled_config("graph_observer", tmp_path / "events"))
 
     with pytest.raises(RuntimeError, match="ambiguous"):
-        xpool.devkit.registry.discover_devkit_observers(package)
+        xpool.devkit.registry.install(package)

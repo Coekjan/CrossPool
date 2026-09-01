@@ -18,14 +18,14 @@ from sglang.srt.models.glm4_moe_lite import (
 from sglang.srt.plugins.hook_registry import HookType
 from torch import nn
 
-from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.adapter import (
     SglangHook,
-    SglangModelAdapter,
+    SglangShimAdapter,
     filter_decoder_ffn_weights,
     model_runner_architectures,
 )
 from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError
+from xpool.native.ffn import LayerKind
 
 LAYER_PREFIX_PATTERN = re.compile(r"^model\.layers\.(?P<layer_id>\d+)\.mlp$")
 
@@ -55,7 +55,7 @@ class XpoolGlm4MoeLiteMLP(FfnShimModule, Glm4MoeLiteMLP):
             self,
             layer_id=int(match.group("layer_id")),
             hidden_size=hidden_size,
-            layer_kind=FfnLayerKind.DENSE,
+            layer_kind=LayerKind.DENSE,
         )
 
 
@@ -83,7 +83,7 @@ class XpoolGlm4MoeLiteSparseMoeBlock(FfnShimModule, Glm4MoeLiteSparseMoeBlock):
             self,
             layer_id=layer_id,
             hidden_size=cast(int, hidden_size),
-            layer_kind=FfnLayerKind.SPARSE,
+            layer_kind=LayerKind.MOE,
         )
 
     def get_moe_weights(self) -> list[torch.Tensor]:
@@ -92,7 +92,7 @@ class XpoolGlm4MoeLiteSparseMoeBlock(FfnShimModule, Glm4MoeLiteSparseMoeBlock):
         return []
 
 
-class Glm4MoeLiteAdapter(SglangModelAdapter):
+class Glm4MoeLiteShimAdapter(SglangShimAdapter):
     """SGLang hooks and validation policy for GLM-4 MoE Lite models."""
 
     name = "glm4_moe_lite"
@@ -140,7 +140,7 @@ class Glm4MoeLiteAdapter(SglangModelAdapter):
         setattr(model_runner, "xpool_ffn_shim_count", len(shims))
 
 
-def expected_mixed_layer_kinds(config: object, *, family: str) -> tuple[FfnLayerKind, ...]:
+def expected_mixed_layer_kinds(config: object, *, family: str) -> tuple[LayerKind, ...]:
     """Derive the pinned dense/sparse decoder policy from the loaded config."""
 
     layer_count = getattr(config, "num_hidden_layers", None)
@@ -150,7 +150,7 @@ def expected_mixed_layer_kinds(config: object, *, family: str) -> tuple[FfnLayer
     if not isinstance(layer_count, int) or isinstance(layer_count, bool) or layer_count <= 0:
         raise RuntimeError(f"xpool {family} model config has no positive integer num_hidden_layers")
     if routed_experts is None:
-        return (FfnLayerKind.DENSE,) * layer_count
+        return (LayerKind.DENSE,) * layer_count
     if not isinstance(routed_experts, int) or isinstance(routed_experts, bool) or routed_experts <= 0:
         raise RuntimeError(f"xpool {family} model config has invalid n_routed_experts")
     if not isinstance(first_sparse_layer, int) or isinstance(first_sparse_layer, bool) or first_sparse_layer < 0:
@@ -158,9 +158,7 @@ def expected_mixed_layer_kinds(config: object, *, family: str) -> tuple[FfnLayer
     if not isinstance(sparse_frequency, int) or isinstance(sparse_frequency, bool) or sparse_frequency <= 0:
         raise RuntimeError(f"xpool {family} model config has invalid moe_layer_freq")
     return tuple(
-        FfnLayerKind.SPARSE
-        if layer_id >= first_sparse_layer and layer_id % sparse_frequency == 0
-        else FfnLayerKind.DENSE
+        LayerKind.MOE if layer_id >= first_sparse_layer and layer_id % sparse_frequency == 0 else LayerKind.DENSE
         for layer_id in range(layer_count)
     )
 

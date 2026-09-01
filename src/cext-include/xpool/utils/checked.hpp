@@ -27,11 +27,6 @@ template <typename T>
 concept CheckedUnsignedInteger = CheckedInteger<T> && std::unsigned_integral<std::remove_cvref_t<T>>;
 
 /// Add one or more same-type integer operands without overflow.
-/// \tparam T First operand type and result type.
-/// \tparam U Remaining operand types, each exactly matching T.
-/// \param first First operand.
-/// \param values Operands to add in order.
-/// \return Exact sum of values.
 /// \throws c10::Error if the sum overflows T.
 template <typename T, typename... U>
   requires SameCheckedIntegerOperands<T, U...>
@@ -45,11 +40,6 @@ std::remove_cvref_t<T> sum(T first, U... values) {
 }
 
 /// Multiply one or more same-type integer operands without overflow.
-/// \tparam T First operand type and result type.
-/// \tparam U Remaining operand types, each exactly matching T.
-/// \param first First operand.
-/// \param values Operands to multiply in order.
-/// \return Exact product of values.
 /// \throws c10::Error if the product overflows T.
 template <typename T, typename... U>
   requires SameCheckedIntegerOperands<T, U...>
@@ -66,10 +56,6 @@ std::remove_cvref_t<T> prod(T first, U... values) {
 }
 
 /// Round an unsigned integer upward to a positive alignment of the same type.
-/// \tparam T Unsigned integer type used by value, alignment, and the result.
-/// \param value Unaligned value.
-/// \param alignment Positive alignment.
-/// \return Smallest multiple of alignment greater than or equal to value.
 /// \throws c10::Error if alignment is zero or the calculation overflows.
 template <CheckedUnsignedInteger T> std::remove_cvref_t<T> align_up(T value, T alignment) {
   TORCH_CHECK(alignment != 0, "xpool checked alignment must be positive");

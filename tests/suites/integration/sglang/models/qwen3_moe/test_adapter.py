@@ -9,13 +9,13 @@ from sglang.srt.plugins.hook_registry import HookType
 from transformers import Qwen3MoeConfig
 
 from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
-from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.models.qwen3_moe import (
-    Qwen3MoeAdapter,
+    Qwen3MoeShimAdapter,
     XpoolQwen3MoeSparseMoeBlock,
     around_load_weights,
 )
 from xpool.integrations.sglang.shim import ShimUnavailableError
+from xpool.native.ffn import LayerKind
 
 
 def qwen3_moe_config() -> Qwen3MoeConfig:
@@ -28,7 +28,7 @@ def qwen3_moe_config() -> Qwen3MoeConfig:
 
 
 def test_qwen3_moe_adapter_declares_exact_hooks_and_capability() -> None:
-    adapter = Qwen3MoeAdapter()
+    adapter = Qwen3MoeShimAdapter()
     hooks = {(hook.target, hook.kind): hook.handler for hook in adapter.hooks()}
 
     assert adapter.supports_dp_attention
@@ -39,7 +39,7 @@ def test_qwen3_moe_adapter_declares_exact_hooks_and_capability() -> None:
 
 
 def test_qwen3_moe_adapter_matches_only_exact_architecture() -> None:
-    adapter = Qwen3MoeAdapter()
+    adapter = Qwen3MoeShimAdapter()
 
     assert adapter.matches(runner_with_architecture("Qwen3MoeForCausalLM").as_model_runner())
     assert not adapter.matches(runner_with_architecture("Qwen3ForCausalLM").as_model_runner())
@@ -49,7 +49,7 @@ def test_qwen3_moe_replacement_is_parameter_free_sparse_shim() -> None:
     shim = XpoolQwen3MoeSparseMoeBlock(0, qwen3_moe_config())
 
     assert list(shim.parameters()) == []
-    assert shim.layer_kind is FfnLayerKind.SPARSE
+    assert shim.layer_kind is LayerKind.MOE
     assert not hasattr(shim, "experts")
     assert shim.get_moe_weights() == []
 
@@ -89,6 +89,6 @@ def test_qwen3_moe_loaded_model_requires_all_sparse_full_boundaries() -> None:
     runner = runner_with_architecture("Qwen3MoeForCausalLM")
     runner.model = model
 
-    Qwen3MoeAdapter().validate_after_load(runner.as_model_runner())
+    Qwen3MoeShimAdapter().validate_after_load(runner.as_model_runner())
 
     assert runner.xpool_ffn_shim_count == 2

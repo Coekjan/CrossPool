@@ -9,9 +9,9 @@ from sglang.srt.layers import dp_attention
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from torch import nn
 
+import xpool.native.ffn
 import xpool.ops
-from xpool.abi import DpPaddingMode, FfnResultHandoff, XPoolForwardMode
-from xpool.fabric import FfnLayerKind
+from xpool.native.ffn import DpRowLayout, LayerKind, OutputRequirement
 from xpool.transport import FfnRequestMetadata
 
 
@@ -33,7 +33,7 @@ class FfnShimModule(nn.Module):
         *,
         layer_id: int,
         hidden_size: int,
-        layer_kind: FfnLayerKind,
+        layer_kind: LayerKind,
     ) -> None:
         """Initialize a parameter-free FFN shim.
 
@@ -106,19 +106,15 @@ class FfnShimModule(nn.Module):
                 exact xpool forward mode.
             should_allreduce_fusion: SGLang all-reduce fusion flag. Must be
                 false because the current shim ABI has no fused all-reduce path.
-            use_reduce_scatter: SGLang result-handoff flag. When true, the
-                native request returns input for SGLang's existing
-                reduce-scatter path; otherwise it returns replicated full
-                hidden states.
+            use_reduce_scatter: SGLang reduce-scatter flag. True selects the
+                Group-Sum Complete output requirement; false selects Per-Rank
+                Complete.
             gemm_output_zero_allocator: Optional SGLang allocator hook. Must be
                 absent because the shim owns native output placement.
 
         Returns:
             Output tensor returned by the sole ``xpool.ops.ffn_shim``
-            dispatcher API. Current concrete execution succeeds only through
-            the configured Instance, AtnAgent, or FfnAgent debug loopback; the
-            native FFN execution boundary returns ``NotImplemented`` until
-            Phase 8 provides a Dense or MoE body.
+            dispatcher API through installed FFN execution.
 
         Raises:
             ShimUnavailableError: If the shim is unbound or receives unsupported
@@ -129,13 +125,13 @@ class FfnShimModule(nn.Module):
 
         Side Effects:
             Dispatches through ``xpool.ops.ffn_shim``. The SGLang plugin binds
-            runtime layer metadata after model load and the Instance runtime
+            runtime layer metadata after model load and the Instance-rank runtime
             attaches the daemon-brokered Transport arena before serving. The
             fake implementation preserves symbolic token dimensions for
-            piecewise CUDA graph warmup. Device execution failures are sticky:
-            the native path poisons output with NaNs and the Instance failure
-            monitor terminates the serving process after observing the failure;
-            they are not synchronously raised by this call.
+            piecewise CUDA graph warmup. Canonical native protocol failures are
+            sticky: they poison output with NaNs and the Instance-rank
+            failure monitor terminates the serving process after observing the
+            failure; they are not synchronously raised by this call.
         """
 
         if should_allreduce_fusion:
@@ -155,11 +151,11 @@ class FfnShimModule(nn.Module):
         # plain DECODE, EXTEND, and IDLE requests.
         match forward_batch.forward_mode:
             case mode if mode is ForwardMode.DECODE:
-                forward_mode = XPoolForwardMode.DECODE
+                forward_mode = xpool.native.ffn.ForwardMode.DECODE
             case mode if mode is ForwardMode.EXTEND:
-                forward_mode = XPoolForwardMode.EXTEND
+                forward_mode = xpool.native.ffn.ForwardMode.PREFILL
             case mode if mode is ForwardMode.IDLE:
-                forward_mode = XPoolForwardMode.IDLE
+                forward_mode = xpool.native.ffn.ForwardMode.IDLE
             case unsupported_mode:
                 raise ShimUnavailableError(
                     f"xpool FFN shim does not support SGLang forward mode {unsupported_mode!r} "
@@ -167,36 +163,35 @@ class FfnShimModule(nn.Module):
                 )
         self.validate_hidden_states(hidden_states)
         if self.atn_dp_size == 1:
-            request_dp_padding_mode = DpPaddingMode.NONE
-            request_global_num_tokens_gpu = None
+            dp_row_layout = DpRowLayout.NONE
+            dp_rank_payload_rows = None
         else:
             sglang_padding_mode = getattr(forward_batch, "dp_padding_mode", None)
             match sglang_padding_mode:
                 case None:
                     raise ShimUnavailableError("xpool attention DP requires an explicit SGLang padding mode")
                 case dp_attention.DpPaddingMode.MAX_LEN:
-                    request_dp_padding_mode = DpPaddingMode.MAX_LEN
+                    dp_row_layout = DpRowLayout.UNIFORM_BY_RANK
                 case dp_attention.DpPaddingMode.SUM_LEN:
-                    request_dp_padding_mode = DpPaddingMode.SUM_LEN
+                    dp_row_layout = DpRowLayout.PACKED_BY_RANK
                 case _:
                     raise ShimUnavailableError(
                         f"xpool FFN shim does not support SGLang DP padding mode {sglang_padding_mode!r}"
                     )
-            token_counts = getattr(forward_batch, "global_num_tokens_gpu", None)
-            if not isinstance(token_counts, torch.Tensor):
+            dp_rank_payload_rows = getattr(forward_batch, "global_num_tokens_gpu", None)
+            if not isinstance(dp_rank_payload_rows, torch.Tensor):
                 raise ShimUnavailableError("xpool FFN shim expected global_num_tokens_gpu to be a tensor")
-            request_global_num_tokens_gpu = token_counts
         request_metadata = FfnRequestMetadata(
             layer_ordinal=self.layer_ordinal,
             forward_mode=forward_mode,
-            result_handoff=(
-                FfnResultHandoff.REDUCE_SCATTER_INPUT if use_reduce_scatter else FfnResultHandoff.REPLICATED_FULL
+            output_requirement=(
+                OutputRequirement.GROUP_SUM_COMPLETE if use_reduce_scatter else OutputRequirement.PER_RANK_COMPLETE
             ),
-            dp_padding_mode=request_dp_padding_mode,
+            dp_row_layout=dp_row_layout,
         )
         return xpool.ops.ffn_shim(
             hidden_states,
-            request_global_num_tokens_gpu,
+            dp_rank_payload_rows,
             request_metadata,
         )
 

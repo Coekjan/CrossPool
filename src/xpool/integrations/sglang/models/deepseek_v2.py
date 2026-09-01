@@ -17,14 +17,14 @@ from sglang.srt.models.deepseek_v2 import (
 )
 from sglang.srt.plugins.hook_registry import HookType
 
-from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.adapter import (
     SglangHook,
-    SglangModelAdapter,
+    SglangShimAdapter,
     filter_decoder_ffn_weights,
     model_runner_architectures,
 )
 from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError
+from xpool.native.ffn import LayerKind
 
 LAYER_PREFIX_PATTERN = re.compile(r"^model\.layers\.(?P<layer_id>\d+)\.mlp$")
 
@@ -101,7 +101,7 @@ class XpoolDeepseekV2MLP(FfnShimModule, DeepseekV2MLP):
             self,
             layer_id=int(match.group("layer_id")),
             hidden_size=hidden_size,
-            layer_kind=FfnLayerKind.DENSE,
+            layer_kind=LayerKind.DENSE,
         )
 
 
@@ -155,7 +155,7 @@ class XpoolDeepseekV2MoE(FfnShimModule, DeepseekV2MoE):
             self,
             layer_id=layer_id,
             hidden_size=hidden_size,
-            layer_kind=FfnLayerKind.SPARSE,
+            layer_kind=LayerKind.MOE,
         )
         self.experts = DeepseekShimExperts()
 
@@ -176,7 +176,7 @@ class XpoolDeepseekV2MoE(FfnShimModule, DeepseekV2MoE):
         return []
 
 
-class DeepseekV2Adapter(SglangModelAdapter):
+class DeepseekV2ShimAdapter(SglangShimAdapter):
     """SGLang hooks and validation policy for DeepSeek-V2 models."""
 
     name = "deepseek_v2"
@@ -245,7 +245,7 @@ class DeepseekV2Adapter(SglangModelAdapter):
         if not isinstance(layer_count, int) or isinstance(layer_count, bool) or layer_count <= 0:
             raise RuntimeError("xpool DeepSeek model config has no positive integer num_hidden_layers")
         if routed_experts is None:
-            expected_layer_kinds = (FfnLayerKind.DENSE,) * layer_count
+            expected_layer_kinds = (LayerKind.DENSE,) * layer_count
         else:
             if not isinstance(routed_experts, int) or isinstance(routed_experts, bool) or routed_experts <= 0:
                 raise RuntimeError("xpool DeepSeek model config has invalid n_routed_experts")
@@ -258,9 +258,9 @@ class DeepseekV2Adapter(SglangModelAdapter):
             if not isinstance(sparse_frequency, int) or isinstance(sparse_frequency, bool) or sparse_frequency <= 0:
                 raise RuntimeError("xpool DeepSeek model config has invalid moe_layer_freq")
             expected_layer_kinds = tuple(
-                FfnLayerKind.SPARSE
+                LayerKind.MOE
                 if layer_id >= first_sparse_layer and layer_id % sparse_frequency == 0
-                else FfnLayerKind.DENSE
+                else LayerKind.DENSE
                 for layer_id in range(layer_count)
             )
         shims = self.require_ffn_shims(

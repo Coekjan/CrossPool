@@ -1,5 +1,3 @@
-"""Behavior tests for concurrent-safe test-result retention."""
-
 from __future__ import annotations
 
 import fcntl

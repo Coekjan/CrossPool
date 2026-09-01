@@ -1,25 +1,25 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Mapping
 from http import HTTPStatus
 
 import pytest
-from fastapi import FastAPI
 
 import xpool.service.daemon.control
 from tests.harness.support.config import reset_global_config
 from tests.harness.support.service.daemon import (
     FakeMonotonicClock,
+    activate_fabric_world,
     atnagent_registration,
     atnagent_transport_arenas,
     create_app,
     deterministic_daemon_dependencies,
-    fabric_participant_report,
-    ffn_workload,
+    ffn_profile,
     ffnagent_registration,
     instance_registration,
     process_ref,
+    register_fabric_world,
+    report_fabric_phase,
     request,
     start_sleeping_proc,
     stop_proc,
@@ -29,77 +29,12 @@ from xpool.fabric import (
     FabricGenerationPhase,
     FabricParticipantPhase,
     FabricPlan,
-    FifoSchedulerPlan,
-    RandomSchedulerPlan,
+    FifoSchedulerPolicy,
+    RandomSchedulerPolicy,
 )
 from xpool.utils.procs import ProcUniqId
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
-
-
-def register_world(
-    app: FastAPI,
-    *,
-    atnagent: Mapping[str, object] | None = None,
-    ffnagent: Mapping[str, object] | None = None,
-    instance: Mapping[str, object] | None = None,
-) -> tuple[dict[str, object], dict[str, object], dict[str, object], FabricPlan]:
-    """Register one complete 1x1x1 generation and return its retained plan."""
-
-    atnagent_payload = dict(atnagent or atnagent_registration(cuda_device=0))
-    ffnagent_payload = dict(ffnagent or ffnagent_registration(cuda_device=1))
-    instance_payload = dict(instance or instance_registration(instance_id="m"))
-    assert request(app, "POST", "/atnagent/register", json=atnagent_payload).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/ffnagent/register", json=ffnagent_payload).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/instance/register", json=instance_payload).status_code == HTTPStatus.NO_CONTENT
-    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
-    return atnagent_payload, ffnagent_payload, instance_payload, plan
-
-
-def report_phase(
-    app: FastAPI,
-    registration: Mapping[str, object],
-    plan: FabricPlan,
-    *,
-    pe: int,
-    phase: FabricParticipantPhase,
-    invocation_failure: Mapping[str, object] | None = None,
-    protocol_failure: Mapping[str, object] | None = None,
-) -> HTTPStatus:
-    """Submit one self-contained participant transition through the HTTP boundary."""
-
-    response = request(
-        app,
-        "POST",
-        "/fabric/participant-reports",
-        json=fabric_participant_report(
-            registration,
-            generation=plan.model_dump(mode="json")["generation"],
-            plan_digest=plan.digest(),
-            pe=pe,
-            phase=phase.value,
-            invocation_failure=invocation_failure,
-            protocol_failure=protocol_failure,
-        ),
-    )
-    return HTTPStatus(response.status_code)
-
-
-def activate_world(
-    app: FastAPI,
-    atnagent: Mapping[str, object],
-    ffnagent: Mapping[str, object],
-    plan: FabricPlan,
-) -> None:
-    """Commit every exact participant transition through ACTIVE."""
-
-    for registration, pe in ((atnagent, 0), (ffnagent, 1)):
-        for phase in (
-            FabricParticipantPhase.JOINING,
-            FabricParticipantPhase.JOINED,
-            FabricParticipantPhase.ACTIVE,
-        ):
-            assert report_phase(app, registration, plan, pe=pe, phase=phase) == HTTPStatus.NO_CONTENT
 
 
 def invocation_failure(*, origin_pe: int, sequence: int = 1) -> dict[str, object]:
@@ -108,7 +43,7 @@ def invocation_failure(*, origin_pe: int, sequence: int = 1) -> dict[str, object
     return {
         "result_code": 2,
         "origin_pe": origin_pe,
-        "model_index": 0,
+        "instance_index": 0,
         "invocation_sequence": sequence,
         "layer_ordinal": 0,
     }
@@ -122,12 +57,13 @@ def test_registration_and_reports_form_executable_ready_generation() -> None:
         }
     )
     app = create_app(config)
-    atnagent, ffnagent, instance, plan = register_world(app)
+    atnagent, ffnagent, instance, plan = register_fabric_world(app)
 
-    assert isinstance(plan.scheduler, FifoSchedulerPlan)
+    assert isinstance(plan.scheduler, FifoSchedulerPolicy)
     assert plan.scheduler.policy is FfnSchedulingPolicy.FIFO
-    assert plan.models[0].workload.model_dump(mode="json") == instance["workload"]
-    assert (plan.models[0].atn_tp_size, plan.models[0].atn_dp_size) == (1, 1)
+    assert plan.instance_plans[0].ffn_profile.model_dump(mode="json") == instance["ffn_profile"]
+    topology = plan.instance_plans[0].instance_rank_topology
+    assert (topology.atn_tp_size, topology.atn_dp_size) == (1, 1)
     assert (
         request(
             app,
@@ -139,13 +75,12 @@ def test_registration_and_reports_form_executable_ready_generation() -> None:
     )
 
     heartbeat = request(app, "POST", "/atnagent/0/heartbeat", json=process_ref(atnagent)).json()
-    assert heartbeat["fabric_phase"] == FabricGenerationPhase.JOINING
-    activate_world(app, atnagent, ffnagent, plan)
+    assert heartbeat["fabric_phase"] == FabricGenerationPhase.PREPARING_JOIN
+    activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
 
     initialized = {
         "owner": process_ref(instance),
         "generation": plan.model_dump(mode="json")["generation"],
-        "plan_digest": plan.digest(),
     }
     assert request(app, "POST", "/instance/m/initialized?rank=0", json=initialized).status_code == HTTPStatus.NO_CONTENT
     readiness = request(app, "GET", "/ready").json()
@@ -155,7 +90,49 @@ def test_registration_and_reports_form_executable_ready_generation() -> None:
     assert readiness["instances_initialized"] is True
     assert readiness["fabric_invocation_failure"] is None
     assert readiness["fabric_owner_failure"] is None
-    assert readiness["fabric_protocol_failure"] is None
+    assert readiness["fabric_control_failure"] is None
+
+
+def test_generation_allows_instance_to_use_atnagent_prefix() -> None:
+    config = XpoolConfig.from_mapping(
+        {
+            "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
+            "models": [{"id": "m", "path": "/models/m"}],
+        }
+    )
+    app = create_app(config)
+    for cuda_device in (0, 1):
+        assert (
+            request(
+                app,
+                "POST",
+                "/atnagent/register",
+                json=atnagent_registration(cuda_device=cuda_device),
+            ).status_code
+            == HTTPStatus.NO_CONTENT
+        )
+    assert (
+        request(
+            app,
+            "POST",
+            "/ffnagent/register",
+            json=ffnagent_registration(cuda_device=2, model_ids=("m",)),
+        ).status_code
+        == HTTPStatus.NO_CONTENT
+    )
+    assert (
+        request(
+            app,
+            "POST",
+            "/instance/register",
+            json=instance_registration(instance_id="m", rank=0, atn_tp_size=1),
+        ).status_code
+        == HTTPStatus.NO_CONTENT
+    )
+
+    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+
+    assert plan.instance_plans[0].instance_rank_topology.atnagent_indices == (0,)
 
 
 def test_plan_waits_for_every_model_while_transport_publication_is_incremental() -> None:
@@ -171,7 +148,10 @@ def test_plan_waits_for_every_model_while_transport_publication_is_incremental()
     app = create_app(config)
     atnagent = atnagent_registration(cuda_device=0)
     assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/ffnagent/register", json=ffnagent_registration()).status_code == HTTPStatus.NO_CONTENT
+    assert (
+        request(app, "POST", "/ffnagent/register", json=ffnagent_registration(model_ids=("a", "b"))).status_code
+        == HTTPStatus.NO_CONTENT
+    )
     assert (
         request(app, "POST", "/instance/register", json=instance_registration(instance_id="a")).status_code
         == HTTPStatus.NO_CONTENT
@@ -193,7 +173,7 @@ def test_plan_waits_for_every_model_while_transport_publication_is_incremental()
     )
     plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
 
-    assert [model.workload.model_config_digest for model in plan.models] == ["a" * 64, "a" * 64]
+    assert [instance.ffn_profile.model_config_digest for instance in plan.instance_plans] == ["a" * 64, "a" * 64]
     assert request(app, "GET", "/ready").json()["transport_ready"] is False
 
 
@@ -217,15 +197,15 @@ def test_random_scheduler_seed_is_generated_once_and_persisted_in_plan(monkeypat
 
     monkeypatch.setattr(xpool.service.daemon.control.secrets, "randbits", generate_seed)
     app = create_app(config)
-    _, _, _, plan = register_world(app)
+    _, _, _, plan = register_fabric_world(app)
 
-    assert isinstance(plan.scheduler, RandomSchedulerPlan)
+    assert isinstance(plan.scheduler, RandomSchedulerPolicy)
     assert plan.scheduler.seed == 17
     assert FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json()) == plan
     assert generated == [17]
 
 
-def test_rank_independent_workload_mismatch_is_rejected_during_registration() -> None:
+def test_rank_independent_ffn_profile_mismatch_is_rejected_during_registration() -> None:
     config = XpoolConfig.from_mapping(
         {
             "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
@@ -235,16 +215,16 @@ def test_rank_independent_workload_mismatch_is_rejected_during_registration() ->
     app = create_app(config)
     first = instance_registration(instance_id="m", rank=0, atn_tp_size=2)
     second = instance_registration(instance_id="m", rank=1, atn_tp_size=2)
-    second["workload"] = ffn_workload(hidden_size=4096)
+    second["ffn_profile"] = ffn_profile(hidden_size=4096)
 
     assert request(app, "POST", "/instance/register", json=first).status_code == HTTPStatus.NO_CONTENT
     response = request(app, "POST", "/instance/register", json=second)
 
     assert response.status_code == HTTPStatus.CONFLICT
-    assert "workload disagrees" in response.json()["detail"]["message"]
+    assert "ffn_profile disagrees" in response.json()["detail"]["message"]
 
 
-def test_owner_invocation_and_protocol_failures_are_retained_independently() -> None:
+def test_owner_invocation_and_control_failures_are_retained_independently() -> None:
     config = XpoolConfig.from_mapping(
         {
             "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
@@ -252,15 +232,15 @@ def test_owner_invocation_and_protocol_failures_are_retained_independently() -> 
         }
     )
     app = create_app(config)
-    atnagent, ffnagent, instance, plan = register_world(app)
-    activate_world(app, atnagent, ffnagent, plan)
+    atnagent, ffnagent, instance, plan = register_fabric_world(app)
+    activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
 
     assert (
         request(app, "POST", "/instance/m/deregister?rank=0", json=process_ref(instance)).status_code
         == HTTPStatus.NO_CONTENT
     )
     assert (
-        report_phase(
+        report_fabric_phase(
             app,
             atnagent,
             plan,
@@ -271,7 +251,7 @@ def test_owner_invocation_and_protocol_failures_are_retained_independently() -> 
         == HTTPStatus.NO_CONTENT
     )
     assert (
-        report_phase(
+        report_fabric_phase(
             app,
             ffnagent,
             plan,
@@ -286,10 +266,12 @@ def test_owner_invocation_and_protocol_failures_are_retained_independently() -> 
     assert readiness["fabric_phase"] == FabricGenerationPhase.ABORTING
     assert readiness["fabric_invocation_failure"] == invocation_failure(origin_pe=0)
     assert readiness["fabric_owner_failure"] == {
-        "owner": {"role": "instance", "instance_id": "m", "rank": 0, "cuda_device": 0},
+        "role": "instance",
+        "instance_id": "m",
+        "rank": 0,
         "reason": "exited",
     }
-    assert "conflicting canonical invocation failures" in readiness["fabric_protocol_failure"]["message"]
+    assert "conflicting canonical invocation failures" in readiness["fabric_control_failure"]
 
 
 def test_illegal_report_aborts_but_exact_committed_retry_remains_idempotent() -> None:
@@ -300,12 +282,17 @@ def test_illegal_report_aborts_but_exact_committed_retry_remains_idempotent() ->
         }
     )
     app = create_app(config)
-    atnagent, _, _, plan = register_world(app)
-    assert report_phase(app, atnagent, plan, pe=0, phase=FabricParticipantPhase.JOINING) == HTTPStatus.NO_CONTENT
+    atnagent, ffnagent, _, plan = register_fabric_world(app)
+    for registration, pe in ((atnagent, 0), (ffnagent, 1)):
+        assert (
+            report_fabric_phase(app, registration, plan, pe=pe, phase=FabricParticipantPhase.JOIN_READY)
+            == HTTPStatus.NO_CONTENT
+        )
+    assert report_fabric_phase(app, atnagent, plan, pe=0, phase=FabricParticipantPhase.JOINING) == HTTPStatus.NO_CONTENT
 
-    assert report_phase(app, atnagent, plan, pe=0, phase=FabricParticipantPhase.ACTIVE) == HTTPStatus.CONFLICT
+    assert report_fabric_phase(app, atnagent, plan, pe=0, phase=FabricParticipantPhase.ACTIVE) == HTTPStatus.CONFLICT
     assert request(app, "GET", "/ready").json()["fabric_phase"] == FabricGenerationPhase.ABORTING
-    assert report_phase(app, atnagent, plan, pe=0, phase=FabricParticipantPhase.JOINING) == HTTPStatus.NO_CONTENT
+    assert report_fabric_phase(app, atnagent, plan, pe=0, phase=FabricParticipantPhase.JOINING) == HTTPStatus.NO_CONTENT
 
 
 def test_quiesce_requires_current_agent_owner_and_generation() -> None:
@@ -319,10 +306,10 @@ def test_quiesce_requires_current_agent_owner_and_generation() -> None:
     atnagent_process, atnagent_proc_id = start_sleeping_proc()
     ffnagent_process, ffnagent_proc_id = start_sleeping_proc()
     try:
-        atnagent, _, instance, plan = register_world(
+        atnagent, _, instance, plan = register_fabric_world(
             app,
             atnagent=atnagent_registration(cuda_device=0, pid=atnagent_proc_id.pid),
-            ffnagent=ffnagent_registration(cuda_device=1, pid=ffnagent_proc_id.pid),
+            ffnagent=ffnagent_registration(cuda_device=1, pid=ffnagent_proc_id.pid, model_ids=("m",)),
         )
         generation = plan.model_dump(mode="json")["generation"]
 
@@ -333,7 +320,7 @@ def test_quiesce_requires_current_agent_owner_and_generation() -> None:
             json={"owner": process_ref(instance), "generation": generation},
         )
         assert invalid.status_code == HTTPStatus.CONFLICT
-        assert request(app, "GET", "/ready").json()["fabric_phase"] == FabricGenerationPhase.JOINING
+        assert request(app, "GET", "/ready").json()["fabric_phase"] == FabricGenerationPhase.PREPARING_JOIN
 
         valid_payload = {"owner": process_ref(atnagent), "generation": generation}
         assert request(app, "POST", "/fabric/quiesce", json=valid_payload).status_code == HTTPStatus.NO_CONTENT
@@ -344,7 +331,7 @@ def test_quiesce_requires_current_agent_owner_and_generation() -> None:
         stop_proc(ffnagent_process)
 
 
-def test_transition_timeout_records_protocol_failure_and_selects_abort(
+def test_transition_timeout_records_control_failure_and_selects_abort(
     deterministic_daemon_dependencies: FakeMonotonicClock,
 ) -> None:
     config = XpoolConfig.from_mapping(
@@ -354,8 +341,15 @@ def test_transition_timeout_records_protocol_failure_and_selects_abort(
         }
     )
     app = create_app(config)
-    atnagent, ffnagent, instance, _ = register_world(app)
-    deterministic_daemon_dependencies.advance(xpool.service.daemon.control.FABRIC_TRANSITION_TIMEOUT_S + 1.0)
+    atnagent, ffnagent, instance, plan = register_fabric_world(app)
+    for registration, pe in ((atnagent, 0), (ffnagent, 1)):
+        assert (
+            report_fabric_phase(app, registration, plan, pe=pe, phase=FabricParticipantPhase.JOIN_READY)
+            == HTTPStatus.NO_CONTENT
+        )
+    deterministic_daemon_dependencies.advance(
+        xpool.service.daemon.control.FABRIC_PHASE_TIMEOUT_S[FabricGenerationPhase.JOINING] + 1.0
+    )
     request(app, "POST", "/atnagent/0/heartbeat", json=process_ref(atnagent))
     request(app, "POST", "/ffnagent/1/heartbeat", json=process_ref(ffnagent))
     request(app, "POST", "/instance/m/heartbeat?rank=0", json=process_ref(instance))
@@ -365,7 +359,7 @@ def test_transition_timeout_records_protocol_failure_and_selects_abort(
 
     assert readiness["fabric_phase"] == FabricGenerationPhase.ABORTING
     assert readiness["fabric_owner_failure"] is None
-    assert readiness["fabric_protocol_failure"] == {"message": "Fabric joining transition timed out"}
+    assert readiness["fabric_control_failure"] == "Fabric joining transition timed out"
 
 
 def test_finalized_agent_exit_does_not_convert_cooperative_cleanup_to_abort() -> None:
@@ -380,11 +374,11 @@ def test_finalized_agent_exit_does_not_convert_cooperative_cleanup_to_abort() ->
     ffnagent_process, ffnagent_id = start_sleeping_proc()
     instance_process, instance_id = start_sleeping_proc()
     atnagent = atnagent_registration(cuda_device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid)
+    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid, model_ids=("m",))
     instance = instance_registration(instance_id="m", pid=instance_id.pid)
     try:
-        _, _, _, plan = register_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
-        activate_world(app, atnagent, ffnagent, plan)
+        _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
+        activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
         assert (
             request(
                 app,
@@ -400,8 +394,11 @@ def test_finalized_agent_exit_does_not_convert_cooperative_cleanup_to_abort() ->
             FabricParticipantPhase.DRAINED,
         ):
             for registration, pe in ((atnagent, 0), (ffnagent, 1)):
-                assert report_phase(app, registration, plan, pe=pe, phase=phase) == HTTPStatus.NO_CONTENT
-        assert report_phase(app, atnagent, plan, pe=0, phase=FabricParticipantPhase.FINALIZED) == HTTPStatus.NO_CONTENT
+                assert report_fabric_phase(app, registration, plan, pe=pe, phase=phase) == HTTPStatus.NO_CONTENT
+        assert (
+            report_fabric_phase(app, atnagent, plan, pe=0, phase=FabricParticipantPhase.FINALIZED)
+            == HTTPStatus.NO_CONTENT
+        )
 
         stop_proc(atnagent_process)
         app.state.control_plane.watchdog()
@@ -427,11 +424,11 @@ def test_termination_requested_instance_exit_during_quiesce_does_not_record_owne
     ffnagent_process, ffnagent_id = start_sleeping_proc()
     instance_process, instance_id = start_sleeping_proc()
     atnagent = atnagent_registration(cuda_device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid)
+    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid, model_ids=("m",))
     instance = instance_registration(instance_id="m", pid=instance_id.pid)
     try:
-        _, _, _, plan = register_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
-        activate_world(app, atnagent, ffnagent, plan)
+        _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
+        activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
         assert (
             request(
                 app,
@@ -492,11 +489,11 @@ def test_unrequested_instance_exit_during_quiesce_records_owner_failure() -> Non
     ffnagent_process, ffnagent_id = start_sleeping_proc()
     instance_process, instance_id = start_sleeping_proc()
     atnagent = atnagent_registration(cuda_device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid)
+    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid, model_ids=("m",))
     instance = instance_registration(instance_id="m", pid=instance_id.pid)
     try:
-        _, _, _, plan = register_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
-        activate_world(app, atnagent, ffnagent, plan)
+        _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
+        activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
         assert (
             request(
                 app,
@@ -513,9 +510,65 @@ def test_unrequested_instance_exit_during_quiesce_records_owner_failure() -> Non
 
         assert readiness["fabric_phase"] == FabricGenerationPhase.QUIESCING
         assert readiness["fabric_owner_failure"] == {
-            "owner": {"role": "instance", "instance_id": "m", "rank": 0, "cuda_device": 0},
+            "role": "instance",
+            "instance_id": "m",
+            "rank": 0,
             "reason": "exited",
         }
+    finally:
+        for process in (atnagent_process, ffnagent_process, instance_process):
+            if process.poll() is None:
+                stop_proc(process)
+
+
+def test_instance_exit_after_activation_completes_cooperative_shutdown() -> None:
+    """Retain Instance owner loss while live Fabric PEs finish every barrier."""
+
+    config = XpoolConfig.from_mapping(
+        {
+            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "models": [{"id": "m", "path": "/models/m"}],
+        }
+    )
+    app = create_app(config)
+    atnagent_process, atnagent_id = start_sleeping_proc()
+    ffnagent_process, ffnagent_id = start_sleeping_proc()
+    instance_process, instance_id = start_sleeping_proc()
+    atnagent = atnagent_registration(cuda_device=0, pid=atnagent_id.pid)
+    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid, model_ids=("m",))
+    instance = instance_registration(instance_id="m", pid=instance_id.pid)
+    try:
+        _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
+        activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
+
+        stop_proc(instance_process)
+        app.state.control_plane.watchdog()
+        readiness = request(app, "GET", "/ready").json()
+        assert readiness["fabric_phase"] == FabricGenerationPhase.QUIESCING
+        assert readiness["fabric_owner_failure"] == {
+            "role": "instance",
+            "instance_id": "m",
+            "rank": 0,
+            "reason": "exited",
+        }
+        assert readiness["fabric_invocation_failure"] is None
+        assert readiness["fabric_control_failure"] is None
+        assert atnagent_process.poll() is None
+        assert ffnagent_process.poll() is None
+
+        for phase in (
+            FabricParticipantPhase.QUIESCED,
+            FabricParticipantPhase.DRAINING,
+            FabricParticipantPhase.DRAINED,
+            FabricParticipantPhase.FINALIZED,
+        ):
+            for registration, pe in ((atnagent, 0), (ffnagent, 1)):
+                assert report_fabric_phase(app, registration, plan, pe=pe, phase=phase) == HTTPStatus.NO_CONTENT
+
+        readiness = request(app, "GET", "/ready").json()
+        assert readiness["fabric_phase"] == FabricGenerationPhase.STOPPED
+        assert readiness["fabric_owner_failure"]["role"] == "instance"
+        assert readiness["fabric_invocation_failure"] is None
     finally:
         for process in (atnagent_process, ffnagent_process, instance_process):
             if process.poll() is None:
@@ -539,10 +592,10 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
     new_ffnagent_process, new_ffnagent_id = start_sleeping_proc()
     new_instance_process, new_instance_id = start_sleeping_proc()
     old_atnagent = atnagent_registration(cuda_device=0, pid=old_atnagent_id.pid)
-    old_ffnagent = ffnagent_registration(cuda_device=1, pid=old_ffnagent_id.pid)
+    old_ffnagent = ffnagent_registration(cuda_device=1, pid=old_ffnagent_id.pid, model_ids=("m",))
     old_instance = instance_registration(instance_id="m", pid=old_instance_id.pid)
     new_atnagent = atnagent_registration(cuda_device=0, pid=new_atnagent_id.pid)
-    new_ffnagent = ffnagent_registration(cuda_device=1, pid=new_ffnagent_id.pid)
+    new_ffnagent = ffnagent_registration(cuda_device=1, pid=new_ffnagent_id.pid, model_ids=("m",))
     new_instance = instance_registration(instance_id="m", pid=new_instance_id.pid)
     processes = (
         old_atnagent_process,
@@ -553,7 +606,7 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
         new_instance_process,
     )
     try:
-        _, _, _, old_plan = register_world(
+        _, _, _, old_plan = register_fabric_world(
             app,
             atnagent=old_atnagent,
             ffnagent=old_ffnagent,
@@ -566,7 +619,8 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
         assert replacement.status_code == HTTPStatus.CONFLICT
         assert readiness["fabric_phase"] == FabricGenerationPhase.ABORTING
         assert readiness["fabric_owner_failure"] == {
-            "owner": {"role": "atnagent", "pe": 0, "cuda_device": 0},
+            "role": "atnagent",
+            "pe": 0,
             "reason": "replaced",
         }
 
@@ -605,7 +659,16 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
                 stop_proc(process)
 
 
+@pytest.mark.parametrize(
+    ("target_role", "target_pe"),
+    [
+        pytest.param("atnagent", 0, id="atnagent"),
+        pytest.param("ffnagent", 1, id="ffnagent"),
+    ],
+)
 def test_fabric_pe_exit_records_owner_failure_and_selects_fail_stop(
+    target_role: str,
+    target_pe: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = XpoolConfig.from_mapping(
@@ -619,7 +682,7 @@ def test_fabric_pe_exit_records_owner_failure_and_selects_fail_stop(
     ffnagent_process, ffnagent_id = start_sleeping_proc()
     instance_process, instance_id = start_sleeping_proc()
     atnagent = atnagent_registration(cuda_device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid)
+    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid, model_ids=("m",))
     instance = instance_registration(instance_id="m", pid=instance_id.pid)
     killed: list[int] = []
 
@@ -629,18 +692,22 @@ def test_fabric_pe_exit_records_owner_failure_and_selects_fail_stop(
 
     monkeypatch.setattr(ProcUniqId, "kill_tree", retain_owner_for_assertion)
     try:
-        register_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
-        stop_proc(atnagent_process)
+        _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
+        activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
+        target_process = atnagent_process if target_role == "atnagent" else ffnagent_process
+        surviving_agent_id = ffnagent_id if target_role == "atnagent" else atnagent_id
+        stop_proc(target_process)
 
         app.state.control_plane.watchdog()
         readiness = request(app, "GET", "/ready").json()
 
         assert readiness["fabric_phase"] == FabricGenerationPhase.ABORTING
         assert readiness["fabric_owner_failure"] == {
-            "owner": {"role": "atnagent", "pe": 0, "cuda_device": 0},
+            "role": target_role,
+            "pe": target_pe,
             "reason": "exited",
         }
-        assert set(killed) == {ffnagent_id.pid, instance_id.pid}
+        assert set(killed) == {surviving_agent_id.pid, instance_id.pid}
     finally:
         for process in (atnagent_process, ffnagent_process, instance_process):
             if process.poll() is None:

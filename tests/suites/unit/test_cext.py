@@ -6,8 +6,8 @@ from threading import Lock
 import pytest
 
 import xpool.cext
-from xpool.abi import ABI_VERSION
 from xpool.cext import NativeLoadError, ensure_native_loaded
+from xpool.native import ABI_VERSION
 
 
 @pytest.fixture
@@ -26,12 +26,13 @@ def test_native_preflight_is_serialized(monkeypatch: pytest.MonkeyPatch) -> None
     events: list[str] = []
     events_lock = Lock()
 
-    def abi_version() -> int:
-        with events_lock:
-            events.append("preflight")
-        return ABI_VERSION
+    class AbiVersion:
+        def __int__(self) -> int:
+            with events_lock:
+                events.append("preflight")
+            return ABI_VERSION
 
-    monkeypatch.setattr(xpool.cext.xpool.native, "abi_version", abi_version)
+    monkeypatch.setattr(xpool.cext.xpool.native, "ABI_VERSION", AbiVersion())
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         tuple(executor.map(lambda index: ensure_native_loaded(), range(32)))
@@ -42,7 +43,7 @@ def test_native_preflight_is_serialized(monkeypatch: pytest.MonkeyPatch) -> None
 def test_native_preflight_rejects_abi_version_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
     """Python refuses an extension built for another ABI revision."""
 
-    monkeypatch.setattr(xpool.cext.xpool.native, "abi_version", lambda: ABI_VERSION + 1)
+    monkeypatch.setattr(xpool.cext.xpool.native, "ABI_VERSION", ABI_VERSION + 1)
 
     with pytest.raises(NativeLoadError, match="does not match"):
         ensure_native_loaded()

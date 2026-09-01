@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.26)
 
 list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+# CUDA language initialization consumes the architecture list, so resolve the
+# xpool policy before project() enables CUDA.
 include(XpoolCudaArchitectures)
 
 project(xpool LANGUAGES C CXX CUDA)

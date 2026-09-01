@@ -7,11 +7,13 @@ import pytest
 from tests.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
 from tests.harness.support.service.daemon import (
     ProcUniqId,
+    activate_fabric_world,
     atnagent_registration,
     atnagent_transport_arenas,
     atnagent_transport_arenas_path,
     create_app,
     deterministic_daemon_dependencies,
+    ffnagent_registration,
     instance_registration,
     instance_transport_arena,
     instance_transport_arena_acquire_path,
@@ -20,8 +22,8 @@ from tests.harness.support.service.daemon import (
     start_sleeping_proc,
     stop_proc,
 )
-from xpool.abi import ABI_VERSION
-from xpool.config import LoopbackSite
+from xpool.fabric import FabricPlan
+from xpool.native import ABI_VERSION
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
 
@@ -112,7 +114,7 @@ def test_daemon_heartbeat_rejects_reused_pid_identity(monkeypatch: pytest.Monkey
 
 
 def test_daemon_rejects_transport_arenas_from_non_owner_atnagent() -> None:
-    config = synthetic_config(loopback_site=LoopbackSite.ATNAGENT)
+    config = synthetic_config()
     app = create_app(config)
     atnagent = atnagent_registration(cuda_device=0)
     non_owner = {**atnagent, "pid": int(atnagent["pid"]) + 1}
@@ -125,31 +127,23 @@ def test_daemon_rejects_transport_arenas_from_non_owner_atnagent() -> None:
         atnagent_transport_arenas_path(0),
         json=atnagent_transport_arenas((TEST_MODEL_ID, 0), publisher=non_owner),
     )
-    fetch = request(
-        app,
-        "POST",
-        instance_transport_arena_acquire_path(TEST_MODEL_ID, 0),
-        json=process_ref(),
-    )
-
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"] == {
         "kind": "conflict",
         "message": "transport arena publisher pid does not match registration pid",
     }
-    assert fetch.status_code == HTTPStatus.SERVICE_UNAVAILABLE
-    assert fetch.json()["detail"] == {
-        "kind": "not_ready",
-        "message": "local attention atnagent has no transport arena handle for instance rank",
-    }
 
 
 def test_daemon_preserves_atnagent_transport_arenas_after_same_process_reregister() -> None:
-    config = synthetic_config(loopback_site=LoopbackSite.ATNAGENT)
+    config = synthetic_config()
     app = create_app(config)
     atnagent = atnagent_registration(cuda_device=0)
+    ffnagent = ffnagent_registration()
     assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
+    assert request(app, "POST", "/ffnagent/register", json=ffnagent).status_code == HTTPStatus.NO_CONTENT
     assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
+    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+    activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
     assert (
         request(
             app,

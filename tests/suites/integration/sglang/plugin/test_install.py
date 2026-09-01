@@ -68,9 +68,6 @@ def install_fake_hook(monkeypatch: pytest.MonkeyPatch, target: str) -> None:
         "MODEL_RUNNER_LOAD_MODEL": "hook_target_load",
         "MODEL_RUNNER_INIT_MEMORY_POOL": "hook_target_memory_pool",
         "MODEL_RUNNER_INITIALIZE": "hook_target_initialize",
-        "SIGNAL_HANDLER_SIGTERM": "hook_target_sigterm",
-        "SCHEDULER_RUN_EVENT_LOOP": "hook_target_event_loop",
-        "KILL_PROCESS_TREE": "hook_target_kill_process_tree",
     }
     for constant, name in target_names.items():
         monkeypatch.setattr(

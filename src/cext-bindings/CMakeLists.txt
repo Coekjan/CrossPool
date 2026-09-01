@@ -27,11 +27,11 @@ target_link_libraries(
   xpool_cext
   PRIVATE
     xpool_abi
-    xpool_cext_core
+    "$<LINK_LIBRARY:WHOLE_ARCHIVE,xpool_cext_core>"
     xpool_compiler_options
     NVSHMEM::NVSHMEM
-    nlohmann_json::nlohmann_json
     ${TORCH_LIBRARIES}
+    "${XPOOL_TORCH_PYTHON_LIBRARY}"
     CUDA::cuda_driver
     CUDA::cudart
     "${XPOOL_CUDADEVRT_LIBRARY}"
@@ -48,6 +48,8 @@ set(XPOOL_NATIVE_STUB_DIR "${CMAKE_CURRENT_BINARY_DIR}/stubs")
 set(XPOOL_NATIVE_STUB_IMPORT_DIR "${CMAKE_CURRENT_BINARY_DIR}/stubimport")
 set(XPOOL_NATIVE_STUB_IMPORT_PACKAGE "${XPOOL_NATIVE_STUB_IMPORT_DIR}/xpool")
 set(XPOOL_NATIVE_SOURCE_STUB_DIR "${PROJECT_SOURCE_DIR}/src/xpool/native")
+# Stub generation needs a temporary importable SOABI package, then replaces the
+# source-tree PEP 561 stubs as one post-link transaction.
 add_custom_command(TARGET xpool_cext POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E rm -rf "${XPOOL_NATIVE_STUB_DIR}"
   COMMAND "${CMAKE_COMMAND}" -E rm -rf "${XPOOL_NATIVE_STUB_IMPORT_DIR}"

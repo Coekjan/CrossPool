@@ -1,4 +1,4 @@
-"""Provide explicitly imported fixtures for Instance runtime lifecycle tests."""
+"""Provide explicitly imported fixtures for Instance-rank runtime lifecycle tests."""
 
 from __future__ import annotations
 
@@ -6,20 +6,22 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
 import pytest
+import torch
 
 import xpool.runtime.instance
 from tests.harness.support.config import install_test_config
-from xpool.abi import ABI_VERSION, TensorDType
 from xpool.config import XpoolConfig
-from xpool.fabric import FfnLayerKind, FfnLayerSpec, FfnWorkload
+from xpool.fabric import InstanceFfnLayerProfile, InstanceFfnProfile
+from xpool.native import ABI_VERSION
+from xpool.native.ffn import LayerKind
 from xpool.runtime.instance import (
-    Instance,
-    InstanceHeartbeat,
+    InstanceRankHeartbeat,
+    InstanceRankRuntime,
 )
-from xpool.runtime.transport import InstanceTransportAttributes
+from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.wire import (
     HeartbeatResponse,
-    InstanceRegistration,
+    InstanceRankRegistration,
     ProcessRef,
 )
 from xpool.transport import TransportArenaHandle
@@ -27,7 +29,7 @@ from xpool.transport import TransportArenaHandle
 
 @dataclass(slots=True)
 class ScriptedInstanceClient:
-    """Response scripts and call observations for one Instance heartbeat test."""
+    """Response scripts and call observations for one Instance-rank heartbeat test."""
 
     heartbeat_results: list[HeartbeatResponse | BaseException] = field(default_factory=list)
     arena_results: list[TransportArenaHandle | BaseException] = field(default_factory=list)
@@ -48,7 +50,7 @@ class ScriptedInstanceClient:
         self.calls.append(("heartbeat", instance_id, rank, heartbeat))
         return self.consume(self.heartbeat_results, "heartbeat")
 
-    def register_instance(self, registration: InstanceRegistration) -> None:
+    def register_instance(self, registration: InstanceRankRegistration) -> None:
         self.calls.append(("register", registration))
 
     def deregister_instance(self, instance_id: str, *, rank: int, owner: ProcessRef) -> None:
@@ -67,7 +69,7 @@ class ScriptedInstanceClient:
     @staticmethod
     def consume[T](script: list[T | BaseException], operation: str) -> T:
         if not script:
-            raise AssertionError(f"unexpected scripted Instance client {operation}")
+            raise AssertionError(f"unexpected scripted Instance-rank client {operation}")
         result = script.pop(0)
         if isinstance(result, BaseException):
             raise result
@@ -80,7 +82,7 @@ def install_scripted_instance_client(
     heartbeat_results: list[HeartbeatResponse | BaseException],
     arena_results: list[TransportArenaHandle | BaseException] | None = None,
 ) -> ScriptedInstanceClient:
-    """Install one isolated scripted client for a production Instance heartbeat."""
+    """Install one isolated scripted client for an Instance-rank heartbeat."""
 
     client = ScriptedInstanceClient(
         heartbeat_results=list(heartbeat_results),
@@ -99,7 +101,7 @@ def install_offline_instance_client(
         def close(self) -> None:
             pass
 
-        def register_instance(self, registration: InstanceRegistration) -> None:
+        def register_instance(self, registration: InstanceRankRegistration) -> None:
             pytest.fail("test must install a client fake before daemon registration")
 
         def deregister_instance(self, *args: object, **kwargs: object) -> None:
@@ -112,14 +114,12 @@ def install_offline_instance_client(
     yield
 
 
-def runtime_config(*, enabled: bool) -> XpoolConfig:
-    env = {"XPOOL_DEBUG_LOOPBACK_ENABLE": "1", "XPOOL_DEBUG_LOOPBACK_SITE": "atnagent"} if enabled else {}
+def runtime_config() -> XpoolConfig:
     config = XpoolConfig.from_mapping(
         {
             "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         },
-        env=env,
     )
     install_test_config(config)
     return config
@@ -131,10 +131,10 @@ def runtime_instance(
     *,
     rank: int = 0,
     pid: int = 123,
-) -> Instance:
+) -> InstanceRankRuntime:
     monkeypatch.setattr(xpool.runtime.instance.os, "getpid", lambda: pid)
     install_test_config(config)
-    return Instance(instance_id="m", rank=rank)
+    return InstanceRankRuntime(instance_id="m", rank=rank)
 
 
 def runtime_heartbeat(
@@ -143,23 +143,23 @@ def runtime_heartbeat(
     *,
     rank: int = 0,
     pid: int = 123,
-) -> InstanceHeartbeat:
+) -> InstanceRankHeartbeat:
     monkeypatch.setattr(xpool.runtime.instance.os, "getpid", lambda: pid)
     install_test_config(config)
     instance_id = "m"
     local_cuda_device = config.devices.atn_cuda_devices[rank]
     heartbeat = ProcessRef(abi_version=ABI_VERSION, pid=pid)
-    return InstanceHeartbeat(
+    return InstanceRankHeartbeat(
         instance_id=instance_id,
         rank=rank,
         local_cuda_device=local_cuda_device,
-        registration=InstanceRegistration(
+        registration=InstanceRankRegistration(
             instance_id=instance_id,
             rank=rank,
             abi_version=ABI_VERSION,
             pid=pid,
             transport=transport_attributes(),
-            workload=workload(),
+            ffn_profile=ffn_profile(),
         ),
         heartbeat=heartbeat,
     )
@@ -193,14 +193,14 @@ def patch_native_instance_ops(
     monkeypatch.setattr(
         xpool.runtime.instance.xpool.native.transport,
         "read_generation_failure",
-        error_snapshot or (lambda *args: int(xpool.runtime.instance.FfnResultCode.OK)),
+        error_snapshot or (lambda *args: int(xpool.runtime.instance.ResultCode.OK)),
     )
 
 
-def transport_attributes() -> InstanceTransportAttributes:
-    return InstanceTransportAttributes(
+def transport_attributes() -> InstanceRankTransportProfile:
+    return InstanceRankTransportProfile(
         hidden_size=4,
-        max_tokens=8,
+        payload_row_capacity=8,
         atn_tp_rank=0,
         atn_tp_size=1,
         atn_dp_rank=0,
@@ -208,14 +208,15 @@ def transport_attributes() -> InstanceTransportAttributes:
     )
 
 
-def workload() -> FfnWorkload:
-    """Return the minimal valid workload used by instance runtime tests."""
+def ffn_profile() -> InstanceFfnProfile:
+    """Return the minimal valid FFN Profile used by instance runtime tests."""
 
-    return FfnWorkload(
+    return InstanceFfnProfile(
         model_config_digest="a" * 64,
-        dtype=TensorDType.BF16,
+        payload_dtype=torch.bfloat16,
         hidden_size=4,
-        layers=(FfnLayerSpec(layer_id=0, kind=FfnLayerKind.DENSE),),
-        max_decode_rows=1,
-        max_prefill_rows=1,
+        layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.DENSE),),
+        decode_payload_row_capacity=1,
+        prefill_payload_row_capacity=1,
+        group_sum_complete_admitted=False,
     )

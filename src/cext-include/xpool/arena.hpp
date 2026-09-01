@@ -29,8 +29,6 @@ struct LayoutHeader {
   /// Byte offset of the concrete arena's mutable state.
   std::size_t state_offset;
 
-  /// Return whether two headers describe the same arena root geometry.
-  /// \return True when every protocol field matches exactly.
   constexpr bool operator==(const LayoutHeader &) const = default;
 };
 

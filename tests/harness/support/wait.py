@@ -6,6 +6,15 @@ import time
 from collections.abc import Callable
 
 
+def remaining_seconds(deadline: float, operation: str) -> float:
+    """Return the positive remainder of one monotonic deadline."""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RuntimeError(f"{operation} exceeded its deadline")
+    return remaining
+
+
 def wait_until(predicate: Callable[[], bool], *, timeout_s: float = 1.0) -> bool:
     """Poll until a predicate succeeds or the bounded deadline expires."""
 

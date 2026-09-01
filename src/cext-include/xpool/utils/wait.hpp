@@ -15,55 +15,46 @@ namespace xpool::utils::wait {
 
 /// Side-effecting polling operation that reports whether progress completed.
 template <typename F>
-concept Poll = std::invocable<F &> && std::same_as<std::invoke_result_t<F &>, bool>;
+concept Poll = std::invocable<F &> && std::same_as < std::invoke_result_t<F &>,
+bool > ;
 
-/// Terminal outcome of one bounded polling operation.
-enum class Result : std::uint32_t {
+/// Outcome of one bounded polling observation.
+enum class Status : std::uint32_t {
+  /// No terminal predicate matched; the caller may schedule another probe.
+  Pending = 0,
   /// The readiness predicate completed the wait.
-  Ready,
+  Ready = 1,
   /// The cancellation predicate stopped the wait before readiness.
-  Cancelled,
+  Cancelled = 2,
   /// The deadline expired before readiness or cancellation.
-  TimedOut,
+  TimedOut = 3,
 };
 
 /// Poll host readiness until it succeeds, cancellation wins, or time expires.
-/// \tparam Ready Callable returning true when the operation completed.
-/// \tparam Cancelled Callable returning true when the operation must stop.
-/// \param deadline Monotonic host deadline governing this wait.
-/// \param ready Readiness predicate evaluated first on every iteration.
-/// \param cancelled Cancellation predicate evaluated after readiness.
-/// \param interval Maximum sleep duration after an unsuccessful iteration.
-/// \return Terminal wait outcome.
 template <Poll Ready, Poll Cancelled>
-Result until(std::chrono::steady_clock::time_point deadline, Ready ready,
-             Cancelled cancelled,
+Status until(std::chrono::steady_clock::time_point deadline, Ready ready, Cancelled cancelled,
              std::chrono::steady_clock::duration interval) {
   while (true) {
     if (ready()) {
-      return Result::Ready;
+      return Status::Ready;
     }
     if (cancelled()) {
-      return Result::Cancelled;
+      return Status::Cancelled;
     }
     const auto now = std::chrono::steady_clock::now();
     if (now >= deadline) {
-      return Result::TimedOut;
+      return Status::TimedOut;
     }
     std::this_thread::sleep_for(std::min(interval, deadline - now));
   }
 }
 
 /// Poll host readiness until it succeeds or time expires.
-/// \tparam Ready Callable returning true when the operation completed.
-/// \param deadline Monotonic host deadline governing this wait.
-/// \param ready Readiness predicate evaluated on every iteration.
-/// \param interval Maximum sleep duration after an unsuccessful iteration.
-/// \return Ready or TimedOut.
 template <Poll Ready>
-Result until(std::chrono::steady_clock::time_point deadline, Ready ready,
+Status until(std::chrono::steady_clock::time_point deadline, Ready ready,
              std::chrono::steady_clock::duration interval) {
-  return until(deadline, std::move(ready), [] { return false; }, interval);
+  return until(
+      deadline, std::move(ready), [] { return false; }, interval);
 }
 
 } // namespace xpool::utils::wait

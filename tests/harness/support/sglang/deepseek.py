@@ -5,13 +5,12 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from sglang.srt.model_executor import forward_batch_info
 from transformers import PretrainedConfig
 
 from tests.harness.support.config import install_test_config
 from xpool.config import XpoolConfig
-from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.shim import FfnShimModule
+from xpool.native.ffn import LayerKind
 
 
 @pytest.fixture
@@ -42,14 +41,10 @@ def deepseek_config() -> PretrainedConfig:
 
 
 def bound_shim(*, layer_id: int = 0, atn_dp_size: int = 1) -> FfnShimModule:
-    shim = FfnShimModule(layer_id=layer_id, hidden_size=2048, layer_kind=FfnLayerKind.DENSE)
+    shim = FfnShimModule(layer_id=layer_id, hidden_size=2048, layer_kind=LayerKind.DENSE)
     shim.bind_runtime(
         layer_ordinal=0,
         model_architecture="DeepseekV2ForCausalLM",
         atn_dp_size=atn_dp_size,
     )
     return shim
-
-
-def decode_forward_batch() -> object:
-    return type("FakeForwardBatch", (), {"forward_mode": forward_batch_info.ForwardMode.DECODE})()

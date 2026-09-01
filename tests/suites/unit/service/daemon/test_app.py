@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 import xpool.service.daemon.app
-from xpool.runtime import RuntimeRole
+from xpool.native import RuntimeRole
 
 
 def test_daemon_failure_retains_first_exception() -> None:

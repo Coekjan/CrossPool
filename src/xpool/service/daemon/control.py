@@ -11,20 +11,22 @@ from concurrent.futures import ThreadPoolExecutor
 from time import monotonic, sleep
 
 import xpool.native
-from xpool.abi import ABI_VERSION
-from xpool.config import FfnSchedulingPolicy, LoopbackSite, XpoolConfig, get_global_config
+from xpool import ffn
+from xpool.config import FfnSchedulingPolicy, XpoolConfig, get_global_config
 from xpool.fabric import (
-    FabricGeneration,
+    FabricGenerationId,
     FabricGenerationPhase,
     FabricParticipantPhase,
     FabricPlan,
     FabricRole,
     FabricUid,
-    FifoSchedulerPlan,
-    RandomSchedulerPlan,
+    FifoSchedulerPolicy,
+    RandomSchedulerPolicy,
 )
+from xpool.mps import MpsProbeResult, probe_mps_controller
+from xpool.native import ABI_VERSION
 from xpool.service.daemon.fabric import FabricController, FabricGenerationState, FabricMembership
-from xpool.service.daemon.mps import MpsProbeResult, probe_mps_controller
+from xpool.service.daemon.ffn_placement import place_ffn_models
 from xpool.service.daemon.readiness import ControlPlaneProjection
 from xpool.service.daemon.registration import (
     HEARTBEAT_WARNING_WATERMARK_S,
@@ -32,7 +34,7 @@ from xpool.service.daemon.registration import (
     CommonRegistration,
     FfnAgentRegistrationState,
     InstanceRankId,
-    InstanceRegistrationState,
+    InstanceRankRegistrationState,
     RegistrationBook,
 )
 from xpool.service.daemon.transport import (
@@ -46,18 +48,16 @@ from xpool.service.wire import (
     AtnAgentTransportArenaBinding,
     AtnAgentTransportLeaseQuiesceResponse,
     ControlPlaneWarning,
-    FabricInstanceOwner,
-    FabricOwnerFailure,
+    FabricInstanceRankOwnerFailure,
     FabricOwnerFailureReason,
     FabricParticipantReport,
-    FabricPeOwner,
-    FabricProtocolFailure,
+    FabricPeOwnerFailure,
     FabricQuiesceRequest,
     FfnAgentRegistration,
     HeartbeatResponse,
-    InstanceInitializedPublication,
+    InstanceRankInitializedPublication,
     InstanceRankRef,
-    InstanceRegistration,
+    InstanceRankRegistration,
     ProcessRef,
     ReadinessSnapshot,
     ReadinessStatus,
@@ -68,7 +68,12 @@ from xpool.utils.procs import ProcUniqId
 TRANSPORT_ARENA_LEASE_HEARTBEAT_TIMEOUT_S = 2.0 * HEARTBEAT_WARNING_WATERMARK_S
 TRANSPORT_DRAIN_TERM_GRACE_S = HEARTBEAT_WARNING_WATERMARK_S
 ATNAGENT_REPLACEMENT_TIMEOUT_S = 60.0
-FABRIC_TRANSITION_TIMEOUT_S = 60.0
+FABRIC_PHASE_TIMEOUT_S = {
+    FabricGenerationPhase.JOINING: 60.0,
+    FabricGenerationPhase.QUIESCING: 60.0,
+    FabricGenerationPhase.DRAINING: 60.0,
+    FabricGenerationPhase.FINALIZING: 60.0,
+}
 INSTANCE_STARTUP_TIMEOUT_S = 600.0
 GLOBAL_WARNING_CACHE_S = 1.0
 MPS_READINESS_CACHE_S = 1.0
@@ -81,8 +86,10 @@ class ControlPlane:
     Attributes:
         started_at: Unix timestamp recorded when the daemon state was created.
         registrations: Process identities and declared registration contracts.
-        transport_broker: Transport publications and Instance leases.
+        transport_broker: Transport publications and Instance-rank leases.
         fabric_controller: Installed Fabric generation state.
+        fabric_plan_formation_lock: Serializes expensive generation formation
+            without blocking ordinary domain reads and writes.
         lock: Reentrant domain lock protecting every mutable control-plane
             record and cross-module invariant.
         warning_cache_at: Monotonic timestamp of the cached warning snapshot.
@@ -95,6 +102,7 @@ class ControlPlane:
 
         self.started_at = time.time()
         self.lock = threading.RLock()
+        self.fabric_plan_formation_lock = threading.Lock()
         self.registrations = RegistrationBook()
         self.transport_broker = TransportBroker()
         self.fabric_controller = FabricController()
@@ -192,8 +200,8 @@ class ControlPlane:
         with self.lock:
             return self.registrations.ffnagent_views()
 
-    def list_instances(self) -> list[InstanceRegistration]:
-        """Return the current Instance registration wire views."""
+    def list_instances(self) -> list[InstanceRankRegistration]:
+        """Return the current Instance-rank registration wire views."""
 
         with self.lock:
             return self.registrations.instance_views()
@@ -254,19 +262,16 @@ class ControlPlane:
             existing = self.registrations.atnagents.query(registration.cuda_device)
             fabric = self.fabric_controller.generation
             if fabric is not None:
-                placement = next(
-                    item
-                    for item in fabric.plan.pe_placements
+                pe = next(
+                    pe
+                    for pe, item in enumerate(fabric.plan.pe_placements)
                     if item.role is FabricRole.ATNAGENT and item.cuda_device == registration.cuda_device
                 )
-                if fabric.agent_owners[placement.pe] != registration.proc:
+                if fabric.agent_owners[pe] != registration.proc:
                     fabric.record_owner_failure(
-                        FabricOwnerFailure(
-                            owner=FabricPeOwner(
-                                role="atnagent",
-                                pe=placement.pe,
-                                cuda_device=placement.cuda_device,
-                            ),
+                        FabricPeOwnerFailure(
+                            role="atnagent",
+                            pe=pe,
                             reason=FabricOwnerFailureReason.REPLACED,
                         )
                     )
@@ -316,11 +321,16 @@ class ControlPlane:
                 self.membership_revision += 1
         self.ensure_fabric_plan()
 
-    def register_ffnagent(self, registration: FfnAgentRegistrationState) -> None:
+    def register_ffnagent(
+        self,
+        registration: FfnAgentRegistrationState,
+        model_specs: tuple[ffn.FfnModelSpec, ...],
+    ) -> None:
         """Install a configured FfnAgent process registration.
 
         Args:
             registration: Candidate FfnAgent process registration.
+            model_specs: Complete ordered Model Specs declared by the process.
 
         Raises:
             XpoolDaemonError: If placement or ABI is invalid or a different
@@ -336,19 +346,16 @@ class ControlPlane:
             existing = self.registrations.ffnagents.query(registration.cuda_device)
             fabric = self.fabric_controller.generation
             if fabric is not None:
-                placement = next(
-                    item
-                    for item in fabric.plan.pe_placements
+                pe = next(
+                    pe
+                    for pe, item in enumerate(fabric.plan.pe_placements)
                     if item.role is FabricRole.FFNAGENT and item.cuda_device == registration.cuda_device
                 )
-                if fabric.agent_owners[placement.pe] != registration.proc:
+                if fabric.agent_owners[pe] != registration.proc:
                     fabric.record_owner_failure(
-                        FabricOwnerFailure(
-                            owner=FabricPeOwner(
-                                role="ffnagent",
-                                pe=placement.pe,
-                                cuda_device=placement.cuda_device,
-                            ),
+                        FabricPeOwnerFailure(
+                            role="ffnagent",
+                            pe=pe,
                             reason=FabricOwnerFailureReason.REPLACED,
                         )
                     )
@@ -356,16 +363,21 @@ class ControlPlane:
                     raise XpoolDaemonError("conflict", "retained Fabric generation forbids FfnAgent replacement")
         existing_alive = False if existing is None else existing.proc.is_alive()
         with self.lock:
+            canonical_specs = self.registrations.ffn_model_specs
+            if canonical_specs is not None and model_specs != canonical_specs:
+                raise XpoolDaemonError("conflict", "FfnAgent Model Specs disagree with the canonical declaration")
             changed = self.registrations.ffnagents.install_snapshot(
                 registration,
                 existing,
                 existing_alive=existing_alive,
             )
+            if canonical_specs is None:
+                self.registrations.ffn_model_specs = model_specs
             if changed:
                 self.membership_revision += 1
         self.ensure_fabric_plan()
 
-    def register_instance(self, registration: InstanceRegistrationState) -> None:
+    def register_instance(self, registration: InstanceRankRegistrationState) -> None:
         """Install an instance registration unless a different live one exists."""
 
         self.retire_terminal_generation()
@@ -377,10 +389,10 @@ class ControlPlane:
             raise XpoolDaemonError("not_found", "unknown instance")
         self.validate_instance_rank(rank)
         transport = registration.transport
-        if transport.atn_tp_size * transport.atn_dp_size != get_global_config().atn_world_size:
+        if transport.atn_tp_size * transport.atn_dp_size > get_global_config().atn_world_size:
             raise XpoolDaemonError(
                 "conflict",
-                "instance transport TP-by-DP topology does not cover the configured AtnAgent world",
+                "instance transport TP-by-DP topology exceeds the configured AtnAgent world",
             )
         if transport.atn_dp_rank * transport.atn_tp_size + transport.atn_tp_rank != rank:
             raise XpoolDaemonError("conflict", "instance transport coordinates do not use TP-fastest rank order")
@@ -391,17 +403,14 @@ class ControlPlane:
                 expected_owner = fabric.instance_owners.get(registration.instance)
                 if expected_owner != registration.proc:
                     fabric.record_owner_failure(
-                        FabricOwnerFailure(
-                            owner=FabricInstanceOwner(
-                                instance_id=instance_id,
-                                rank=rank,
-                                cuda_device=get_global_config().devices.atn_cuda_devices[rank],
-                            ),
+                        FabricInstanceRankOwnerFailure(
+                            instance_id=instance_id,
+                            rank=rank,
                             reason=FabricOwnerFailureReason.REPLACED,
                         )
                     )
                     self.fabric_controller.quiesce(now=monotonic())
-                    raise XpoolDaemonError("conflict", "retained Fabric generation forbids Instance replacement")
+                    raise XpoolDaemonError("conflict", "retained Fabric generation forbids Instance-rank replacement")
         existing_alive = False if existing is None else existing.proc.is_alive()
         with self.lock:
             if self.registrations.instances.query(registration.instance) is not existing:
@@ -411,20 +420,20 @@ class ControlPlane:
                     continue
                 peer_contract = (
                     peer.transport.hidden_size,
-                    peer.transport.max_tokens,
+                    peer.transport.payload_row_capacity,
                     peer.transport.atn_tp_size,
                     peer.transport.atn_dp_size,
                 )
                 candidate_contract = (
                     transport.hidden_size,
-                    transport.max_tokens,
+                    transport.payload_row_capacity,
                     transport.atn_tp_size,
                     transport.atn_dp_size,
                 )
                 if peer_contract != candidate_contract:
                     raise XpoolDaemonError("conflict", "instance transport attributes disagree across ranks")
-                if peer.workload != registration.workload:
-                    raise XpoolDaemonError("conflict", "FFN workload disagrees across instance ranks")
+                if peer.ffn_profile != registration.ffn_profile:
+                    raise XpoolDaemonError("conflict", "FFN ffn_profile disagrees across instance ranks")
             changed = self.registrations.instances.install_snapshot(
                 registration,
                 existing,
@@ -453,12 +462,9 @@ class ControlPlane:
             self.membership_revision += 1
             self.fabric_controller.instance_departed(
                 instance,
-                FabricOwnerFailure(
-                    owner=FabricInstanceOwner(
-                        instance_id=instance_id,
-                        rank=rank,
-                        cuda_device=get_global_config().devices.atn_cuda_devices[rank],
-                    ),
+                FabricInstanceRankOwnerFailure(
+                    instance_id=instance_id,
+                    rank=rank,
                     reason=FabricOwnerFailureReason.EXITED,
                 ),
                 termination_requested=lease is not None and lease.termination_requested,
@@ -472,55 +478,64 @@ class ControlPlane:
         committed only if its membership revision still matches.
         """
 
-        config = get_global_config()
-        # Capture: freeze complete membership while the registration revision
-        # and current-generation check are protected by the domain lock.
-        with self.lock:
-            if self.fabric_controller.generation is not None:
-                return self.fabric_controller.generation.plan
-            membership = FabricMembership.capture(config, self.registrations, self.membership_revision)
+        with self.fabric_plan_formation_lock:
+            config = get_global_config()
+            # Capture: freeze complete membership while the registration revision
+            # and current-generation check are protected by the domain lock.
+            with self.lock:
+                if self.fabric_controller.generation is not None:
+                    return self.fabric_controller.generation.plan
+                membership = FabricMembership.capture(config, self.registrations, self.membership_revision)
 
-        # Validate: reject incomplete or dead membership without holding the
-        # domain lock or creating generation resources.
-        if membership is None or not all(owner.is_alive() for owner in membership.owners()):
-            return None
-
-        # Plan: materialize the scheduler, UID, and digest-bearing plan without
-        # holding the domain lock.
-        if config.scheduler.ffn_policy is FfnSchedulingPolicy.FIFO:
-            scheduler = FifoSchedulerPlan()
-        else:
-            seed = config.scheduler.ffn_random_seed
-            while seed is None or seed == 0:
-                seed = secrets.randbits(64)
-            scheduler = RandomSchedulerPlan(seed=seed)
-        plan = FabricPlan(
-            generation=FabricGeneration.create(),
-            uid=FabricUid(value=xpool.native.fabric.create_uid()),
-            pe_placements=membership.pe_placements,
-            executor_count=config.scheduler.ffn_concurrency,
-            scheduler=scheduler,
-            models=membership.models,
-        )
-        # Commit: install only if no generation appeared and the captured
-        # membership revision still describes the authoritative registration set.
-        with self.lock:
-            if self.fabric_controller.generation is not None:
-                return self.fabric_controller.generation.plan
-            if self.membership_revision != membership.revision:
+            # Validate: reject incomplete or dead membership without holding the
+            # domain lock or creating generation resources.
+            if membership is None or not all(owner.is_alive() for owner in membership.owners()):
                 return None
-            return self.fabric_controller.install(
-                FabricGenerationState(
-                    plan=plan,
-                    phase=FabricGenerationPhase.JOINING,
-                    phase_started_at=monotonic(),
-                    invocation_failure=None,
-                    owner_failure=None,
-                    protocol_failure=None,
-                    agent_owners=dict(membership.agent_owners),
-                    instance_owners=dict(membership.instance_owners),
-                )
+
+            # Plan: materialize the scheduler and immutable plan without
+            # holding the domain lock.
+            if config.scheduler.ffn_policy is FfnSchedulingPolicy.FIFO:
+                scheduler = FifoSchedulerPolicy()
+            else:
+                seed = config.scheduler.ffn_random_seed
+                while seed is None or seed == 0:
+                    seed = secrets.randbits(64)
+                scheduler = RandomSchedulerPolicy(seed=seed)
+            model_plans = place_ffn_models(
+                model_specs=membership.model_specs,
+                instance_plans=membership.instance_plans,
+                ffnagent_free_memory_bytes=membership.ffnagent_free_memory_bytes,
             )
+            if not all(owner.is_alive() for owner in membership.owners()):
+                return None
+            plan = FabricPlan(
+                generation=FabricGenerationId.create(),
+                uid=FabricUid(value=xpool.native.fabric.create_uid()),
+                pe_placements=membership.pe_placements,
+                executor_lane_count=config.scheduler.ffn_concurrency,
+                scheduler=scheduler,
+                model_plans=model_plans,
+                instance_plans=membership.instance_plans,
+            )
+            # Commit: install only if no generation appeared and the captured
+            # membership revision still describes the authoritative registration set.
+            with self.lock:
+                if self.fabric_controller.generation is not None:
+                    return self.fabric_controller.generation.plan
+                if self.membership_revision != membership.revision:
+                    return None
+                return self.fabric_controller.install(
+                    FabricGenerationState(
+                        plan=plan,
+                        phase=FabricGenerationPhase.PREPARING_JOIN,
+                        phase_started_at=monotonic(),
+                        invocation_failure=None,
+                        owner_failure=None,
+                        control_failure=None,
+                        agent_owners=dict(membership.agent_owners),
+                        instance_owners=dict(membership.instance_owners),
+                    )
+                )
 
     def require_fabric_plan(self) -> FabricPlan:
         """Return the installed immutable Fabric plan without forming one."""
@@ -536,7 +551,7 @@ class ControlPlane:
             if fabric is None or request.generation != fabric.plan.generation:
                 raise XpoolDaemonError("conflict", "fabric quiesce generation is not retained")
             owner_matches = 0
-            for placement in fabric.plan.pe_placements:
+            for pe, placement in enumerate(fabric.plan.pe_placements):
                 registration = (
                     self.registrations.atnagents.query(placement.cuda_device)
                     if placement.role is FabricRole.ATNAGENT
@@ -544,7 +559,7 @@ class ControlPlane:
                 )
                 if (
                     registration is not None
-                    and registration.proc == fabric.agent_owners[placement.pe]
+                    and registration.proc == fabric.agent_owners[pe]
                     and registration.proc.pid == request.owner.pid
                     and registration.abi_version == request.owner.abi_version
                 ):
@@ -585,7 +600,7 @@ class ControlPlane:
         instance_id: str,
         *,
         rank: int,
-        publication: InstanceInitializedPublication,
+        publication: InstanceRankInitializedPublication,
     ) -> None:
         """Record one SGLang rank's post-initialize graph-capture barrier."""
 
@@ -605,7 +620,6 @@ class ControlPlane:
                 registration.instance,
                 registration.proc,
                 generation=publication.generation,
-                plan_digest=publication.plan_digest,
             )
 
     def heartbeat_response(self, now: float) -> HeartbeatResponse:
@@ -615,16 +629,10 @@ class ControlPlane:
             fabric = self.fabric_controller.generation
             generation = None if fabric is None else fabric.plan.generation
             fabric_phase = None if fabric is None else fabric.phase
-            invocation_failure = None if fabric is None else fabric.invocation_failure
-            owner_failure = None if fabric is None else fabric.owner_failure
-            protocol_failure = None if fabric is None else fabric.protocol_failure
         return HeartbeatResponse(
             warnings=self.global_warnings(now),
             generation=generation,
             fabric_phase=fabric_phase,
-            fabric_invocation_failure=invocation_failure,
-            fabric_owner_failure=owner_failure,
-            fabric_protocol_failure=protocol_failure,
         )
 
     def heartbeat_atnagent(self, cuda_device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
@@ -672,6 +680,9 @@ class ControlPlane:
 
         now = monotonic()
         self.refresh_mps_status(now)
+
+        # Snapshot identities under the lock, but perform process-liveness I/O
+        # outside it so a slow kernel/process query cannot block daemon control.
         with self.lock:
             registrations: tuple[CommonRegistration, ...] = tuple(
                 [
@@ -693,15 +704,17 @@ class ControlPlane:
                 registration.alive = liveness[registration.proc]
 
         abort_owners: tuple[ProcUniqId, ...] = ()
+        # Reconcile only the generation captured above. A replacement makes
+        # this watchdog iteration stale and therefore harmless.
         with self.lock:
             fabric = self.fabric_controller.generation
             if fabric is None or fabric is not fabric_snapshot:
                 return
-            for placement in fabric.plan.pe_placements:
-                participant = fabric.participants.get(placement.pe)
+            for pe, placement in enumerate(fabric.plan.pe_placements):
+                participant = fabric.participants.get(pe)
                 if participant is not None and participant.phase is FabricParticipantPhase.FINALIZED:
                     continue
-                owner = fabric.agent_owners[placement.pe]
+                owner = fabric.agent_owners[pe]
                 registration = (
                     self.registrations.atnagents.query(placement.cuda_device)
                     if placement.role is FabricRole.ATNAGENT
@@ -716,12 +729,9 @@ class ControlPlane:
                     reason = FabricOwnerFailureReason.STALE
                 if reason is not None:
                     fabric.record_owner_failure(
-                        FabricOwnerFailure(
-                            owner=FabricPeOwner(
-                                role=placement.role.value,
-                                pe=placement.pe,
-                                cuda_device=placement.cuda_device,
-                            ),
+                        FabricPeOwnerFailure(
+                            role=placement.role.value,
+                            pe=pe,
                             reason=reason,
                         )
                     )
@@ -750,12 +760,9 @@ class ControlPlane:
                         ):
                             continue
                         fabric.record_owner_failure(
-                            FabricOwnerFailure(
-                                owner=FabricInstanceOwner(
-                                    instance_id=instance.instance_id,
-                                    rank=instance.rank,
-                                    cuda_device=get_global_config().devices.atn_cuda_devices[instance.rank],
-                                ),
+                            FabricInstanceRankOwnerFailure(
+                                instance_id=instance.instance_id,
+                                rank=instance.rank,
                                 reason=reason,
                             )
                         )
@@ -768,27 +775,20 @@ class ControlPlane:
                 and len(fabric.initialized_instances) < expected_initialized
                 and now - fabric.phase_started_at > INSTANCE_STARTUP_TIMEOUT_S
             ):
-                fabric.record_protocol_failure(FabricProtocolFailure(message="SGLang initialization barrier timed out"))
+                fabric.record_control_failure("SGLang initialization barrier timed out")
                 self.fabric_controller.abort(now=now)
             elif (
-                fabric.phase
-                in {
-                    FabricGenerationPhase.JOINING,
-                    FabricGenerationPhase.QUIESCING,
-                    FabricGenerationPhase.DRAINING,
-                    FabricGenerationPhase.FINALIZING,
-                }
-                and now - fabric.phase_started_at > FABRIC_TRANSITION_TIMEOUT_S
-            ):
+                phase_timeout := FABRIC_PHASE_TIMEOUT_S.get(fabric.phase)
+            ) is not None and now - fabric.phase_started_at > phase_timeout:
                 phase = fabric.phase
-                fabric.record_protocol_failure(
-                    FabricProtocolFailure(message=f"Fabric {phase.value} transition timed out")
-                )
+                fabric.record_control_failure(f"Fabric {phase.value} transition timed out")
                 self.fabric_controller.abort(now=now)
 
             if fabric.phase is FabricGenerationPhase.ABORTING:
                 abort_owners = tuple({*fabric.agent_owners.values(), *fabric.instance_owners.values()})
 
+        # Fail-stop process trees outside the daemon lock; state advances to
+        # Stopped only after every generation owner is proven dead.
         live_abort_owners = tuple(owner for owner in abort_owners if owner.is_alive())
         if live_abort_owners:
             with ThreadPoolExecutor(max_workers=len(live_abort_owners)) as executor:
@@ -967,7 +967,6 @@ class ControlPlane:
             raise XpoolDaemonError("not_found", "unknown instance")
 
         atn_cuda_devices = config.devices.atn_cuda_devices
-        atnagent_loopback = config.debug.loopback.enable and config.debug.loopback.site is LoopbackSite.ATNAGENT
         self.validate_instance_rank(rank)
         instance_uid = InstanceRankId(instance_id=instance_id, rank=rank)
         cuda_device = atn_cuda_devices[rank]
@@ -989,7 +988,7 @@ class ControlPlane:
             registration.require_online(now, context="instance rank")
             atnagent_registration.require_online(now, context="local attention atnagent")
             fabric = self.fabric_controller.generation
-            if fabric is None and not atnagent_loopback:
+            if fabric is None:
                 raise XpoolDaemonError("not_ready", "Fabric generation is not executable")
             if fabric is not None:
                 if fabric.phase in {
@@ -999,11 +998,13 @@ class ControlPlane:
                     FabricGenerationPhase.ABORTING,
                     FabricGenerationPhase.STOPPED,
                 }:
-                    raise XpoolDaemonError("not_ready", "Fabric generation is not accepting Instance arena leases")
-                if fabric.phase is not FabricGenerationPhase.EXECUTABLE and not atnagent_loopback:
+                    raise XpoolDaemonError("not_ready", "Fabric generation is not accepting Instance-rank arena leases")
+                if fabric.phase is not FabricGenerationPhase.EXECUTABLE:
                     raise XpoolDaemonError("not_ready", "Fabric generation is not executable")
                 if fabric.instance_owners.get(instance_uid) != registration.proc:
-                    raise XpoolDaemonError("conflict", "Fabric generation owner does not match Instance registration")
+                    raise XpoolDaemonError(
+                        "conflict", "Fabric generation owner does not match Instance-rank registration"
+                    )
             publication = self.transport_broker.publication(cuda_device, instance_uid, atnagent_registration.proc)
             if publication.transport != registration.transport:
                 raise XpoolDaemonError("not_ready", "published transport arena geometry is stale")

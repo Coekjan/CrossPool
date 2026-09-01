@@ -7,13 +7,14 @@ from http import HTTPStatus
 
 import httpx
 import pytest
+import torch
 
 import xpool.service.client
 from tests.harness.support.config import install_test_config
-from xpool.abi import TensorDType
 from xpool.config import XpoolConfig
-from xpool.fabric import FfnLayerKind, FfnLayerSpec, FfnWorkload
-from xpool.runtime.transport import InstanceTransportAttributes
+from xpool.fabric import InstanceFfnLayerProfile, InstanceFfnProfile
+from xpool.native.ffn import LayerKind
+from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.transport import TransportArenaHandle
 
 
@@ -118,10 +119,10 @@ def response(status: HTTPStatus, payload: object | None) -> httpx.Response:
     )
 
 
-def transport_attributes() -> InstanceTransportAttributes:
-    return InstanceTransportAttributes(
+def transport_attributes() -> InstanceRankTransportProfile:
+    return InstanceRankTransportProfile(
         hidden_size=4,
-        max_tokens=8,
+        payload_row_capacity=8,
         atn_tp_rank=0,
         atn_tp_size=1,
         atn_dp_rank=0,
@@ -133,14 +134,15 @@ def arena_record(*, rank: int) -> TransportArenaHandle:
     return TransportArenaHandle(handle=f"{rank:02x}" * 64)
 
 
-def workload() -> FfnWorkload:
-    """Return one valid rank-independent workload for client requests."""
+def ffn_profile() -> InstanceFfnProfile:
+    """Return one valid rank-independent FFN Profile for client requests."""
 
-    return FfnWorkload(
+    return InstanceFfnProfile(
         model_config_digest="a" * 64,
-        dtype=TensorDType.BF16,
+        payload_dtype=torch.bfloat16,
         hidden_size=4,
-        layers=(FfnLayerSpec(layer_id=0, kind=FfnLayerKind.DENSE),),
-        max_decode_rows=1,
-        max_prefill_rows=1,
+        layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.DENSE),),
+        decode_payload_row_capacity=1,
+        prefill_payload_row_capacity=1,
+        group_sum_complete_admitted=False,
     )

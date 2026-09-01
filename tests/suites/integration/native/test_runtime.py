@@ -1,5 +1,3 @@
-"""Native process-runtime initialization contracts."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,7 +8,7 @@ import torch
 import xpool.native
 from tests.harness.native.case import run_native_case
 from tests.harness.native.debug import native_debug_options
-from xpool.runtime import RuntimeRole
+from xpool.native import RuntimeRole
 
 
 def isolated_runtime_identity() -> None:
@@ -23,8 +21,8 @@ def isolated_runtime_identity() -> None:
 
 def isolated_invalid_runtime_values() -> None:
     cuda_device = torch.cuda.current_device()
-    with pytest.raises(RuntimeError, match="invalid runtime role"):
-        xpool.native.initialize(99, cuda_device, None)
+    with pytest.raises(TypeError):
+        xpool.native.initialize(99, cuda_device, None)  # ty: ignore[invalid-argument-type]
 
 
 def isolated_negative_cuda_device() -> None:
@@ -43,17 +41,46 @@ def isolated_cuda_configuration_failure() -> None:
 def isolated_daemon_runtime() -> None:
     with pytest.raises(RuntimeError, match="daemon init requires a null CUDA device"):
         xpool.native.initialize(RuntimeRole.DAEMON, 0, None)
-    with pytest.raises(RuntimeError, match="daemon initialize requires null debug options"):
-        xpool.native.initialize(RuntimeRole.DAEMON, None, native_debug_options())
-    xpool.native.initialize(RuntimeRole.DAEMON)
+    options = native_debug_options()
+    xpool.native.initialize(RuntimeRole.DAEMON, None, options)
+    xpool.native.initialize(RuntimeRole.DAEMON, None, options)
     uid = xpool.native.fabric.create_uid()
     assert isinstance(uid, str)
     assert uid
     with pytest.raises(RuntimeError, match="requires runtime role atnagent"):
-        xpool.native.transport.create_arena(0, 0, 1, 2, 2, 0, 1, 0, 1)
+        xpool.native.transport.create_arena(0, 0, 1, 2, torch.bfloat16, 0, 1, 0, 1)
     with pytest.raises(RuntimeError, match="requires one of the accepted runtime roles"):
         xpool.native.fabric.join(
-            xpool.native.FabricJoinMetadata(uid, 0, 1, 1, 1, xpool.native.FfnSchedulerPolicy.fifo(), [])
+            xpool.native.fabric.ArenaProjection(
+                1,
+                1,
+                uid,
+                1,
+                1,
+                1,
+                xpool.native.fabric.SchedulerPolicy.fifo(),
+                (
+                    xpool.native.fabric.InstanceProjection(
+                        torch.bfloat16,
+                        8,
+                        4,
+                        4,
+                        True,
+                        1,
+                        1,
+                        (0,),
+                        (
+                            xpool.native.fabric.InstanceLayerProjection(
+                                0,
+                                xpool.native.ffn.LayerKind.DENSE,
+                                0,
+                                (0,),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            0,
         )
 
 

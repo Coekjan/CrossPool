@@ -12,7 +12,7 @@ import pytest
 import xpool.runtime.agent
 from tests.harness.support.config import reset_global_config
 from tests.harness.support.runtime.atnagent import reset_agent_runtime
-from xpool.runtime import RuntimeRole
+from xpool.native import RuntimeRole
 from xpool.runtime.agent import Agent
 from xpool.service.client import XpoolClient
 from xpool.service.wire import HeartbeatResponse
@@ -98,8 +98,8 @@ class RunLoopAgent(Agent):
 
         return HeartbeatResponse(warnings=[], generation=None, fabric_phase=None)
 
-    def prepare_fabric(self) -> bool:
-        """Complete role preparation and optionally request shutdown within it."""
+    def prepare_fabric_join(self) -> bool:
+        """Complete join preparation and optionally request shutdown within it."""
 
         self.events.append("prepare:start")
         if self.shutdown_point == "prepare":
@@ -107,15 +107,15 @@ class RunLoopAgent(Agent):
         self.events.append("prepare:end")
         return True
 
-    def join_fabric(self) -> None:
-        """Model the indivisible Fabric bootstrap transaction."""
+    def prepare_fabric_execution(self) -> None:
+        """Model the indivisible post-join execution preparation transaction."""
 
         self.events.append("bootstrap:start")
         if self.shutdown_point == "bootstrap":
             self.request_shutdown()
         self.events.append("bootstrap:active")
 
-    def activate_fabric_plan(self) -> None:
+    def activate_fabric(self) -> None:
         """Satisfy the abstract Agent role contract."""
 
     def quiesce_fabric(self) -> None:
@@ -129,8 +129,12 @@ class RunLoopAgent(Agent):
     def advance_fabric_lifecycle(self) -> None:
         """Complete one action/report boundary and optionally request shutdown."""
 
-        self.events.append("advance:start")
-        if self.shutdown_point == "advance":
+        if self.shutdown_point == "prepare":
+            self.prepare_fabric_join()
+        elif self.shutdown_point == "bootstrap":
+            self.prepare_fabric_execution()
+        else:
+            self.events.append("advance:start")
             self.request_shutdown()
         self.events.append("advance:reported")
 
@@ -156,6 +160,7 @@ class RunLoopAgent(Agent):
                 "prepare:start",
                 "signal",
                 "prepare:end",
+                "advance:reported",
                 "shutdown",
                 "heartbeat:close",
                 "role:close",
@@ -168,11 +173,10 @@ class RunLoopAgent(Agent):
             [
                 "register",
                 "heartbeat:start",
-                "prepare:start",
-                "prepare:end",
                 "bootstrap:start",
                 "signal",
                 "bootstrap:active",
+                "advance:reported",
                 "shutdown",
                 "heartbeat:close",
                 "role:close",
@@ -185,11 +189,6 @@ class RunLoopAgent(Agent):
             [
                 "register",
                 "heartbeat:start",
-                "prepare:start",
-                "prepare:end",
-                "bootstrap:start",
-                "bootstrap:active",
-                "health",
                 "advance:start",
                 "signal",
                 "advance:reported",
@@ -240,3 +239,58 @@ def test_agent_run_observes_shutdown_only_at_safe_boundaries(
     agent.run()
 
     assert events == expected
+
+
+def test_agent_run_closes_local_owners_when_pre_join_work_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Failure before JOIN_READY releases only process-local owners."""
+
+    events: list[str] = []
+    agent = RunLoopAgent(
+        events=events,
+        request_shutdown=lambda: None,
+        shutdown_point="advance",
+    )
+
+    def fail_lifecycle() -> None:
+        raise RuntimeError("failed")
+
+    def fail_stop(**kwargs: object) -> None:
+        raise SystemExit(1)
+
+    monkeypatch.setattr(agent, "advance_fabric_lifecycle", fail_lifecycle)
+    monkeypatch.setattr(xpool.runtime.agent, "bail", fail_stop)
+
+    with pytest.raises(SystemExit):
+        agent.run()
+
+    assert events == ["register", "heartbeat:start", "heartbeat:close", "role:close", "client:close"]
+
+
+def test_agent_run_continues_pre_join_cleanup_after_owner_close_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One failed local close does not strand later pre-join owners."""
+
+    events: list[str] = []
+    agent = RunLoopAgent(
+        events=events,
+        request_shutdown=lambda: None,
+        shutdown_point="advance",
+    )
+
+    def fail_lifecycle() -> None:
+        raise RuntimeError("failed")
+
+    def fail_heartbeat_close() -> None:
+        events.append("heartbeat:close")
+        raise RuntimeError("heartbeat close failed")
+
+    def fail_stop(**kwargs: object) -> None:
+        raise SystemExit(1)
+
+    monkeypatch.setattr(agent, "advance_fabric_lifecycle", fail_lifecycle)
+    monkeypatch.setattr(agent.heartbeat_worker, "close", fail_heartbeat_close)
+    monkeypatch.setattr(xpool.runtime.agent, "bail", fail_stop)
+
+    with pytest.raises(SystemExit):
+        agent.run()
+
+    assert events == ["register", "heartbeat:start", "heartbeat:close", "role:close", "client:close"]

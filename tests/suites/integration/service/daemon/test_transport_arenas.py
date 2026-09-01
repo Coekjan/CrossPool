@@ -8,8 +8,9 @@ import httpx
 import pytest
 
 import xpool.service.daemon.registration
-from tests.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config, with_loopback
+from tests.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
 from tests.harness.support.service.daemon import (
+    activate_fabric_world,
     atnagent_registration,
     atnagent_transport_arena_bindings,
     atnagent_transport_arenas,
@@ -23,7 +24,8 @@ from tests.harness.support.service.daemon import (
     process_ref,
     request,
 )
-from xpool.config import LoopbackSite, XpoolConfig
+from xpool.config import XpoolConfig
+from xpool.fabric import FabricPlan
 from xpool.service.wire import ProcessRef
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
@@ -71,63 +73,6 @@ def test_daemon_requires_executable_fabric_for_transport_arena() -> None:
     }
 
 
-def test_daemon_allows_atnagent_loopback_transport_before_fabric() -> None:
-    config = synthetic_config(loopback_site=LoopbackSite.ATNAGENT)
-    app = create_app(config)
-    atnagent = atnagent_registration(cuda_device=0)
-    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
-    assert (
-        request(
-            app,
-            "POST",
-            atnagent_transport_arenas_path(0),
-            json=atnagent_transport_arenas((TEST_MODEL_ID, 0), publisher=atnagent),
-        ).status_code
-        == HTTPStatus.NO_CONTENT
-    )
-
-    response = request(
-        app,
-        "POST",
-        instance_transport_arena_acquire_path(TEST_MODEL_ID, 0),
-        json=process_ref(),
-    )
-
-    assert response.status_code == HTTPStatus.OK
-    assert response.json() == instance_transport_arena(rank=0)
-
-
-def test_daemon_rejects_ffnagent_loopback_transport_before_fabric() -> None:
-    config = synthetic_config(loopback_site=LoopbackSite.FFNAGENT)
-    app = create_app(config)
-    atnagent = atnagent_registration(cuda_device=0)
-    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
-    assert (
-        request(
-            app,
-            "POST",
-            atnagent_transport_arenas_path(0),
-            json=atnagent_transport_arenas((TEST_MODEL_ID, 0), publisher=atnagent),
-        ).status_code
-        == HTTPStatus.NO_CONTENT
-    )
-
-    response = request(
-        app,
-        "POST",
-        instance_transport_arena_acquire_path(TEST_MODEL_ID, 0),
-        json=process_ref(),
-    )
-
-    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
-    assert response.json()["detail"] == {
-        "kind": "not_ready",
-        "message": "Fabric generation is not executable",
-    }
-
-
 def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -141,7 +86,12 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
     atnagent = atnagent_registration(cuda_device=0)
     assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
     assert (
-        request(app, "POST", "/ffnagent/register", json=ffnagent_registration(cuda_device=1)).status_code
+        request(
+            app,
+            "POST",
+            "/ffnagent/register",
+            json=ffnagent_registration(cuda_device=1, model_ids=("m",)),
+        ).status_code
         == HTTPStatus.NO_CONTENT
     )
     assert (
@@ -161,10 +111,10 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
 
     validation_reached = threading.Event()
     resume_acquisition = threading.Event()
-    original_validate = xpool.service.daemon.registration.InstanceRegistrationState.validate_process_ref
+    original_validate = xpool.service.daemon.registration.InstanceRankRegistrationState.validate_process_ref
 
     def pause_after_validation(
-        registration: xpool.service.daemon.registration.InstanceRegistrationState,
+        registration: xpool.service.daemon.registration.InstanceRankRegistrationState,
         owner: ProcessRef,
         *,
         context: str,
@@ -174,7 +124,7 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
         assert resume_acquisition.wait(timeout=2.0)
 
     monkeypatch.setattr(
-        xpool.service.daemon.registration.InstanceRegistrationState,
+        xpool.service.daemon.registration.InstanceRankRegistrationState,
         "validate_process_ref",
         pause_after_validation,
     )
@@ -202,54 +152,11 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
     assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
     assert response.json()["detail"] == {
         "kind": "not_ready",
-        "message": "Fabric generation is not accepting Instance arena leases",
+        "message": "Fabric generation is not accepting Instance-rank arena leases",
     }
 
 
-def test_daemon_rejects_stale_arena_geometry_after_instance_reregister() -> None:
-    config = synthetic_config(loopback_site=LoopbackSite.ATNAGENT)
-    app = create_app(config)
-    atnagent = atnagent_registration(cuda_device=0)
-    initial_registration = instance_registration(max_tokens=4)
-
-    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/instance/register", json=initial_registration).status_code == HTTPStatus.NO_CONTENT
-    initial_arena = atnagent_transport_arenas((TEST_MODEL_ID, 0), publisher=atnagent)
-    assert (
-        request(
-            app,
-            "POST",
-            atnagent_transport_arenas_path(0),
-            json=initial_arena,
-        ).status_code
-        == HTTPStatus.NO_CONTENT
-    )
-    assert (
-        request(
-            app,
-            "POST",
-            f"/instance/{initial_registration['instance_id']}/deregister?rank={initial_registration['rank']}",
-            json={"pid": initial_registration["pid"], "abi_version": initial_registration["abi_version"]},
-        ).status_code
-        == HTTPStatus.NO_CONTENT
-    )
-    assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
-
-    response = request(
-        app,
-        "POST",
-        instance_transport_arena_acquire_path(TEST_MODEL_ID, 0),
-        json=process_ref(),
-    )
-
-    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
-    assert response.json()["detail"] == {
-        "kind": "not_ready",
-        "message": "published transport arena geometry is stale",
-    }
-
-
-def test_daemon_rejects_transport_topology_that_does_not_cover_atnagent_world() -> None:
+def test_daemon_accepts_transport_topology_using_atnagent_prefix() -> None:
     config = XpoolConfig.from_mapping(
         {
             "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
@@ -265,9 +172,28 @@ def test_daemon_rejects_transport_topology_that_does_not_cover_atnagent_world() 
         json=instance_registration(instance_id="m", rank=0, atn_tp_size=1),
     )
 
+    assert response.status_code == HTTPStatus.NO_CONTENT
+
+
+def test_daemon_rejects_transport_topology_exceeding_atnagent_world() -> None:
+    config = XpoolConfig.from_mapping(
+        {
+            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "models": [{"id": "m", "path": "/models/m"}],
+        }
+    )
+    app = create_app(config)
+
+    response = request(
+        app,
+        "POST",
+        "/instance/register",
+        json=instance_registration(instance_id="m", rank=0, atn_tp_size=2),
+    )
+
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"]["message"] == (
-        "instance transport TP-by-DP topology does not cover the configured AtnAgent world"
+        "instance transport TP-by-DP topology exceeds the configured AtnAgent world"
     )
 
 
@@ -340,14 +266,11 @@ def test_daemon_rejects_cross_rank_transport_geometry_mismatch() -> None:
 
 
 def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instance() -> None:
-    config = with_loopback(
-        XpoolConfig.from_mapping(
-            {
-                "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
-                "models": [{"id": "m", "path": "/models/m"}],
-            }
-        ),
-        LoopbackSite.ATNAGENT,
+    config = XpoolConfig.from_mapping(
+        {
+            "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
+            "models": [{"id": "m", "path": "/models/m"}],
+        }
     )
     app = create_app(config)
     atnagents: dict[int, dict[str, int | float]] = {}
@@ -357,6 +280,8 @@ def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instan
     ):
         atnagents[int(payload["cuda_device"])] = payload
         assert request(app, "POST", "/atnagent/register", json=payload).status_code == HTTPStatus.NO_CONTENT
+    ffnagent = ffnagent_registration(cuda_device=2, model_ids=("m",))
+    assert request(app, "POST", "/ffnagent/register", json=ffnagent).status_code == HTTPStatus.NO_CONTENT
     for rank in (0, 1):
         assert (
             request(
@@ -371,6 +296,8 @@ def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instan
             ).status_code
             == HTTPStatus.NO_CONTENT
         )
+    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+    activate_fabric_world(app, plan, (atnagents[0], 0), (atnagents[1], 1), (ffnagent, 2))
     for rank in (0, 1):
         assert (
             request(

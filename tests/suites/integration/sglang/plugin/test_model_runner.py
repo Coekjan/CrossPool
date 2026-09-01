@@ -13,18 +13,21 @@ from tests.harness.support.sglang.plugin import (
     FailingAfterLoadAdapter,
     FakeAdapter,
     configure_xpool_model,
-    ffn_workload,
+    ffn_profile,
     reset_plugin_required_hook_targets,
 )
 from xpool.config import MissingRequiredConfig
-from xpool.integrations.sglang.topology import AtnKind, SglangModelMetadata
-from xpool.runtime import RuntimeRole
-from xpool.runtime.transport import InstanceTransportAttributes
+from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
+from xpool.native import RuntimeRole
+from xpool.runtime.transport import InstanceRankTransportProfile
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, reset_plugin_required_hook_targets.__name__)
 
 
-def test_model_runner_hook_delegates_to_matching_adapters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_model_runner_hook_delegates_to_matching_adapters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     events: list[str] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
@@ -98,14 +101,16 @@ path = "{unrelated_model_path}"
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
 
     def fake_sglang_metadata(config_path: Path, *, model_id: str) -> SglangModelMetadata:
-        assert config_path == model_path / "config.json"
+        assert config_path == model_path
         assert model_id == "test/model"
         return SglangModelMetadata(
+            model_id=model_id,
             family=model_id,
             hidden_size=2048,
             num_atn_heads=16,
             num_key_value_heads=2,
-            atn_kind=AtnKind.GQA,
+            atn_kind=SglangAttentionKind.GQA,
+            raw_config_path=config_path,
         )
 
     monkeypatch.setattr(SglangModelMetadata, "load", fake_sglang_metadata)
@@ -133,7 +138,7 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     events: list[str] = []
     installs: list[tuple[str, int]] = []
     registrations: list[tuple[str, int, int]] = []
-    workloads: list[object] = []
+    profiles: list[object] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
     configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
@@ -142,7 +147,11 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         "init",
         lambda cuda_device, role: events.append(f"init:{cuda_device}:{int(role)}"),
     )
-    monkeypatch.setattr(xpool.integrations.sglang.plugin.devkit, "install", lambda: events.append("devkit"))
+    monkeypatch.setattr(
+        xpool.integrations.sglang.plugin.devkit,
+        "install",
+        lambda package=None: events.append("devkit"),
+    )
 
     class FakeInstanceRuntime:
         def wait_for_fabric_executable(self) -> object:
@@ -165,19 +174,19 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         *,
         instance_id: str,
         rank: int,
-        transport: InstanceTransportAttributes,
-        workload: object,
+        transport: InstanceRankTransportProfile,
+        ffn_profile: object,
     ) -> FakeInstanceRuntime:
-        registrations.append((instance_id, rank, transport.max_tokens))
-        workloads.append(workload)
+        registrations.append((instance_id, rank, transport.payload_row_capacity))
+        profiles.append(ffn_profile)
         installs.append((instance_id, rank))
         events.append("start_instance")
         return FakeInstanceRuntime()
 
-    monkeypatch.setattr(xpool.integrations.sglang.plugin.Instance, "start", fake_instance_init)
-    workload = ffn_workload()
+    monkeypatch.setattr(xpool.integrations.sglang.plugin.InstanceRankRuntime, "start", fake_instance_init)
+    profile = ffn_profile()
     monkeypatch.setattr(
-        xpool.integrations.sglang.plugin, "derive_workload", lambda model_runner, binding, args: workload
+        xpool.integrations.sglang.plugin, "derive_instance_ffn_profile", lambda model_runner, binding, args: profile
     )
 
     def original(model_runner: ModelRunner) -> str:
@@ -189,6 +198,7 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     )
     assert events == [
         f"init:0:{int(RuntimeRole.INSTANCE)}",
+        "devkit",
         "devkit",
         "validate_before_load",
         "bind_runtime",
@@ -209,6 +219,7 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     assert events == [
         f"init:0:{int(RuntimeRole.INSTANCE)}",
         "devkit",
+        "devkit",
         "validate_before_load",
         "bind_runtime",
         "original",
@@ -222,7 +233,7 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     ]
     assert registrations == [(TEST_MODEL_ID, 0, 8)]
     assert installs == [(TEST_MODEL_ID, 0)]
-    assert workloads == [workload]
+    assert profiles == [profile]
 
 
 def test_model_runner_hook_validates_before_daemon_registration(
@@ -258,8 +269,8 @@ def test_model_runner_hook_clears_binding_when_instance_start_fails(
         events.append("start_instance")
         raise RuntimeError("install failed")
 
-    monkeypatch.setattr(xpool.integrations.sglang.plugin.Instance, "start", fail_instance_init)
-    monkeypatch.setattr(xpool.integrations.sglang.plugin, "derive_workload", lambda *args: ffn_workload())
+    monkeypatch.setattr(xpool.integrations.sglang.plugin.InstanceRankRuntime, "start", fail_instance_init)
+    monkeypatch.setattr(xpool.integrations.sglang.plugin, "derive_instance_ffn_profile", lambda *args: ffn_profile())
 
     def original(model_runner: ModelRunner) -> str:
         events.append("original")
@@ -310,8 +321,8 @@ def test_model_runner_hook_cleans_up_when_post_executable_transport_attach_fails
         events.append("start_instance")
         return FakeInstanceRuntime()
 
-    monkeypatch.setattr(xpool.integrations.sglang.plugin.Instance, "start", start_instance)
-    monkeypatch.setattr(xpool.integrations.sglang.plugin, "derive_workload", lambda *args: ffn_workload())
+    monkeypatch.setattr(xpool.integrations.sglang.plugin.InstanceRankRuntime, "start", start_instance)
+    monkeypatch.setattr(xpool.integrations.sglang.plugin, "derive_instance_ffn_profile", lambda *args: ffn_profile())
 
     xpool.integrations.sglang.plugin.around_model_runner_load_model(
         (adapter,), lambda model_runner: None, runner.as_model_runner()
@@ -328,49 +339,15 @@ def test_model_runner_hook_cleans_up_when_post_executable_transport_attach_fails
     assert runner.xpool_runtime is None
 
 
-def test_model_runner_hook_skips_transport_runtime_for_instance_loopback(
+def test_model_runner_hook_waits_for_executable_fabric(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    events: list[str] = []
-    adapter = FakeAdapter(matches=True, events=events)
-    runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
-    monkeypatch.setenv("XPOOL_DEBUG_LOOPBACK_ENABLE", "1")
-    monkeypatch.setenv("XPOOL_DEBUG_LOOPBACK_SITE", "instance")
-    configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
-    monkeypatch.setattr(
-        xpool.integrations.sglang.plugin.Instance,
-        "start",
-        lambda *args, **kwargs: pytest.fail("instance loopback must not create instance runtime"),
-    )
-
-    def original(model_runner: ModelRunner) -> str:
-        events.append("original")
-        return "loaded"
-
-    result = xpool.integrations.sglang.plugin.around_model_runner_load_model(
-        (adapter,), original, runner.as_model_runner()
-    )
-    pool_result = xpool.integrations.sglang.plugin.after_model_runner_init_memory_pool(
-        None, runner.as_model_runner(), 0
-    )
-
-    assert result == "loaded"
-    assert pool_result is None
-    assert events == ["validate_before_load", "bind_runtime", "original", "validate_after_load"]
-
-
-def test_model_runner_hook_waits_for_executable_ffnagent_loopback(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """FfnAgent loopback attaches transport and waits for joined participants."""
+    """The model runner attaches Transport only after Fabric is executable."""
 
     events: list[str] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
-    monkeypatch.setenv("XPOOL_DEBUG_LOOPBACK_ENABLE", "1")
-    monkeypatch.setenv("XPOOL_DEBUG_LOOPBACK_SITE", "ffnagent")
     configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
 
     class FakeInstanceRuntime:
@@ -385,11 +362,11 @@ def test_model_runner_hook_waits_for_executable_ffnagent_loopback(
             events.append("start_failure_monitor")
 
     def fake_instance_init(*args: object, **kwargs: object) -> FakeInstanceRuntime:
-        events.append("register_instance_workload")
+        events.append("register_instance_profile")
         return FakeInstanceRuntime()
 
-    monkeypatch.setattr(xpool.integrations.sglang.plugin.Instance, "start", fake_instance_init)
-    monkeypatch.setattr(xpool.integrations.sglang.plugin, "derive_workload", lambda *args: ffn_workload())
+    monkeypatch.setattr(xpool.integrations.sglang.plugin.InstanceRankRuntime, "start", fake_instance_init)
+    monkeypatch.setattr(xpool.integrations.sglang.plugin, "derive_instance_ffn_profile", lambda *args: ffn_profile())
 
     xpool.integrations.sglang.plugin.around_model_runner_load_model(
         (adapter,), lambda model_runner: None, runner.as_model_runner()
@@ -400,7 +377,7 @@ def test_model_runner_hook_waits_for_executable_ffnagent_loopback(
     assert result is None
     assert runner.xpool_runtime is not None
     assert events[-4:] == [
-        "register_instance_workload",
+        "register_instance_profile",
         "wait_for_fabric_executable",
         "attach_transport",
         "start_failure_monitor",

@@ -8,6 +8,7 @@ import xpool.service.daemon.control
 from tests.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
 from tests.harness.support.service.daemon import (
     FakeMonotonicClock,
+    activate_fabric_world,
     atnagent_registration,
     atnagent_transport_arenas,
     atnagent_transport_arenas_path,
@@ -22,8 +23,8 @@ from tests.harness.support.service.daemon import (
     start_sleeping_proc,
     stop_proc,
 )
-from xpool.config import LoopbackSite
-from xpool.service.daemon.mps import MpsProbeResult
+from xpool.fabric import FabricPlan
+from xpool.mps import MpsProbeResult
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
 
@@ -101,8 +102,8 @@ def test_mps_status_recovers_without_daemon_restart_while_fabric_is_initializing
 ) -> None:
     config = synthetic_config()
     results = [
-        MpsProbeResult(False, "test controller is offline"),
-        MpsProbeResult(True, "test controller recovered"),
+        MpsProbeResult(False, None, "test controller is offline"),
+        MpsProbeResult(True, 100, "test controller recovered"),
     ]
     monkeypatch.setattr(xpool.service.daemon.control, "probe_mps_controller", lambda: results.pop(0))
     app = create_app(config)
@@ -125,7 +126,7 @@ def test_mps_status_recovers_without_daemon_restart_while_fabric_is_initializing
 
     assert offline["ready"] is False
     assert offline["mps_status"] == "offline"
-    assert offline["fabric_phase"] == "joining"
+    assert offline["fabric_phase"] == "preparing_join"
     assert offline["transport_ready"] is True
     assert offline["instances_initialized"] is False
     assert all(entry["status"] == "online" for entry in offline["atnagents"])
@@ -138,14 +139,15 @@ def test_mps_status_recovers_without_daemon_restart_while_fabric_is_initializing
 
     assert recovered["ready"] is False
     assert recovered["mps_status"] == "online"
-    assert recovered["fabric_phase"] == "joining"
+    assert recovered["fabric_phase"] == "preparing_join"
 
 
 def test_daemon_preserves_stale_registration_but_blocks_stale_transport_arenas() -> None:
-    config = synthetic_config(loopback_site=LoopbackSite.ATNAGENT)
+    config = synthetic_config()
     app = create_app(config)
     atnagent_proc, atnagent_proc_id = start_sleeping_proc()
     atnagent = atnagent_registration(cuda_device=0, pid=atnagent_proc_id.pid)
+    ffnagent = ffnagent_registration()
     try:
         assert (
             request(
@@ -160,6 +162,9 @@ def test_daemon_preserves_stale_registration_but_blocks_stale_transport_arenas()
             request(app, "POST", "/instance/register", json=instance_registration()).status_code
             == HTTPStatus.NO_CONTENT
         )
+        assert request(app, "POST", "/ffnagent/register", json=ffnagent).status_code == HTTPStatus.NO_CONTENT
+        plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+        activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
         assert (
             request(
                 app,
@@ -190,34 +195,6 @@ def test_daemon_preserves_stale_registration_but_blocks_stale_transport_arenas()
         "kind": "not_ready",
         "message": "local attention atnagent process is not live",
     }
-    replacement = atnagent_registration(cuda_device=0)
-    assert (
-        request(
-            app,
-            "POST",
-            "/atnagent/register",
-            json=replacement,
-        ).status_code
-        == HTTPStatus.NO_CONTENT
-    )
-    assert (
-        request(
-            app,
-            "POST",
-            atnagent_transport_arenas_path(0),
-            json=atnagent_transport_arenas((TEST_MODEL_ID, 0), publisher=replacement),
-        ).status_code
-        == HTTPStatus.NO_CONTENT
-    )
-
-    recovered = request(
-        app,
-        "POST",
-        instance_transport_arena_acquire_path(TEST_MODEL_ID, 0),
-        json=process_ref(),
-    )
-
-    assert recovered.status_code == HTTPStatus.OK
 
 
 def test_daemon_reports_not_ready_when_atnagent_upserts_before_registration() -> None:

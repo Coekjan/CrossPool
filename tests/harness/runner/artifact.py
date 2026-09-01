@@ -54,4 +54,7 @@ class ArtifactGroupAdapter(Protocol):
         group: ArtifactGroupRef,
         reports: Sequence[PytestCaseReport],
         artifact_directories: Sequence[Path],
-    ) -> ArtifactGroupResult: ...
+    ) -> ArtifactGroupResult:
+        """Classify one complete group after all case reports are available."""
+
+        ...

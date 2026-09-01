@@ -8,6 +8,8 @@ file(GLOB_RECURSE XPOOL_PUBLIC_HEADERS CONFIGURE_DEPENDS
 set(XPOOL_HEADER_COMPILE_DIR "${CMAKE_CURRENT_BINARY_DIR}/header_compile")
 file(MAKE_DIRECTORY "${XPOOL_HEADER_COMPILE_DIR}")
 set(XPOOL_HEADER_COMPILE_SOURCES)
+# Compile every public header in an otherwise empty translation unit so hidden
+# include dependencies fail independently of ordinary source include order.
 foreach(XPOOL_PUBLIC_HEADER IN LISTS XPOOL_PUBLIC_HEADERS)
   file(RELATIVE_PATH XPOOL_PUBLIC_HEADER_REL "${PROJECT_SOURCE_DIR}/src/cext-include" "${XPOOL_PUBLIC_HEADER}")
   string(REPLACE "/" "_" XPOOL_HEADER_COMPILE_STEM "${XPOOL_PUBLIC_HEADER_REL}")
@@ -80,6 +82,7 @@ foreach(XPOOL_CEXT_TEST_SOURCE IN LISTS XPOOL_CEXT_TEST_SOURCES)
     CUDA_ARCHITECTURES "${XPOOL_EFFECTIVE_CUDA_ARCHITECTURES}"
     CUDA_STANDARD 20
     CUDA_STANDARD_REQUIRED ON
+    # Keep CTest launches inside the harness process boundary used by Python.
     TEST_LAUNCHER
       "${Python3_EXECUTABLE};${PROJECT_SOURCE_DIR}/tests/harness/runner/ctest_launcher.py"
   )
@@ -90,6 +93,7 @@ foreach(XPOOL_CEXT_TEST_SOURCE IN LISTS XPOOL_CEXT_TEST_SOURCES)
 
   set(XPOOL_CEXT_TEST_PROPERTIES TIMEOUT 20)
   if(XPOOL_CEXT_TEST_SOURCE MATCHES "\\.cu$")
+    # Serialize CUDA tests through CTest's leased GPU resource groups.
     list(APPEND XPOOL_CEXT_TEST_PROPERTIES RESOURCE_GROUPS "gpus:1")
   endif()
   gtest_discover_tests("${XPOOL_CEXT_TEST_TARGET}"

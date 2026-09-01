@@ -19,6 +19,8 @@ from typing import Literal, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
+import xpool.native
+
 __all__ = [
     "CONFIG_REGISTRY",
     "AtnAgentConfig",
@@ -30,13 +32,17 @@ __all__ = [
     "DevicesConfig",
     "FabricObserverDebugConfig",
     "FfnAgentConfig",
+    "FfnConfig",
+    "FfnLoaderConfig",
+    "FfnPlacementConfig",
+    "FfnPlacementOptimizerConfig",
+    "FfnRoutingObserverDebugConfig",
     "FfnSchedulingPolicy",
     "GraphObserverDebugConfig",
     "InstanceConfig",
-    "LoopbackDebugConfig",
-    "LoopbackSite",
     "MissingRequiredConfig",
     "ModelConfig",
+    "PrefillLogitObserverDebugConfig",
     "SchedulerConfig",
     "TopologyError",
     "VendorConfig",
@@ -88,20 +94,6 @@ class MissingRequiredConfig(ConfigError):
 
 class TopologyError(ConfigError):
     """Raised when model or device topology cannot be derived safely."""
-
-
-class LoopbackSite(StrEnum):
-    """Execution site selected for the debug FFN loopback.
-
-    Attributes:
-        INSTANCE: Execute directly inside the SGLang instance process.
-        ATNAGENT: Execute in the local AtnAgent transport kernel.
-        FFNAGENT: Execute in the remote FfnAgent after transport.
-    """
-
-    INSTANCE = "instance"
-    ATNAGENT = "atnagent"
-    FFNAGENT = "ffnagent"
 
 
 class FfnSchedulingPolicy(StrEnum):
@@ -290,31 +282,13 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Bootstrap TOML config path used before repository config can be loaded.",
     ),
     ConfigSetting(
-        name="debug_loopback_enable",
-        path=("debug", "loopback", "enable"),
-        parser="bool",
-        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
-        default=False,
-        env_var="XPOOL_DEBUG_LOOPBACK_ENABLE",
-        description="Development-only switch that routes FFN calls through a selected loopback execution site.",
-    ),
-    ConfigSetting(
-        name="debug_loopback_site",
-        path=("debug", "loopback", "site"),
-        parser="raw",
-        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
-        default=None,
-        env_var="XPOOL_DEBUG_LOOPBACK_SITE",
-        description="Execution site for the enabled debug FFN loopback.",
-    ),
-    ConfigSetting(
         name="debug_graph_observer_enable",
         path=("debug", "graph_observer", "enable"),
         parser="bool",
         allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
         default=False,
         env_var="XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE",
-        description="Development-only switch that records SGLang CUDA graph capture/replay events.",
+        description="Development-only switch for SGLang graph events and native FFN Graph snapshots.",
     ),
     ConfigSetting(
         name="debug_graph_observer_outdir",
@@ -323,7 +297,25 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
         default=None,
         env_var="XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR",
-        description="Directory used by the debug graph observer for JSONL event files.",
+        description="Directory for SGLang graph event files and native FFN Graph snapshots.",
+    ),
+    ConfigSetting(
+        name="debug_prefill_logit_observer_enable",
+        path=("debug", "prefill_logit_observer", "enable"),
+        parser="bool",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=False,
+        env_var="XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE",
+        description="Development-only switch that records first-prefill logits from SGLang.",
+    ),
+    ConfigSetting(
+        name="debug_prefill_logit_observer_outdir",
+        path=("debug", "prefill_logit_observer", "outdir"),
+        parser="raw",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=None,
+        env_var="XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_OUTDIR",
+        description="Directory used by the prefill-logit observer for Safetensors output.",
     ),
     ConfigSetting(
         name="debug_transport_observer_enable",
@@ -344,12 +336,12 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Directory used by the native transport observer for JSON output.",
     ),
     ConfigSetting(
-        name="debug_transport_observer_trace_capacity",
-        path=("debug", "transport_observer", "trace_capacity"),
+        name="debug_transport_observer_record_capacity",
+        path=("debug", "transport_observer", "record_capacity"),
         parser="int",
         allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
         default=8192,
-        env_var="XPOOL_DEBUG_TRANSPORT_OBSERVER_TRACE_CAPACITY",
+        env_var="XPOOL_DEBUG_TRANSPORT_OBSERVER_RECORD_CAPACITY",
         description="Positive number of native transport trace records retained per arena.",
     ),
     ConfigSetting(
@@ -371,13 +363,40 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Directory used by the fabric observer for structured snapshots.",
     ),
     ConfigSetting(
-        name="debug_fabric_observer_trace_capacity",
-        path=("debug", "fabric_observer", "trace_capacity"),
+        name="debug_fabric_observer_record_capacity",
+        path=("debug", "fabric_observer", "record_capacity"),
         parser="int",
         allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
         default=8192,
-        env_var="XPOOL_DEBUG_FABRIC_OBSERVER_TRACE_CAPACITY",
+        env_var="XPOOL_DEBUG_FABRIC_OBSERVER_RECORD_CAPACITY",
         description="Positive number of native fabric trace records retained per PE.",
+    ),
+    ConfigSetting(
+        name="debug_ffn_routing_observer_enable",
+        path=("debug", "ffn_routing_observer", "enable"),
+        parser="bool",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=False,
+        env_var="XPOOL_DEBUG_FFN_ROUTING_OBSERVER_ENABLE",
+        description="Development-only switch that records real-FFN routing tensors.",
+    ),
+    ConfigSetting(
+        name="debug_ffn_routing_observer_outdir",
+        path=("debug", "ffn_routing_observer", "outdir"),
+        parser="raw",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=None,
+        env_var="XPOOL_DEBUG_FFN_ROUTING_OBSERVER_OUTDIR",
+        description="Directory used by the FFN routing observer for Safetensors output.",
+    ),
+    ConfigSetting(
+        name="debug_ffn_routing_observer_record_capacity",
+        path=("debug", "ffn_routing_observer", "record_capacity"),
+        parser="int",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
+        default=8,
+        env_var="XPOOL_DEBUG_FFN_ROUTING_OBSERVER_RECORD_CAPACITY",
+        description="Positive number of routing records retained per FfnAgent.",
     ),
     ConfigSetting(
         name="vendor_model_base_uri",
@@ -385,6 +404,51 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="str",
         allowed_sources=(ConfigSource.CONFIG,),
         description="Absolute local model-cache root used to resolve model ids such as org/name into weight paths.",
+    ),
+    ConfigSetting(
+        name="ffn_loader_parallelism",
+        path=("ffn", "loader", "parallelism"),
+        parser="int",
+        allowed_sources=(ConfigSource.CLI, ConfigSource.ENV, ConfigSource.CONFIG, ConfigSource.DEFAULT),
+        default=4,
+        cli="--ffn-loader-parallelism",
+        env_var="XPOOL_FFN_LOADER_PARALLELISM",
+        description="Number of bounded Host readers used by one FfnAgent checkpoint materialization.",
+    ),
+    ConfigSetting(
+        name="ffn_placement_optimizer_parallelism",
+        path=("ffn", "placement", "optimizer", "parallelism"),
+        parser="int",
+        allowed_sources=(ConfigSource.CLI, ConfigSource.ENV, ConfigSource.CONFIG, ConfigSource.DEFAULT),
+        default=4,
+        cli="--ffn-placement-optimizer-parallelism",
+        env_var="XPOOL_FFN_PLACEMENT_OPTIMIZER_PARALLELISM",
+        description="Worker count for FFN Placement objective passes.",
+    ),
+    ConfigSetting(
+        name="ffn_placement_optimizer_timeout_seconds",
+        path=("ffn", "placement", "optimizer", "timeout_seconds"),
+        parser="int",
+        allowed_sources=(ConfigSource.CONFIG, ConfigSource.DEFAULT),
+        default=60,
+        description="Shared non-renewable FFN Placement solve deadline in seconds.",
+    ),
+    ConfigSetting(
+        name="ffn_placement_device_memory_extra_margin_bytes",
+        path=("ffn", "placement", "device_memory_extra_margin_bytes"),
+        parser="int",
+        allowed_sources=(ConfigSource.CONFIG, ConfigSource.DEFAULT),
+        default=0,
+        description="Explicit extra device-memory safety margin added after estimation.",
+    ),
+    ConfigSetting(
+        name="memory_calibration_path",
+        path=("memory", "calibration_path"),
+        parser="raw",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.CONFIG, ConfigSource.DEFAULT),
+        default=None,
+        env_var="XPOOL_MEMORY_CALIBRATION_PATH",
+        description="Absolute path to one environment-qualified xpool memory calibration Profile.",
     ),
     ConfigSetting(
         name="daemon_host",
@@ -411,7 +475,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         allowed_sources=TOP_LEVEL_SOURCES,
         default=1,
         cli="--atn-concurrency",
-        description="Maximum concurrent attention owners per attention CUDA device.",
+        description="Reserved attention-side concurrency setting for future KV-pool admission.",
     ),
     ConfigSetting(
         name="scheduler_ffn_concurrency",
@@ -420,7 +484,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         allowed_sources=TOP_LEVEL_SOURCES,
         default=1,
         cli="--ffn-concurrency",
-        description="Maximum FFN-side execution concurrency budget.",
+        description="Number of FFN Executor Lanes instantiated per Fabric generation.",
     ),
     ConfigSetting(
         name="scheduler_ffn_policy",
@@ -485,6 +549,13 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         allowed_sources=CONFIG_REQUIRED,
         description="Optional absolute local model path override containing config.json.",
     ),
+    ConfigSetting(
+        name="model_ffn_tp_size",
+        path=("models", "*", "ffn_tp_size"),
+        parser="int",
+        allowed_sources=(ConfigSource.CONFIG,),
+        description="Optional fixed FFN tensor-parallel width for this model.",
+    ),
 )
 
 
@@ -512,17 +583,17 @@ class XpoolDaemonConfig(BaseModel):
 
 
 class SchedulerConfig(BaseModel):
-    """Conservative resource-concurrency limits enforced by agents."""
+    """FFN lane scheduling and reserved attention admission settings."""
 
     model_config = ConfigDict(extra="forbid")
 
     atn_concurrency: int = Field(
         ge=1,
-        description="Maximum number of concurrent attention owners per attention CUDA device.",
+        description="Reserved attention-side concurrency setting for future KV-pool admission.",
     )
     ffn_concurrency: int = Field(
         ge=1,
-        description="Maximum FFN-side execution concurrency budget.",
+        description="Number of FFN Executor Lanes instantiated per Fabric generation.",
     )
     ffn_policy: FfnSchedulingPolicy = Field(
         description="Device-side policy used to admit ready FFN steps to executors.",
@@ -540,6 +611,89 @@ class SchedulerConfig(BaseModel):
 
         if self.ffn_policy is FfnSchedulingPolicy.FIFO and self.ffn_random_seed is not None:
             raise ValueError("scheduler.ffn_random_seed is valid only when scheduler.ffn_policy is random")
+        return self
+
+
+class FfnLoaderConfig(BaseModel):
+    """Host checkpoint-loading concurrency for one FfnAgent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    parallelism: int = Field(
+        default=4,
+        ge=1,
+        description="Number of bounded exact-key Safetensors readers.",
+    )
+
+
+class FfnPlacementOptimizerConfig(BaseModel):
+    """Deterministic startup Placement optimizer policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    parallelism: int = Field(
+        default=4,
+        ge=1,
+        description="Number of placement-solver workers.",
+    )
+    timeout_seconds: int = Field(
+        default=60,
+        ge=1,
+        description="Whole placement-solver deadline in seconds.",
+    )
+
+
+class FfnPlacementConfig(BaseModel):
+    """FFN Placement resource-admission policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    device_memory_extra_margin_bytes: int = Field(
+        default=0,
+        ge=0,
+        description="Operator-requested bytes reserved beyond the estimated device-memory envelope.",
+    )
+    optimizer: FfnPlacementOptimizerConfig = Field(
+        default_factory=FfnPlacementOptimizerConfig,
+        description="Placement optimizer settings.",
+    )
+
+
+class FfnConfig(BaseModel):
+    """FFN-owned startup policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    loader: FfnLoaderConfig = Field(
+        default_factory=FfnLoaderConfig,
+        description="Checkpoint-loading settings.",
+    )
+    placement: FfnPlacementConfig = Field(
+        default_factory=FfnPlacementConfig,
+        description="FFN placement and device-memory admission settings.",
+    )
+
+
+class MemoryConfig(BaseModel):
+    """Optional offline-calibrated device-memory admission input."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    calibration_path: Path | None = Field(
+        default=None,
+        description="Absolute path to one xpool Memory Calibration Profile.",
+    )
+
+    @model_validator(mode="after")
+    def validate_calibration_path(self) -> MemoryConfig:
+        """Normalize and validate the optional calibration Profile path."""
+
+        if self.calibration_path is None:
+            return self
+        path = self.calibration_path.expanduser()
+        if not path.is_absolute():
+            raise ValueError(f"memory.calibration_path must be absolute: {self.calibration_path}")
+        self.calibration_path = path
         return self
 
 
@@ -594,6 +748,11 @@ class ModelConfig(BaseModel):
         default=None,
         description="Optional absolute local model path override containing config.json.",
     )
+    ffn_tp_size: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional fixed FFN tensor-parallel width; omission resolves to the FfnAgent Fleet width.",
+    )
 
     @model_validator(mode="after")
     def validate_model_path(self) -> ModelConfig:
@@ -643,48 +802,18 @@ class InstanceConfig(BaseModel):
     instance_index: int = Field(ge=0, description="Integer instance index fed to the native shim ABI.")
 
 
-class LoopbackDebugConfig(BaseModel):
-    """Debug-only FFN loopback settings resolved through the config registry."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enable: bool = Field(
-        default=False,
-        description="Whether FFN calls should execute through a debug loopback path.",
-    )
-    site: LoopbackSite | None = Field(
-        default=None,
-        description="Process site that executes loopback work when loopback is enabled.",
-    )
-
-    @model_validator(mode="after")
-    def validate_loopback(self) -> LoopbackDebugConfig:
-        """Require loopback enablement and execution site together.
-
-        Returns:
-            The validated loopback settings.
-
-        Raises:
-            ValueError: If enabled loopback has no site or disabled loopback has one.
-        """
-
-        if self.enable != (self.site is not None):
-            raise ValueError("debug.loopback.enable and debug.loopback.site must be set or unset together")
-        return self
-
-
 class GraphObserverDebugConfig(BaseModel):
-    """Debug-only SGLang CUDA graph observer settings."""
+    """Debug-only CUDA Graph observer settings shared by graph producers."""
 
     model_config = ConfigDict(extra="forbid")
 
     enable: bool = Field(
         default=False,
-        description="Whether the SGLang plugin should install devkit CUDA graph capture/replay observers.",
+        description="Whether Devkit should observe SGLang graph events and native FFN Graph structure.",
     )
     outdir: Path | None = Field(
         default=None,
-        description="Directory where the devkit graph observer writes per-process JSONL event files.",
+        description="Directory for per-process SGLang graph events and native FFN Graph snapshots.",
     )
 
     @model_validator(mode="after")
@@ -710,6 +839,35 @@ class GraphObserverDebugConfig(BaseModel):
         return self
 
 
+class PrefillLogitObserverDebugConfig(BaseModel):
+    """Debug-only first-prefill logit observer settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enable: bool = Field(
+        default=False,
+        description="Whether the SGLang plugin should record first-prefill next-token logits.",
+    )
+    outdir: Path | None = Field(
+        default=None,
+        description="Directory where the observer writes per-process Safetensors files.",
+    )
+
+    @model_validator(mode="after")
+    def validate_prefill_logit_observer(self) -> PrefillLogitObserverDebugConfig:
+        """Normalize and validate prefill-logit observer output settings."""
+
+        if self.enable != (self.outdir is not None):
+            raise ValueError(
+                "debug.prefill_logit_observer.enable and debug.prefill_logit_observer.outdir "
+                "must be set or unset together"
+            )
+        if self.outdir is not None:
+            outdir = self.outdir.expanduser()
+            self.outdir = outdir.resolve() if outdir.is_absolute() else (Path.cwd() / outdir).resolve()
+        return self
+
+
 class TransportObserverDebugConfig(BaseModel):
     """Debug-only native transport device-phase observer settings."""
 
@@ -717,7 +875,7 @@ class TransportObserverDebugConfig(BaseModel):
 
     enable: bool = Field(default=False, description="Whether native transport device-phase timing is enabled.")
     outdir: Path | None = Field(default=None, description="Directory where transport timing snapshots are written.")
-    trace_capacity: int = Field(
+    record_capacity: int = Field(
         default=8192,
         gt=0,
         le=2**63 - 1,
@@ -752,7 +910,7 @@ class FabricObserverDebugConfig(BaseModel):
 
     enable: bool = Field(default=False, description="Whether cross-Agent Fabric timing is enabled.")
     outdir: Path | None = Field(default=None, description="Directory where fabric snapshots are written.")
-    trace_capacity: int = Field(
+    record_capacity: int = Field(
         default=8192,
         gt=0,
         le=2**63 - 1,
@@ -780,18 +938,46 @@ class FabricObserverDebugConfig(BaseModel):
         return self
 
 
+class FfnRoutingObserverDebugConfig(BaseModel):
+    """Debug-only real-FFN routing tensor observer settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enable: bool = Field(default=False, description="Whether to capture real-FFN routing records.")
+    outdir: Path | None = Field(default=None, description="Directory that receives routing-observer artifacts.")
+    record_capacity: int = Field(
+        default=8,
+        ge=1,
+        le=2**63 - 1,
+        description="Maximum routing records retained per process.",
+    )
+
+    @model_validator(mode="after")
+    def validate_routing_observer(self) -> FfnRoutingObserverDebugConfig:
+        """Normalize and validate routing-observer output settings."""
+
+        if self.enable != (self.outdir is not None):
+            raise ValueError(
+                "debug.ffn_routing_observer.enable and debug.ffn_routing_observer.outdir must be set or unset together"
+            )
+        if self.outdir is not None:
+            outdir = self.outdir.expanduser()
+            self.outdir = outdir.resolve() if outdir.is_absolute() else (Path.cwd() / outdir).resolve()
+        return self
+
+
 class DebugConfig(BaseModel):
     """Debug-only runtime switches resolved through the config registry."""
 
     model_config = ConfigDict(extra="forbid")
 
-    loopback: LoopbackDebugConfig = Field(
-        default_factory=LoopbackDebugConfig,
-        description="FFN loopback debug settings.",
-    )
     graph_observer: GraphObserverDebugConfig = Field(
         default_factory=GraphObserverDebugConfig,
-        description="SGLang CUDA graph observer debug settings.",
+        description="SGLang and native FFN CUDA Graph observer debug settings.",
+    )
+    prefill_logit_observer: PrefillLogitObserverDebugConfig = Field(
+        default_factory=PrefillLogitObserverDebugConfig,
+        description="SGLang first-prefill logit observer debug settings.",
     )
     transport_observer: TransportObserverDebugConfig = Field(
         default_factory=TransportObserverDebugConfig,
@@ -801,6 +987,29 @@ class DebugConfig(BaseModel):
         default_factory=FabricObserverDebugConfig,
         description="Cross-Agent Fabric observer settings.",
     )
+    ffn_routing_observer: FfnRoutingObserverDebugConfig = Field(
+        default_factory=FfnRoutingObserverDebugConfig,
+        description="Real-FFN routing tensor observer settings.",
+    )
+
+    def native_options(self) -> xpool.native.debug.Options:
+        """Project the exact device-runtime debug options to native values."""
+
+        return xpool.native.debug.Options(
+            transport_observer=xpool.native.debug.TraceObserverOptions(
+                enable=self.transport_observer.enable,
+                record_capacity=self.transport_observer.record_capacity,
+            ),
+            fabric_observer=xpool.native.debug.TraceObserverOptions(
+                enable=self.fabric_observer.enable,
+                record_capacity=self.fabric_observer.record_capacity,
+            ),
+            graph_observer=xpool.native.debug.GraphObserverOptions(enable=self.graph_observer.enable),
+            ffn_routing_observer=xpool.native.debug.FfnRoutingObserverOptions(
+                enable=self.ffn_routing_observer.enable,
+                record_capacity=self.ffn_routing_observer.record_capacity,
+            ),
+        )
 
 
 class VendorConfig(BaseModel):
@@ -841,6 +1050,8 @@ class XpoolConfig(BaseModel):
 
     daemon: XpoolDaemonConfig = Field(description="Daemon control-plane config.")
     scheduler: SchedulerConfig = Field(description="Scheduler resource-concurrency config.")
+    ffn: FfnConfig = Field(default_factory=FfnConfig, description="FFN startup policy.")
+    memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Device-memory calibration input.")
     debug: DebugConfig = Field(description="Debug-only runtime switches.")
     vendor: VendorConfig = Field(default_factory=VendorConfig, description="Vendor model-root settings.")
     devices: DevicesConfig = Field(description="Role-local CUDA device config.")

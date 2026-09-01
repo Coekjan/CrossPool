@@ -12,28 +12,25 @@
 namespace xpool::fabric {
 
 /// Process-local registration of xpool Fabric CUDA device code with NVSHMEM.
-class FabricModuleRegistration {
+class ModuleRegistration {
 public:
   /// Construct an empty module registration.
-  FabricModuleRegistration() = default;
+  ModuleRegistration() = default;
 
   /// Best-effort fallback for an active module registration.
   /// \post Normal lifecycle code must call destroy() before destruction so
   /// finalization failures remain observable.
-  ~FabricModuleRegistration();
+  ~ModuleRegistration();
 
-  FabricModuleRegistration(const FabricModuleRegistration &) = delete;
-  FabricModuleRegistration &operator=(const FabricModuleRegistration &) = delete;
+  ModuleRegistration(const ModuleRegistration &) = delete;
+  ModuleRegistration &operator=(const ModuleRegistration &) = delete;
 
   /// Move one module registration and leave its source empty.
-  /// \param other Registration whose ownership is transferred.
-  FabricModuleRegistration(FabricModuleRegistration &&other) noexcept
+  ModuleRegistration(ModuleRegistration &&other) noexcept
       : module_(std::exchange(other.module_, nullptr)) {}
 
   /// Replace this empty registration by moving another registration.
-  /// \param other Registration whose ownership is transferred.
-  /// \return This registration owner.
-  FabricModuleRegistration &operator=(FabricModuleRegistration &&other) {
+  ModuleRegistration &operator=(ModuleRegistration &&other) {
     if (this != &other) {
       TORCH_CHECK(module_ == nullptr, "a live Fabric module registration cannot be replaced");
       module_ = std::exchange(other.module_, nullptr);
@@ -42,10 +39,9 @@ public:
   }
 
   /// Resolve and register the Fabric-owned CUDA module with NVSHMEM.
-  /// \return Active registration requiring explicit destroy before finalize.
   /// \throws c10::Error if CUDA module resolution or NVSHMEM registration
   /// fails.
-  static FabricModuleRegistration create();
+  static ModuleRegistration create();
 
   /// Finalize this CUDA module registration if active.
   /// \throws c10::Error if NVSHMEM module finalization fails.
@@ -53,8 +49,7 @@ public:
 
 private:
   /// Construct the sole owning state returned by create().
-  /// \param module CUDA module already registered with NVSHMEM.
-  explicit FabricModuleRegistration(CUmodule module) : module_(module) {}
+  explicit ModuleRegistration(CUmodule module) : module_(module) {}
 
   /// CUDA module registered with the active NVSHMEM runtime.
   CUmodule module_ = nullptr;

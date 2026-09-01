@@ -9,7 +9,7 @@ from typing import Protocol
 
 import pytest
 
-import xpool.devkit.sglang.graph_observer
+import xpool.integrations.sglang.devkit.graph_observer
 from xpool.config import XpoolConfig
 
 
@@ -18,19 +18,19 @@ def reset_graph_observer(
     monkeypatch: pytest.MonkeyPatch,
     reset_global_config: None,
 ) -> Iterator[None]:
-    event_handle = xpool.devkit.sglang.graph_observer.event_handle
+    event_handle = xpool.integrations.sglang.devkit.graph_observer.event_handle
     if event_handle is not None and not event_handle.closed:
         event_handle.close()
-    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "event_file", None)
-    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "event_handle", None)
-    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "installed", False)
+    monkeypatch.setattr(xpool.integrations.sglang.devkit.graph_observer, "event_file", None)
+    monkeypatch.setattr(xpool.integrations.sglang.devkit.graph_observer, "event_handle", None)
+    monkeypatch.setattr(xpool.integrations.sglang.devkit.graph_observer, "installed", False)
     yield
-    event_handle = xpool.devkit.sglang.graph_observer.event_handle
+    event_handle = xpool.integrations.sglang.devkit.graph_observer.event_handle
     if event_handle is not None and not event_handle.closed:
         event_handle.close()
-    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "event_file", None)
-    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "event_handle", None)
-    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "installed", False)
+    monkeypatch.setattr(xpool.integrations.sglang.devkit.graph_observer, "event_file", None)
+    monkeypatch.setattr(xpool.integrations.sglang.devkit.graph_observer, "event_handle", None)
+    monkeypatch.setattr(xpool.integrations.sglang.devkit.graph_observer, "installed", False)
 
 
 class FakeMode:
@@ -95,9 +95,9 @@ def install_fake_sglang_runner_classes(
     cuda_graph_runner: type[object],
     piecewise_cuda_graph_runner: type[object],
 ) -> None:
-    monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "CudaGraphRunner", cuda_graph_runner)
+    monkeypatch.setattr(xpool.integrations.sglang.devkit.graph_observer, "CudaGraphRunner", cuda_graph_runner)
     monkeypatch.setattr(
-        xpool.devkit.sglang.graph_observer,
+        xpool.integrations.sglang.devkit.graph_observer,
         "PiecewiseCudaGraphRunner",
         piecewise_cuda_graph_runner,
     )

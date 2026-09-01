@@ -9,16 +9,17 @@ import xpool.service.client
 from tests.harness.support.config import reset_global_config
 from tests.harness.support.service.client import (
     config,
+    ffn_profile,
     initialize_client_config,
     install_scripted_http_client,
     response,
     transport_attributes,
-    workload,
 )
-from xpool.abi import ABI_VERSION
+from tests.harness.support.service.daemon import ffnagent_registration
+from xpool.native import ABI_VERSION
 from xpool.service.client import DAEMON_HEALTH_RETRY_ATTEMPTS, XpoolClient, XpoolDaemonError
 from xpool.service.errors import XpoolClientError
-from xpool.service.wire import AtnAgentRegistration, FfnAgentRegistration, InstanceRegistration, ProcessRef
+from xpool.service.wire import AtnAgentRegistration, FfnAgentRegistration, InstanceRankRegistration, ProcessRef
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, initialize_client_config.__name__)
 
@@ -68,16 +69,16 @@ def test_client_rejects_registration_after_config_conflict(
             if participant == "atnagent":
                 client.register_atnagent(AtnAgentRegistration(pid=11, abi_version=ABI_VERSION, cuda_device=0))
             elif participant == "ffnagent":
-                client.register_ffnagent(FfnAgentRegistration(pid=13, abi_version=ABI_VERSION, cuda_device=1))
+                client.register_ffnagent(FfnAgentRegistration.model_validate(ffnagent_registration(pid=13)))
             else:
                 client.register_instance(
-                    InstanceRegistration(
+                    InstanceRankRegistration(
                         pid=12,
                         abi_version=ABI_VERSION,
                         instance_id="m",
                         rank=0,
                         transport=transport_attributes(),
-                        workload=workload(),
+                        ffn_profile=ffn_profile(),
                     )
                 )
     finally:

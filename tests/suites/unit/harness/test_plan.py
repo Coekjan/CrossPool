@@ -53,7 +53,7 @@ def test_collected_case_rejects_stage_and_resource_drift() -> None:
         )
 
 
-def test_plan_rejects_duplicate_nodes_and_incomplete_parity_groups() -> None:
+def test_plan_rejects_duplicate_nodes_and_incomplete_serving_graph_groups() -> None:
     case = unit_case()
     with pytest.raises(ValueError, match="nodeids must be unique"):
         tests.harness.runner.plan.TestPlan((case, case))
@@ -61,7 +61,7 @@ def test_plan_rejects_duplicate_nodes_and_incomplete_parity_groups() -> None:
         tests.harness.runner.plan.TestPlan((e2e_case("eager"),))
 
 
-def test_plan_rejects_inconsistent_parity_group_cardinality() -> None:
+def test_plan_rejects_inconsistent_serving_graph_group_cardinality() -> None:
     eager = e2e_case("eager")
     full = tests.harness.runner.plan.CollectedTestCase(
         path=eager.path,
@@ -70,7 +70,7 @@ def test_plan_rejects_inconsistent_parity_group_cardinality() -> None:
         requirements=eager.requirements,
         estimated_duration_seconds=eager.estimated_duration_seconds,
         timeout_seconds=eager.timeout_seconds,
-        artifact_group=tests.harness.runner.artifact.ArtifactGroupRef("token_parity", "example", 3),
+        artifact_group=tests.harness.runner.artifact.ArtifactGroupRef("serving_graph", "example", 3),
     )
 
     with pytest.raises(ValueError, match="inconsistent expected_case_count"):
@@ -98,5 +98,5 @@ def e2e_case(mode: str) -> tests.harness.runner.plan.CollectedTestCase:
         requirements=tests.harness.runner.plan.TestRequirements(2, True, True, ("organization/model",)),
         estimated_duration_seconds=60,
         timeout_seconds=120,
-        artifact_group=tests.harness.runner.artifact.ArtifactGroupRef("token_parity", "example", 2),
+        artifact_group=tests.harness.runner.artifact.ArtifactGroupRef("serving_graph", "example", 2),
     )

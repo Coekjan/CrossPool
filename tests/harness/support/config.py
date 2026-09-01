@@ -11,7 +11,7 @@ import xpool.bootstrap
 import xpool.config
 from tests.harness.runner.pytest_plugin import requirement_resolver_key
 from tests.harness.runner.requirements import RequirementGuard
-from xpool.config import DebugConfig, LoopbackDebugConfig, LoopbackSite, XpoolConfig
+from xpool.config import XpoolConfig
 
 TEST_MODEL_ID = "test-model"
 
@@ -44,11 +44,10 @@ def synthetic_config(
     model_id: str = TEST_MODEL_ID,
     atn_cuda_devices: tuple[int, ...] = (0,),
     ffn_cuda_devices: tuple[int, ...] = (1,),
-    loopback_site: LoopbackSite | None = None,
 ) -> XpoolConfig:
     """Return an in-memory config for tests where model identity is incidental."""
 
-    config = XpoolConfig.from_mapping(
+    return XpoolConfig.from_mapping(
         {
             "daemon": {"host": "127.0.0.1", "port": 9810},
             "scheduler": {"atn_concurrency": 1, "ffn_concurrency": 1, "ffn_policy": "fifo"},
@@ -58,27 +57,6 @@ def synthetic_config(
                 "ffn_cuda_devices": list(ffn_cuda_devices),
             },
             "models": [{"id": model_id}],
-        }
-    )
-    if loopback_site is None:
-        return config
-    return config.model_copy(
-        update={
-            "debug": DebugConfig(
-                loopback=LoopbackDebugConfig(enable=True, site=loopback_site),
-            )
-        }
-    )
-
-
-def with_loopback(config: XpoolConfig, site: LoopbackSite) -> XpoolConfig:
-    """Return ``config`` with one explicitly enabled debug loopback site."""
-
-    return config.model_copy(
-        update={
-            "debug": DebugConfig(
-                loopback=LoopbackDebugConfig(enable=True, site=site),
-            )
         }
     )
 

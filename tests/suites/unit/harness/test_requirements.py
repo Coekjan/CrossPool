@@ -1,5 +1,3 @@
-"""Tests for pytest-independent resource requirement resolution."""
-
 from pathlib import Path
 from typing import Never
 

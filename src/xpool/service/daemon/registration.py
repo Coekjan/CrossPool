@@ -8,13 +8,14 @@ from dataclasses import dataclass
 
 import psutil
 
-from xpool.fabric import FfnWorkload
-from xpool.runtime.transport import InstanceTransportAttributes
+from xpool import ffn
+from xpool.fabric import InstanceFfnProfile
+from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
     AtnAgentRegistration,
     FfnAgentRegistration,
-    InstanceRegistration,
+    InstanceRankRegistration,
     ProcessRef,
     ReadinessStatus,
 )
@@ -93,15 +94,15 @@ class InstanceRankId:
     rank: int
 
 
-class InstanceRegistrationState(CommonRegistration):
-    """One live Instance rank registration."""
+class InstanceRankRegistrationState(CommonRegistration):
+    """One live Instance-rank registration."""
 
-    __slots__ = ("abi_version", "instance", "transport", "workload")
+    __slots__ = ("abi_version", "ffn_profile", "instance", "transport")
 
     abi_version: int
     instance: InstanceRankId
-    transport: InstanceTransportAttributes
-    workload: FfnWorkload
+    transport: InstanceRankTransportProfile
+    ffn_profile: InstanceFfnProfile
 
     def __init__(
         self,
@@ -109,34 +110,34 @@ class InstanceRegistrationState(CommonRegistration):
         instance: InstanceRankId,
         abi_version: int,
         pid: int,
-        transport: InstanceTransportAttributes,
-        workload: FfnWorkload,
+        transport: InstanceRankTransportProfile,
+        ffn_profile: InstanceFfnProfile,
         now: float,
     ) -> None:
-        """Create one registration from the Instance's declared contract."""
+        """Create one registration from the Instance rank's declared contract."""
 
         super().__init__(pid, now=now)
         self.abi_version = abi_version
         self.instance = instance
         self.transport = transport
-        self.workload = workload
+        self.ffn_profile = ffn_profile
 
     def key(self) -> InstanceRankId:
-        """Return the configured Instance rank key."""
+        """Return the configured Instance-rank key."""
 
         return self.instance
 
     def conflicts_with(self, candidate: CommonRegistration) -> bool:
         """Return whether owner or declared contracts differ."""
 
-        if not isinstance(candidate, InstanceRegistrationState):
-            raise TypeError(f"expected InstanceRegistrationState, got {type(candidate).__name__}")
+        if not isinstance(candidate, InstanceRankRegistrationState):
+            raise TypeError(f"expected InstanceRankRegistrationState, got {type(candidate).__name__}")
         return (
             super().conflicts_with(candidate)
             or self.instance != candidate.instance
             or self.abi_version != candidate.abi_version
             or self.transport != candidate.transport
-            or self.workload != candidate.workload
+            or self.ffn_profile != candidate.ffn_profile
         )
 
 
@@ -175,17 +176,35 @@ class AtnAgentRegistrationState(CommonRegistration):
 class FfnAgentRegistrationState(CommonRegistration):
     """One live FfnAgent registration."""
 
-    __slots__ = ("abi_version", "cuda_device")
+    __slots__ = (
+        "abi_version",
+        "cuda_device",
+        "cuda_free_memory_bytes",
+        "cuda_total_memory_bytes",
+    )
 
     abi_version: int
     cuda_device: int
+    cuda_total_memory_bytes: int
+    cuda_free_memory_bytes: int
 
-    def __init__(self, *, cuda_device: int, abi_version: int, pid: int, now: float) -> None:
+    def __init__(
+        self,
+        *,
+        cuda_device: int,
+        cuda_total_memory_bytes: int,
+        cuda_free_memory_bytes: int,
+        abi_version: int,
+        pid: int,
+        now: float,
+    ) -> None:
         """Create one FfnAgent registration."""
 
         super().__init__(pid, now=now)
         self.abi_version = abi_version
         self.cuda_device = cuda_device
+        self.cuda_total_memory_bytes = cuda_total_memory_bytes
+        self.cuda_free_memory_bytes = cuda_free_memory_bytes
 
     def key(self) -> int:
         """Return the owned CUDA device."""
@@ -201,6 +220,8 @@ class FfnAgentRegistrationState(CommonRegistration):
             super().conflicts_with(candidate)
             or self.cuda_device != candidate.cuda_device
             or self.abi_version != candidate.abi_version
+            or self.cuda_total_memory_bytes != candidate.cuda_total_memory_bytes
+            or self.cuda_free_memory_bytes != candidate.cuda_free_memory_bytes
         )
 
 
@@ -260,31 +281,32 @@ class RegistrationTable[R: CommonRegistration]:
 class RegistrationBook:
     """Caller-synchronized process registrations composed by ``ControlPlane``."""
 
-    __slots__ = ("atnagents", "ffnagents", "instances")
+    __slots__ = ("atnagents", "ffn_model_specs", "ffnagents", "instances")
 
     def __init__(self) -> None:
         """Create empty role-specific registration tables."""
 
-        self.instances = RegistrationTable[InstanceRegistrationState]()
+        self.instances = RegistrationTable[InstanceRankRegistrationState]()
         self.atnagents = RegistrationTable[AtnAgentRegistrationState]()
         self.ffnagents = RegistrationTable[FfnAgentRegistrationState]()
+        self.ffn_model_specs: tuple[ffn.FfnModelSpec, ...] | None = None
 
     def all_values(self) -> list[CommonRegistration]:
         """Return every registration in stable role order."""
 
         return [*self.atnagents.values(), *self.ffnagents.values(), *self.instances.values()]
 
-    def instance_views(self) -> list[InstanceRegistration]:
-        """Project Instance records to wire views."""
+    def instance_views(self) -> list[InstanceRankRegistration]:
+        """Project Instance-rank records to wire views."""
 
         return [
-            InstanceRegistration(
+            InstanceRankRegistration(
                 pid=registration.proc.pid,
                 instance_id=registration.instance.instance_id,
                 rank=registration.instance.rank,
                 abi_version=registration.abi_version,
                 transport=registration.transport,
-                workload=registration.workload,
+                ffn_profile=registration.ffn_profile,
             )
             for registration in self.instances.values()
         ]
@@ -304,10 +326,16 @@ class RegistrationBook:
     def ffnagent_views(self) -> list[FfnAgentRegistration]:
         """Project FfnAgent records to wire views."""
 
+        model_specs = self.ffn_model_specs
+        if model_specs is None and self.ffnagents.values():
+            raise RuntimeError("FfnAgent registrations exist without canonical Model Specs")
         return [
             FfnAgentRegistration(
                 pid=registration.proc.pid,
                 cuda_device=registration.cuda_device,
+                cuda_total_memory_bytes=registration.cuda_total_memory_bytes,
+                cuda_free_memory_bytes=registration.cuda_free_memory_bytes,
+                model_specs=() if model_specs is None else model_specs,
                 abi_version=registration.abi_version,
             )
             for registration in self.ffnagents.values()

@@ -1,14 +1,9 @@
-/// \file tests/suites/cext/transport/view_test.cu
-/// \brief Device behavior tests for the Transport mailbox and failure cache.
-
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include <array>
 #include <cstddef>
-#include <cstdint>
 
-#include <xpool/abi.hpp>
+#include <xpool/macros.hpp>
 #include <xpool/transport/arena.cuh>
 #include <xpool/transport/protocol.cuh>
 
@@ -33,235 +28,221 @@ protected:
   }
 };
 
-__global__ void exercise_mailbox(xpool::transport::TransportArenaView arena,
-                                 std::uint32_t *observed) {
-  if (threadIdx.x != 0) {
-    return;
-  }
+struct MailboxObservation {
+  xpool::transport::MailboxStatus initial_status;
+  xpool::transport::MailboxStatus opened_status;
+  bool staging_acquired;
+  xpool::transport::MailboxStatus published_status;
+  xpool::transport::MailboxStatus evaluated_status;
+  xpool::ffn::ResultCode evaluated_result;
+  xpool::transport::MailboxStatus acknowledged_status;
+  xpool::ffn::ResultCode acknowledged_result;
+  std::size_t acknowledged_payload_rows;
+  bool idle_closed;
+  xpool::transport::MailboxStatus closed_status;
+};
 
+struct CloseObservation {
+  bool staging_acquired;
+  xpool::transport::MailboxStatus status;
+  xpool::ffn::ResultCode result_code;
+};
+
+struct FailureCloseObservation {
+  bool staging_acquired;
+  xpool::transport::MailboxStatus status;
+  xpool::ffn::ResultCode result_code;
+  xpool::ffn::ResultCode generation_failure;
+};
+
+struct ShutdownCloseObservation {
+  bool staging_acquired;
+  xpool::transport::MailboxStatus status;
+  xpool::ffn::ResultCode result_code;
+  bool shutdown_requested;
+};
+
+XPOOL_KERNEL_FN void exercise_mailbox(xpool::transport::ArenaView arena, MailboxObservation *observed) {
   auto &mailbox = arena.mailbox();
-  observed[0] = static_cast<std::uint32_t>(mailbox.observe());
+  observed->initial_status = mailbox.observe();
   mailbox.open();
-  observed[1] = static_cast<std::uint32_t>(mailbox.observe());
-  observed[2] = mailbox.try_begin_staging() ? 1U : 0U;
+  observed->opened_status = mailbox.observe();
+  observed->staging_acquired = mailbox.try_begin_staging();
   mailbox.payload_rows = 2;
   mailbox.request = {
       .layer_ordinal = 3,
-      .forward_mode = xpool::abi::XPoolForwardMode::Decode,
-      .result_handoff = xpool::abi::FfnResultHandoff::ReplicatedFull,
-      .dp_padding_mode = xpool::abi::DpPaddingMode::None,
+      .forward_mode = xpool::ffn::ForwardMode::Decode,
+      .output_requirement = xpool::ffn::OutputRequirement::PerRankComplete,
+      .dp_row_layout = xpool::ffn::DpRowLayout::None,
   };
   mailbox.publish_request();
-  observed[3] = static_cast<std::uint32_t>(mailbox.observe());
-  mailbox.publish_result(xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::Ok});
-  observed[4] = static_cast<std::uint32_t>(mailbox.observe());
-  observed[5] = mailbox.result_code;
+  observed->published_status = mailbox.observe();
+  mailbox.publish_result(xpool::ffn::ResultCode::Ok);
+  observed->evaluated_status = mailbox.observe();
+  observed->evaluated_result = mailbox.result_code;
   mailbox.acknowledge();
-  observed[6] = static_cast<std::uint32_t>(mailbox.observe());
-  observed[7] = mailbox.result_code;
-  observed[8] = static_cast<std::uint32_t>(mailbox.payload_rows);
-  observed[9] = mailbox.try_close_idle() ? 1U : 0U;
-  observed[10] = static_cast<std::uint32_t>(mailbox.observe());
+  observed->acknowledged_status = mailbox.observe();
+  observed->acknowledged_result = mailbox.result_code;
+  observed->acknowledged_payload_rows = mailbox.payload_rows;
+  observed->idle_closed = mailbox.try_close_idle();
+  observed->closed_status = mailbox.observe();
 }
 
-__global__ void publish_same_generation_failure(
-    xpool::transport::TransportArenaView arena, std::uint32_t *observed) {
-  if (threadIdx.x != 0) {
-    return;
-  }
-  const auto failure = xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::ProtocolMismatch};
+XPOOL_KERNEL_FN void publish_same_generation_failure(xpool::transport::ArenaView arena,
+                                                     xpool::ffn::ResultCode *observed) {
+  const auto failure = xpool::ffn::ResultCode::Timeout;
   arena.publish_generation_failure(failure);
   arena.publish_generation_failure(failure);
-  observed[0] = arena.generation_failure().value();
+  *observed = arena.generation_failure();
 }
 
-__global__ void close_staging_for_shutdown(
-    xpool::transport::TransportArenaView arena, std::uint32_t *observed) {
-  if (threadIdx.x != 0) {
-    return;
-  }
+XPOOL_KERNEL_FN void close_staging_for_shutdown(xpool::transport::ArenaView arena, CloseObservation *observed) {
   auto &mailbox = arena.mailbox();
   mailbox.open();
-  observed[0] = mailbox.try_begin_staging() ? 1U : 0U;
-  mailbox.result_code = xpool::abi::FfnResultCode::Shutdown;
+  observed->staging_acquired = mailbox.try_begin_staging();
+  mailbox.result_code = xpool::ffn::ResultCode::Shutdown;
   mailbox.close_staging();
-  observed[1] = static_cast<std::uint32_t>(mailbox.observe());
-  observed[2] = mailbox.result_code;
+  observed->status = mailbox.observe();
+  observed->result_code = mailbox.result_code;
 }
 
-__global__ void close_evaluated_for_generation_failure(
-    xpool::transport::TransportArenaView arena, std::uint32_t *observed) {
-  if (threadIdx.x != 0) {
-    return;
-  }
+XPOOL_KERNEL_FN void close_evaluated_for_generation_failure(xpool::transport::ArenaView arena,
+                                                            FailureCloseObservation *observed) {
   auto &mailbox = arena.mailbox();
   mailbox.open();
-  observed[0] = mailbox.try_begin_staging() ? 1U : 0U;
+  observed->staging_acquired = mailbox.try_begin_staging();
   mailbox.payload_rows = 1;
   mailbox.request = {
       .layer_ordinal = 0,
-      .forward_mode = xpool::abi::XPoolForwardMode::Decode,
-      .result_handoff = xpool::abi::FfnResultHandoff::ReplicatedFull,
-      .dp_padding_mode = xpool::abi::DpPaddingMode::None,
+      .forward_mode = xpool::ffn::ForwardMode::Decode,
+      .output_requirement = xpool::ffn::OutputRequirement::PerRankComplete,
+      .dp_row_layout = xpool::ffn::DpRowLayout::None,
   };
   mailbox.publish_request();
-  const auto failure = xpool::abi::FfnResultCode{
-      xpool::abi::FfnResultCode::ProtocolMismatch};
+  const auto failure = xpool::ffn::ResultCode::ProtocolMismatch;
   arena.publish_generation_failure(failure);
   mailbox.publish_result(failure);
   mailbox.close_evaluated();
-  observed[1] = static_cast<std::uint32_t>(mailbox.observe());
-  observed[2] = mailbox.result_code;
-  observed[3] = arena.generation_failure().value();
+  observed->status = mailbox.observe();
+  observed->result_code = mailbox.result_code;
+  observed->generation_failure = arena.generation_failure();
 }
 
-__global__ void close_successful_evaluation_for_shutdown(
-    xpool::transport::TransportArenaView arena, std::uint32_t *observed) {
-  if (threadIdx.x != 0) {
-    return;
-  }
+XPOOL_KERNEL_FN void close_successful_evaluation_for_shutdown(xpool::transport::ArenaView arena,
+                                                              ShutdownCloseObservation *observed) {
   auto &mailbox = arena.mailbox();
   mailbox.open();
-  observed[0] = mailbox.try_begin_staging() ? 1U : 0U;
+  observed->staging_acquired = mailbox.try_begin_staging();
   mailbox.payload_rows = 1;
   mailbox.request = {
       .layer_ordinal = 0,
-      .forward_mode = xpool::abi::XPoolForwardMode::Decode,
-      .result_handoff = xpool::abi::FfnResultHandoff::ReplicatedFull,
-      .dp_padding_mode = xpool::abi::DpPaddingMode::None,
+      .forward_mode = xpool::ffn::ForwardMode::Decode,
+      .output_requirement = xpool::ffn::OutputRequirement::PerRankComplete,
+      .dp_row_layout = xpool::ffn::DpRowLayout::None,
   };
   mailbox.publish_request();
-  mailbox.publish_result(
-      xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::Ok});
+  mailbox.publish_result(xpool::ffn::ResultCode::Ok);
   arena.publish_shutdown();
   mailbox.close_evaluated();
-  observed[1] = static_cast<std::uint32_t>(mailbox.observe());
-  observed[2] = mailbox.result_code;
-  observed[3] = arena.shutdown_requested() ? 1U : 0U;
+  observed->status = mailbox.observe();
+  observed->result_code = mailbox.result_code;
+  observed->shutdown_requested = arena.shutdown_requested();
 }
 
 } // namespace
 
 TEST_F(TransportArenaViewTest, ExecutesMailboxLifecycleAndResetsBody) {
-  const auto layout = xpool::transport::TransportArenaLayout::create(
-      0, 0, 0, 1, 0, 1, 4, 2,
-      xpool::abi::TensorDType{xpool::abi::TensorDType::Fp32});
-  auto arena = xpool::transport::TransportArena::create(0, layout);
-  auto observed = static_cast<std::uint32_t *>(nullptr);
-  ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&observed, 11 * sizeof(*observed))));
+  const auto layout = xpool::transport::ArenaLayout::create(0, 0, 0, 1, 0, 1, 4, 2, c10::ScalarType::Half);
+  auto arena = xpool::transport::Arena::create(0, layout);
+  auto observed = static_cast<MailboxObservation *>(nullptr);
+  ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&observed, sizeof(*observed))));
 
   exercise_mailbox<<<1, 1, 0, nullptr>>>(arena.view(), observed);
   ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
   ASSERT_TRUE(cuda_succeeded(cudaDeviceSynchronize()));
 
-  const std::array expected{
-      static_cast<std::uint32_t>(xpool::transport::MailboxStatus::Dormant),
-      static_cast<std::uint32_t>(xpool::transport::MailboxStatus::Idle),
-      1U,
-      static_cast<std::uint32_t>(xpool::transport::MailboxStatus::Published),
-      static_cast<std::uint32_t>(xpool::transport::MailboxStatus::Evaluated),
-      static_cast<std::uint32_t>(xpool::abi::FfnResultCode::Ok),
-      static_cast<std::uint32_t>(xpool::transport::MailboxStatus::Idle),
-      static_cast<std::uint32_t>(xpool::abi::FfnResultCode::ProtocolMismatch),
-      0U,
-      1U,
-      static_cast<std::uint32_t>(xpool::transport::MailboxStatus::Closed),
-  };
-  for (auto index = std::size_t{0}; index < expected.size(); ++index) {
-    EXPECT_EQ(observed[index], expected[index]) << "observed[" << index << "]";
-  }
+  EXPECT_EQ(observed->initial_status, xpool::transport::MailboxStatus::Dormant);
+  EXPECT_EQ(observed->opened_status, xpool::transport::MailboxStatus::Idle);
+  EXPECT_TRUE(observed->staging_acquired);
+  EXPECT_EQ(observed->published_status, xpool::transport::MailboxStatus::Published);
+  EXPECT_EQ(observed->evaluated_status, xpool::transport::MailboxStatus::Evaluated);
+  EXPECT_EQ(observed->evaluated_result, xpool::ffn::ResultCode::Ok);
+  EXPECT_EQ(observed->acknowledged_status, xpool::transport::MailboxStatus::Idle);
+  EXPECT_EQ(observed->acknowledged_result, xpool::ffn::ResultCode::ProtocolMismatch);
+  EXPECT_EQ(observed->acknowledged_payload_rows, 0);
+  EXPECT_TRUE(observed->idle_closed);
+  EXPECT_EQ(observed->closed_status, xpool::transport::MailboxStatus::Closed);
 
   EXPECT_TRUE(cuda_succeeded(cudaFree(observed)));
   EXPECT_NO_THROW(arena.destroy());
 }
 
-TEST_F(TransportArenaViewTest, KeepsRepeatedCanonicalGenerationFailure) {
-  const auto layout = xpool::transport::TransportArenaLayout::create(
-      0, 0, 0, 1, 0, 1, 4, 2,
-      xpool::abi::TensorDType{xpool::abi::TensorDType::Fp32});
-  auto arena = xpool::transport::TransportArena::create(0, layout);
-  auto observed = static_cast<std::uint32_t *>(nullptr);
+TEST_F(TransportArenaViewTest, KeepsRepeatedCanonicalTimeout) {
+  const auto layout = xpool::transport::ArenaLayout::create(0, 0, 0, 1, 0, 1, 4, 2, c10::ScalarType::Half);
+  auto arena = xpool::transport::Arena::create(0, layout);
+  auto observed = static_cast<xpool::ffn::ResultCode *>(nullptr);
   ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&observed, sizeof(*observed))));
 
   publish_same_generation_failure<<<1, 1, 0, nullptr>>>(arena.view(), observed);
   ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
   ASSERT_TRUE(cuda_succeeded(cudaDeviceSynchronize()));
 
-  EXPECT_EQ(*observed, xpool::abi::FfnResultCode::ProtocolMismatch);
-  EXPECT_EQ(arena.read_generation_failure(), xpool::abi::FfnResultCode::ProtocolMismatch);
+  EXPECT_EQ(*observed, xpool::ffn::ResultCode::Timeout);
+  EXPECT_EQ(arena.read_generation_failure(), xpool::ffn::ResultCode::Timeout);
 
   EXPECT_TRUE(cuda_succeeded(cudaFree(observed)));
   EXPECT_NO_THROW(arena.destroy());
 }
 
 TEST_F(TransportArenaViewTest, LetsInstanceCloseStagingForShutdown) {
-  const auto layout = xpool::transport::TransportArenaLayout::create(
-      0, 0, 0, 1, 0, 1, 4, 2,
-      xpool::abi::TensorDType{xpool::abi::TensorDType::Fp32});
-  auto arena = xpool::transport::TransportArena::create(0, layout);
-  auto observed = static_cast<std::uint32_t *>(nullptr);
-  ASSERT_TRUE(
-      cuda_succeeded(cudaMallocManaged(&observed, 3 * sizeof(*observed))));
+  const auto layout = xpool::transport::ArenaLayout::create(0, 0, 0, 1, 0, 1, 4, 2, c10::ScalarType::Half);
+  auto arena = xpool::transport::Arena::create(0, layout);
+  auto observed = static_cast<CloseObservation *>(nullptr);
+  ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&observed, sizeof(*observed))));
 
   close_staging_for_shutdown<<<1, 1, 0, nullptr>>>(arena.view(), observed);
   ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
   ASSERT_TRUE(cuda_succeeded(cudaDeviceSynchronize()));
 
-  EXPECT_EQ(observed[0], 1U);
-  EXPECT_EQ(observed[1],
-            static_cast<std::uint32_t>(
-                xpool::transport::MailboxStatus::Closed));
-  EXPECT_EQ(observed[2], xpool::abi::FfnResultCode::Shutdown);
+  EXPECT_TRUE(observed->staging_acquired);
+  EXPECT_EQ(observed->status, xpool::transport::MailboxStatus::Closed);
+  EXPECT_EQ(observed->result_code, xpool::ffn::ResultCode::Shutdown);
   EXPECT_TRUE(cuda_succeeded(cudaFree(observed)));
   EXPECT_NO_THROW(arena.destroy());
 }
 
-TEST_F(TransportArenaViewTest,
-       LetsInstanceCloseEvaluatedCanonicalFailure) {
-  const auto layout = xpool::transport::TransportArenaLayout::create(
-      0, 0, 0, 1, 0, 1, 4, 2,
-      xpool::abi::TensorDType{xpool::abi::TensorDType::Fp32});
-  auto arena = xpool::transport::TransportArena::create(0, layout);
-  auto observed = static_cast<std::uint32_t *>(nullptr);
-  ASSERT_TRUE(
-      cuda_succeeded(cudaMallocManaged(&observed, 4 * sizeof(*observed))));
+TEST_F(TransportArenaViewTest, LetsInstanceCloseEvaluatedCanonicalFailure) {
+  const auto layout = xpool::transport::ArenaLayout::create(0, 0, 0, 1, 0, 1, 4, 2, c10::ScalarType::Half);
+  auto arena = xpool::transport::Arena::create(0, layout);
+  auto observed = static_cast<FailureCloseObservation *>(nullptr);
+  ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&observed, sizeof(*observed))));
 
-  close_evaluated_for_generation_failure<<<1, 1, 0, nullptr>>>(arena.view(),
-                                                                observed);
+  close_evaluated_for_generation_failure<<<1, 1, 0, nullptr>>>(arena.view(), observed);
   ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
   ASSERT_TRUE(cuda_succeeded(cudaDeviceSynchronize()));
 
-  EXPECT_EQ(observed[0], 1U);
-  EXPECT_EQ(observed[1],
-            static_cast<std::uint32_t>(
-                xpool::transport::MailboxStatus::Closed));
-  EXPECT_EQ(observed[2], xpool::abi::FfnResultCode::ProtocolMismatch);
-  EXPECT_EQ(observed[3], xpool::abi::FfnResultCode::ProtocolMismatch);
+  EXPECT_TRUE(observed->staging_acquired);
+  EXPECT_EQ(observed->status, xpool::transport::MailboxStatus::Closed);
+  EXPECT_EQ(observed->result_code, xpool::ffn::ResultCode::ProtocolMismatch);
+  EXPECT_EQ(observed->generation_failure, xpool::ffn::ResultCode::ProtocolMismatch);
   EXPECT_TRUE(cuda_succeeded(cudaFree(observed)));
   EXPECT_NO_THROW(arena.destroy());
 }
 
-TEST_F(TransportArenaViewTest,
-       PreservesSuccessfulResultWhenInstanceClosesForShutdown) {
-  const auto layout = xpool::transport::TransportArenaLayout::create(
-      0, 0, 0, 1, 0, 1, 4, 2,
-      xpool::abi::TensorDType{xpool::abi::TensorDType::Fp32});
-  auto arena = xpool::transport::TransportArena::create(0, layout);
-  auto observed = static_cast<std::uint32_t *>(nullptr);
-  ASSERT_TRUE(
-      cuda_succeeded(cudaMallocManaged(&observed, 4 * sizeof(*observed))));
+TEST_F(TransportArenaViewTest, PreservesSuccessfulResultWhenInstanceClosesForShutdown) {
+  const auto layout = xpool::transport::ArenaLayout::create(0, 0, 0, 1, 0, 1, 4, 2, c10::ScalarType::Half);
+  auto arena = xpool::transport::Arena::create(0, layout);
+  auto observed = static_cast<ShutdownCloseObservation *>(nullptr);
+  ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&observed, sizeof(*observed))));
 
-  close_successful_evaluation_for_shutdown<<<1, 1, 0, nullptr>>>(arena.view(),
-                                                                  observed);
+  close_successful_evaluation_for_shutdown<<<1, 1, 0, nullptr>>>(arena.view(), observed);
   ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
   ASSERT_TRUE(cuda_succeeded(cudaDeviceSynchronize()));
 
-  EXPECT_EQ(observed[0], 1U);
-  EXPECT_EQ(observed[1],
-            static_cast<std::uint32_t>(
-                xpool::transport::MailboxStatus::Closed));
-  EXPECT_EQ(observed[2], xpool::abi::FfnResultCode::Ok);
-  EXPECT_EQ(observed[3], 1U);
+  EXPECT_TRUE(observed->staging_acquired);
+  EXPECT_EQ(observed->status, xpool::transport::MailboxStatus::Closed);
+  EXPECT_EQ(observed->result_code, xpool::ffn::ResultCode::Ok);
+  EXPECT_TRUE(observed->shutdown_requested);
   EXPECT_TRUE(cuda_succeeded(cudaFree(observed)));
   EXPECT_NO_THROW(arena.destroy());
 }

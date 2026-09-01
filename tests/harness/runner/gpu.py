@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 
 NVIDIA_SMI_COMMAND = "nvidia-smi"
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,3 +133,48 @@ def query_physical_gpus() -> dict[str, str]:
     if not gpu_by_index:
         raise RuntimeError(f"{NVIDIA_SMI_COMMAND} returned no physical GPUs")
     return gpu_by_index
+
+
+def query_physical_gpu_links() -> dict[tuple[str, str], str]:
+    """Return directed physical-GPU link tokens keyed by UUID pair."""
+
+    gpu_by_index = query_physical_gpus()
+    try:
+        result = subprocess.run(
+            [NVIDIA_SMI_COMMAND, "topo", "-m"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(f"failed to query physical GPU links with {NVIDIA_SMI_COMMAND}: {error}") from error
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+        raise RuntimeError(f"failed to query physical GPU links with {NVIDIA_SMI_COMMAND}: {detail}")
+
+    rows = tuple(ANSI_ESCAPE_PATTERN.sub("", line).split() for line in result.stdout.splitlines() if line.strip())
+    if not rows:
+        raise RuntimeError(f"{NVIDIA_SMI_COMMAND} returned no topology rows")
+    gpu_columns = tuple(value for value in rows[0] if value.startswith("GPU") and value[3:].isdigit())
+    expected_columns = tuple(f"GPU{index}" for index in range(len(gpu_by_index)))
+    if gpu_columns != expected_columns:
+        raise RuntimeError(f"{NVIDIA_SMI_COMMAND} returned invalid topology columns: {gpu_columns}")
+
+    tokens_by_row = {row[0]: row[1 : len(gpu_columns) + 1] for row in rows[1:] if row[0] in gpu_columns}
+    if set(tokens_by_row) != set(gpu_columns) or any(
+        len(tokens) != len(gpu_columns) for tokens in tokens_by_row.values()
+    ):
+        raise RuntimeError(f"{NVIDIA_SMI_COMMAND} returned an incomplete physical GPU topology matrix")
+    links: dict[tuple[str, str], str] = {}
+    for source_index, source in enumerate(gpu_columns):
+        for destination_index, destination in enumerate(gpu_columns):
+            if source_index == destination_index:
+                continue
+            source_uuid = gpu_by_index[str(source_index)]
+            destination_uuid = gpu_by_index[str(destination_index)]
+            token = tokens_by_row[source][destination_index]
+            if not token or token == "X":
+                raise RuntimeError(f"{NVIDIA_SMI_COMMAND} returned invalid link {source}->{destination}: {token!r}")
+            links[(source_uuid, destination_uuid)] = token
+    return links

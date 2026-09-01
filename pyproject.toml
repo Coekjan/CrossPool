@@ -11,25 +11,25 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "xpool"
 version = "0.1.0"
-description = "xpool system"
+description = "Resource-disaggregated infrastructure for multi-model serving"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "cuda-python>=13.0,<14.0",
+    "cuda-bindings>=13.0.3,<14",
     "fastapi>=0.137.1",
-    "flashinfer-cubin==0.6.12",
-    "flashinfer-python[cu13]==0.6.12",
     "httpx>=0.28.1",
     "nvidia-nvshmem-cu13==3.7.2",
-    "numpy>=2.3.5,<2.4",
+    "ortools==9.15.6755",
     "pydantic>=2.13.4",
     "psutil>=7.2.2",
     "safetensors>=0.8.0",
     "setproctitle>=1.3.7,<2",
+    "sglang-kernel==0.4.3",
     "sglang==0.5.13.post1",
     "torch==2.11.0",
+    "triton==3.6.0",
     "transformers==5.8.1",
     "uvicorn>=0.49.0",
 ]
@@ -48,7 +48,6 @@ dev = [
     "pre-commit>=4.6.0",
     "pybind11-stubgen==2.5.5",
     "pytest>=9.1.0",
-    "pytest-cov>=7.0.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.15.17",
     "scikit-build-core>=0.11",
@@ -80,23 +79,16 @@ markers = [
     "requires_mps: requires a responsive CUDA MPS controller",
     "requires_model_weights(model_id): requires model weights resolved through XPOOL_CONFIG",
     "estimated_duration(seconds): estimated runtime used by python -m tests scheduling",
-    "token_parity_group(name, expected_case_count): complete cross-task token parity group",
+    "serving_graph_group(name, expected_case_count): complete cross-task serving graph group",
 ]
 testpaths = ["tests/suites"]
-
-[tool.coverage.run]
-branch = true
-parallel = true
-source = ["xpool"]
-
-[tool.coverage.report]
-show_missing = true
 
 [tool.ty.rules]
 deprecated = "error"
 
 [tool.ruff]
 line-length = 120
+extend-exclude = ["src/xpool/native"]
 
 [tool.ruff.lint]
 select = [
@@ -105,19 +97,25 @@ select = [
     "FAST",
     "I",
     "ANN401",
-    "D101",
-    "D102",
-    "D103",
-    "D107",
-    "D417",
+    "D200",
+    "D201",
+    "D204",
+    "D205",
+    "D209",
+    "D210",
+    "D211",
+    "D214",
+    "D405",
+    "D410",
+    "D411",
+    "D412",
+    "D414",
+    "D416",
+    "D419",
     "RUF",
     "UP",
     "W",
 ]
-
-[tool.ruff.lint.per-file-ignores]
-".codex/skills/**" = ["D101", "D102", "D103", "D107", "D417"]
-"tests/**" = ["D101", "D102", "D103", "D107", "D417"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

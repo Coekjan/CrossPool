@@ -1,6 +1,3 @@
-/// \file tests/suites/cext/transport/shutdown_test.cu
-/// \brief Process-wide cooperative Transport Resident shutdown tests.
-
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
@@ -16,7 +13,7 @@
 #include <span>
 #include <thread>
 
-#include <xpool/abi.hpp>
+#include <xpool/ffn.hpp>
 #include <xpool/fabric/arena.hpp>
 #include <xpool/transport/arena.hpp>
 #include <xpool/transport/atnagent.hpp>
@@ -26,11 +23,9 @@ namespace {
 
 class TransportResident {
 public:
-  explicit TransportResident(
-      std::span<const xpool::transport::TransportArenaView> arenas,
-      xpool::fabric::FabricArenaView fabric_arena = {}) {
-    TORCH_CHECK(!arenas.empty(),
-                "Transport Resident test requires at least one arena");
+  explicit TransportResident(std::span<const xpool::transport::ArenaView> arenas,
+                             xpool::fabric::ArenaView fabric_arena = {}) {
+    TORCH_CHECK(!arenas.empty(), "Transport Resident test requires at least one arena");
     auto cuda_device = int{0};
     C10_CUDA_CHECK(cudaGetDevice(&cuda_device));
     cuda_device_ = static_cast<c10::DeviceIndex>(cuda_device);
@@ -38,24 +33,19 @@ public:
     try {
       auto *arena_allocation = static_cast<void *>(nullptr);
       C10_CUDA_CHECK(cudaMalloc(&arena_allocation, arenas.size_bytes()));
-      arenas_ = static_cast<xpool::transport::TransportArenaView *>(
-          arena_allocation);
-      C10_CUDA_CHECK(cudaMemcpy(arenas_, arenas.data(), arenas.size_bytes(),
-                                cudaMemcpyHostToDevice));
+      arenas_ = static_cast<xpool::transport::ArenaView *>(arena_allocation);
+      C10_CUDA_CHECK(cudaMemcpy(arenas_, arenas.data(), arenas.size_bytes(), cudaMemcpyHostToDevice));
 
       auto *state_allocation = static_cast<void *>(nullptr);
-      C10_CUDA_CHECK(cudaMalloc(
-          &state_allocation,
-          sizeof(xpool::transport::TransportResidentState)));
-      state_ = static_cast<xpool::transport::TransportResidentState *>(
-          state_allocation);
-      C10_CUDA_CHECK(cudaMemset(
-          state_, 0, sizeof(xpool::transport::TransportResidentState)));
+      C10_CUDA_CHECK(cudaMalloc(&state_allocation, sizeof(xpool::transport::ResidentState)));
+      state_ = static_cast<xpool::transport::ResidentState *>(state_allocation);
+      C10_CUDA_CHECK(cudaMemset(state_, 0, sizeof(xpool::transport::ResidentState)));
 
       control_stream_ = xpool::utils::device::OwnedCudaStream::create();
       resident_stream_ = xpool::utils::device::OwnedCudaStream::create();
-      xpool::transport::launch_transport_resident_kernel(
-          arenas_, arenas.size(), fabric_arena, state_, resident_stream_.get());
+      xpool::transport::launch_resident_kernel(
+          cuda::std::span<const xpool::transport::ArenaView>{arenas_, arenas.size()}, fabric_arena, state_,
+          resident_stream_.get());
       launched_ = true;
     } catch (...) {
       cleanup();
@@ -71,15 +61,13 @@ public:
   TransportResident &operator=(TransportResident &&) = delete;
 
   void drain_async() {
-    TORCH_CHECK(launched_ && state_ != nullptr,
-                "Transport Resident test is not active");
+    TORCH_CHECK(launched_ && state_ != nullptr, "Transport Resident test is not active");
     if (drain_requested_) {
       return;
     }
     const auto device_guard = c10::cuda::CUDAGuard{cuda_device_};
     auto *address = reinterpret_cast<std::uint32_t *>(
-        reinterpret_cast<std::uint8_t *>(state_) +
-        offsetof(xpool::transport::TransportResidentState, drain_requested));
+        reinterpret_cast<std::uint8_t *>(state_) + offsetof(xpool::transport::ResidentState, drain_requested));
     control_stream_.write_value(address, 1);
     drain_requested_ = true;
   }
@@ -97,10 +85,8 @@ public:
   }
 
   void release() {
-    TORCH_CHECK(state_ != nullptr,
-                "Transport Resident test is already released");
-    TORCH_CHECK(drain_requested_,
-                "Transport Resident test must be drained before release");
+    TORCH_CHECK(state_ != nullptr, "Transport Resident test is already released");
+    TORCH_CHECK(drain_requested_, "Transport Resident test must be drained before release");
     const auto device_guard = c10::cuda::CUDAGuard{cuda_device_};
     TORCH_CHECK(control_stream_.query() && resident_stream_.query(),
                 "Transport Resident test cannot release pending resources");
@@ -119,12 +105,10 @@ private:
       return;
     }
     C10_CUDA_IGNORE_ERROR(cudaSetDevice(cuda_device_));
-    if (launched_ && !drain_requested_ && state_ != nullptr &&
-        control_stream_) {
-      auto *address = reinterpret_cast<std::uint32_t *>(
-          reinterpret_cast<std::uint8_t *>(state_) +
-          offsetof(xpool::transport::TransportResidentState,
-                   drain_requested));
+    if (launched_ && !drain_requested_ && state_ != nullptr && control_stream_) {
+      auto *address =
+          reinterpret_cast<std::uint32_t *>(reinterpret_cast<std::uint8_t *>(state_) +
+                                            offsetof(xpool::transport::ResidentState, drain_requested));
       static_cast<void>(control_stream_.try_write_value(address, 1));
     }
     if (resident_stream_) {
@@ -144,18 +128,16 @@ private:
   }
 
   c10::DeviceIndex cuda_device_ = 0;
-  xpool::transport::TransportArenaView *arenas_ = nullptr;
-  xpool::transport::TransportResidentState *state_ = nullptr;
+  xpool::transport::ArenaView *arenas_ = nullptr;
+  xpool::transport::ResidentState *state_ = nullptr;
   xpool::utils::device::OwnedCudaStream control_stream_;
   xpool::utils::device::OwnedCudaStream resident_stream_;
   bool launched_ = false;
   bool drain_requested_ = false;
 };
 
-bool wait_for_mailbox_status(
-    const xpool::transport::TransportArena &arena,
-    xpool::transport::MailboxStatus expected,
-    std::chrono::milliseconds timeout = std::chrono::seconds{5}) {
+bool wait_for_mailbox_status(const xpool::transport::Arena &arena, xpool::transport::MailboxStatus expected,
+                             std::chrono::milliseconds timeout = std::chrono::seconds{5}) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
     if (arena.mailbox_status() == expected) {
@@ -188,21 +170,17 @@ protected:
 } // namespace
 
 TEST_F(TransportShutdownCudaTest, OpensAndDrainsAllArenas) {
-  const auto first_layout = xpool::transport::TransportArenaLayout::create(
-      0, 0, 0, 1, 0, 1, 1, 2,
-      xpool::abi::TensorDType{xpool::abi::TensorDType::Fp16});
-  const auto second_layout = xpool::transport::TransportArenaLayout::create(
-      1, 0, 0, 1, 0, 1, 1, 2,
-      xpool::abi::TensorDType{xpool::abi::TensorDType::Fp16});
-  auto first_arena = xpool::transport::TransportArena::create(0, first_layout);
-  auto second_arena = xpool::transport::TransportArena::create(0, second_layout);
+  const auto first_layout = xpool::transport::ArenaLayout::create(
+      0, 0, 0, 1, 0, 1, 1, 2, c10::ScalarType::Half);
+  const auto second_layout = xpool::transport::ArenaLayout::create(
+      1, 0, 0, 1, 0, 1, 1, 2, c10::ScalarType::Half);
+  auto first_arena = xpool::transport::Arena::create(0, first_layout);
+  auto second_arena = xpool::transport::Arena::create(0, second_layout);
   const auto views = std::array{first_arena.view(), second_arena.view()};
   auto resident = TransportResident{views};
 
-  ASSERT_TRUE(wait_for_mailbox_status(
-      first_arena, xpool::transport::MailboxStatus::Idle));
-  ASSERT_TRUE(wait_for_mailbox_status(
-      second_arena, xpool::transport::MailboxStatus::Idle));
+  ASSERT_TRUE(wait_for_mailbox_status(first_arena, xpool::transport::MailboxStatus::Idle));
+  ASSERT_TRUE(wait_for_mailbox_status(second_arena, xpool::transport::MailboxStatus::Idle));
 
   ASSERT_NO_THROW(resident.drain_async());
   ASSERT_TRUE(resident.wait());
@@ -211,8 +189,8 @@ TEST_F(TransportShutdownCudaTest, OpensAndDrainsAllArenas) {
   EXPECT_EQ(second_arena.state().shutdown, 1U);
   EXPECT_EQ(first_arena.mailbox_status(), xpool::transport::MailboxStatus::Closed);
   EXPECT_EQ(second_arena.mailbox_status(), xpool::transport::MailboxStatus::Closed);
-  EXPECT_EQ(first_arena.read_generation_failure(), xpool::abi::FfnResultCode::Ok);
-  EXPECT_EQ(second_arena.read_generation_failure(), xpool::abi::FfnResultCode::Ok);
+  EXPECT_EQ(first_arena.read_generation_failure(), xpool::ffn::ResultCode::Ok);
+  EXPECT_EQ(second_arena.read_generation_failure(), xpool::ffn::ResultCode::Ok);
 
   ASSERT_NO_THROW(resident.release());
   EXPECT_NO_THROW(first_arena.destroy());
@@ -220,41 +198,32 @@ TEST_F(TransportShutdownCudaTest, OpensAndDrainsAllArenas) {
 }
 
 TEST_F(TransportShutdownCudaTest, RejectsOverCapacityBeforeOpeningAnyMailbox) {
-  const auto first_layout = xpool::transport::TransportArenaLayout::create(
-      0, 0, 0, 1, 0, 1, 1, 2,
-      xpool::abi::TensorDType{xpool::abi::TensorDType::Fp16});
-  const auto second_layout = xpool::transport::TransportArenaLayout::create(
-      1, 0, 0, 1, 0, 1, 1, 2,
-      xpool::abi::TensorDType{xpool::abi::TensorDType::Fp16});
-  auto first_arena = xpool::transport::TransportArena::create(0, first_layout);
-  auto second_arena = xpool::transport::TransportArena::create(0, second_layout);
+  const auto first_layout = xpool::transport::ArenaLayout::create(
+      0, 0, 0, 1, 0, 1, 1, 2, c10::ScalarType::Half);
+  const auto second_layout = xpool::transport::ArenaLayout::create(
+      1, 0, 0, 1, 0, 1, 1, 2, c10::ScalarType::Half);
+  auto first_arena = xpool::transport::Arena::create(0, first_layout);
+  auto second_arena = xpool::transport::Arena::create(0, second_layout);
   const auto views = std::array{first_arena.view(), second_arena.view()};
 
   auto *view_allocation = static_cast<void *>(nullptr);
   ASSERT_TRUE(cuda_succeeded(cudaMalloc(&view_allocation, sizeof(views))));
-  auto *device_views =
-      static_cast<xpool::transport::TransportArenaView *>(view_allocation);
-  ASSERT_TRUE(cuda_succeeded(cudaMemcpy(device_views, views.data(), sizeof(views),
-                                        cudaMemcpyHostToDevice)));
+  auto *device_views = static_cast<xpool::transport::ArenaView *>(view_allocation);
+  ASSERT_TRUE(cuda_succeeded(cudaMemcpy(device_views, views.data(), sizeof(views), cudaMemcpyHostToDevice)));
 
   auto *state_allocation = static_cast<void *>(nullptr);
-  ASSERT_TRUE(cuda_succeeded(cudaMalloc(
-      &state_allocation, sizeof(xpool::transport::TransportResidentState))));
-  auto *state = static_cast<xpool::transport::TransportResidentState *>(
-      state_allocation);
-  ASSERT_TRUE(cuda_succeeded(
-      cudaMemset(state, 0, sizeof(xpool::transport::TransportResidentState))));
+  ASSERT_TRUE(cuda_succeeded(cudaMalloc(&state_allocation, sizeof(xpool::transport::ResidentState))));
+  auto *state = static_cast<xpool::transport::ResidentState *>(state_allocation);
+  ASSERT_TRUE(cuda_succeeded(cudaMemset(state, 0, sizeof(xpool::transport::ResidentState))));
   auto stream = xpool::utils::device::OwnedCudaStream::create();
 
-  EXPECT_THROW(
-      xpool::transport::launch_transport_resident_kernel(
-          device_views, std::numeric_limits<std::size_t>::max(), {}, state,
-          stream.get()),
-      c10::Error);
-  EXPECT_EQ(first_arena.mailbox_status(),
-            xpool::transport::MailboxStatus::Dormant);
-  EXPECT_EQ(second_arena.mailbox_status(),
-            xpool::transport::MailboxStatus::Dormant);
+  EXPECT_THROW(xpool::transport::launch_resident_kernel(
+                   cuda::std::span<const xpool::transport::ArenaView>{device_views,
+                                                                               std::numeric_limits<std::size_t>::max()},
+                   {}, state, stream.get()),
+               c10::Error);
+  EXPECT_EQ(first_arena.mailbox_status(), xpool::transport::MailboxStatus::Dormant);
+  EXPECT_EQ(second_arena.mailbox_status(), xpool::transport::MailboxStatus::Dormant);
 
   EXPECT_NO_THROW(stream.destroy());
   EXPECT_TRUE(cuda_succeeded(cudaFree(state)));

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Write Design"
+  short_description: "Update current xpool design documents"
+  default_prompt: "Use $write-design to fold an accepted implementation into xpool current design documents."

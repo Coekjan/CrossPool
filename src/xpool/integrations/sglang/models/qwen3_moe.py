@@ -12,14 +12,14 @@ from sglang.srt.models.qwen3_moe import Qwen3MoeForCausalLM, Qwen3MoeSparseMoeBl
 from sglang.srt.plugins.hook_registry import HookType
 from transformers import Qwen3MoeConfig
 
-from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.adapter import (
     SglangHook,
-    SglangModelAdapter,
+    SglangShimAdapter,
     filter_decoder_ffn_weights,
     model_runner_architectures,
 )
 from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError
+from xpool.native.ffn import LayerKind
 
 
 class XpoolQwen3MoeSparseMoeBlock(FfnShimModule, Qwen3MoeSparseMoeBlock):
@@ -42,7 +42,7 @@ class XpoolQwen3MoeSparseMoeBlock(FfnShimModule, Qwen3MoeSparseMoeBlock):
             self,
             layer_id=layer_id,
             hidden_size=cast(int, hidden_size),
-            layer_kind=FfnLayerKind.SPARSE,
+            layer_kind=LayerKind.MOE,
         )
 
     def get_moe_weights(self) -> list[torch.Tensor]:
@@ -51,7 +51,7 @@ class XpoolQwen3MoeSparseMoeBlock(FfnShimModule, Qwen3MoeSparseMoeBlock):
         return []
 
 
-class Qwen3MoeAdapter(SglangModelAdapter):
+class Qwen3MoeShimAdapter(SglangShimAdapter):
     """SGLang hooks and validation policy for Qwen3 MoE models."""
 
     name = "qwen3_moe"
@@ -89,7 +89,7 @@ class Qwen3MoeAdapter(SglangModelAdapter):
             raise RuntimeError("xpool Qwen3-MoE model config has no positive integer num_hidden_layers")
         shims = self.require_ffn_shims(
             model,
-            expected_layer_kinds=(FfnLayerKind.SPARSE,) * layer_count,
+            expected_layer_kinds=(LayerKind.MOE,) * layer_count,
             allowed_shim_types=(XpoolQwen3MoeSparseMoeBlock,),
         )
         self.require_full_mlp_boundaries(model, shims, allow_reduce_scatter=True)

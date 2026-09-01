@@ -17,6 +17,7 @@ src/xpool/native/
 
 build/
 dist/
+Testing/
 *.egg-info/
 compile_commands.json
 

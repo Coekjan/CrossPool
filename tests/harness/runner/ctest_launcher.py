@@ -8,7 +8,7 @@ from importlib.metadata import distribution
 from pathlib import Path
 from typing import NoReturn
 
-from xpool.service.daemon.mps import probe_mps_controller
+from xpool.mps import probe_mps_controller
 
 
 def native_library_paths() -> tuple[Path, ...]:

@@ -17,13 +17,13 @@ from fastapi.responses import JSONResponse
 from xpool import bootstrap
 from xpool.config import XpoolConfig, get_global_config
 from xpool.fabric import FabricPlan
-from xpool.runtime import RuntimeRole
+from xpool.native import RuntimeRole
 from xpool.service.daemon.control import ControlPlane
 from xpool.service.daemon.registration import (
     AtnAgentRegistrationState,
     FfnAgentRegistrationState,
     InstanceRankId,
-    InstanceRegistrationState,
+    InstanceRankRegistrationState,
 )
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
@@ -34,8 +34,8 @@ from xpool.service.wire import (
     FabricQuiesceRequest,
     FfnAgentRegistration,
     HeartbeatResponse,
-    InstanceInitializedPublication,
-    InstanceRegistration,
+    InstanceRankInitializedPublication,
+    InstanceRankRegistration,
     ProcessRef,
     ReadinessSnapshot,
     XpoolDaemonErrorDetail,
@@ -197,7 +197,7 @@ def create_daemon() -> FastAPI:
         return await asyncio.to_thread(control_plane.list_atnagents)
 
     @app.get("/instances")
-    async def list_instances() -> list[InstanceRegistration]:
+    async def list_instances() -> list[InstanceRankRegistration]:
         """List retained Instance-rank registrations."""
 
         return await asyncio.to_thread(control_plane.list_instances)
@@ -258,10 +258,13 @@ def create_daemon() -> FastAPI:
             control_plane.register_ffnagent,
             FfnAgentRegistrationState(
                 cuda_device=request.cuda_device,
+                cuda_total_memory_bytes=request.cuda_total_memory_bytes,
+                cuda_free_memory_bytes=request.cuda_free_memory_bytes,
                 abi_version=request.abi_version,
                 pid=request.pid,
                 now=monotonic(),
             ),
+            request.model_specs,
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
@@ -316,26 +319,26 @@ def create_daemon() -> FastAPI:
         return await asyncio.to_thread(control_plane.quiesce_atnagent_transport_leases, cuda_device, request)
 
     @app.post("/instance/register")
-    async def register_instance(request: InstanceRegistration) -> Response:
-        """Register one live Instance rank and its Transport and FFN workload contracts.
+    async def register_instance(request: InstanceRankRegistration) -> Response:
+        """Register one live Instance rank and its Transport and FFN profile contracts.
 
         Returns:
             Empty 204 response after registration.
 
         Raises:
             404: The configured Instance identity or rank is unknown.
-            409: ABI, workload, placement, or process ownership conflicts.
+            409: ABI, ffn_profile, placement, or process ownership conflicts.
             503: A predecessor registration has not completed cleanup.
         """
 
         await asyncio.to_thread(
             control_plane.register_instance,
-            InstanceRegistrationState(
+            InstanceRankRegistrationState(
                 instance=InstanceRankId(instance_id=request.instance_id, rank=request.rank),
                 abi_version=request.abi_version,
                 pid=request.pid,
                 transport=request.transport,
-                workload=request.workload,
+                ffn_profile=request.ffn_profile,
                 now=monotonic(),
             ),
         )
@@ -360,9 +363,9 @@ def create_daemon() -> FastAPI:
     async def publish_instance_initialized(
         instance_id: str,
         rank: int,
-        request: InstanceInitializedPublication,
+        request: InstanceRankInitializedPublication,
     ) -> Response:
-        """Publish that one Instance rank initialized against the retained Fabric plan.
+        """Publish that one Instance rank initialized against the retained Fabric Plan.
 
         Returns:
             Empty 204 response after initialization is published.
@@ -370,7 +373,7 @@ def create_daemon() -> FastAPI:
         Raises:
             404: The Instance rank or Fabric generation does not exist.
             409: Owner, generation, or initialization facts conflict.
-            503: Fabric is not ready to accept Instance initialization.
+            503: Fabric is not ready to accept Instance-rank initialization.
         """
 
         await asyncio.to_thread(
@@ -398,7 +401,7 @@ def create_daemon() -> FastAPI:
         rank: int,
         request: ProcessRef,
     ) -> TransportArenaHandle:
-        """Acquire the admitted rank-local Transport arena lease for one Instance.
+        """Acquire the admitted rank-local Transport arena lease for one Instance rank.
 
         Raises:
             404: The configured Instance or its Transport publication is unknown.

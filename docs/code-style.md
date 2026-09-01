@@ -1,309 +1,229 @@
 # xpool Code Style
 
-## Scope And Language
+## Scope
 
-This document is the canonical source for code-level naming, typing,
-ownership, abstraction, documentation, formatting, and native-language
-conventions in xpool. It applies to production code, tests, native bindings,
-and build definitions. Repository architecture, configuration, test layering,
-developer environment, and workflow policy remain in `AGENTS.md`.
+This document is the canonical source for code-level conventions in xpool. It
+applies to production code, tests, native bindings, and build definitions.
+Current architecture belongs under `docs/designs/`, active target changes under
+`docs/plans/`, and configuration, test layering, environment, and workflow
+policy in `AGENTS.md`.
 
-Documentation, comments, identifiers, tests, and commit messages must use
-English.
+Use English for documentation, comments, identifiers, tests, and commit
+messages.
 
-Public APIs must be documented at the declaration site. For Python, public
-modules, classes, functions, methods, dataclass fields, Pydantic fields, and
-enum members need useful docstrings or field descriptions. Use Google-style
-docstrings with `Args`, `Returns`, `Raises`, preconditions, postconditions, and
-side effects where those sections apply.
+## Documentation
 
-Python API support is determined by an explicit package, facade, or stable
-direct-module `__all__`, or by a wire/service boundary; the absence of a
-leading underscore does not by itself make an internal implementation symbol a
-supported API. FastAPI routes and their wire models document request, success,
-and principal failure behavior. Every type, enum value, property, and function
-exposed through `xpool.native` bindings carries useful runtime documentation at
-its binding declaration. Internal production modules and reusable test-harness
-modules still document module and type responsibilities plus nontrivial
-lifecycle methods, but do not add ceremonial Google-style sections to simple
-accessors. Ordinary `test_*.py` modules do not require a module docstring when
-their path and test names already express the behavioral scope; add one only
-when it records a non-obvious boundary, prerequisite, or acceptance strategy.
-Repository `conftest.py` files document the session hooks and fixture effects
-they install.
+Document supported APIs at their declaration site. Documentation must explain
+the contract that a caller cannot infer from the signature: meaning, units,
+ownership, lifecycle, side effects, and principal failures. Do not add
+ceremonial descriptions that only repeat a name or type.
 
-For C++ and CUDA, public namespaces, classes, structs, enum values, constants,
-functions, and fields need Doxygen-style `///` or `/** ... */` documentation.
-Public field documentation must explain meaning, units, ownership, lifecycle,
-and why the field exists.
+Use Google-style docstrings for Python and Doxygen comments for public C++ and
+CUDA declarations. Native declarations under `src/cext-include/xpool` are the
+documented project boundary. Internal helpers need comments only for
+non-obvious ownership, synchronization, graph-capture, transport, or failure
+semantics.
 
-For native headers, public and protected declarations plus namespace-level
-functions in `src/cext-include/xpool` form the documented project boundary.
-Private storage and implementation-only helpers need comments only when their
-ownership, units, synchronization, or lifecycle are not evident from the
-surrounding documented contract.
+Tests do not need module docstrings when their path and names already describe
+their behavioral scope. Add documentation when a test has a non-obvious
+prerequisite, boundary, or acceptance strategy.
 
-Use inline comments only where they clarify ownership, device placement,
-synchronization, CUDA graph capture, NVSHMEM ordering, IPC, or failure behavior
-that is not obvious from the code.
+Use phase comments only for functions with at least three genuine protocol or
+lifecycle phases. A phase comment names the phase and its invariant; it must not
+justify mixing unrelated responsibilities.
 
-Use phase comments only in functions with at least three genuine lifecycle or
-protocol phases. Name the phase and explain the ownership, visibility, or
-state-machine invariant established there. Do not add phase comments to short
-helpers or use them to justify keeping unrelated responsibilities together.
-Use the uniform `// Phase: Name - invariant` form in C++ and CUDA so phase
-boundaries remain searchable across persistent kernels and device protocols.
+Build and configuration comments explain only non-obvious toolchain,
+dependency-discovery, ordering, package-layout, or side-effect constraints. Do
+not translate declarations line by line, and do not hand-edit generated files
+to add documentation.
+
+Documentation gates cover supported declarations, not every implementation
+parameter. They must not require ceremonial parameter, return-value, override,
+or helper descriptions merely to satisfy a coverage rule.
 
 ## Ownership And Abstraction
 
-Keep implementation structure deliberate. Model-specific code belongs under
-the model adapter that owns it; global integration layers should expose only
-generic registration, discovery, binding, and shim contracts.
+Put behavior at the narrowest layer that owns it. Model-specific behavior
+belongs to its model adapter. Serving-integration imports, types, runtime
+objects, hooks, compatibility rules, and devkit helpers belong under
+`xpool.integrations.<engine>`. Translate them to xpool-owned values before they
+cross into core configuration, runtime, protocol, or native interfaces. A
+low-level operator implementation shipped in the same distribution is not
+serving-integration code only when the relevant accepted design or active plan
+explicitly accepts that narrow dependency and no serving-runtime type or
+retained state crosses into core.
 
-Use repository terminology consistently. `AtnAgent` and `FfnAgent` are the two
-xpool Agent runtime roles. Use the generic `Agent` term only for shared
-lifecycle concepts; `DevAgent` and `devagent` are not current types, roles,
-commands, or compatibility terms. Use `PE` only when directly describing
-NVSHMEM APIs or behavior.
+Do not introduce an abstraction for one implementation or a compatibility
+layer for a private detail. A helper, wrapper, provider, manager, registry, or
+base class must own a real boundary, repeated operation, invariant, or
+lifecycle. Inline single-use indirection when that makes ownership clearer.
 
-Treat `AtnAgent` and `FfnAgent` as indivisible role names in PascalCase C++ and
-Python identifiers, including C++ enum values. Python wire-enum values use
-`ATNAGENT` and `FFNAGENT`; modules, files, commands, process titles, config
-values, and other lowercase identifiers use `atnagent` and `ffnagent`. Do not
-write variants such as `Atnagent`, `Ffnagent`, `Atn_Agent`, or `ATN_AGENT`.
+Do not add production seams solely so tests can replace dependencies. Tests
+should patch the dependency at the module that owns the call. Production APIs
+must describe runtime concepts rather than test mechanics.
 
-Avoid boilerplate helper functions, especially private helpers used only once
-or twice, when inlining keeps the calling code clearer. Add an abstraction only
-when it carries a real ownership boundary, repeated behavior, or a typed
-contract that improves local reasoning.
+Bind intrinsic construction, validation, formatting, serialization, and
+resource lifecycle to the type that owns the invariant. Keep cross-type
+orchestration, discovery, plugin hooks, I/O, and general algorithms at module
+or namespace scope. Do not use classes merely as namespaces.
 
-Do not add one-line wrappers, renamed constants, or pass-through functions that
-only obscure the real API. Examples include `call_native_*` wrappers,
-single-use `*_to_outdir` helpers, or constants that merely rename one local
-literal. Inline the call unless the wrapper owns validation, synchronization,
-lifetime, or a stable typed boundary.
+Avoid duplicate sources of truth. Configuration, protocol fields, materialized
+state, and derived values must each have one owner. Pass or derive values from
+that owner instead of caching copies in adapters, registries, or globals.
 
-Do not add production callback or provider parameters solely to make tests
-replace dependencies. Production signatures should expose runtime concepts;
-tests should monkeypatch the dependency in the module that owns the call. A
-short function is justified only when it implements a framework protocol, a
-typed conversion, resource lifecycle, synchronization or failure semantics, or
-a genuinely repeated domain operation. Before finalizing a change, inspect new
-single-statement functions, renamed imports, and local helpers for needless
-indirection.
+Validate untrusted values once at the boundary that assumes ownership. Public
+lifecycle operations continue to reject invalid state transitions, and external
+runtime, device, IPC, and shared-memory results remain checked. Private helpers
+rely on invariants already established by their owner; document non-obvious
+preconditions instead of repeating the same runtime checks or replacing them
+with release-disabled assertions.
 
-Bind behavior to an xpool-owned type when it defines that type's intrinsic
-construction, parsing, formatting, validation, serialization, or resource
-lifecycle. Keep subsystem entry points, cross-type orchestration, discovery,
-plugin hooks, I/O, and general algorithms at module or namespace scope. Do not
-introduce manager, singleton, or namespace classes merely to group functions,
-and do not retain pass-through wrappers around newly type-bound APIs.
+Keep each exception boundary scoped to one operation, retry, or cleanup owner.
+Nest exception handling only when compensation or reconciliation can fail
+independently and both failures affect diagnostics or resource safety. Preserve
+the original operation failure unless cleanup cannot prove resources safe to
+release; suppress only explicitly ignorable idempotent cleanup outcomes.
+
+Use repository terminology consistently. `AtnAgent` and `FfnAgent` are
+indivisible role names in PascalCase identifiers. Use `ATNAGENT` and `FFNAGENT`
+for Python wire-enum values, and `atnagent` and `ffnagent` in lowercase names.
+Use `Agent` only for a shared lifecycle concept and `PE` only for NVSHMEM
+behavior. `DevAgent` is not a current role or compatibility term.
 
 ## Python
 
-Run Python project tools through `uv run`; do not invoke `.venv/bin/...`
-commands directly. Format with `uv run ruff format`, lint with
-`uv run ruff check`, and type-check with `uv run ty check`. Keep public Python
-documentation passing Ruff's public docstring checks.
+Run Python tools through `uv run`. Format with `uv run ruff format`, lint with
+`uv run ruff check`, and type-check with `uv run ty check`.
 
-Prefer explicit concrete types. Avoid broad `Any` or `object` unless they are
-required for a dynamic third-party surface and the reason is documented close
-to the annotation. In SGLang integration code, import pinned SGLang concrete
-types directly instead of inventing local `*Like` protocols. Do not use
-`TYPE_CHECKING` blocks or local imports to hide ordinary dependency cycles; fix
-the ownership boundary instead.
+Prefer explicit concrete types. Use `Any` or `object` only for a genuinely
+dynamic boundary and document the reason nearby. Import pinned third-party
+types instead of inventing local look-alike protocols.
 
-Do not define xpool-owned Python variables, parameters, constants, functions,
-methods, attributes, classes, or type aliases with a single leading underscore.
-Use descriptive names, remove bindings that are not needed, and keep
-framework-mandated unused parameters under their protocol names instead of
-prefixing or deleting them. Python double-underscore protocols and unavoidable
-private names owned by standard-library or third-party APIs are exempt. Do not
-add compatibility aliases for renamed private implementation details.
+Do not use `TYPE_CHECKING` blocks or local imports to conceal ordinary
+dependency cycles. Fix the ownership boundary.
 
-Do not use Python import aliases. Import the module that owns a symbol and use
-its qualified name when local or third-party names would otherwise collide.
-Python module filenames may use underscores when they express established
-Python, configuration, integration, or model terminology.
+Do not define xpool-owned names with a single leading underscore. Remove
+unneeded bindings and keep framework-mandated parameters under their protocol
+names. Python protocols and unavoidable private third-party names are exempt.
+Do not preserve renamed private details through compatibility aliases.
 
-Use `__all__` to document supported package, facade, and stable direct-module
-APIs. Enumerate those exports explicitly. Omit `__all__` from internal
-implementation and test-harness modules, and do not use wildcard imports.
+Do not use import aliases. Import the owning module and qualify symbols where
+names would collide.
 
-Deprecated APIs must be migrated rather than suppressed. Keep ty's `deprecated`
-diagnostic enabled as an error for PEP 702-decorated APIs. This gate is not
-exhaustive for typeshed overload deprecations, so migrate those directly when
-another supported tool or review identifies them. A function decorated with
-`contextmanager` returns `Generator[Yield, None, None]`; one decorated with
-`asynccontextmanager` returns `AsyncGenerator[Yield, None]`. Undecorated pytest
-yield fixtures may continue to return `Iterator[Yield]`.
+Use explicit `__all__` declarations for supported package, facade, and stable
+direct-module APIs. Omit `__all__` from internal implementation and test
+harness modules. Do not use wildcard imports.
 
-For PEP 695 generic functions, prefer short local type parameter names such as
-`R` and `W` when the scope is obvious. Avoid legacy-style verbose names such as
-`ReturnT` or `WeightT` for local generic function parameters.
+Migrate deprecated APIs instead of suppressing diagnostics. Keep the
+`deprecated` type-check diagnostic enabled. Context-manager generators must use
+the generator return type required by their decorator.
 
-Prefer `match` statements when dispatching over a closed set of enum-like
-states; avoid long `if`/`elif` ladders when a closed dispatch table or `match`
-would make exhaustiveness clearer.
+Prefer short local PEP 695 type-parameter names when scope makes their meaning
+clear. Prefer `match` or a closed dispatch table when dispatching over a closed
+set of states.
 
 ## C++ And CUDA
 
-Format C++, CUDA, and headers with `uv run clang-format`. The repository-root
-`.clang-format` is the only native formatting policy and sets the same
-120-column limit as Ruff. Pass only explicit `.c`, `.cc`, `.cpp`, `.cu`, `.h`,
-`.hh`, `.hpp`, or `.cuh` paths; never run clang-format over the repository root,
-a mixed-language file list, Markdown, Python, TOML, YAML, or extensionless
-files. The root `.clang-format-ignore` is a final safeguard against accidental
-mixed-language invocation, not a substitute for selecting native inputs
-correctly. When adding a native extension to the CMake source or header globs,
-update the ignore allowlist in the same change.
+Format native files with `uv run clang-format` and the repository
+`.clang-format`. Pass only explicit native source and header paths. Keep public
+native documentation passing `doxygen Doxyfile`.
 
-Keep native C++/CUDA file basenames free of underscores; express subsystem and
-role boundaries through directories instead of compound filenames.
-Native CTest source files use the explicit `*_test.{c,cc,cpp,cu}` discovery
-suffix as the sole basename exception; their directory still carries subsystem
-ownership.
+Order native includes in formatter-owned groups: the translation unit's
+matching main header first, then C++ standard-library headers, third-party
+headers, and xpool or local project headers. Let clang-format regroup and sort
+these categories. Use the narrowest possible `clang-format off` region only
+when preprocessing or another semantic dependency requires a different order,
+and explain that dependency beside the exception.
 
-Define short, stable class and struct member functions directly in the class
-definition in the owning `.hpp` or `.cuh`. In-class definitions are already
-implicitly inline; do not add a redundant `inline` specifier. Simple accessors,
-singleton accessors, thin overload delegation, move operations, and short
-resource delegation are typical candidates.
+Keep native production basenames free of underscores; directories express
+subsystem boundaries. Flat core Devkit components use descriptive snake-case
+basenames that match their component names. CTest files use the `*_test`
+suffix.
 
-Keep member functions out of line when they require an incomplete private type,
-an implementation-only dependency such as a CUDA device symbol, NVSHMEM, or a
-JSON parser, or when they implement substantial algorithms, synchronization
-protocols, resource lifecycles, or failure recovery. Do not introduce PIMPL
-solely to hide short member functions or reduce header content; require a
-concrete ABI firewall or dependency-isolation reason.
+Define short, stable member functions in the owning class definition. Keep
+substantial algorithms, synchronization, resource lifecycle, failure recovery,
+and implementation-only dependencies out of line. Do not introduce PIMPL
+without a concrete ABI or dependency-isolation need.
 
-Keep public C++/CUDA documentation passing `doxygen Doxyfile`; Doxygen is a
-repository development prerequisite.
+Prefer `auto` for initialized local variables when the initializer fixes the
+exact type. Keep public signatures, stored fields, protocol layouts, and
+schema-bearing callbacks explicit.
 
-Prefer `auto` for initialized C++ and CUDA local variables when the initializer
-determines the exact type. Preserve semantic integer width or handle type with
-an explicit typed initializer on the right-hand side. Keep public signatures,
-stored fields, protocol layouts, and schema-bearing callback parameters
-explicit.
+Use an alias only for an intentional domain representation or genuinely
+complex template expression. Do not alias primitives, familiar standard
+containers, optionals, pointers, locks, or streams merely to shorten spelling.
+Do not use `using namespace`.
 
-Prefer `using` over `typedef`, but introduce a type alias only when it names an
-intentional domain representation or hides genuinely complex template
-machinery. A public alias is part of the owning header's API and must document
-whether callers may rely on exact substitutability with its underlying type. Do
-not alias primitive integers, familiar standard-library containers, optionals,
-smart pointers, locks, streams, or template instantiations merely to shorten
-spelling; use an xpool-owned wrapper or struct when values with the same
-representation must not be mixed. Keep implementation-convenience aliases local
-or private, and do not use `using namespace` directives.
+Choose integers by domain:
 
-Choose native integer types by semantic domain. Accept Torch operator integers
-as `std::int64_t` only at the registration boundary and convert them once to the
-owning domain type. Use `std::size_t` for host/device arena sizes, byte offsets,
-strides, capacities, tensor dimensions, and container, model, layer, lane,
-slot, and rank counts or indices. The native ABI targets 64-bit Linux/CUDA and
-may enforce 64-bit `std::size_t` as a compile-time platform contract. Use
-fixed-width integers for raw enum values, ABI versions, states, errors,
-monotonic sequences, and timestamps; use external API-native types such as
-`c10::DeviceIndex` and NVSHMEM's `int`. Remove redundant casts after values
-enter their domain type. Use `std::uintptr_t` only when address bits are
-intentionally represented as an integer, not for ordinary pointer or
-arena-offset arithmetic.
+- convert Torch operator integers once at the registration boundary;
+- use `std::size_t` for sizes, offsets, strides, capacities, dimensions,
+  counts, and indices;
+- use fixed-width integers for wire values, enum representations, ABI
+  versions, states, errors, sequences, and timestamps; and
+- use an external API's native integer or handle type at that boundary.
 
-Keep checked integer arithmetic type-preserving. `checked::sum` and
-`checked::prod` accept same-type non-boolean integral operands and return the
-exact operand type; `checked::align_up` additionally requires an unsigned
-operand type. Reject mixed integer types at compile time instead of silently
-selecting a common type.
+Keep checked integer arithmetic type-preserving. Reject mixed integer types at
+compile time rather than silently choosing a common type.
 
-Represent trusted closed-set native values with xpool-owned validated value
-types, while keeping untrusted Transport and Fabric wire enum, state, and error
-fields in their explicit fixed-width integer representation. Generic enum-value
-constructors may accept the type's own enum or non-boolean integral inputs, but
-ordinary integers must require explicit construction and invalid construction
-must fail-stop. Recoverable operator and wire boundaries must validate before
-constructing the trusted value.
+Represent trusted closed-set values with validated xpool-owned types. Keep
+untrusted wire values in their explicit fixed-width representation and
+validate them before constructing a trusted value.
 
-Use `static_assert` to enforce a real compile-time capability or external
-contract, such as trivial copying across CUDA/NVSHMEM boundaries, standard
-layout where required, or a generic template's type requirements. Do not freeze
-compiler-derived object sizes, alignments, or member offsets when all producers,
-consumers, arena planners, and transfers use the declared type and `sizeof(T)`.
-Express required alignment with `alignas` at the declaration.
+Use `static_assert` for a real compile-time capability or external contract.
+Do not freeze compiler-derived sizes, alignments, or member offsets when every
+participant uses the declared type and `sizeof`. Express required alignment in
+the declaration.
 
-Do not prefix C++ or CUDA global storage with `g_`, and do not expose mutable
-global storage as the subsystem API. Access process-lifetime owners through a
-type-bound static `singleton()` accessor backed by a function-local static
-object. CUDA and NVSHMEM resources require explicit lifecycle cleanup before
-process teardown; static destruction only terminates an already empty or
-finalized host owner and is not a recovery path for live device resources. Keep
-process-lifetime resource state directly in its owning type unless an accepted
-PIMPL boundary has a concrete ABI or dependency-isolation purpose. Host and
-device debug code must read their target-specific storage through
-`debug::options()` rather than accessing the `_h` or `_d` storage directly.
+Do not prefix global storage with `g_`, and do not expose mutable storage as a
+subsystem API. Ordinary callers use the owning accessor or lifecycle API.
+Link-visible host/device storage is permitted only when required to implement
+such an accessor; it remains an implementation detail.
 
-Model nullable native resource ownership directly in the owning type: default
-construction is empty, explicit boolean conversion reports ownership, typed
-acquisition creates or attaches the resource, normal cleanup reports errors,
-and destruction is only a best-effort fallback for resources that one process
-can release independently. Collective or distributed resources must use their
-explicit coordinated shutdown while the required runtime is live; their
-destructors verify the owner is empty and fail-stop instead of initiating an
-implicit collective. Do not wrap an already nullable owner in `std::optional`
-or `std::unique_ptr` solely to represent presence.
+Place native headers under `src/cext-include` and include them through the
+`xpool/...` root. Directories under `src/cext` contain compilation units only.
+Headers include the owning declarations they use instead of adding
+namespace-scope forward declarations for project or third-party types.
 
-Name private C++ and CUDA data members with a trailing underscore. Keep public
-fields unsuffixed only for intentional structs such as wire records, arena
-layouts, device state, and plain data aggregates. Types that own a resource or
-enforce parsing, formatting, validation, or lifecycle invariants must keep their
-storage private and expose behavior through member functions.
+Model nullable resource ownership in the owner itself. Do not wrap an already
+nullable owner merely to express presence. Distributed resources require
+explicit coordinated shutdown while their runtime is live; destruction is not
+a substitute for that protocol.
 
-Keep CUDA/NVSHMEM synchronization assumptions close to the code that depends on
-them.
+Name private data members with a trailing underscore. Leave fields unsuffixed
+only in intentional plain data aggregates such as wire records, arena layouts,
+and device state.
 
-Prefer Cooperative Groups for CUDA group behavior, then CCCL/libcu++ for
-standard algorithms and utilities, then an existing typed xpool utility. Use a
-raw block/warp synchronization, shuffle, atomic, or cooperative-launch intrinsic
-only when the preferred libraries cannot express the required semantics and the
-reason is accepted and documented close to the implementation. Raw CUDA
-allocation, copy, and set APIs remain appropriate at IPC ownership and one-shot
-host-initialization boundaries; NVSHMEM remote operations and device pointers
-remain required at cross-address-space boundaries.
+Keep synchronization assumptions next to the code that depends on them.
+Prefer Cooperative Groups for CUDA group behavior, then CCCL/libcu++, then an
+existing typed xpool utility. Use raw intrinsics only when these cannot express
+the required semantics and document the reason nearby.
 
-Annotate native function execution space through `XPOOL_HOST_FN`,
-`XPOOL_DEVICE_FN`, and `XPOOL_HOST_DEVICE_FN` from `xpool/macros.hpp`. These
-macros express execution space only: keep `inline`, `__forceinline__`,
-`__global__`, CUDA storage qualifiers, and kernel launch syntax explicit.
-Ordinary `.hpp` files must retain `__CUDACC__` guards around device-only
-declarations; `.cuh` files are CUDA-only and need no redundant guard.
+Use the `XPOOL_*` annotations from `xpool/macros.hpp` for CUDA function
+execution space, Device storage space, and justified forced inlining. Keep
+compiler probes, Device intrinsics, and kernel launch syntax explicit. Guard
+device-only declarations in ordinary `.hpp` files; `.cuh` files are CUDA-only.
 
-Keep one global entry per persistent CUDA role when its phases share resident
-state and synchronization. Extract only pure mechanisms, typed local contexts,
-or complete lifecycle transactions, while leaving barriers, warp/block
-ownership, queue transfer, publication, NVSHMEM ordering, shutdown, and
-fail-stop transitions visible in the kernel body. Do not split a resident
-protocol into additional kernels or add forced inlining without same-toolchain
-resource and profiling evidence.
+Keep one global entry for a persistent CUDA role when its phases share resident
+state and synchronization. Extract pure mechanisms or complete lifecycle
+transactions, but keep barriers, ownership, publication, transport ordering,
+shutdown, and fail-stop transitions visible. Split kernels or force inlining
+only with same-toolchain evidence.
 
 ## Native Build Definitions
 
-Manage native targets with CMake; do not reintroduce `setup.py` as the primary
-native build system.
+Manage native targets with CMake. Do not use `setup.py` as a parallel native
+build system.
 
-Apply native warning policy through the internal `xpool_compiler_options`
-target, linked privately by project-owned extension and test targets. Keep
-`-Wall -Wextra` enabled for C++ and the CUDA host compiler, keep the selected
-CUDA frontend diagnostics enabled, and treat warnings as errors by default.
-`XPOOL_WARNINGS_AS_ERRORS=OFF` is a toolchain-diagnosis escape hatch, not a
-normal development mode. Do not place project warning policy on public or
-dependency interface targets such as `xpool_abi`.
+Apply project warning policy through the internal compiler-options target and
+link it privately to project-owned targets. Keep normal C++ and CUDA warnings
+enabled and treat them as errors. Warning escape hatches are for toolchain
+diagnosis, not normal development.
 
-Treat third-party include directories as CMake `SYSTEM` paths. Add a documented
-header under `xpool/third-party/` only when it implements a real compatibility
-boundary that cannot be expressed by dependency versioning or build-system
-metadata. Do not add wrappers that merely rename an include or suppress
-diagnostics, and do not add translation-unit-wide suppressions that also hide
-xpool diagnostics.
+Treat third-party include directories as CMake `SYSTEM` paths. Add a
+compatibility header only for a real boundary that dependency versioning or
+build metadata cannot express. Do not add wrappers that merely rename an
+include or suppress project diagnostics.
 
-Do not enable `--Wmissing-launch-bounds` or add `__launch_bounds__` merely to
-satisfy a warning gate. Launch bounds affect CUDA code generation and require
-workload-specific profiling and performance evidence.
+Compiler controls that change generated CUDA code require workload-specific
+profiling evidence; do not add them only to silence diagnostics.

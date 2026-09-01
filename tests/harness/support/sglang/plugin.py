@@ -7,21 +7,22 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
+import torch
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.plugins.hook_registry import HookRegistry
 
 import xpool.config
 import xpool.integrations.sglang.plugin
 from tests.harness.support.config import TEST_MODEL_ID
-from xpool.abi import TensorDType
 from xpool.config import XpoolConfig
-from xpool.fabric import FfnLayerKind, FfnLayerSpec, FfnWorkload
+from xpool.fabric import InstanceFfnLayerProfile, InstanceFfnProfile
 from xpool.integrations.sglang.adapter import (
     SglangHook,
-    SglangModelAdapter,
-    XpoolModelBinding,
+    SglangInstanceRankBinding,
+    SglangShimAdapter,
 )
-from xpool.integrations.sglang.topology import AtnKind, SglangModelMetadata
+from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
+from xpool.native.ffn import LayerKind
 
 
 @pytest.fixture
@@ -33,7 +34,7 @@ def reset_plugin_required_hook_targets(
     guarded = HookRegistry.__dict__.get("xpool_apply_hooks_guarded")
     HookRegistry.reset()
     monkeypatch.setattr(xpool.integrations.sglang.plugin.bootstrap, "init", lambda cuda_device, role: None)
-    monkeypatch.setattr(xpool.integrations.sglang.plugin.devkit, "install", lambda: None)
+    monkeypatch.setattr(xpool.integrations.sglang.plugin.devkit, "install", lambda package=None: None)
     xpool.integrations.sglang.plugin.XPOOL_REQUIRED_HOOK_TARGETS.clear()
     yield
     HookRegistry.reset()
@@ -53,7 +54,7 @@ def configure_xpool_model(
     *,
     atn_cuda_devices: tuple[int, ...] = (0,),
     ffn_cuda_devices: tuple[int, ...] = (1,),
-    atn_kind: AtnKind = AtnKind.GQA,
+    atn_kind: SglangAttentionKind = SglangAttentionKind.GQA,
     num_key_value_heads: int = 2,
 ) -> None:
     resolved_model_path = Path(model_path).expanduser().resolve()
@@ -98,19 +99,21 @@ path = "{resolved_model_path}"
 
     def fake_sglang_metadata(config_path: Path, *, model_id: str) -> SglangModelMetadata:
         return SglangModelMetadata(
+            model_id=model_id,
             family=model_id,
             hidden_size=2048,
             num_atn_heads=16,
             num_key_value_heads=num_key_value_heads,
             atn_kind=atn_kind,
+            raw_config_path=config_path,
         )
 
     monkeypatch.setattr(SglangModelMetadata, "load", fake_sglang_metadata)
     xpool.config.init_global_config()
 
 
-def binding() -> XpoolModelBinding:
-    return XpoolModelBinding(
+def binding() -> SglangInstanceRankBinding:
+    return SglangInstanceRankBinding(
         instance_id=TEST_MODEL_ID,
         model_path=Path("/tmp/xpool/fake-model"),
         instance_index=0,
@@ -126,21 +129,22 @@ def binding() -> XpoolModelBinding:
     )
 
 
-def ffn_workload(
+def ffn_profile(
     *,
     hidden_size: int = 2048,
-    max_decode_rows: int = 4,
-    max_prefill_rows: int = 8,
-) -> FfnWorkload:
-    """Return one strict workload suitable for SGLang plugin tests."""
+    decode_payload_row_capacity: int = 4,
+    prefill_payload_row_capacity: int = 8,
+) -> InstanceFfnProfile:
+    """Return one strict FFN profile suitable for SGLang plugin tests."""
 
-    return FfnWorkload(
+    return InstanceFfnProfile(
         model_config_digest="a" * 64,
-        dtype=TensorDType.FP16,
+        payload_dtype=torch.float16,
         hidden_size=hidden_size,
-        layers=(FfnLayerSpec(layer_id=0, kind=FfnLayerKind.DENSE),),
-        max_decode_rows=max_decode_rows,
-        max_prefill_rows=max_prefill_rows,
+        layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.DENSE),),
+        decode_payload_row_capacity=decode_payload_row_capacity,
+        prefill_payload_row_capacity=prefill_payload_row_capacity,
+        group_sum_complete_admitted=False,
     )
 
 
@@ -173,25 +177,7 @@ def hook_target_initialize() -> str:
     return "initialize"
 
 
-def hook_target_sigterm() -> str:
-    """Synthetic valid target for the plugin's parent SIGTERM hook."""
-
-    return "sigterm"
-
-
-def hook_target_event_loop() -> str:
-    """Synthetic valid target for the plugin's scheduler event-loop hook."""
-
-    return "event_loop"
-
-
-def hook_target_kill_process_tree() -> str:
-    """Synthetic valid target for the plugin's process-tree cleanup hook."""
-
-    return "kill_process_tree"
-
-
-class FakeAdapter(SglangModelAdapter):
+class FakeAdapter(SglangShimAdapter):
     name = "fake"
 
     def __init__(

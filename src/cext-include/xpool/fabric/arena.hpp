@@ -1,11 +1,14 @@
 #pragma once
 
 /// \file xpool/fabric/arena.hpp
-/// \brief Fabric symmetric-arena state, typed view, and explicit owner.
+/// \brief Fabric symmetric-arena state, typed views, and explicit owner.
 
+#include <cuda/atomic>
+#include <cuda/std/optional>
+#include <cuda/std/span>
 #include <cuda_runtime_api.h>
 
-#include <chrono>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -18,137 +21,192 @@
 #include <xpool/abort.hpp>
 #include <xpool/fabric/layout.hpp>
 #include <xpool/fabric/protocol.hpp>
-#include <xpool/fabric/trace.hpp>
 #include <xpool/macros.hpp>
 #include <xpool/utils/device.hpp>
 
-#if defined(__CUDACC__)
-#include <xpool/atomic.cuh>
-#endif
-
 namespace xpool::fabric {
 
-class FfnScheduler;
-class FfnSchedulerEntry;
-class FfnSchedulerPolicy;
-
 /// Mutable device state local to one PE's symmetric arena allocation.
-struct FabricArenaState {
-  /// Monotonic FfnAgent Resident startup publication; unused on AtnAgent PEs.
-  std::uint32_t ffnagent_resident_ready;
-  /// Monotonic PE-local command requesting Resident drain.
+struct ArenaState {
+  /// Nonzero after this PE has requested resident-kernel shutdown.
   std::uint32_t shutdown;
-  /// First-writer-wins canonical invocation failure.
-  FabricFailure failure;
-  /// Allocation counters for this PE's local Fabric trace buffer.
-  xpool::trace::BufferState trace;
+  /// First Fabric failure published for this PE.
+  Failure failure;
+};
+
+/// Non-owning interpretation of one lane's fixed-capacity routing block.
+class RoutingMetadataBlock {
+public:
+#if defined(__CUDACC__)
+  /// Return writable storage for the live top-k expert identifiers.
+  XPOOL_DEVICE_FN cuda::std::span<std::int32_t> topk_ids_destination() const;
+  /// Return the live top-k expert identifiers.
+  XPOOL_DEVICE_FN cuda::std::span<const std::int32_t> topk_ids() const;
+  /// Return writable storage for the live top-k weights.
+  XPOOL_DEVICE_FN cuda::std::span<float> topk_weights_destination() const;
+  /// Return the live top-k weights.
+  XPOOL_DEVICE_FN cuda::std::span<const float> topk_weights() const;
+  /// Return the entire fixed-capacity block used by remote publication.
+  XPOOL_DEVICE_FN cuda::std::span<std::uint8_t> publication_payload() const;
+#endif
+
+private:
+  friend struct ArenaView;
+  XPOOL_HOST_DEVICE_FN constexpr RoutingMetadataBlock(std::uint8_t *base, std::size_t capacity_elements,
+                                                      std::size_t live_elements)
+      : base_(base), capacity_elements_(capacity_elements), live_elements_(live_elements) {}
+
+  std::uint8_t *base_;
+  std::size_t capacity_elements_;
+  std::size_t live_elements_;
+};
+
+/// AtnAgent interpretation of one lane's two physical payload regions.
+class AtnAgentLanePayloadView {
+public:
+#if defined(__CUDACC__)
+  /// Return writable storage for the input payload produced by this AtnAgent.
+  XPOOL_DEVICE_FN cuda::std::span<std::uint8_t> input_destination() const;
+  /// Return the input payload produced by this AtnAgent.
+  XPOOL_DEVICE_FN cuda::std::span<const std::uint8_t> input() const;
+  /// Return writable storage for the completed output payload.
+  XPOOL_DEVICE_FN cuda::std::span<std::uint8_t> output_destination() const;
+  /// Return the completed output payload consumed by this AtnAgent.
+  XPOOL_DEVICE_FN cuda::std::span<const std::uint8_t> output() const;
+#endif
+
+private:
+  friend struct ArenaView;
+  XPOOL_HOST_DEVICE_FN constexpr AtnAgentLanePayloadView(
+      std::array<std::uint8_t *, kExecutorLanePayloadBufferCount> buffers, std::size_t capacity)
+      : buffers_(buffers), capacity_(capacity) {}
+
+  std::array<std::uint8_t *, kExecutorLanePayloadBufferCount> buffers_;
+  std::size_t capacity_;
+};
+
+/// FfnAgent interpretation of one lane's two physical payload regions.
+class FfnAgentLanePayloadView {
+public:
+#if defined(__CUDACC__)
+  /// Return the input payload consumed by this FfnAgent.
+  XPOOL_DEVICE_FN cuda::std::span<const std::uint8_t> input() const;
+  /// Return writable storage for this FfnAgent's partial result.
+  XPOOL_DEVICE_FN cuda::std::span<std::uint8_t> partial_destination() const;
+  /// Return this FfnAgent's partial result.
+  XPOOL_DEVICE_FN cuda::std::span<const std::uint8_t> partial() const;
+  /// Return writable staging storage for a complete output before publication.
+  XPOOL_DEVICE_FN cuda::std::span<std::uint8_t> complete_output_staging_destination() const;
+  /// Return the staged complete output.
+  XPOOL_DEVICE_FN cuda::std::span<const std::uint8_t> complete_output_staging() const;
+#endif
+
+private:
+  friend struct ArenaView;
+  XPOOL_HOST_DEVICE_FN constexpr FfnAgentLanePayloadView(
+      std::array<std::uint8_t *, kExecutorLanePayloadBufferCount> buffers, std::size_t capacity)
+      : buffers_(buffers), capacity_(capacity) {}
+
+  std::array<std::uint8_t *, kExecutorLanePayloadBufferCount> buffers_;
+  std::size_t capacity_;
 };
 
 /// Non-owning typed address view over one process-local symmetric arena.
-struct FabricArenaView {
-  /// Construct an empty arena view.
-  XPOOL_HOST_DEVICE_FN constexpr FabricArenaView() = default;
-
-  /// Construct a view over one process-local symmetric arena.
-  /// \param base Process-local address returned by the symmetric allocation.
-  XPOOL_HOST_DEVICE_FN explicit constexpr FabricArenaView(std::uint8_t *base) : base_(base) {}
-
-  /// Return whether no arena is bound.
-  /// \return True when this view has no process-local arena address.
+/// Device accessors require a nonempty view whose owner validated and
+/// materialized the immutable layout.
+struct ArenaView {
+  /// Construct an empty view.
+  XPOOL_HOST_DEVICE_FN constexpr ArenaView() = default;
+  /// Construct a view over a symmetric arena allocation.
+  XPOOL_HOST_DEVICE_FN explicit constexpr ArenaView(std::uint8_t *base) : base_(base) {}
+  /// Return whether this view is detached from an allocation.
   XPOOL_HOST_DEVICE_FN constexpr bool empty() const { return base_ == nullptr; }
 
+  /// Return host-visible storage for one lane's FFN input payload.
+  XPOOL_HOST_FN std::uint8_t *ffn_input_storage(const ArenaLayout &layout, std::size_t executor_lane_index) const {
+    return base_ + layout.lane_payload_storage_offset_bytes + executor_lane_index * layout.lane_payload_capacity_bytes;
+  }
+
+  /// Return host-visible storage for one lane's FFN partial payload.
+  XPOOL_HOST_FN std::uint8_t *ffn_partial_storage(const ArenaLayout &layout, std::size_t executor_lane_index) const {
+    return base_ + layout.lane_payload_storage_offset_bytes +
+           (layout.executor_lane_count + executor_lane_index) * layout.lane_payload_capacity_bytes;
+  }
+
+  /// Return host-visible storage for one lane's routing metadata.
+  XPOOL_HOST_FN std::uint8_t *routing_metadata_storage(const ArenaLayout &layout,
+                                                       std::size_t executor_lane_index) const {
+    return base_ + layout.routing_metadata_offset_bytes + executor_lane_index * layout.routing_metadata_stride_bytes;
+  }
+
+  /// Return the host-visible payload-row field captured by a lane graph.
+  XPOOL_HOST_FN std::size_t *lane_payload_rows(const ArenaLayout &layout, std::size_t executor_lane_index) const {
+    const auto publication_bytes = sizeof(Publication<LaneExecution>);
+    const auto record_offset = offsetof(Publication<LaneExecution>, record);
+    return reinterpret_cast<std::size_t *>(base_ + layout.lane_execution_publications_offset_bytes +
+                                           executor_lane_index * publication_bytes + record_offset +
+                                           offsetof(LaneExecution, payload_rows));
+  }
+
 #if defined(__CUDACC__)
-  /// Acquire-observe whether this PE has been asked to stop Fabric progress.
-  /// \return True after the monotonic shutdown command is published.
+  /// Return whether shutdown has been published for this PE.
+  /// The result is acquire-loaded from the device-local arena state.
   XPOOL_DEVICE_FN bool shutdown_requested() const {
-    return xpool::atomic::load_acquire(state().shutdown) != 0;
+    return cuda::atomic_ref{state().shutdown}.load(cuda::memory_order_acquire) != 0;
   }
-  /// Publish the monotonic PE-local shutdown command.
+  /// Publish a shutdown request for this PE.
   XPOOL_DEVICE_FN void request_shutdown() const {
-    xpool::atomic::store_release(state().shutdown, std::uint32_t{1});
+    cuda::atomic_ref{state().shutdown}.store(std::uint32_t{1}, cuda::memory_order_release);
   }
-  /// Return immutable root geometry at offset zero.
-  /// \return Validated Fabric arena layout.
-  XPOOL_DEVICE_FN const FabricArenaLayout &layout() const;
-  /// Return mutable PE-local arena state.
-  /// \return State region owned by the local PE.
-  XPOOL_DEVICE_FN FabricArenaState &state() const;
-  /// Return one model layout after fail-stop bounds checking.
-  /// \param model_index Canonical model table index.
-  /// \return Immutable model geometry.
-  XPOOL_DEVICE_FN const FabricModelLayout &model_layout(std::size_t model_index) const;
-  /// Return one layer layout after fail-stop bounds checking.
-  /// \param layer_index Canonical flattened layer table index.
-  /// \return Immutable layer identity and kind.
-  XPOOL_DEVICE_FN const FabricLayerLayout &layer_layout(std::size_t layer_index) const;
-  /// Return the Scheduler object owned by the Coordinator PE.
-  /// \return Mutable generation-scoped Scheduler.
-  XPOOL_DEVICE_FN FfnScheduler &scheduler() const;
-  /// Return one model-scoped Scheduler entry.
-  /// \param model_index Canonical model table index.
-  /// \return Mutable Scheduler entry for that model.
-  XPOOL_DEVICE_FN FfnSchedulerEntry &scheduler_entry(std::size_t model_index) const;
-  /// Return one AtnAgent/model Submission publication.
-  /// \param atnagent_index Canonical AtnAgent PE index.
-  /// \param model_index Canonical model table index.
-  /// \return Mutable Submission publication cell.
-  XPOOL_DEVICE_FN FabricPublication<FfnSubmission> &submission_publication(std::size_t atnagent_index,
-                                                                          std::size_t model_index) const;
-  /// Return one AtnAgent/model Admission publication.
-  /// \param atnagent_index Canonical AtnAgent PE index.
-  /// \param model_index Canonical model table index.
-  /// \return Mutable execution-admission publication cell.
-  XPOOL_DEVICE_FN FabricPublication<FfnExecutionAdmission> &admission_publication(std::size_t atnagent_index,
-                                                                                  std::size_t model_index) const;
-  /// Return one Executor Invocation publication.
-  /// \param executor_index Distributed Executor index.
-  /// \return Mutable Invocation publication cell.
-  XPOOL_DEVICE_FN FabricPublication<FfnInvocation> &invocation_publication(std::size_t executor_index) const;
-  /// Return one Executor InputReady publication.
-  /// \param executor_index Distributed Executor index.
-  /// \return Mutable InputReady publication cell.
-  XPOOL_DEVICE_FN FabricPublication<FfnInputReady> &input_ready_publication(std::size_t executor_index) const;
-  /// Return one FfnAgent/Executor Completion publication.
-  /// \param ffnagent_index Canonical FfnAgent index, excluding AtnAgent PEs.
-  /// \param executor_index Distributed Executor index.
-  /// \return Mutable FfnAgent completion publication cell.
-  XPOOL_DEVICE_FN FabricPublication<FfnAgentCompletion> &
-  ffnagent_completion_publication(std::size_t ffnagent_index, std::size_t executor_index) const;
-  /// Return one AtnAgent/model Result publication.
-  /// \param atnagent_index Canonical AtnAgent PE index.
-  /// \param model_index Canonical model table index.
-  /// \return Mutable result publication cell.
-  XPOOL_DEVICE_FN FabricPublication<FfnResult> &result_publication(std::size_t atnagent_index,
-                                                                  std::size_t model_index) const;
-  /// Return one AtnAgent/model Acknowledgement publication.
-  /// \param atnagent_index Canonical AtnAgent PE index.
-  /// \param model_index Canonical model table index.
-  /// \return Mutable result-acknowledgement publication cell.
-  XPOOL_DEVICE_FN FabricPublication<FfnResultAcknowledgement> &
-  acknowledgement_publication(std::size_t atnagent_index, std::size_t model_index) const;
-  /// Return one model-owned Decode input byte range.
-  /// \param model_index Canonical model table index.
-  /// \return Start of this model's fixed Decode input payload.
-  XPOOL_DEVICE_FN std::uint8_t *model_input_payload(std::size_t model_index) const;
-  /// Return one model-owned Decode output byte range.
-  /// \param model_index Canonical model table index.
-  /// \return Start of this model's fixed Decode output payload.
-  XPOOL_DEVICE_FN std::uint8_t *model_output_payload(std::size_t model_index) const;
-  /// Return one Executor-owned Prefill input byte range.
-  /// \param executor_index Distributed Executor index.
-  /// \return Start of this Executor's Prefill input payload.
-  XPOOL_DEVICE_FN std::uint8_t *executor_input_payload(std::size_t executor_index) const;
-  /// Return one Executor-owned Prefill output byte range.
-  /// \param executor_index Distributed Executor index.
-  /// \return Start of this Executor's Prefill output payload.
-  XPOOL_DEVICE_FN std::uint8_t *executor_output_payload(std::size_t executor_index) const;
-  /// Reserve one PE-local Fabric trace entry.
-  /// \return Reserved entry, or an empty entry when disabled or full.
-  XPOOL_DEVICE_FN xpool::trace::Entry<FabricTraceRecord> reserve_trace() const;
-  /// Find one retained PE-local Fabric trace by monotonic identity.
-  /// \param local_trace_id Positive local trace sequence.
-  /// \return Retained record, or nullptr when unavailable.
-  XPOOL_DEVICE_FN FabricTraceRecord *find_trace(std::uint64_t local_trace_id) const;
+  /// Return the protocol result that should terminate an in-flight request.
+  /// Returns the first Fabric failure, or cancellation when none was recorded.
+  XPOOL_DEVICE_FN xpool::ffn::ResultCode cancellation_result() const;
+
+  /// Return the immutable layout copied into the allocation header.
+  XPOOL_DEVICE_FN const ArenaLayout &layout() const;
+  /// Return this PE's mutable arena state.
+  XPOOL_DEVICE_FN ArenaState &state() const;
+  /// Return one materialized model-instance entry.
+  XPOOL_DEVICE_FN const InstanceEntry &instance_entry(std::size_t instance_index) const;
+  /// Return one materialized model-layer entry.
+  XPOOL_DEVICE_FN const LayerEntry &layer_entry(std::size_t instance_index, std::size_t layer_ordinal) const;
+  /// Return the AtnAgent PE membership for one instance.
+  XPOOL_DEVICE_FN cuda::std::span<const int> atnagent_pes(std::size_t instance_index) const;
+  /// Return the FfnAgent PE membership for one layer.
+  XPOOL_DEVICE_FN cuda::std::span<const int> ffnagent_pes(std::size_t instance_index, std::size_t layer_ordinal) const;
+  /// Interpret one lane's routing metadata for the live row capacity.
+  XPOOL_DEVICE_FN RoutingMetadataBlock routing_metadata(std::size_t executor_lane_index,
+                                                        std::size_t payload_row_capacity) const;
+
+  /// Return the submission publication owned by one source AtnAgent.
+  XPOOL_DEVICE_FN Publication<Submission> &submission_publication(std::size_t source_atnagent_index,
+                                                                  std::size_t instance_index) const;
+  /// Return the admission publication for one instance.
+  XPOOL_DEVICE_FN Publication<Admission> &admission_publication(std::size_t instance_index) const;
+  /// Return the execution publication for one lane.
+  XPOOL_DEVICE_FN Publication<LaneExecution> &lane_execution_publication(std::size_t executor_lane_index) const;
+  /// Return the input-readiness publication for one lane.
+  XPOOL_DEVICE_FN Publication<InputReady> &input_ready_publication(std::size_t executor_lane_index) const;
+  /// Return the routing-metadata readiness publication for one lane.
+  XPOOL_DEVICE_FN Publication<RoutingMetadataReady> &
+  routing_metadata_ready_publication(std::size_t executor_lane_index) const;
+  /// Return one FfnAgent's partial-readiness publication for a lane.
+  XPOOL_DEVICE_FN Publication<PartialReady> &partial_ready_publication(std::size_t source_ffnagent_index,
+                                                                       std::size_t executor_lane_index) const;
+  /// Return one FfnAgent's completion publication for a lane.
+  XPOOL_DEVICE_FN Publication<FfnAgentCompletion> &
+  ffnagent_completion_publication(std::size_t source_ffnagent_index, std::size_t executor_lane_index) const;
+  /// Return the output-commit publication for one instance.
+  XPOOL_DEVICE_FN Publication<OutputCommit> &output_commit_publication(std::size_t instance_index) const;
+  /// Return one AtnAgent's output acknowledgement publication.
+  XPOOL_DEVICE_FN Publication<OutputAcknowledgement> &
+  output_acknowledgement_publication(std::size_t source_atnagent_index, std::size_t instance_index) const;
+
+  /// Interpret one lane's physical payload buffers from the AtnAgent role.
+  XPOOL_DEVICE_FN AtnAgentLanePayloadView atnagent_lane_payload(std::size_t executor_lane_index) const;
+  /// Interpret one lane's physical payload buffers from the FfnAgent role.
+  XPOOL_DEVICE_FN FfnAgentLanePayloadView ffnagent_lane_payload(std::size_t executor_lane_index) const;
+
 #endif
 
 private:
@@ -158,96 +216,79 @@ private:
   std::uint8_t *base_ = nullptr;
 };
 
-/// Explicit owner of one process-local NVSHMEM symmetric arena allocation.
-class FabricArena {
-public:
-  /// Construct an empty arena owner.
-  FabricArena() = default;
-  /// Fail-stop when coordinated shutdown leaves a live symmetric allocation.
-  ~FabricArena() { xpool::abort_if(base_ != nullptr); }
+#if defined(__CUDACC__)
+/// Select the delivery protocol implied by instance topology and output count.
+/// \return Complete delivery when every consumer can receive a complete value;
+/// otherwise partial delivery.
+XPOOL_DEVICE_FN DeliveryVariant delivery_variant(const InstanceEntry &instance,
+                                                 xpool::ffn::OutputRequirement output_requirement);
+#endif
 
-  /// Return whether this owner contains a live symmetric allocation.
+/// Explicit owner of one process-local NVSHMEM symmetric arena allocation.
+/// Live operations require the allocation installed by Fabric Runtime and
+/// surface CUDA or NVSHMEM failures as c10::Error.
+class Arena {
+public:
+  /// Construct an empty owner.
+  Arena() = default;
+  /// Require callers to destroy a live symmetric allocation explicitly.
+  ~Arena() { xpool::abort_if(base_ != nullptr); }
+
+  /// Return whether this owner currently holds an allocation.
   explicit operator bool() const noexcept { return base_ != nullptr; }
 
-  FabricArena(const FabricArena &) = delete;
-  FabricArena &operator=(const FabricArena &) = delete;
+  /// Symmetric arena ownership cannot be copied.
+  Arena(const Arena &) = delete;
+  /// Symmetric arena ownership cannot be copied.
+  Arena &operator=(const Arena &) = delete;
 
-  /// Move one arena owner and leave the source empty.
-  /// \param other Arena owner whose resources should be transferred.
-  FabricArena(FabricArena &&other) noexcept
-      : base_(std::exchange(other.base_, nullptr)), layout_(std::exchange(other.layout_, {})),
-        model_topologies_(std::move(other.model_topologies_)) {}
+  /// Transfer ownership from another arena.
+  Arena(Arena &&other) noexcept
+      : base_(std::exchange(other.base_, nullptr)), layout_(std::exchange(other.layout_, {})) {}
 
-  /// Replace this empty owner by moving another arena owner.
-  /// \param other Arena owner whose resources should be transferred.
-  /// \return This owner after transfer.
-  FabricArena &operator=(FabricArena &&other) {
+  /// Transfer ownership into an empty arena.
+  /// \throws c10::Error when the destination already owns a live allocation.
+  Arena &operator=(Arena &&other) {
     if (this != &other) {
       TORCH_CHECK(base_ == nullptr, "a live Fabric arena cannot be replaced by move");
       base_ = std::exchange(other.base_, nullptr);
       layout_ = std::exchange(other.layout_, {});
-      model_topologies_ = std::move(other.model_topologies_);
     }
     return *this;
   }
 
-  /// Validate, allocate, initialize, and return one symmetric arena owner.
-  /// \param layout Validated root layout shared by every PE.
-  /// \param models Canonical model layouts stored in the arena.
-  /// \param layers Flattened canonical layer layouts stored in the arena.
-  /// \param scheduler_policy Immutable Scheduler policy for the generation.
-  /// \return Owner of the process-local symmetric allocation.
-  static FabricArena create(const FabricArenaLayout &layout, std::span<const FabricModelLayout> models,
-                            std::span<const FabricLayerLayout> layers,
-                            const FfnSchedulerPolicy &scheduler_policy);
-
-  /// Return the immutable host-cached root layout.
-  /// \return Validated root layout for this allocation.
-  const FabricArenaLayout &layout() const {
+  /// Return the materialized layout of a live arena.
+  const ArenaLayout &layout() const {
     TORCH_CHECK(base_ != nullptr, "xpool cannot read layout from an empty Fabric arena");
     return layout_;
   }
 
-  /// Copy this PE's mutable arena state to host memory.
-  /// \return Host snapshot of the local mutable state.
-  FabricArenaState state() const;
-
-  /// Boundedly wait for the FfnAgent Resident's device startup publication.
-  /// \param resident_stream Stream owning the cooperative Resident kernel.
-  /// \param timeout Maximum monotonic host duration allowed for startup.
-  /// \throws c10::Error on premature Resident completion, timeout, an invalid
-  /// readiness publication, or CUDA copy failure.
-  void wait_until_resident_ready(
-      const xpool::utils::device::OwnedCudaStream &resident_stream,
-      std::chrono::steady_clock::duration timeout) const;
-
-  /// Return a typed non-owning address view.
-  /// \return View over this owner's process-local arena address.
-  FabricArenaView view() const { return FabricArenaView{base_}; }
-
-  /// Publish the monotonic PE-local shutdown command on a control stream.
-  /// \param stream Live CUDA stream owner used for the asynchronous device write.
+  /// Copy this PE's current device state to the host.
+  ArenaState state() const;
+  /// Return a non-owning address view over this allocation.
+  ArenaView view() const { return ArenaView{base_}; }
+  /// Publish shutdown on the supplied stream.
   void request_shutdown(const xpool::utils::device::OwnedCudaStream &stream) const;
-
-  /// Copy this drained PE's retained local Fabric trace rows.
-  /// \return Host-owned trace snapshot in local sequence order.
-  FabricTraceSnapshot read_trace() const;
-
-  /// Collectively release this arena and reset the owner to empty.
+  /// Release the symmetric allocation and reset this owner.
+  /// \pre No resident or graph execution still addresses the allocation.
   void destroy();
 
 private:
-  /// Construct the owner returned after successful collective initialization.
-  FabricArena(std::uint8_t *base, FabricArenaLayout layout,
-              std::vector<FabricTraceModelTopology> model_topologies)
-      : base_(base), layout_(std::move(layout)), model_topologies_(std::move(model_topologies)) {}
+  friend class Runtime;
+
+  /// Allocate an arena from tables materialized by a validated Runtime join.
+  /// \pre layout and every span were produced together from the joined Projection.
+  static Arena create(const ArenaLayout &layout, std::span<const InstanceEntry> instances,
+                      std::span<const LayerEntry> layers, std::span<const int> atnagent_pes,
+                      std::span<const int> ffnagent_pes);
+
+  Arena(std::uint8_t *base, ArenaLayout layout) : base_(base), layout_(std::move(layout)) {}
 
   std::uint8_t *base_ = nullptr;
-  FabricArenaLayout layout_{};
-  std::vector<FabricTraceModelTopology> model_topologies_;
+  ArenaLayout layout_{};
 };
 
-static_assert(std::is_trivially_copyable_v<FabricArenaState>);
-static_assert(std::is_trivially_copyable_v<FabricArenaView>);
+static_assert(std::is_trivially_copyable_v<ArenaState>);
+static_assert(std::is_trivially_copyable_v<ArenaView>);
 
 } // namespace xpool::fabric

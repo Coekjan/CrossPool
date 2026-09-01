@@ -8,14 +8,14 @@ from sglang.srt.models.glm4_moe_lite import Glm4MoeLiteForCausalLM, PretrainedCo
 from sglang.srt.plugins.hook_registry import HookType
 
 from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
-from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.models.glm4_moe_lite import (
-    Glm4MoeLiteAdapter,
+    Glm4MoeLiteShimAdapter,
     XpoolGlm4MoeLiteMLP,
     XpoolGlm4MoeLiteSparseMoeBlock,
     around_load_weights,
 )
 from xpool.integrations.sglang.shim import ShimUnavailableError
+from xpool.native.ffn import LayerKind
 
 
 def glm_config() -> PretrainedConfig:
@@ -30,7 +30,7 @@ def glm_config() -> PretrainedConfig:
 
 
 def test_glm_adapter_declares_exact_hooks_and_capability() -> None:
-    adapter = Glm4MoeLiteAdapter()
+    adapter = Glm4MoeLiteShimAdapter()
     hooks = {(hook.target, hook.kind): hook.handler for hook in adapter.hooks()}
 
     assert adapter.supports_dp_attention
@@ -43,7 +43,7 @@ def test_glm_adapter_declares_exact_hooks_and_capability() -> None:
 
 
 def test_glm_adapter_matches_only_exact_architecture() -> None:
-    adapter = Glm4MoeLiteAdapter()
+    adapter = Glm4MoeLiteShimAdapter()
 
     assert adapter.matches(runner_with_architecture("Glm4MoeLiteForCausalLM").as_model_runner())
     assert not adapter.matches(runner_with_architecture("Glm4ForCausalLM").as_model_runner())
@@ -55,8 +55,8 @@ def test_glm_replacements_are_parameter_free_and_preserve_layer_kinds() -> None:
 
     assert list(dense.parameters()) == []
     assert list(sparse.parameters()) == []
-    assert dense.layer_kind is FfnLayerKind.DENSE
-    assert sparse.layer_kind is FfnLayerKind.SPARSE
+    assert dense.layer_kind is LayerKind.DENSE
+    assert sparse.layer_kind is LayerKind.MOE
     assert not hasattr(sparse, "experts")
     assert sparse.get_moe_weights() == []
 
@@ -100,6 +100,6 @@ def test_glm_loaded_model_uses_effective_config_policy() -> None:
     runner = runner_with_architecture("Glm4MoeLiteForCausalLM")
     runner.model = model
 
-    Glm4MoeLiteAdapter().validate_after_load(runner.as_model_runner())
+    Glm4MoeLiteShimAdapter().validate_after_load(runner.as_model_runner())
 
     assert runner.xpool_ffn_shim_count == 2

@@ -12,15 +12,15 @@ from tests.harness.support.runtime.atnagent import (
     reset_atnagent_runtime,
     transport_entry,
 )
-from xpool.abi import ABI_VERSION
 from xpool.config import XpoolConfig
+from xpool.native import ABI_VERSION
 from xpool.runtime.agent import AgentError
-from xpool.runtime.atnagent import AtnTransportCatalog
+from xpool.runtime.atnagent import AtnAgentTransportRuntime
 from xpool.service.client import XpoolClient
 from xpool.service.wire import (
     AtnAgentTransportArenaBinding,
     AtnAgentTransportLeaseQuiesceResponse,
-    InstanceRegistration,
+    InstanceRankRegistration,
     ProcessRef,
 )
 from xpool.transport import TransportArenaHandle
@@ -32,7 +32,7 @@ pytestmark = pytest.mark.usefixtures(
 )
 
 
-def catalog_config(*model_ids: str) -> XpoolConfig:
+def transport_config(*model_ids: str) -> XpoolConfig:
     """Install a config containing the requested model instances."""
 
     config = XpoolConfig.from_mapping(
@@ -45,10 +45,10 @@ def catalog_config(*model_ids: str) -> XpoolConfig:
     return config
 
 
-def transport_catalog(client: object) -> AtnTransportCatalog:
-    """Return an empty rank-zero catalog using a test client."""
+def create_transport_runtime(client: object) -> AtnAgentTransportRuntime:
+    """Return an empty rank-zero transport runtime using a test client."""
 
-    return AtnTransportCatalog(
+    return AtnAgentTransportRuntime(
         client=cast(XpoolClient, client),
         cuda_device=0,
         local_rank=0,
@@ -56,10 +56,10 @@ def transport_catalog(client: object) -> AtnTransportCatalog:
     )
 
 
-def test_catalog_drains_process_wide_resident(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Catalog drain publishes and polls one process-wide Resident command."""
+def test_transport_runtime_drains_process_wide_resident(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Runtime drain publishes and polls one process-wide Resident command."""
 
-    catalog_config("a", "b")
+    transport_config("a", "b")
     resources = (
         transport_entry(instance_id="a", rank=0, handle_rank=1),
         transport_entry(instance_id="b", rank=0, handle_rank=2),
@@ -76,18 +76,18 @@ def test_catalog_drains_process_wide_resident(monkeypatch: pytest.MonkeyPatch) -
 
     patch_native_atnagent_ops(monkeypatch, drain_async=drain_async, drain_pending=drain_pending)
     monkeypatch.setattr("xpool.runtime.atnagent.time.sleep", lambda delay: events.append("sleep"))
-    catalog = transport_catalog(object())
-    catalog.entries = {entry.instance_id: entry for entry in resources}
+    runtime = create_transport_runtime(object())
+    runtime.entries = {entry.instance_id: entry for entry in resources}
 
-    catalog.drain()
+    runtime.drain()
 
     assert events == ["drain", "poll", "sleep", "poll"]
 
 
-def test_catalog_quiesces_leases_before_draining_resident(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_transport_runtime_quiesces_leases_before_draining_resident(monkeypatch: pytest.MonkeyPatch) -> None:
     """Transport admission closes before the process-wide Resident drains."""
 
-    catalog_config("m")
+    transport_config("m")
     events: list[str] = []
 
     class FakeClient:
@@ -105,45 +105,65 @@ def test_catalog_quiesces_leases_before_draining_resident(monkeypatch: pytest.Mo
         drain_async=lambda: events.append("resident_drain"),
         drain_pending=lambda: False,
     )
-    catalog = transport_catalog(FakeClient())
+    runtime = create_transport_runtime(FakeClient())
     entry = transport_entry(instance_id="m", rank=0, handle_rank=1)
     entry.published_epoch = 1
-    catalog.entries = {entry.instance_id: entry}
+    runtime.entries = {entry.instance_id: entry}
 
-    catalog.quiesce()
+    runtime.quiesce()
 
     assert events == ["lease_quiesce", "resident_drain"]
 
 
-def test_catalog_activates_and_checks_one_process_wide_resident(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_transport_runtime_activates_and_checks_one_process_wide_resident(monkeypatch: pytest.MonkeyPatch) -> None:
     """Activation and health checks do not enumerate arena handles."""
 
-    catalog_config("a", "b")
+    transport_config("a", "b")
     events: list[str] = []
     patch_native_atnagent_ops(
         monkeypatch,
         activate=lambda: events.append("activate"),
         check_health=lambda: events.append("check"),
     )
-    catalog = transport_catalog(object())
+    runtime = create_transport_runtime(object())
+    entry = transport_entry(instance_id="a", rank=0, handle_rank=1)
+    runtime.entries = {entry.instance_id: entry}
 
-    catalog.activate()
-    catalog.check_health()
+    runtime.activate()
+    runtime.check_health()
 
     assert events == ["activate", "check"]
 
 
-def test_catalog_publishes_instances_incrementally_and_republishes_each_epoch(
+def test_transport_runtime_skips_resident_without_assigned_instances(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An idle AtnAgent joins Fabric without launching an empty Transport Resident."""
+
+    transport_config("a")
+    events: list[str] = []
+    patch_native_atnagent_ops(
+        monkeypatch,
+        activate=lambda: events.append("activate"),
+        check_health=lambda: events.append("check"),
+    )
+    runtime = create_transport_runtime(object())
+
+    runtime.activate()
+    runtime.check_health()
+
+    assert events == []
+
+
+def test_transport_runtime_publishes_instances_incrementally_and_republishes_each_epoch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Model load skew does not block ready rank-local arena publication."""
 
-    catalog_config("a", "b")
-    registrations = [InstanceRegistration.model_validate(instance_registration_view(instance_id="a", rank=0))]
+    transport_config("a", "b")
+    registrations = [InstanceRankRegistration.model_validate(instance_registration_view(instance_id="a", rank=0))]
     publications: list[list[str]] = []
 
     class FakeClient:
-        def list_instances(self) -> list[InstanceRegistration]:
+        def list_instances(self) -> list[InstanceRankRegistration]:
             return list(registrations)
 
         def upsert_atnagent_transport_arenas(
@@ -165,46 +185,82 @@ def test_catalog_publishes_instances_incrementally_and_republishes_each_epoch(
         return handle
 
     patch_native_atnagent_ops(monkeypatch, create=create)
-    catalog = transport_catalog(FakeClient())
+    runtime = create_transport_runtime(FakeClient())
 
-    assert not catalog.reconcile(1)
+    instance_ranks = {"a": 0, "b": 0}
+    assert not runtime.prepare(1, instance_ranks)
     assert publications == [["a"]]
 
-    registrations.append(InstanceRegistration.model_validate(instance_registration_view(instance_id="b", rank=0)))
-    assert catalog.reconcile(1)
+    registrations.append(InstanceRankRegistration.model_validate(instance_registration_view(instance_id="b", rank=0)))
+    assert runtime.prepare(1, instance_ranks)
     assert publications == [["a"], ["b"]]
 
-    assert catalog.reconcile(2)
+    assert runtime.prepare(2, instance_ranks)
     assert publications == [["a"], ["b"], ["a", "b"]]
 
 
-def test_catalog_rejects_registration_geometry_change(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An existing native arena cannot be silently rebound to new geometry."""
+def test_transport_runtime_preserves_creation_failure_when_rollback_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Partial-arena rollback diagnostics do not replace the creation cause."""
 
-    catalog_config("m")
-    original = InstanceRegistration.model_validate(instance_registration_view(instance_id="m", rank=0))
-    changed_view = instance_registration_view(instance_id="m", rank=0)
-    changed_view["transport"] = {**cast(dict[str, object], changed_view["transport"]), "hidden_size": 8}
-    changed = InstanceRegistration.model_validate(changed_view)
+    transport_config("a", "b")
+    registrations = [
+        InstanceRankRegistration.model_validate(instance_registration_view(instance_id=instance_id, rank=0))
+        for instance_id in ("a", "b")
+    ]
 
     class FakeClient:
-        def list_instances(self) -> list[InstanceRegistration]:
+        def list_instances(self) -> list[InstanceRankRegistration]:
+            return registrations
+
+    def create(instance_index: int, *args: object) -> TransportArenaHandle:
+        if instance_index == 1:
+            raise RuntimeError("creation failed")
+        return TransportArenaHandle(handle="01" * 64)
+
+    def destroy(handle: TransportArenaHandle) -> None:
+        raise RuntimeError("rollback failed")
+
+    patch_native_atnagent_ops(monkeypatch, create=create, destroy=destroy)
+    runtime = create_transport_runtime(FakeClient())
+
+    with pytest.raises(AgentError, match="release partial arenas") as error:
+        runtime.prepare(1, {"a": 0, "b": 0})
+
+    cause = error.value.__cause__
+    assert isinstance(cause, RuntimeError)
+    assert str(cause) == "creation failed"
+    assert cause.__notes__ == ["transport arena rollback also failed: RuntimeError: rollback failed"]
+
+
+def test_transport_runtime_rejects_registration_geometry_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An existing native arena cannot be silently rebound to new geometry."""
+
+    transport_config("m")
+    original = InstanceRankRegistration.model_validate(instance_registration_view(instance_id="m", rank=0))
+    changed_view = instance_registration_view(instance_id="m", rank=0)
+    changed_view["transport"] = {**cast(dict[str, object], changed_view["transport"]), "hidden_size": 8}
+    changed = InstanceRankRegistration.model_validate(changed_view)
+
+    class FakeClient:
+        def list_instances(self) -> list[InstanceRankRegistration]:
             return [changed]
 
-    catalog = transport_catalog(FakeClient())
-    catalog.entries["m"] = transport_entry(instance_id="m", rank=0, handle_rank=1)
-    catalog.entries["m"].registration = original
+    runtime = create_transport_runtime(FakeClient())
+    runtime.entries["m"] = transport_entry(instance_id="m", rank=0, handle_rank=1)
+    runtime.entries["m"].registration = original
 
     with pytest.raises(AgentError, match="hot resize is unsupported"):
-        catalog.reconcile(1)
+        runtime.prepare(1, {"m": 0})
 
 
-def test_catalog_close_uses_collection_destroy(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_transport_runtime_close_uses_collection_destroy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Terminal cleanup destroys one stable already-quiesced resource snapshot."""
 
-    catalog_config("a", "b")
-    catalog = transport_catalog(object())
-    catalog.entries = {
+    transport_config("a", "b")
+    runtime = create_transport_runtime(object())
+    runtime.entries = {
         "a": transport_entry(instance_id="a", rank=0, handle_rank=1),
         "b": transport_entry(instance_id="b", rank=0, handle_rank=2),
     }
@@ -214,7 +270,7 @@ def test_catalog_close_uses_collection_destroy(monkeypatch: pytest.MonkeyPatch) 
         destroy=lambda handle: events.append(("destroy", int(handle.handle[:2], 16))),
     )
 
-    catalog.close()
+    runtime.close()
 
-    assert catalog.resources == ()
+    assert runtime.resources == ()
     assert events == [("destroy", 1), ("destroy", 2)]

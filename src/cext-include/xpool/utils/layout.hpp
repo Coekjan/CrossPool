@@ -22,8 +22,6 @@ struct LayoutRegion {
   std::size_t bytes;
   /// Required byte alignment of the region start.
   std::size_t alignment;
-  /// Return whether two regions have identical geometry.
-  /// \return True when every region field matches exactly.
   bool operator==(const LayoutRegion &) const = default;
 };
 
@@ -37,26 +35,17 @@ struct LayoutRegionSpec {
   std::size_t alignment;
 
   /// Describe storage for a raw byte region.
-  /// \param name Human-readable region name.
-  /// \param byte_count Requested byte count.
-  /// \param alignment Required alignment of the region start.
-  /// \return Region specification for byte_count raw bytes.
   static LayoutRegionSpec bytes(std::string_view name, std::size_t byte_count,
                                 std::size_t alignment = 1) {
     return LayoutRegionSpec{name, byte_count, alignment};
   }
 
   /// Describe storage for one object.
-  /// \param name Human-readable region name.
-  /// \return Region specification for one object of type T.
   template <typename T> static LayoutRegionSpec object(std::string_view name) {
     return LayoutRegionSpec{name, sizeof(T), alignof(T)};
   }
 
   /// Describe storage for a contiguous object array.
-  /// \param name Human-readable region name.
-  /// \param count Number of array elements.
-  /// \return Region specification for count objects of type T.
   /// \throws c10::Error if size arithmetic overflows.
   template <typename T> static LayoutRegionSpec array(std::string_view name, std::size_t count) {
     const auto byte_count = xpool::utils::checked::prod(count, std::size_t{sizeof(T)});
@@ -65,7 +54,6 @@ struct LayoutRegionSpec {
 };
 
 /// Concrete layout plan derived from an ordered region specification.
-/// \tparam N Number of regions in the plan.
 template <std::size_t N> struct LayoutPlan {
   /// Concrete regions with aligned offsets and unaligned byte sizes.
   std::array<LayoutRegion, N> regions;
@@ -73,16 +61,12 @@ template <std::size_t N> struct LayoutPlan {
   std::size_t total_bytes;
 
   /// Build a concrete aligned layout plan from ordered region specifications.
-  /// \param specs Ordered region specifications.
-  /// \param allocation_alignment Positive alignment applied to total_bytes.
   /// \throws c10::Error if a name is empty, alignment is zero, or offset
   /// arithmetic overflows.
   explicit LayoutPlan(const std::array<LayoutRegionSpec, N> &specs,
                       std::size_t allocation_alignment);
 
   /// Return a concrete region by index.
-  /// \param index Region index in the original specification order.
-  /// \return Region at index.
   const LayoutRegion &operator[](std::size_t index) const { return regions[index]; }
 };
 

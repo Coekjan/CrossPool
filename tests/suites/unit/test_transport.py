@@ -1,5 +1,3 @@
-"""Behavior tests for host-side native transport contracts."""
-
 from __future__ import annotations
 
 import pytest

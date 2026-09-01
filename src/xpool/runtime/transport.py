@@ -5,12 +5,12 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class InstanceTransportAttributes(BaseModel):
-    """Transport capacity and topology declared by one instance rank.
+class InstanceRankTransportProfile(BaseModel):
+    """Transport capacity and topology declared by one Instance rank.
 
     Attributes:
         hidden_size: Hidden-state width produced by this instance rank.
-        max_tokens: Maximum token rows the rank may publish in one FFN request.
+        payload_row_capacity: Maximum physical rows the rank may publish.
         atn_tp_rank: Attention tensor-parallel rank for this instance rank.
         atn_tp_size: Attention tensor-parallel world size for this instance
             rank.
@@ -21,14 +21,14 @@ class InstanceTransportAttributes(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     hidden_size: int = Field(ge=1, description="Hidden-state width produced by this instance rank.")
-    max_tokens: int = Field(ge=1, description="Maximum token rows the transport arena must support.")
+    payload_row_capacity: int = Field(ge=1, description="Maximum physical rows the Transport Arena supports.")
     atn_tp_rank: int = Field(ge=0, description="Attention tensor-parallel rank for this instance rank.")
     atn_tp_size: int = Field(ge=1, description="Attention tensor-parallel world size for this instance rank.")
     atn_dp_rank: int = Field(ge=0, description="Attention data-parallel rank for this instance rank.")
     atn_dp_size: int = Field(ge=1, description="Attention data-parallel world size for this instance rank.")
 
     @model_validator(mode="after")
-    def validate_geometry(self) -> InstanceTransportAttributes:
+    def validate_geometry(self) -> InstanceRankTransportProfile:
         """Validate transport geometry independently of daemon placement."""
 
         if self.atn_tp_rank >= self.atn_tp_size:

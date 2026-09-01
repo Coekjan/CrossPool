@@ -1,5 +1,3 @@
-"""Behavior tests for xpool's pytest requirement plugin."""
-
 import pytest
 
 import tests.harness.runner.plan
@@ -85,7 +83,7 @@ def test_mps_marker_rejects_arguments(pytester: pytest.Pytester) -> None:
     result.stderr.fnmatch_lines(["*requires_mps accepts no arguments*"])
 
 
-def test_collection_requires_complete_token_parity_group(pytester: pytest.Pytester) -> None:
+def test_collection_requires_complete_serving_graph_group(pytester: pytest.Pytester) -> None:
     pytester.makeini("[pytest]\n")
     test_directory = pytester.path / "tests" / "suites" / "e2e"
     test_directory.mkdir(parents=True)
@@ -93,7 +91,7 @@ def test_collection_requires_complete_token_parity_group(pytester: pytest.Pytest
         """
 import pytest
 
-@pytest.mark.token_parity_group(name="example", expected_case_count=2)
+@pytest.mark.serving_graph_group(name="example", expected_case_count=2)
 @pytest.mark.parametrize("mode", ["eager", "full"])
 def test_e2e_example(mode):
     pass
@@ -119,13 +117,13 @@ def test_e2e_example(mode):
     assert "artifact groups must contain every expected case" in result.stderr.str()
 
 
-def test_collection_rejects_xfail_token_parity_case(pytester: pytest.Pytester) -> None:
+def test_collection_rejects_xfail_serving_graph_case(pytester: pytest.Pytester) -> None:
     pytester.makepyfile(
         """
         import pytest
 
         @pytest.mark.xfail(reason="not supported")
-        @pytest.mark.token_parity_group(name="example", expected_case_count=2)
+        @pytest.mark.serving_graph_group(name="example", expected_case_count=2)
         def test_e2e_example():
             pass
         """
@@ -133,7 +131,7 @@ def test_collection_rejects_xfail_token_parity_case(pytester: pytest.Pytester) -
 
     result = pytester.runpytest("-p", "tests.harness.runner.pytest_plugin", "--collect-only", "-q")
 
-    result.stderr.fnmatch_lines(["*token parity cases cannot use xfail*"])
+    result.stderr.fnmatch_lines(["*serving graph cases cannot use xfail*"])
 
 
 def test_collection_worker_writes_final_typed_item_metadata(pytester: pytest.Pytester) -> None:

@@ -1,6 +1,3 @@
-/// \file tests/suites/cext/utils/device_test.cu
-/// \brief GoogleTest coverage for host-side CUDA device utilities.
-
 #include <cuda_runtime_api.h>
 #include <gtest/gtest.h>
 

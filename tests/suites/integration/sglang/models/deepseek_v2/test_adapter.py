@@ -13,22 +13,22 @@ from tests.harness.support.config import reset_global_config
 from tests.harness.support.sglang.deepseek import deepseek_config, install_adapter_config
 from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 from xpool.integrations.sglang.adapter import (
-    XpoolModelBinding,
-    XpoolModelRuntime,
+    SglangInstanceRankBinding,
+    SglangInstanceRankRuntime,
     filter_decoder_ffn_weights,
 )
 from xpool.integrations.sglang.models.deepseek_v2 import (
-    DeepseekV2Adapter,
+    DeepseekV2ShimAdapter,
     XpoolDeepseekV2MLP,
     XpoolDeepseekV2MoE,
 )
-from xpool.integrations.sglang.topology import AtnKind, SglangModelMetadata
+from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_adapter_config.__name__)
 
 
 def test_deepseek_adapter_declares_its_sglang_hooks() -> None:
-    hooks = {(spec.target, spec.kind): spec.handler for spec in DeepseekV2Adapter().hooks()}
+    hooks = {(spec.target, spec.kind): spec.handler for spec in DeepseekV2ShimAdapter().hooks()}
 
     assert hooks[("sglang.srt.models.deepseek_v2.DeepseekV2MLP", HookType.REPLACE)] is XpoolDeepseekV2MLP
     assert hooks[("sglang.srt.models.deepseek_v2.DeepseekV2MoE", HookType.REPLACE)] is XpoolDeepseekV2MoE
@@ -36,7 +36,7 @@ def test_deepseek_adapter_declares_its_sglang_hooks() -> None:
 
 
 def test_deepseek_adapter_matches_only_deepseek_v2_architecture() -> None:
-    adapter = DeepseekV2Adapter()
+    adapter = DeepseekV2ShimAdapter()
 
     assert adapter.matches(runner_with_architecture("DeepseekV2ForCausalLM").as_model_runner())
     assert not adapter.matches(runner_with_architecture("DeepseekV3ForCausalLM").as_model_runner())
@@ -67,7 +67,7 @@ def test_deepseek_loaded_model_validation_requires_integer_layer_count() -> None
     runner.model = loaded_model(DeepseekV2ForCausalLM, config, [])
 
     with pytest.raises(RuntimeError, match="integer num_hidden_layers"):
-        DeepseekV2Adapter().validate_after_load(runner.as_model_runner())
+        DeepseekV2ShimAdapter().validate_after_load(runner.as_model_runner())
 
 
 def test_deepseek_loaded_model_rejects_non_full_mlp_boundary() -> None:
@@ -100,7 +100,7 @@ def test_deepseek_loaded_model_rejects_non_full_mlp_boundary() -> None:
     runner.model = model
 
     with pytest.raises(RuntimeError, match=r"requires ScatterMode\.FULL"):
-        DeepseekV2Adapter().validate_after_load(runner.as_model_runner())
+        DeepseekV2ShimAdapter().validate_after_load(runner.as_model_runner())
 
 
 def test_deepseek_model_binding_resolves_instance_from_config(
@@ -148,11 +148,13 @@ path = "{model_path}"
         SglangModelMetadata,
         "load",
         lambda config_path, *, model_id: SglangModelMetadata(
+            model_id=model_id,
             family=model_id,
             hidden_size=2048,
             num_atn_heads=16,
             num_key_value_heads=2,
-            atn_kind=AtnKind.GQA,
+            atn_kind=SglangAttentionKind.GQA,
+            raw_config_path=config_path,
         ),
     )
     monkeypatch.setattr(xpool.config, "global_config", None)
@@ -160,12 +162,12 @@ path = "{model_path}"
     runner = runner_with_architecture("DeepseekV2ForCausalLM")
     runner.model_config.model_path = str(model_path)
 
-    binding = XpoolModelBinding.resolve(
+    binding = SglangInstanceRankBinding.resolve(
         runner.as_model_runner(),
         runner.server_args,
         supports_dp_attention=True,
     )
-    XpoolModelRuntime.attach(runner.as_model_runner(), binding)
+    SglangInstanceRankRuntime.attach(runner.as_model_runner(), binding)
 
     assert binding.instance_id == "test/deepseek-v2"
     assert runner.xpool_runtime is not None

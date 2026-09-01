@@ -7,16 +7,31 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from tests.harness.sglang.graph import SglangGraphMode
-from tests.harness.sglang.manifest import E2E_MANIFEST_PATH, E2eManifest, E2eModelPlacement, E2eServingCase
+from tests.harness.sglang.manifest import (
+    E2E_MANIFEST_PATH,
+    E2eFfnInputMatrix,
+    E2eManifest,
+    E2eModelPlacement,
+    E2eServingCase,
+)
+from tests.harness.sglang.serving.graph import SglangGraphMode
 
 
 def test_manifest_loads_complete_serving_catalog() -> None:
     manifest = E2eManifest.load(E2E_MANIFEST_PATH)
 
     assert manifest.models
-    assert manifest.model_serving_cases
-    assert manifest.loopback_serving_cases
+    assert len(manifest.model_serving_cases) == 7
+    assert sum(len(case.graph_modes) for case in manifest.model_serving_cases) == 18
+    assert len(manifest.ffn_numerical_cases) == len(manifest.models) == 4
+    assert tuple(case.id for case in manifest.ffn_topology_cases) == (
+        "single-rank-delivery",
+        "group-sum-direct-partial",
+        "odd-tp-single-complete",
+        "subgroup-replicated-complete",
+        "cross-model-placement",
+    )
+    assert all(case.ffn_tp_size == 2 for case in manifest.ffn_numerical_cases)
     assert all(
         case.required_gpu_count == case.atnagent_count + case.ffnagent_count for case in manifest.model_serving_cases
     )
@@ -35,24 +50,13 @@ unknown = true
 id = "synthetic"
 models = [{ model = "synthetic", atn_tp_size = 1, atn_dp_size = 1 }]
 ffnagent_count = 1
-executor_count = 1
+executor_lane_count = 1
 graph_modes = ["eager"]
 estimated_duration_seconds = 1
 timeout_seconds = 1
-transport_trace_capacity = 1
-fabric_trace_capacity = 1
+transport_record_capacity = 1
+fabric_record_capacity = 1
 
-[[loopback_serving_cases]]
-id = "synthetic-sites"
-models = [{ model = "synthetic", atn_tp_size = 1, atn_dp_size = 1 }]
-ffnagent_count = 1
-executor_count = 1
-sites = ["instance"]
-graph_modes = ["eager"]
-estimated_duration_seconds = 1
-timeout_seconds = 1
-transport_trace_capacity = 1
-fabric_trace_capacity = 1
 """,
         encoding="utf-8",
     )
@@ -66,21 +70,26 @@ def test_serving_case_allows_fewer_executors_than_ffnagents() -> None:
         id="shared-executor",
         models=(E2eModelPlacement(model="synthetic", atn_tp_size=1, atn_dp_size=1),),
         ffnagent_count=2,
-        executor_count=1,
+        executor_lane_count=1,
         graph_modes=(SglangGraphMode.EAGER,),
         estimated_duration_seconds=1,
         timeout_seconds=1,
-        transport_trace_capacity=1,
-        fabric_trace_capacity=1,
+        transport_record_capacity=1,
+        fabric_record_capacity=1,
     )
 
     assert case.ffnagent_count == 2
-    assert case.executor_count == 1
+    assert case.executor_lane_count == 1
 
 
 def test_model_placement_rejects_combined_attention_tp_by_dp() -> None:
     with pytest.raises(ValidationError, match="combined attention TP-by-DP"):
         E2eModelPlacement(model="synthetic", atn_tp_size=2, atn_dp_size=2)
+
+
+def test_ffn_input_matrix_rejects_unordered_rows() -> None:
+    with pytest.raises(ValidationError, match="strictly increasing"):
+        E2eFfnInputMatrix(seed=17, row_counts=(32, 1))
 
 
 def test_serving_case_rejects_heterogeneous_attention_topology() -> None:
@@ -110,10 +119,10 @@ def serving_case(
         id="synthetic-case",
         models=models,
         ffnagent_count=1,
-        executor_count=1,
+        executor_lane_count=1,
         graph_modes=graph_modes,
         estimated_duration_seconds=1,
         timeout_seconds=1,
-        transport_trace_capacity=1,
-        fabric_trace_capacity=1,
+        transport_record_capacity=1,
+        fabric_record_capacity=1,
     )

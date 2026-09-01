@@ -3,7 +3,9 @@ host = "127.0.0.1"
 port = 9810
 
 [scheduler]
+# Reserved for future attention-side KV-pool admission.
 atn_concurrency = 1
+# Executor Lane count materialized for each Fabric generation.
 ffn_concurrency = 1
 ffn_policy = "fifo"
 

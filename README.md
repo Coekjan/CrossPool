@@ -53,7 +53,7 @@ xpool has four process roles:
 3. **AtnAgent** owns CUDA IPC Transport arenas for one configured GPU and bridges
    rank-local requests into the generation Fabric.
 4. **FfnAgent** is an NVSHMEM participant for one configured GPU. FfnAgents own
-   the resident Fabric path and its distributed executor slots; the first
+   the resident Fabric path and its distributed Executor Lanes; the first
    FfnAgent participant also hosts the Coordinator.
 
 A model-layer request moves through the system as follows:
@@ -64,8 +64,8 @@ A model-layer request moves through the system as follows:
    `xpool.ops.ffn_shim`.
 3. The AtnAgent consumes that mailbox operation and publishes a matching Fabric
    Submission.
-4. The Coordinator forms an Invocation after all configured AtnAgents agree on
-   its identity and geometry, then admits it to a distributed Executor.
+4. The Fabric Coordinator forms an Invocation after all configured AtnAgents
+   agree on its identity and geometry, then admits it to an Executor Lane.
 5. Completion and result state return through the Fabric and Transport
    protocols to the originating SGLang rank.
 
@@ -85,8 +85,8 @@ controller is responsive.
 - An externally managed CUDA MPS controller for runtime and GPU validation
 - Local model weights for model-dependent validation
 
-The native extension is built through uv and scikit-build-core. CUDA, Torch,
-SGLang, FlashInfer, and the NVIDIA NVSHMEM runtime are project dependencies.
+The native extension is built through uv and scikit-build-core. CUDA bindings,
+Torch, SGLang, and the NVIDIA NVSHMEM runtime are direct project dependencies.
 
 ## Quick Start
 
@@ -203,7 +203,9 @@ GPU lease, endpoint, and artifact ownership.
 
 ## Repository Guide
 
-- [`PLAN.md`](PLAN.md) is the canonical architecture and implementation plan.
+- [`docs/designs/README.md`](docs/designs/README.md) maps the current implemented
+  architecture.
+- [`CONTEXT.md`](CONTEXT.md) defines the xpool domain language.
 - [`src/xpool/`](src/xpool/) contains configuration, runtime roles, the daemon,
   SGLang integration, and Python/native boundaries.
 - [`src/cext-include/xpool/`](src/cext-include/xpool/) and

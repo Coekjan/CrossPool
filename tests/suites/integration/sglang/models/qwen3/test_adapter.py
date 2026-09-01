@@ -9,7 +9,7 @@ from sglang.srt.plugins.hook_registry import HookType
 from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 from xpool.integrations.sglang.adapter import filter_decoder_ffn_weights
 from xpool.integrations.sglang.models.qwen3 import (
-    Qwen3Adapter,
+    Qwen3ShimAdapter,
     XpoolQwen3MLP,
 )
 
@@ -37,14 +37,14 @@ def loaded_qwen_model(*, mlp_mode: ScatterMode = ScatterMode.FULL) -> Qwen3ForCa
 
 
 def test_qwen3_adapter_declares_dense_sglang_hooks() -> None:
-    hooks = {(hook.target, hook.kind): hook.handler for hook in Qwen3Adapter().hooks()}
+    hooks = {(hook.target, hook.kind): hook.handler for hook in Qwen3ShimAdapter().hooks()}
 
     assert hooks[("sglang.srt.models.qwen3.Qwen3MLP", HookType.REPLACE)] is XpoolQwen3MLP
     assert ("sglang.srt.models.qwen3.Qwen3ForCausalLM.load_weights", HookType.AROUND) in hooks
 
 
 def test_qwen3_adapter_matches_only_dense_qwen3_architecture() -> None:
-    adapter = Qwen3Adapter()
+    adapter = Qwen3ShimAdapter()
 
     assert adapter.matches(runner_with_architecture("Qwen3ForCausalLM").as_model_runner())
     assert not adapter.matches(runner_with_architecture("Qwen3MoeForCausalLM").as_model_runner())
@@ -69,7 +69,7 @@ def test_qwen3_loaded_model_requires_full_non_reduce_scatter_boundary() -> None:
     runner = runner_with_architecture("Qwen3ForCausalLM")
     runner.model = loaded_qwen_model()
 
-    Qwen3Adapter().validate_after_load(runner.as_model_runner())
+    Qwen3ShimAdapter().validate_after_load(runner.as_model_runner())
 
     assert runner.xpool_ffn_shim_count == 2
 
@@ -79,4 +79,4 @@ def test_qwen3_loaded_model_rejects_non_full_mlp_boundary() -> None:
     runner.model = loaded_qwen_model(mlp_mode=ScatterMode.TP_ATTN_FULL)
 
     with pytest.raises(RuntimeError, match=r"requires ScatterMode\.FULL"):
-        Qwen3Adapter().validate_after_load(runner.as_model_runner())
+        Qwen3ShimAdapter().validate_after_load(runner.as_model_runner())

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Write Plan"
+  short_description: "Write decision-complete xpool change plans"
+  default_prompt: "Use $write-plan to write a decision-complete xpool change plan."

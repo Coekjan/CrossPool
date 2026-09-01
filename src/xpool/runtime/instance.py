@@ -1,4 +1,4 @@
-"""Instance runtime registration and transport arena handoff."""
+"""Instance-rank runtime registration and Transport arena handoff."""
 
 from __future__ import annotations
 
@@ -7,15 +7,16 @@ import os
 import time
 
 import xpool.native
-from xpool.abi import ABI_VERSION, FfnResultCode
 from xpool.config import get_global_config
-from xpool.fabric import FabricGenerationPhase, FabricPlan, FfnWorkload
-from xpool.runtime.transport import InstanceTransportAttributes
+from xpool.fabric import FabricGenerationPhase, FabricPlan, InstanceFfnProfile
+from xpool.native import ABI_VERSION
+from xpool.native.ffn import ResultCode
+from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.client import XpoolClient, XpoolClientError, XpoolDaemonError
 from xpool.service.wire import (
     HeartbeatResponse,
-    InstanceInitializedPublication,
-    InstanceRegistration,
+    InstanceRankInitializedPublication,
+    InstanceRankRegistration,
     ProcessRef,
 )
 from xpool.transport import TransportArenaHandle
@@ -23,10 +24,10 @@ from xpool.utils.background import BackgroundThread
 from xpool.utils.procs import bail
 
 __all__ = [
-    "Instance",
-    "InstanceError",
-    "InstanceFailureMonitor",
-    "InstanceHeartbeat",
+    "InstanceRankError",
+    "InstanceRankFailureMonitor",
+    "InstanceRankHeartbeat",
+    "InstanceRankRuntime",
 ]
 
 INSTANCE_HEARTBEAT_INTERVAL_S = 5.0
@@ -40,11 +41,11 @@ INSTANCE_FAILURE_MONITOR_STOP_JOIN_TIMEOUT_S = 5.0
 logger = logging.getLogger(__name__)
 
 
-class InstanceError(RuntimeError):
+class InstanceRankError(RuntimeError):
     """Raised when daemon-brokered FFN shim transport arenas cannot be attached."""
 
 
-class InstanceFailureMonitor:
+class InstanceRankFailureMonitor:
     """Fail-close an instance when its transport arena records a failure.
 
     Args:
@@ -82,8 +83,8 @@ class InstanceFailureMonitor:
     def step(self) -> bool:
         """Poll once and terminate the process when the arena has failed."""
 
-        failure = FfnResultCode(xpool.native.transport.read_generation_failure())
-        if failure != FfnResultCode.OK:
+        failure = xpool.native.transport.read_generation_failure()
+        if failure != ResultCode.OK:
             bail(
                 logger,
                 "xpool transport executor failed for instance %s rank %s: %s",
@@ -94,7 +95,7 @@ class InstanceFailureMonitor:
         return True
 
 
-class InstanceHeartbeat:
+class InstanceRankHeartbeat:
     """Background heartbeat owner for one registered instance rank.
 
     Args:
@@ -122,7 +123,7 @@ class InstanceHeartbeat:
         instance_id: str,
         rank: int,
         local_cuda_device: int,
-        registration: InstanceRegistration,
+        registration: InstanceRankRegistration,
         heartbeat: ProcessRef,
     ) -> None:
         """Create a stopped heartbeat worker owner."""
@@ -282,7 +283,7 @@ class InstanceHeartbeat:
         logger.warning("xpool instance heartbeat failed: %s", exc)
 
 
-class Instance:
+class InstanceRankRuntime:
     """Runtime lifecycle and resources for one SGLang instance rank."""
 
     client: XpoolClient
@@ -291,10 +292,10 @@ class Instance:
     rank: int
     local_cuda_device: int
     process_ref: ProcessRef
-    registration: InstanceRegistration | None
+    registration: InstanceRankRegistration | None
     heartbeat: ProcessRef
-    heartbeat_worker: InstanceHeartbeat | None
-    failure_monitor: InstanceFailureMonitor | None
+    heartbeat_worker: InstanceRankHeartbeat | None
+    failure_monitor: InstanceRankFailureMonitor | None
     arena_handle: TransportArenaHandle | None
 
     def __init__(
@@ -310,15 +311,15 @@ class Instance:
             rank: Rank-local SGLang process index within the instance.
 
         Raises:
-            InstanceError: If the identity or rank is absent from global config.
+            InstanceRankError: If the identity or rank is absent from global config.
         """
 
         config = get_global_config()
         config_instance = config.instance_by_id.get(instance_id)
         if config_instance is None:
-            raise InstanceError(f"unknown instance id for daemon registration: {instance_id}")
+            raise InstanceRankError(f"unknown instance id for daemon registration: {instance_id}")
         if rank < 0 or rank >= config.atn_world_size:
-            raise InstanceError(f"instance rank {rank} is outside configured ATN devices")
+            raise InstanceRankError(f"instance rank {rank} is outside configured ATN devices")
         pid = os.getpid()
         self.client = XpoolClient()
         self.instance_id = instance_id
@@ -339,23 +340,23 @@ class Instance:
         *,
         instance_id: str,
         rank: int,
-        transport: InstanceTransportAttributes,
-        workload: FfnWorkload,
-    ) -> Instance:
+        transport: InstanceRankTransportProfile,
+        ffn_profile: InstanceFfnProfile,
+    ) -> InstanceRankRuntime:
         """Construct and transactionally start one runner-owned runtime.
 
         Args:
             instance_id: Configured model/instance id owned by this rank.
             rank: Rank-local SGLang process index within the instance.
             transport: Transport geometry declared by this rank.
-            workload: Rank-independent FFN execution contract.
+            ffn_profile: Rank-independent FFN execution contract.
 
         Returns:
             Registered runtime with a running heartbeat worker. Transport
             attachment remains an explicit post-``EXECUTABLE`` operation.
 
         Raises:
-            InstanceError: If identity, registration, or attachment fails.
+            InstanceRankError: If identity, registration, or attachment fails.
 
         Side Effects:
             Registers with the daemon and starts the heartbeat worker.
@@ -363,21 +364,21 @@ class Instance:
 
         runtime = cls(instance_id=instance_id, rank=rank)
         try:
-            runtime.start_runtime(transport, workload)
+            runtime.start_runtime(transport, ffn_profile)
         except Exception:
             runtime.close()
             raise
         return runtime
 
-    def start_runtime(self, transport: InstanceTransportAttributes, workload: FfnWorkload) -> None:
+    def start_runtime(self, transport: InstanceRankTransportProfile, ffn_profile: InstanceFfnProfile) -> None:
         """Register this instance rank and start its heartbeat transactionally."""
 
         if self.registration is not None:
             self.expect_transport(transport)
-            if self.registration.workload != workload:
-                raise InstanceError("instance runtime is already registered with a different workload")
+            if self.registration.ffn_profile != ffn_profile:
+                raise InstanceRankError("instance runtime is already registered with a different ffn_profile")
             return
-        self.register_runtime(transport, workload)
+        self.register_runtime(transport, ffn_profile)
         try:
             self.start_heartbeat_worker()
         except Exception:
@@ -387,21 +388,21 @@ class Instance:
                 logger.warning("failed to clean up xpool instance registration: %s", cleanup_exc)
             raise
 
-    def register_runtime(self, transport: InstanceTransportAttributes, workload: FfnWorkload) -> None:
+    def register_runtime(self, transport: InstanceRankTransportProfile, ffn_profile: InstanceFfnProfile) -> None:
         """Register this instance rank with the daemon."""
 
         if self.registration is not None:
             self.expect_transport(transport)
-            if self.registration.workload != workload:
-                raise InstanceError("instance runtime is already registered with a different workload")
+            if self.registration.ffn_profile != ffn_profile:
+                raise InstanceRankError("instance runtime is already registered with a different ffn_profile")
             return
-        registration = InstanceRegistration(
+        registration = InstanceRankRegistration(
             instance_id=self.instance_id,
             rank=self.rank,
             abi_version=ABI_VERSION,
             pid=self.process_ref.pid,
             transport=transport,
-            workload=workload,
+            ffn_profile=ffn_profile,
         )
         self.client.register_instance(registration)
         self.registration = registration
@@ -413,7 +414,7 @@ class Instance:
             Immutable active fabric plan observed at the executable barrier.
 
         Raises:
-            InstanceError: If the barrier times out or the generation fails or drains.
+            InstanceRankError: If the barrier times out or the generation fails or drains.
         """
 
         deadline = time.monotonic() + INSTANCE_STARTUP_BARRIER_TIMEOUT_S
@@ -423,10 +424,16 @@ class Instance:
                 case FabricGenerationPhase.EXECUTABLE:
                     plan = self.client.fabric_plan()
                     if readiness.generation is None or plan.generation != readiness.generation:
-                        raise InstanceError("daemon returned inconsistent executable Fabric generation facts")
+                        raise InstanceRankError("daemon returned inconsistent executable Fabric generation facts")
                     self.fabric_plan = plan
                     return plan
-                case None | FabricGenerationPhase.JOINING:
+                case (
+                    None
+                    | FabricGenerationPhase.PREPARING_JOIN
+                    | FabricGenerationPhase.JOINING
+                    | FabricGenerationPhase.PREPARING_EXECUTION
+                    | FabricGenerationPhase.ACTIVATING
+                ):
                     time.sleep(INSTANCE_TRANSPORT_ACQUIRE_INTERVAL_S)
                 case phase:
                     failures = tuple(
@@ -434,31 +441,30 @@ class Instance:
                         for failure in (
                             readiness.fabric_invocation_failure,
                             readiness.fabric_owner_failure,
-                            readiness.fabric_protocol_failure,
+                            readiness.fabric_control_failure,
                         )
                         if failure is not None
                     )
                     detail = f": {failures}" if failures else ""
-                    raise InstanceError(f"fabric entered {phase.value} during startup{detail}")
-        raise InstanceError("timed out waiting for executable fabric generation")
+                    raise InstanceRankError(f"fabric entered {phase.value} during startup{detail}")
+        raise InstanceRankError("timed out waiting for executable fabric generation")
 
     def publish_initialized(self) -> None:
         """Publish the post-ModelRunner.initialize startup barrier.
 
         Raises:
-            InstanceError: If this runtime did not observe an executable plan.
+            InstanceRankError: If this runtime did not observe an executable plan.
         """
 
         plan = self.fabric_plan
         if plan is None:
-            raise InstanceError("instance cannot publish initialized before the executable fabric barrier")
+            raise InstanceRankError("instance cannot publish initialized before the executable fabric barrier")
         self.client.publish_instance_initialized(
             self.instance_id,
             rank=self.rank,
-            publication=InstanceInitializedPublication(
+            publication=InstanceRankInitializedPublication(
                 owner=self.process_ref,
                 generation=plan.generation,
-                plan_digest=plan.digest(),
             ),
         )
 
@@ -466,7 +472,7 @@ class Instance:
         """Wait for every configured SGLang rank to finish initialization.
 
         Raises:
-            InstanceError: If the barrier times out or the generation fails or drains.
+            InstanceRankError: If the barrier times out or the generation fails or drains.
         """
 
         deadline = time.monotonic() + INSTANCE_STARTUP_BARRIER_TIMEOUT_S
@@ -483,21 +489,22 @@ class Instance:
                         for failure in (
                             readiness.fabric_invocation_failure,
                             readiness.fabric_owner_failure,
-                            readiness.fabric_protocol_failure,
+                            readiness.fabric_control_failure,
                         )
                         if failure is not None
                     )
                     detail = f": {failures}" if failures else ""
-                    raise InstanceError(f"fabric entered {phase.value} during initialization{detail}")
-        raise InstanceError("timed out waiting for every instance rank to initialize")
+                    raise InstanceRankError(f"fabric entered {phase.value} during initialization{detail}")
+        raise InstanceRankError("timed out waiting for every instance rank to initialize")
 
     def deregister_runtime(self) -> None:
         """Detach transport and remove this rank's registration.
 
         Native detach runs before daemon deregistration. The deregistration is
-        the authoritative Instance-departure event that makes the daemon select
-        generation-wide cooperative quiesce. If native cleanup fails, daemon
-        deregistration is intentionally skipped so agents do not treat a
+        the authoritative explicit Instance-rank departure event that
+        makes the daemon select generation-wide cooperative quiesce. Owner loss
+        is detected separately by the daemon watchdog. If native cleanup fails,
+        daemon deregistration is intentionally skipped so agents do not treat a
         still-attached CUDA IPC arena as detached.
         """
 
@@ -519,7 +526,7 @@ class Instance:
 
         if self.arena_handle is not None:
             if self.arena_handle != handle:
-                raise InstanceError("instance transport arena is already attached with a different handle")
+                raise InstanceRankError("instance transport arena is already attached with a different handle")
             return
         xpool.native.transport.attach_arena(self.instance_index, self.rank, handle.handle)
         self.arena_handle = handle
@@ -561,9 +568,9 @@ class Instance:
         """Start or replace this process's background heartbeat worker."""
 
         if self.registration is None:
-            raise InstanceError("instance must be registered before starting heartbeat")
+            raise InstanceRankError("instance must be registered before starting heartbeat")
         if self.heartbeat_worker is None:
-            self.heartbeat_worker = InstanceHeartbeat(
+            self.heartbeat_worker = InstanceRankHeartbeat(
                 instance_id=self.instance_id,
                 rank=self.rank,
                 local_cuda_device=self.local_cuda_device,
@@ -585,9 +592,9 @@ class Instance:
         """Start the sticky failure monitor for the attached arena."""
 
         if self.arena_handle is None:
-            raise InstanceError("instance failure monitor requires an attached arena")
+            raise InstanceRankError("instance failure monitor requires an attached arena")
         if self.failure_monitor is None:
-            self.failure_monitor = InstanceFailureMonitor(
+            self.failure_monitor = InstanceRankFailureMonitor(
                 instance_id=self.instance_id,
                 instance_index=self.instance_index,
                 rank=self.rank,
@@ -615,7 +622,7 @@ class Instance:
             if self.registration is None and self.arena_handle is None:
                 self.client.close()
 
-    def expect_transport(self, transport: InstanceTransportAttributes) -> None:
+    def expect_transport(self, transport: InstanceRankTransportProfile) -> None:
         """Raise when a started runtime receives different transport attributes."""
 
         if self.registration is None:
@@ -623,4 +630,4 @@ class Instance:
         installed = self.registration.transport.model_dump(mode="json")
         requested = transport.model_dump(mode="json")
         if installed != requested:
-            raise InstanceError("xpool instance runtime already started with different transport attributes")
+            raise InstanceRankError("xpool instance runtime already started with different transport attributes")

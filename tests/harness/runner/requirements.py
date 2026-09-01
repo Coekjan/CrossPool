@@ -12,7 +12,7 @@ import torch
 from pydantic import ValidationError
 
 from xpool.config import XpoolConfig
-from xpool.service.daemon.mps import probe_mps_controller
+from xpool.mps import probe_mps_controller
 
 R = TypeVar("R")
 

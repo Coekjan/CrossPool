@@ -3,27 +3,20 @@
 from __future__ import annotations
 
 import argparse
-import importlib
-import inspect
-import logging
-import pkgutil
-from collections.abc import Iterable, Sequence
-from types import ModuleType
-from typing import cast
+from collections.abc import Sequence
 
 from xpool.cli.command import CliCommand, CliCommandGroup, RunnableCliCommand
 from xpool.config import XpoolConfig
+from xpool.utils.discovery import discover_concrete_subclasses
 
 CLI_PACKAGE = "xpool.cli.subcommands"
-logger = logging.getLogger(__name__)
 
 
-def discover_cli_commands(package_name: str = CLI_PACKAGE, *, strict: bool = True) -> tuple[CliCommand, ...]:
+def discover_cli_commands(package_name: str = CLI_PACKAGE) -> tuple[CliCommand, ...]:
     """Discover and instantiate concrete xpool CLI commands from a subcommands package.
 
     Args:
         package_name: Importable subcommands package containing command modules.
-        strict: Whether child module import failures should abort discovery.
 
     Returns:
         Stable, name-validated command instances.
@@ -35,13 +28,12 @@ def discover_cli_commands(package_name: str = CLI_PACKAGE, *, strict: bool = Tru
     """
 
     commands: list[CliCommand] = []
-    for module in iter_cli_modules(package_name, strict=strict):
-        for command_class in command_classes_in_module(module):
-            try:
-                commands.append(command_class())
-            except TypeError as exc:
-                command_name = f"{command_class.__module__}.{command_class.__name__}"
-                raise RuntimeError(f"xpool CLI command {command_name} must be zero-argument") from exc
+    for command_class in discover_concrete_subclasses(package_name, CliCommand):
+        try:
+            commands.append(command_class())
+        except TypeError as error:
+            command_name = f"{command_class.__module__}.{command_class.__name__}"
+            raise RuntimeError(f"xpool CLI command {command_name} must be zero-argument") from error
     return sort_and_validate_commands(commands)
 
 
@@ -81,78 +73,6 @@ def register_cli_commands(subparsers: argparse._SubParsersAction, commands: Sequ
                 raise RuntimeError(f"unsupported xpool CLI command type: {type(command).__name__}")
 
     register_children(None)
-
-
-def iter_cli_modules(package_name: str, *, strict: bool = True) -> tuple[ModuleType, ...]:
-    """Import non-private CLI command modules from a subcommands package tree.
-
-    Args:
-        package_name: Importable subcommands package whose children should be scanned.
-        strict: Whether child import failures should abort discovery.
-
-    Returns:
-        Imported module objects for command modules.
-
-    Raises:
-        ImportError: If the package itself cannot be imported.
-        RuntimeError: If a child module cannot be imported in strict mode.
-    """
-
-    package = importlib.import_module(package_name)
-    package_path = cast(Iterable[str], getattr(package, "__path__"))
-    modules: list[ModuleType] = []
-    for module_info in sorted(
-        pkgutil.walk_packages(
-            package_path,
-            package.__name__ + ".",
-            onerror=lambda failed_package_name: logger.warning(
-                "Skipping xpool CLI package %s after import failure",
-                failed_package_name,
-            ),
-        ),
-        key=lambda item: item.name,
-    ):
-        module_parts = module_info.name.removeprefix(package.__name__ + ".").split(".")
-        if any(part.startswith("_") for part in module_parts):
-            continue
-        try:
-            modules.append(importlib.import_module(module_info.name))
-        except Exception as exc:
-            if strict:
-                raise RuntimeError(f"failed to import xpool CLI module {module_info.name}: {exc}") from exc
-            logger.warning(
-                "Skipping xpool CLI module %s after import failure: %s",
-                module_info.name,
-                exc,
-                exc_info=True,
-            )
-    return tuple(modules)
-
-
-def command_classes_in_module(module: ModuleType) -> tuple[type[CliCommand], ...]:
-    """Return concrete command classes defined by one module.
-
-    Args:
-        module: Imported module to inspect.
-
-    Returns:
-        Concrete ``CliCommand`` subclasses whose ``__module__`` is the inspected
-        module.
-    """
-
-    classes: list[type[CliCommand]] = []
-    for member in inspect.getmembers(module, inspect.isclass):
-        value = member[1]
-        if value in (CliCommand, CliCommandGroup, RunnableCliCommand):
-            continue
-        if value.__module__ != module.__name__:
-            continue
-        if not issubclass(value, CliCommand):
-            continue
-        if inspect.isabstract(value):
-            continue
-        classes.append(cast(type[CliCommand], value))
-    return tuple(classes)
 
 
 def sort_and_validate_commands(commands: Sequence[CliCommand]) -> tuple[CliCommand, ...]:

@@ -3,441 +3,324 @@
 /// \file xpool/fabric/protocol.hpp
 /// \brief Typed NVSHMEM records for one distributed FFN invocation.
 
+#include <cuda/std/span>
+
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <type_traits>
 
-#include <xpool/abi.hpp>
-#include <xpool/abort.hpp>
 #include <xpool/fabric/layout.hpp>
+#include <xpool/ffn.hpp>
 #include <xpool/macros.hpp>
-#include <xpool/utils/enum.hpp>
 
-#ifdef __CUDACC__
+#if defined(__CUDACC__)
 #include <cooperative_groups.h>
 #endif
 
 namespace xpool::fabric {
 
-/// Data-plane identity of one model-level FFN invocation.
-struct FfnInvocationKey {
-  /// Config-order model identity.
-  std::size_t model_index;
-  /// Positive monotonic sequence jointly presented by all AtnAgents.
+/// Delivery branch selected for one distributed FFN invocation.
+enum class DeliveryVariant : std::uint32_t {
+  /// Each FfnAgent writes its local TP partial directly to one AtnAgent.
+  DirectPartial = 1,
+  /// One FfnAgent reduces TP partials and writes one complete output.
+  SingleComplete = 2,
+  /// Every FfnAgent receives the complete reduced output for rank-local delivery.
+  ReplicatedComplete = 3,
+};
+
+/// Return whether a raw delivery variant names a supported protocol branch.
+XPOOL_HOST_DEVICE_FN constexpr bool is_valid(DeliveryVariant value) {
+  return value == DeliveryVariant::DirectPartial || value == DeliveryVariant::SingleComplete ||
+         value == DeliveryVariant::ReplicatedComplete;
+}
+
+/// Identity shared by every record belonging to one FFN invocation.
+struct InvocationKey {
+  /// Config-order Instance identity in the generation Projection.
+  std::size_t instance_index;
+  /// Positive sequence assigned monotonically by the Instance rank.
   std::uint64_t invocation_sequence;
 
   /// Return whether this key can identify a published invocation.
-  /// \return True when the invocation sequence is positive.
   XPOOL_HOST_DEVICE_FN constexpr bool valid() const { return invocation_sequence != 0; }
-
-  /// Compare two invocation identities.
-  /// \return True when model index and sequence are equal.
-  constexpr bool operator==(const FfnInvocationKey &) const = default;
+  constexpr bool operator==(const InvocationKey &) const = default;
 };
 
-/// Coordinator-derived execution mode for a complete model invocation.
-struct FfnExecutionMode {
-  /// Stable execution-mode values used by Fabric records.
-  enum Type : std::uint32_t {
-    /// Variable-size prompt-token execution through Executor-owned payloads.
-    Prefill = 1,
-    /// Fixed-capacity decode execution through model-owned payloads.
-    Decode = 2,
-  };
+/// Coordinator-private aggregate after successful Submission rendezvous.
+struct Invocation {
+  /// Invocation identity established by Submission rendezvous.
+  InvocationKey key;
+  /// Config-order FFN layer ordinal within the selected Instance.
+  std::size_t layer_ordinal;
+  /// Number of live hidden-state rows in the complete invocation.
+  std::size_t payload_rows;
+  /// Mathematical output requirement requested by the Instance.
+  xpool::ffn::OutputRequirement output_requirement;
 
-  /// Construct a validated execution mode from its same-domain enum.
-  /// \param value Supported execution mode.
-  XPOOL_HOST_DEVICE_FN constexpr FfnExecutionMode(Type value)
-      : FfnExecutionMode(static_cast<std::uint32_t>(value)) {}
-
-  /// Explicitly construct a validated execution mode from an integer.
-  /// \tparam T Same-domain enum or non-boolean integral input.
-  /// \param value Candidate execution-mode representation.
-  /// \pre is_valid(value) is true; violation fail-stops.
-  template <xpool::utils::EnumInput<Type> T>
-  XPOOL_HOST_DEVICE_FN explicit constexpr FfnExecutionMode(T value) : value_(static_cast<Type>(value)) {
-    if (!is_valid(value)) {
-      xpool::abort();
-    }
+  /// Validate intrinsic identity, dimensions, and closed-set values.
+  XPOOL_HOST_DEVICE_FN constexpr xpool::ffn::ResultCode validate() const {
+    return key.valid() && payload_rows != 0 && xpool::ffn::is_valid(output_requirement)
+               ? xpool::ffn::ResultCode::Ok
+               : xpool::ffn::ResultCode::ProtocolMismatch;
   }
-
-  /// Return the wrapped execution mode.
-  /// \return Stable execution-mode enum value.
-  XPOOL_HOST_DEVICE_FN constexpr Type value() const { return value_; }
-
-  /// Return whether a raw value names a supported execution mode.
-  /// \tparam T Same-domain enum or non-boolean integral input.
-  /// \param value Candidate execution-mode representation.
-  /// \return True when value denotes Prefill or Decode.
-  template <xpool::utils::EnumInput<Type> T> XPOOL_HOST_DEVICE_FN static constexpr bool is_valid(T value) {
-    return xpool::utils::enum_value_equal(value, Prefill) || xpool::utils::enum_value_equal(value, Decode);
-  }
-
-  /// Compare two validated execution modes.
-  /// \return True when both wrappers contain the same mode.
-  constexpr bool operator==(const FfnExecutionMode &) const = default;
-
-  /// Compare this wrapper with one same-domain enum value.
-  /// \param value Execution mode to compare.
-  /// \return True when this wrapper contains value.
-  constexpr bool operator==(Type value) const { return value_ == value; }
-
-private:
-  Type value_;
+  constexpr bool operator==(const Invocation &) const = default;
 };
 
-/// Complete model-level invocation derived by the Coordinator.
-struct FfnInvocation {
-  /// Model and sequence identity.
-  FfnInvocationKey key;
+/// AtnAgent publication contributing one rank-local input description.
+struct Submission {
+  /// Shared invocation identity.
+  InvocationKey key;
   /// Config-order FFN layer ordinal.
   std::size_t layer_ordinal;
-  /// Physical rows in the complete invocation payload.
+  /// Total live rows across participating DP ranks.
   std::size_t payload_rows;
-  /// AtnAgent PE selected as the deterministic Input Publisher.
-  int input_pe;
-  /// Raw FfnExecutionMode value.
-  std::uint32_t execution_mode;
-  /// Raw abi::FfnResultHandoff value.
-  std::uint32_t result_handoff;
-  /// Raw abi::DpPaddingMode value.
-  std::uint32_t dp_padding_mode;
+  /// Physical DP row layout describing the submitted payload rows.
+  xpool::ffn::DpRowLayout dp_row_layout;
+  /// Mathematical output requirement requested by the Instance.
+  xpool::ffn::OutputRequirement output_requirement;
+  /// Rows contributed by this AtnAgent's DP rank.
+  std::size_t dp_rank_payload_rows;
+  /// Runtime forward mode selecting Decode or Prefill capacity.
+  xpool::ffn::ForwardMode forward_mode;
 
-  /// Validate intrinsic invocation identity and closed-set values.
-  /// \return Ok for a structurally valid invocation, otherwise ProtocolMismatch.
-  XPOOL_HOST_DEVICE_FN constexpr xpool::abi::FfnResultCode validate() const {
-    return key.valid() && payload_rows != 0 && input_pe >= 0 && FfnExecutionMode::is_valid(execution_mode) &&
-                   xpool::abi::FfnResultHandoff::is_valid(result_handoff) &&
-                   xpool::abi::DpPaddingMode::is_valid(dp_padding_mode)
-               ? xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::Ok}
-               : xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::ProtocolMismatch};
+  /// Return the sequence that publishes this record.
+  XPOOL_HOST_DEVICE_FN constexpr std::uint64_t publication_sequence() const { return key.invocation_sequence; }
+  /// Validate intrinsic submission identity, row geometry, and closed-set values.
+  XPOOL_HOST_DEVICE_FN constexpr xpool::ffn::ResultCode validate() const {
+    return key.valid() && payload_rows != 0 && dp_rank_payload_rows <= payload_rows &&
+                   xpool::ffn::is_valid(forward_mode) && xpool::ffn::is_valid(output_requirement) &&
+                   xpool::ffn::is_valid(dp_row_layout)
+               ? xpool::ffn::ResultCode::Ok
+               : xpool::ffn::ResultCode::ProtocolMismatch;
   }
-
-  /// Validate this invocation against immutable arena and model geometry.
-  /// \param layout Generation-wide participant and Executor geometry.
-  /// \param model Model payload and layer geometry selected by key.model_index.
-  /// \return Ok when intrinsic facts and contextual bounds are valid, otherwise ProtocolMismatch.
-  XPOOL_HOST_DEVICE_FN constexpr xpool::abi::FfnResultCode validate(
-      const FabricArenaLayout &layout, const FabricModelLayout &model) const {
-    const auto invalid = xpool::abi::FfnResultCode{
-        xpool::abi::FfnResultCode::ProtocolMismatch};
-    if (validate() != xpool::abi::FfnResultCode::Ok ||
-        key.model_index >= layout.model_count || layer_ordinal >= model.layer_count ||
-        input_pe != 0 || model.hidden_size == 0 ||
-        !xpool::abi::TensorDType::is_valid(model.dtype)) {
-      return invalid;
-    }
-    const auto element_bytes = xpool::abi::TensorDType{model.dtype}.bytes();
-    if (payload_rows > std::numeric_limits<std::size_t>::max() /
-                           model.hidden_size / element_bytes) {
-      return invalid;
-    }
-    const auto payload_bytes = payload_rows * model.hidden_size * element_bytes;
-    const auto prefill = execution_mode == FfnExecutionMode::Prefill;
-    const auto capacity = prefill ? model.prefill_payload_capacity_bytes
-                                  : model.decode_payload_capacity_bytes;
-    return payload_bytes <= capacity &&
-                   (!prefill || payload_bytes <= layout.executor_payload_capacity_bytes)
-               ? xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::Ok}
-               : invalid;
-  }
-
-  /// Compare two derived invocations.
-  /// \return True when every invocation field is equal.
-  constexpr bool operator==(const FfnInvocation &) const = default;
+  constexpr bool operator==(const Submission &) const = default;
 };
 
-/// One AtnAgent's model-scoped invocation submission.
-struct FfnSubmission {
-  /// Model and sequence identity presented by this AtnAgent.
-  FfnInvocationKey key;
-  /// Config-order FFN layer ordinal.
+/// Coordinator publication assigning one invocation to an Executor Lane lease.
+struct Admission {
+  /// Admitted invocation identity.
+  InvocationKey key;
+  /// Generation-local Executor Lane index.
+  std::size_t executor_lane_index;
+  /// Positive lease sequence preventing stale Lane reuse.
+  std::uint64_t executor_lease_sequence;
+
+  /// Return the sequence that publishes this record.
+  XPOOL_HOST_DEVICE_FN constexpr std::uint64_t publication_sequence() const { return key.invocation_sequence; }
+  /// Validate admission identity and lease sequence.
+  XPOOL_HOST_DEVICE_FN constexpr xpool::ffn::ResultCode validate() const {
+    return key.valid() && executor_lease_sequence != 0 ? xpool::ffn::ResultCode::Ok
+                                                       : xpool::ffn::ResultCode::ProtocolMismatch;
+  }
+  constexpr bool operator==(const Admission &) const = default;
+};
+
+/// Coordinator publication launching one admitted invocation on its Lane.
+struct LaneExecution {
+  /// Admitted invocation identity.
+  InvocationKey key;
+  /// Positive sequence of the active Executor Lane lease.
+  std::uint64_t executor_lease_sequence;
+  /// Config-order FFN layer ordinal to execute.
   std::size_t layer_ordinal;
-  /// Physical rows in this AtnAgent's replicated hidden-state buffer.
+  /// Number of live hidden-state rows.
   std::size_t payload_rows;
-  /// Rank-local live token count before DP padding; zero is valid for Idle.
-  std::size_t local_token_count;
-  /// Raw abi::XPoolForwardMode value.
-  std::uint32_t forward_mode;
-  /// Raw abi::FfnResultHandoff value.
-  std::uint32_t result_handoff;
-  /// Raw abi::DpPaddingMode value.
-  std::uint32_t dp_padding_mode;
+  /// Mathematical output requirement controlling delivery.
+  xpool::ffn::OutputRequirement output_requirement;
 
-  /// Validate intrinsic submission identity and closed-set values.
-  /// \return Ok for a structurally valid submission, otherwise ProtocolMismatch.
-  XPOOL_HOST_DEVICE_FN constexpr xpool::abi::FfnResultCode validate() const {
-    return key.valid() && payload_rows != 0 && local_token_count <= payload_rows &&
-                   xpool::abi::XPoolForwardMode::is_valid(forward_mode) &&
-                   xpool::abi::FfnResultHandoff::is_valid(result_handoff) &&
-                   xpool::abi::DpPaddingMode::is_valid(dp_padding_mode)
-               ? xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::Ok}
-               : xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::ProtocolMismatch};
+  /// Return the sequence that publishes this Lane-scoped record.
+  XPOOL_HOST_DEVICE_FN constexpr std::uint64_t publication_sequence() const { return executor_lease_sequence; }
+  /// Validate execution identity, lease, dimensions, and requirement.
+  XPOOL_HOST_DEVICE_FN constexpr xpool::ffn::ResultCode validate() const {
+    return key.valid() && executor_lease_sequence != 0 && payload_rows != 0 && xpool::ffn::is_valid(output_requirement)
+               ? xpool::ffn::ResultCode::Ok
+               : xpool::ffn::ResultCode::ProtocolMismatch;
   }
-
-  /// Compare two source submissions.
-  /// \return True when every submission field is equal.
-  constexpr bool operator==(const FfnSubmission &) const = default;
+  constexpr bool operator==(const LaneExecution &) const = default;
 };
 
-/// Coordinator-owned admission of one invocation to an Executor.
-struct FfnExecutionAdmission {
-  /// Admitted model and sequence identity.
-  FfnInvocationKey key;
-  /// Distributed Executor leased to the invocation.
-  std::size_t executor_index;
-  /// Raw FfnExecutionMode value derived by the Coordinator.
-  std::uint32_t execution_mode;
+/// Validate the identity shared by successful Lane-scoped records.
+/// \tparam Record Lane-scoped record containing `key` and `executor_lease_sequence`.
+template <class Record>
+XPOOL_HOST_DEVICE_FN constexpr xpool::ffn::ResultCode validate_lane_success(const Record &record) {
+  return record.key.valid() && record.executor_lease_sequence != 0 ? xpool::ffn::ResultCode::Ok
+                                                                   : xpool::ffn::ResultCode::ProtocolMismatch;
+}
 
-  /// Validate intrinsic admission identity and execution mode.
-  /// \return Ok for a structurally valid admission, otherwise ProtocolMismatch.
-  XPOOL_HOST_DEVICE_FN constexpr xpool::abi::FfnResultCode validate() const {
-    return key.valid() && FfnExecutionMode::is_valid(execution_mode)
-               ? xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::Ok}
-               : xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::ProtocolMismatch};
-  }
-
-  /// Compare two execution admissions.
-  /// \return True when invocation, Executor, and mode are equal.
-  constexpr bool operator==(const FfnExecutionAdmission &) const = default;
+/// AtnAgent signal that the admitted Lane input is visible.
+struct InputReady {
+  /// Admitted invocation identity.
+  InvocationKey key;
+  /// Active Executor Lane lease sequence.
+  std::uint64_t executor_lease_sequence;
+  /// Return the Executor lease sequence used for publication.
+  XPOOL_HOST_DEVICE_FN constexpr std::uint64_t publication_sequence() const { return executor_lease_sequence; }
+  /// Validate the shared Lane-scoped identity.
+  XPOOL_HOST_DEVICE_FN constexpr xpool::ffn::ResultCode validate() const { return validate_lane_success(*this); }
+  constexpr bool operator==(const InputReady &) const = default;
 };
 
-/// Input Publisher proof that one Prefill Executor payload is visible.
-struct FfnInputReady {
-  /// Invocation whose Executor-owned input is ready.
-  FfnInvocationKey key;
-
-  /// Validate this success-only record.
-  /// \return Ok when the invocation key is valid, otherwise ProtocolMismatch.
-  XPOOL_HOST_DEVICE_FN constexpr xpool::abi::FfnResultCode validate() const {
-    return key.valid() ? xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::Ok}
-                       : xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::ProtocolMismatch};
-  }
-
-  /// Compare two input-readiness records.
-  /// \return True when both records identify the same invocation.
-  constexpr bool operator==(const FfnInputReady &) const = default;
+/// FfnAgent signal that MoE routing metadata is visible to its TP peers.
+struct RoutingMetadataReady {
+  /// Admitted invocation identity.
+  InvocationKey key;
+  /// Active Executor Lane lease sequence.
+  std::uint64_t executor_lease_sequence;
+  /// Return the Executor lease sequence used for publication.
+  XPOOL_HOST_DEVICE_FN constexpr std::uint64_t publication_sequence() const { return executor_lease_sequence; }
+  /// Validate the shared Lane-scoped identity.
+  XPOOL_HOST_DEVICE_FN constexpr xpool::ffn::ResultCode validate() const { return validate_lane_success(*this); }
+  constexpr bool operator==(const RoutingMetadataReady &) const = default;
 };
 
-/// One FfnAgent's successful completion of an Executor invocation.
+/// FfnAgent signal that its rank-local TP partial is visible.
+struct PartialReady {
+  /// Admitted invocation identity.
+  InvocationKey key;
+  /// Active Executor Lane lease sequence.
+  std::uint64_t executor_lease_sequence;
+  /// Return the Executor lease sequence used for publication.
+  XPOOL_HOST_DEVICE_FN constexpr std::uint64_t publication_sequence() const { return executor_lease_sequence; }
+  /// Validate the shared Lane-scoped identity.
+  XPOOL_HOST_DEVICE_FN constexpr xpool::ffn::ResultCode validate() const { return validate_lane_success(*this); }
+  constexpr bool operator==(const PartialReady &) const = default;
+};
+
+/// FfnAgent signal that compute and its selected delivery are complete.
 struct FfnAgentCompletion {
-  /// Successfully completed invocation.
-  FfnInvocationKey key;
-
-  /// Validate this success-only record.
-  /// \return Ok when the invocation key is valid, otherwise ProtocolMismatch.
-  XPOOL_HOST_DEVICE_FN constexpr xpool::abi::FfnResultCode validate() const {
-    return key.valid() ? xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::Ok}
-                       : xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::ProtocolMismatch};
-  }
-
-  /// Compare two FfnAgent completion records.
-  /// \return True when both records identify the same invocation.
+  /// Admitted invocation identity.
+  InvocationKey key;
+  /// Active Executor Lane lease sequence.
+  std::uint64_t executor_lease_sequence;
+  /// Return the Executor lease sequence used for publication.
+  XPOOL_HOST_DEVICE_FN constexpr std::uint64_t publication_sequence() const { return executor_lease_sequence; }
+  /// Validate the shared Lane-scoped identity.
+  XPOOL_HOST_DEVICE_FN constexpr xpool::ffn::ResultCode validate() const { return validate_lane_success(*this); }
   constexpr bool operator==(const FfnAgentCompletion &) const = default;
 };
 
-/// Mathematical contribution delivered to one AtnAgent recipient.
-struct FfnResultContribution {
-  /// Stable result-contribution values.
-  enum Type : std::uint32_t {
-    /// Complete mathematical FFN contribution.
-    Full = 1,
-    /// Additive zero, materialized locally without a payload transfer.
-    Zero = 2,
-  };
+/// Validate the identity shared by successful Instance-scoped records.
+/// \tparam Record Instance-scoped record containing `key`.
+template <class Record>
+XPOOL_HOST_DEVICE_FN constexpr xpool::ffn::ResultCode validate_instance_success(const Record &record) {
+  return record.key.valid() ? xpool::ffn::ResultCode::Ok : xpool::ffn::ResultCode::ProtocolMismatch;
+}
 
-  /// Construct a validated contribution from its same-domain enum.
-  /// \param value Supported mathematical contribution.
-  XPOOL_HOST_DEVICE_FN constexpr FfnResultContribution(Type value)
-      : FfnResultContribution(static_cast<std::uint32_t>(value)) {}
+/// Coordinator signal committing a complete output for Instance consumption.
+struct OutputCommit {
+  /// Committed invocation identity.
+  InvocationKey key;
 
-  /// Explicitly construct a validated contribution from an integer.
-  /// \tparam T Same-domain enum or non-boolean integral input.
-  /// \param value Candidate contribution representation.
-  /// \pre is_valid(value) is true; violation fail-stops.
-  template <xpool::utils::EnumInput<Type> T>
-  XPOOL_HOST_DEVICE_FN explicit constexpr FfnResultContribution(T value) : value_(static_cast<Type>(value)) {
-    if (!is_valid(value)) {
-      xpool::abort();
-    }
-  }
-
-  /// Return the wrapped contribution value.
-  /// \return Stable contribution enum value.
-  XPOOL_HOST_DEVICE_FN constexpr Type value() const { return value_; }
-
-  /// Return whether a raw value names a supported contribution.
-  /// \tparam T Same-domain enum or non-boolean integral input.
-  /// \param value Candidate contribution representation.
-  /// \return True when value denotes Full or Zero.
-  template <xpool::utils::EnumInput<Type> T> XPOOL_HOST_DEVICE_FN static constexpr bool is_valid(T value) {
-    return xpool::utils::enum_value_equal(value, Full) || xpool::utils::enum_value_equal(value, Zero);
-  }
-
-  /// Compare two validated result contributions.
-  /// \return True when both wrappers contain the same contribution.
-  constexpr bool operator==(const FfnResultContribution &) const = default;
-
-  /// Compare this wrapper with one same-domain enum value.
-  /// \param value Contribution to compare.
-  /// \return True when this wrapper contains value.
-  constexpr bool operator==(Type value) const { return value_ == value; }
-
-private:
-  Type value_;
+  /// Return the invocation sequence used for publication.
+  XPOOL_HOST_DEVICE_FN constexpr std::uint64_t publication_sequence() const { return key.invocation_sequence; }
+  /// Validate the shared Instance-scoped identity.
+  XPOOL_HOST_DEVICE_FN constexpr xpool::ffn::ResultCode validate() const { return validate_instance_success(*this); }
+  constexpr bool operator==(const OutputCommit &) const = default;
 };
 
-/// Coordinator-published successful contribution for one AtnAgent.
-struct FfnResult {
-  /// Completed model and sequence identity.
-  FfnInvocationKey key;
-  /// Raw FfnResultContribution value.
-  std::uint32_t contribution;
+/// AtnAgent signal acknowledging that a committed output was consumed.
+struct OutputAcknowledgement {
+  /// Acknowledged invocation identity.
+  InvocationKey key;
 
-  /// Validate this success-only result record.
-  /// \return Ok for a valid key and contribution, otherwise ProtocolMismatch.
-  XPOOL_HOST_DEVICE_FN constexpr xpool::abi::FfnResultCode validate() const {
-    return key.valid() && FfnResultContribution::is_valid(contribution)
-               ? xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::Ok}
-               : xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::ProtocolMismatch};
-  }
-
-  /// Compare two successful result records.
-  /// \return True when invocation and contribution are equal.
-  constexpr bool operator==(const FfnResult &) const = default;
+  /// Return the invocation sequence used for publication.
+  XPOOL_HOST_DEVICE_FN constexpr std::uint64_t publication_sequence() const { return key.invocation_sequence; }
+  /// Validate the shared Instance-scoped identity.
+  XPOOL_HOST_DEVICE_FN constexpr xpool::ffn::ResultCode validate() const { return validate_instance_success(*this); }
+  constexpr bool operator==(const OutputAcknowledgement &) const = default;
 };
 
-/// AtnAgent proof that one successful Fabric result is no longer read.
-struct FfnResultAcknowledgement {
-  /// Acknowledged model and sequence identity.
-  FfnInvocationKey key;
-
-  /// Validate this success-only acknowledgement.
-  /// \return Ok when the invocation key is valid, otherwise ProtocolMismatch.
-  XPOOL_HOST_DEVICE_FN constexpr xpool::abi::FfnResultCode validate() const {
-    return key.valid() ? xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::Ok}
-                       : xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::ProtocolMismatch};
-  }
-
-  /// Compare two result acknowledgements.
-  /// \return True when both records identify the same invocation.
-  constexpr bool operator==(const FfnResultAcknowledgement &) const = default;
-};
-
-/// Immutable payload of the first canonical invocation failure.
-struct FabricFailurePayload {
-  /// Raw abi::FfnResultCode value eligible for canonical publication.
-  std::uint32_t result_code;
-  /// NVSHMEM PE that first claimed the failure.
+/// Canonical first-failure payload shared across all Fabric PEs.
+struct FailurePayload {
+  /// Non-Ok canonical result code.
+  xpool::ffn::ResultCode result_code;
+  /// PE that first claimed the failure slot.
   int origin_pe;
-  /// Failed model and invocation sequence.
-  FfnInvocationKey key;
-  /// Config-order FFN layer ordinal associated with the failure.
+  /// Invocation active when the failure occurred.
+  InvocationKey key;
+  /// Config-order layer ordinal active at failure.
   std::size_t layer_ordinal;
 
-  /// Compare two immutable failure payloads.
-  /// \return True when every canonical failure field is equal.
-  constexpr bool operator==(const FabricFailurePayload &) const = default;
+  constexpr bool operator==(const FailurePayload &) const = default;
 };
 
-/// First-writer-wins canonical Fabric invocation failure.
-struct FabricFailure {
-  /// Coordinator-local remote-CAS arbitration word.
+/// Generation-wide first-failure slot with claim and publication phases.
+struct Failure {
+  /// Atomic claim word; zero means no PE has claimed failure ownership.
   std::uint64_t claim;
-  /// PE-local visibility signal; one means payload is published.
+  /// Publication word made visible after the winning payload is complete.
   std::uint64_t publication;
-  /// Immutable payload written by the unique successful claimant.
-  FabricFailurePayload payload;
+  /// Payload written only by the winning claimant.
+  FailurePayload payload;
 
 #if defined(__CUDACC__)
-  /// Return whether this PE has acquired the canonical failure payload.
-  /// \return True after local release publication of the payload.
-  XPOOL_DEVICE_FN bool published() const;
-
-  /// Try to claim and publish one eligible canonical failure.
-  /// \param coordinator_pe NVSHMEM PE that owns the arbitration word.
-  /// \param result_code Eligible canonical failure code.
-  /// \param key Failed invocation identity.
-  /// \param layer_ordinal Model-local layer ordinal associated with the failure.
-  /// \return True only for the unique successful claimant.
-  XPOOL_DEVICE_FN bool try_publish(int coordinator_pe, xpool::abi::FfnResultCode result_code,
-                                   const FfnInvocationKey &key, std::size_t layer_ordinal);
-
-  /// Fan the Coordinator's canonical failure payload and signal to all PEs.
-  /// \param pe_count Total number of Fabric PEs.
+  /// Return whether a failure payload has been published locally.
+  XPOOL_DEVICE_FN XPOOL_DEVICE_FORCEINLINE bool published() const;
+  /// Claim and publish the first local failure when this PE wins.
+  /// Only ProtocolMismatch and Timeout are admissible. The winning PE owns the
+  /// payload; later contenders leave it unchanged.
+  XPOOL_DEVICE_FN bool try_publish(int coordinator_pe, xpool::ffn::ResultCode result_code, const InvocationKey &key,
+                                   std::size_t layer_ordinal);
+  /// Replicate a published failure to every participating PE.
   XPOOL_DEVICE_FN void publish_to_all(int pe_count) const;
 #endif
 };
 
-/// Fixed-size record suitable for one typed Fabric publication.
+/// Trivially copyable record accepted by `Publication`.
+/// \tparam Record Candidate record type with publication and validation operations.
 template <class Record>
-concept FabricRecord = std::is_standard_layout_v<Record> && std::is_trivially_copyable_v<Record> &&
-                       requires(const Record &record) {
-                         { record.validate() } -> std::same_as<xpool::abi::FfnResultCode>;
-                         { record.key.invocation_sequence } -> std::convertible_to<std::uint64_t>;
-                       };
+concept PublicationRecord = std::is_standard_layout_v<Record> && std::is_trivially_copyable_v<Record> &&
+    requires(const Record &record) {
+  { record.publication_sequence() } -> std::same_as<std::uint64_t>;
+  { record.validate() } -> std::same_as<xpool::ffn::ResultCode>;
+  { record.key } -> std::same_as<const InvocationKey &>;
+};
 
-/// One symmetric typed record followed by its publication sequence.
-template <FabricRecord Record>
-struct alignas(kFabricPublicationAlignment) FabricPublication {
-  /// Record bytes written before sequence publication.
+/// One aligned record and its release-published monotonic sequence.
+/// \tparam Record Trivially copyable Fabric protocol record.
+template <PublicationRecord Record> struct alignas(kFabricPublicationAlignment) Publication {
+  /// Record bytes published before `sequence` becomes visible.
   Record record;
-  /// Zero for an empty Executor publication or a positive model sequence.
+  /// Monotonic publication sequence; zero denotes unpublished storage.
   std::uint64_t sequence;
 
-  /// Validate record identity against the published sequence.
-  /// \return Ok for a complete matching publication, otherwise ProtocolMismatch.
-  XPOOL_HOST_DEVICE_FN constexpr xpool::abi::FfnResultCode validate() const {
-    return sequence != 0 && sequence == record.key.invocation_sequence &&
-                   record.validate() == xpool::abi::FfnResultCode::Ok
-               ? xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::Ok}
-               : xpool::abi::FfnResultCode{xpool::abi::FfnResultCode::ProtocolMismatch};
-  }
-
 #if defined(__CUDACC__)
-  /// Acquire-observe this PE's publication sequence.
-  /// \return Zero for empty, or the positive published invocation sequence.
-  XPOOL_DEVICE_FN std::uint64_t observe() const;
+  /// Test whether the publication has reached a minimum sequence.
+  [[nodiscard]] XPOOL_DEVICE_FN bool test_at_least(std::uint64_t expected_sequence) const;
+  /// Validate the currently published record against expected identity.
+  [[nodiscard]] XPOOL_DEVICE_FN xpool::ffn::ResultCode validate_expected(std::uint64_t expected_sequence,
+                                                                         const InvocationKey &expected_key) const;
 
-  /// Publish record and sequence to one PE with warp participation.
-  /// \param group Warp tile whose threads participate in publication.
-  /// \param sequence Positive invocation sequence copied into the signal.
-  /// \param destination_pe Destination NVSHMEM PE.
-  XPOOL_DEVICE_FN void publish(const cooperative_groups::thread_block_tile<32> &group, std::uint64_t sequence,
-                               int destination_pe);
+  /// Publish record bytes and their release signal to one destination PE.
+  XPOOL_DEVICE_FN void publish_record(const cooperative_groups::thread_block &group, int destination_pe);
 
-  /// Publish payload, record, and sequence to one PE with warp participation.
-  /// \param group Warp tile whose threads participate in publication.
-  /// \param sequence Positive invocation sequence copied into the signal.
-  /// \param destination_pe Destination NVSHMEM PE.
-  /// \param payload Symmetric local source whose peer address receives the payload.
-  /// \param payload_bytes Number of payload bytes copied before publication.
-  XPOOL_DEVICE_FN void publish(const cooperative_groups::thread_block_tile<32> &group, std::uint64_t sequence,
-                               int destination_pe, void *payload, std::size_t payload_bytes);
+  /// Copy one symmetric payload remotely, fence its visibility, then publish
+  /// the matching record and release signal at the same PE.
+  XPOOL_DEVICE_FN void publish_payload(const cooperative_groups::thread_block &group, int destination_pe,
+                                       cuda::std::span<std::uint8_t> symmetric_payload);
 
-  /// Publish record and sequence to one PE with block participation.
-  /// \param group Thread block whose threads participate in publication.
-  /// \param sequence Positive invocation sequence copied into the signal.
-  /// \param destination_pe Destination NVSHMEM PE.
-  XPOOL_DEVICE_FN void publish(const cooperative_groups::thread_block &group, std::uint64_t sequence,
-                               int destination_pe);
+  /// Release-publish after all block participants completed local payload writes.
+  /// Any preceding NVSHMEM work completes before destination records signal
+  /// that the locally addressed payload may be consumed.
+  XPOOL_DEVICE_FN void publish_after_local_payload(const cooperative_groups::thread_block &group,
+                                                   cuda::std::span<const int> destination_pes);
 
-  /// Publish payload, record, and sequence to one PE with block participation.
-  /// \param group Thread block whose threads participate in publication.
-  /// \param sequence Positive invocation sequence copied into the signal.
-  /// \param destination_pe Destination NVSHMEM PE.
-  /// \param payload Symmetric local source whose peer address receives the payload.
-  /// \param payload_bytes Number of payload bytes copied before publication.
-  XPOOL_DEVICE_FN void publish(const cooperative_groups::thread_block &group, std::uint64_t sequence,
-                               int destination_pe, void *payload, std::size_t payload_bytes);
-
-  /// Clear this PE's Executor-scoped publication before reuse.
-  XPOOL_DEVICE_FN void clear();
+  /// Complete prior remote payload writes before release-publishing to one PE.
+  XPOOL_DEVICE_FN void publish_after_remote_payload(const cooperative_groups::thread_block &group, int destination_pe);
 #endif
 };
 
-static_assert(std::is_trivially_copyable_v<FabricFailure>);
+static_assert(sizeof(Publication<Submission>) == kFabricPublicationAlignment);
+static_assert(sizeof(Publication<Admission>) == kFabricPublicationAlignment);
+static_assert(sizeof(Publication<LaneExecution>) == kFabricPublicationAlignment);
+static_assert(sizeof(Publication<InputReady>) == kFabricPublicationAlignment);
+static_assert(sizeof(Publication<RoutingMetadataReady>) == kFabricPublicationAlignment);
+static_assert(sizeof(Publication<PartialReady>) == kFabricPublicationAlignment);
+static_assert(sizeof(Publication<FfnAgentCompletion>) == kFabricPublicationAlignment);
+static_assert(sizeof(Publication<OutputCommit>) == kFabricPublicationAlignment);
+static_assert(sizeof(Publication<OutputAcknowledgement>) == kFabricPublicationAlignment);
+static_assert(std::is_trivially_copyable_v<Failure>);
 
 } // namespace xpool::fabric

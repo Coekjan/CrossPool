@@ -11,14 +11,14 @@ from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.models.qwen3 import Qwen3ForCausalLM, Qwen3MLP
 from sglang.srt.plugins.hook_registry import HookType
 
-from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.adapter import (
     SglangHook,
-    SglangModelAdapter,
+    SglangShimAdapter,
     filter_decoder_ffn_weights,
     model_runner_architectures,
 )
 from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError
+from xpool.native.ffn import LayerKind
 
 LAYER_PREFIX_PATTERN = re.compile(r"^model\.layers\.(?P<layer_id>\d+)\.mlp$")
 
@@ -45,11 +45,11 @@ class XpoolQwen3MLP(FfnShimModule, Qwen3MLP):
             self,
             layer_id=int(match.group("layer_id")),
             hidden_size=hidden_size,
-            layer_kind=FfnLayerKind.DENSE,
+            layer_kind=LayerKind.DENSE,
         )
 
 
-class Qwen3Adapter(SglangModelAdapter):
+class Qwen3ShimAdapter(SglangShimAdapter):
     """SGLang hooks and fail-closed policy for dense Qwen3 models."""
 
     name = "qwen3"
@@ -86,7 +86,7 @@ class Qwen3Adapter(SglangModelAdapter):
             raise RuntimeError("xpool Qwen3 model config has no positive integer num_hidden_layers")
         shims = self.require_ffn_shims(
             model,
-            expected_layer_kinds=(FfnLayerKind.DENSE,) * layer_count,
+            expected_layer_kinds=(LayerKind.DENSE,) * layer_count,
             allowed_shim_types=(XpoolQwen3MLP,),
         )
         self.require_full_mlp_boundaries(model, shims, allow_reduce_scatter=False)

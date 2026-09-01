@@ -1,15 +1,16 @@
-"""Typed subprocess harness for native multi-PE Fabric tests."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
 from multiprocessing.synchronize import Barrier
 
-from xpool.abi import FfnResultCode, TensorDType, XPoolForwardMode
-from xpool.runtime import RuntimeRole
+import torch
 
-FABRIC_LOOPBACK_TIMEOUT_SECONDS = 120.0
+import xpool.native
+from xpool.native import RuntimeRole
+from xpool.native.ffn import ForwardMode, LayerKind, OutputRequirement, ResultCode
+
+FABRIC_TIMEOUT_SECONDS = 120.0
 
 
 class FabricParticipantCommand(StrEnum):
@@ -26,7 +27,7 @@ class FabricBootstrapCommand(StrEnum):
 
 
 class FabricInstanceCommand(StrEnum):
-    """Synchronization commands accepted by one Fabric Instance."""
+    """Synchronization commands accepted by one Fabric Instance rank."""
 
     RUN = "run"
     STOP = "stop"
@@ -52,13 +53,16 @@ class FabricParticipantSpec:
     device: int
     uid: str
     pe: int
-    dtype: TensorDType
     atnagent_count: int
     ffnagent_count: int
-    executor_count: int
-    forward_modes: tuple[XPoolForwardMode, ...]
-    loopback_enabled: bool
-    expect_activation_rejection: bool
+    execution_tp_size: int
+    execution_layer_count: int
+    decode_payload_row_capacity: int
+    prefill_payload_row_capacity: int
+    payload_dtype: torch.dtype
+    executor_lane_count: int
+    forward_modes: tuple[ForwardMode, ...]
+    layer_kind: LayerKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,16 +71,8 @@ class FabricParticipantReady:
 
 
 @dataclass(frozen=True, slots=True)
-class FabricParticipantActivationRejected:
-    """Recoverable FfnAgent activation rejection observed before launch."""
-
-    pe: int
-    message: str
-
-
-@dataclass(frozen=True, slots=True)
 class FabricArenasPublished:
-    """AtnAgent acknowledgement carrying its Instance arena handles."""
+    """AtnAgent acknowledgement carrying its Instance-rank arena handles."""
 
     arenas: tuple[str, ...]
 
@@ -90,41 +86,83 @@ class FabricParticipantQuiesced:
 class FabricAtnAgentTrace:
     """One completed AtnAgent-side Fabric invocation timeline."""
 
-    model_index: int
+    instance_index: int
     invocation_sequence: int
-    executor_index: int | None
-    forward_mode: XPoolForwardMode | None
-    prepared_ns: int
-    acknowledged_ns: int
+    layer_ordinal: int
+    payload_rows: int
+    executor_lane_index: int | None
+    executor_lease_sequence: int | None
+    forward_mode: ForwardMode | None
+    submission_prepared_ns: int
+    output_acknowledgement_published_ns: int
 
 
 @dataclass(frozen=True, slots=True)
 class FabricCoordinatorTrace:
     """One Coordinator scheduling and Executor-lease timeline."""
 
-    model_index: int
+    instance_index: int
     invocation_sequence: int
-    executor_index: int | None
+    layer_ordinal: int
+    payload_rows: int
+    executor_lane_index: int | None
+    executor_lease_sequence: int | None
     ready_ticket: int | None
     enqueued_ns: int
     scheduled_ns: int
-    released_ns: int
+    lane_released_ns: int
 
 
 @dataclass(frozen=True, slots=True)
-class FabricExecutionTrace:
-    """One FfnAgent execution timeline for a distributed Executor."""
+class FabricFfnAgentTrace:
+    """One FfnAgent execution timeline for a distributed Executor Lane."""
 
-    model_index: int
+    instance_index: int
     invocation_sequence: int
-    executor_index: int | None
-    observed_ns: int
-    started_ns: int
-    completed_ns: int
-    published_ns: int
+    layer_ordinal: int
+    payload_rows: int
+    executor_lane_index: int | None
+    executor_lease_sequence: int | None
+    payload_row_capacity: int | None
+    delivery: xpool.native.fabric.DeliveryVariant | None
+    lane_execution_observed_ns: int
+    compute_started_ns: int
+    compute_completed_ns: int
+    completion_published_ns: int
 
 
-type FabricTrace = FabricAtnAgentTrace | FabricCoordinatorTrace | FabricExecutionTrace
+type FabricTrace = FabricAtnAgentTrace | FabricCoordinatorTrace | FabricFfnAgentTrace
+
+
+@dataclass(frozen=True, slots=True)
+class FabricGraphSnapshotEvidence:
+    """Picklable actual Primary Graph and Lane Graph snapshot evidence."""
+
+    primary_graph_binding_site_counts: tuple[int, ...]
+    lane_compute_branch_counts: tuple[int, ...]
+    lane_delivery_branch_counts: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FabricRoutingRecordEvidence:
+    """Bit-preserving semantic Routing evidence for one invocation."""
+
+    instance_index: int
+    invocation_sequence: int
+    layer_ordinal: int
+    row_count: int
+    effective_topk: int
+    topk_ids_bytes: bytes
+    topk_weights_bytes: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class FabricRoutingSnapshotEvidence:
+    """One drained FfnAgent Routing Observer snapshot."""
+
+    sequence: int
+    dropped: int
+    records: tuple[FabricRoutingRecordEvidence, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,9 +171,9 @@ class FabricFailureEvidence:
 
     claim: int
     publication: int
-    result_code: FfnResultCode
+    result_code: ResultCode
     origin_pe: int
-    model_index: int
+    instance_index: int
     invocation_sequence: int
     layer_ordinal: int
 
@@ -150,6 +188,8 @@ class FabricParticipantReport:
     dropped: int
     records: tuple[FabricTrace, ...]
     failure: FabricFailureEvidence | None
+    graph_snapshot: FabricGraphSnapshotEvidence | None
+    routing: FabricRoutingSnapshotEvidence | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,42 +201,49 @@ class FabricParticipantDrained:
 
 @dataclass(frozen=True, slots=True)
 class FabricInstanceSpec:
-    """Complete startup configuration for one Fabric Instance client."""
+    """Complete startup configuration for one Fabric Instance-rank client."""
 
     device: int
     atnagent_pe: int
     arena: str
-    forward_mode: XPoolForwardMode
-    dtype: TensorDType
+    forward_mode: ForwardMode
+    ffnagent_count: int
+    execution_tp_size: int
+    atnagent_count: int
+    output_requirement: OutputRequirement
     instance_index: int
+    payload_rows: int
+    payload_dtype: torch.dtype
+    layer_ordinals: tuple[int, ...]
     payload_offset: int
     repetition_count: int
     stop_on_command: bool
     start_barrier: Barrier
-    loopback_enabled: bool
+    layer_kind: LayerKind
+    pre_admission_rejection: bool
 
 
 @dataclass(frozen=True, slots=True)
 class FabricInstanceReady:
-    """Instance acknowledgement that it reached the shared start gate."""
+    """Instance-rank acknowledgement that it reached the shared start gate."""
 
 
 @dataclass(frozen=True, slots=True)
 class FabricInstanceRunning:
-    """Instance acknowledgement that its first request was submitted."""
+    """Instance-rank acknowledgement that its first request was submitted."""
 
 
 @dataclass(frozen=True, slots=True)
 class FabricInstanceResult:
-    """Numerical output and completion facts returned by one Instance."""
+    """Numerical output and completion facts returned by one Instance rank."""
 
     atnagent_pe: int
     instance_index: int
-    forward_mode: XPoolForwardMode
+    forward_mode: ForwardMode
     repetitions_completed: int
-    result_code: FfnResultCode
+    result_code: ResultCode
     actual: tuple[float, ...]
-    expected: tuple[float, ...]
+    expected: tuple[float, ...] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,8 +252,7 @@ class FabricTopologyReport:
 
     atnagent_count: int
     ffnagent_count: int
-    executor_count: int
-    forward_modes: tuple[XPoolForwardMode, ...]
+    executor_lane_count: int
+    forward_modes: tuple[ForwardMode, ...]
     instances: tuple[FabricInstanceResult, ...]
     participants: tuple[FabricParticipantReport, ...]
-    activation_rejections: tuple[FabricParticipantActivationRejected, ...]

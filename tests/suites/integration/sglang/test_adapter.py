@@ -1,5 +1,3 @@
-"""Common SGLang model-adapter behavior."""
-
 from __future__ import annotations
 
 import pytest
@@ -7,16 +5,16 @@ import torch
 from sglang.srt.model_executor.model_runner import ModelRunner
 from torch import nn
 
-from xpool.fabric import FfnLayerKind
-from xpool.integrations.sglang.adapter import SglangHook, SglangModelAdapter, filter_decoder_ffn_weights
+from xpool.integrations.sglang.adapter import SglangHook, SglangShimAdapter, filter_decoder_ffn_weights
 from xpool.integrations.sglang.shim import FfnShimModule
+from xpool.native.ffn import LayerKind
 
 
 class CommonShim(FfnShimModule):
     """Concrete shim type used to exercise common coverage validation."""
 
 
-class CommonAdapter(SglangModelAdapter):
+class CommonAdapter(SglangShimAdapter):
     """Minimal adapter exposing the common validation helpers."""
 
     name = "test"
@@ -50,14 +48,14 @@ def test_require_ffn_shims_validates_exact_ids_and_kinds() -> None:
     model = nn.Module()
     model.layers = nn.ModuleList(
         [
-            CommonShim(layer_id=0, hidden_size=4, layer_kind=FfnLayerKind.DENSE),
-            CommonShim(layer_id=1, hidden_size=4, layer_kind=FfnLayerKind.SPARSE),
+            CommonShim(layer_id=0, hidden_size=4, layer_kind=LayerKind.DENSE),
+            CommonShim(layer_id=1, hidden_size=4, layer_kind=LayerKind.MOE),
         ]
     )
 
     shims = CommonAdapter().require_ffn_shims(
         model,
-        expected_layer_kinds=(FfnLayerKind.DENSE, FfnLayerKind.SPARSE),
+        expected_layer_kinds=(LayerKind.DENSE, LayerKind.MOE),
         allowed_shim_types=(CommonShim,),
     )
 
@@ -66,11 +64,11 @@ def test_require_ffn_shims_validates_exact_ids_and_kinds() -> None:
 
 def test_require_ffn_shims_rejects_wrong_kind() -> None:
     model = nn.Module()
-    model.layers = nn.ModuleList([CommonShim(layer_id=0, hidden_size=4, layer_kind=FfnLayerKind.DENSE)])
+    model.layers = nn.ModuleList([CommonShim(layer_id=0, hidden_size=4, layer_kind=LayerKind.DENSE)])
 
     with pytest.raises(RuntimeError, match="mismatched FFN layer kinds"):
         CommonAdapter().require_ffn_shims(
             model,
-            expected_layer_kinds=(FfnLayerKind.SPARSE,),
+            expected_layer_kinds=(LayerKind.MOE,),
             allowed_shim_types=(CommonShim,),
         )

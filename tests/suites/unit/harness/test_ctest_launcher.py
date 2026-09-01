@@ -7,7 +7,7 @@ import pytest
 
 import tests.harness.runner.ctest_launcher
 from tests.harness.runner.ctest_launcher import configure_cuda_visibility, decode_ctest_gpu_id
-from xpool.service.daemon.mps import MpsProbeResult
+from xpool.mps import MpsProbeResult
 
 
 def test_launch_prepends_native_dependency_paths(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -57,7 +57,7 @@ def test_ctest_launcher_projects_one_gpu_and_preflights_mps(monkeypatch: pytest.
     monkeypatch.setattr(
         tests.harness.runner.ctest_launcher,
         "probe_mps_controller",
-        lambda: MpsProbeResult(True, "online"),
+        lambda: MpsProbeResult(True, 100, "online"),
     )
 
     configure_cuda_visibility(environment)

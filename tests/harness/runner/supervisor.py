@@ -156,15 +156,12 @@ class SupervisedTaskScope:
             return TaskCompletion(TaskCompletionKind.INFRASTRUCTURE_FAILED, None, str(error))
 
         try:
-            try:
-                completion = scope.wait()
-                scope.close()
-                return completion
-            except TaskSupervisionFailure as error:
-                diagnostics = str(error)
-                cls.terminate_all((scope,))
-                scope.close()
-                return TaskCompletion(TaskCompletionKind.INFRASTRUCTURE_FAILED, None, diagnostics)
+            completion = scope.wait()
+        except TaskSupervisionFailure as error:
+            diagnostics = str(error)
+            cls.terminate_all((scope,))
+            scope.close()
+            return TaskCompletion(TaskCompletionKind.INFRASTRUCTURE_FAILED, None, diagnostics)
         except BaseException as error:
             if scope.state not in (TaskScopeState.CLOSED, TaskScopeState.FAILED):
                 try:
@@ -173,6 +170,8 @@ class SupervisedTaskScope:
                 except TaskScopeFailure as cleanup_error:
                     raise cleanup_error from error
             raise
+        scope.close()
+        return completion
 
     @classmethod
     def start(
@@ -209,18 +208,7 @@ class SupervisedTaskScope:
         scope = cls(name=name, supervisor=supervisor, connection=parent_connection)
         try:
             start_spawn_process(supervisor)
-        except BaseException as startup_error:
             child_connection.close()
-            try:
-                scope.abort_startup(baseline_children)
-            except BaseException as cleanup_error:
-                raise TaskScopeFailure(
-                    f"{name} task supervisor spawn failed ({startup_error}) and its attempted domain could not be "
-                    f"proved empty: {cleanup_error}"
-                ) from startup_error
-            raise TaskStartFailure(f"{name} task supervisor spawn failed: {startup_error}") from startup_error
-        child_connection.close()
-        try:
             if not parent_connection.poll(TASK_SUPERVISOR_START_TIMEOUT_SECONDS):
                 raise TaskSupervisionFailure(f"{name} task supervisor did not acknowledge startup")
             message = scope.receive_message()
@@ -231,6 +219,7 @@ class SupervisedTaskScope:
                 raise TaskSupervisionFailure(f"{name} task supervisor failed during startup: {message.diagnostics}")
             raise TaskSupervisionFailure(f"{name} task supervisor sent an invalid startup message: {message!r}")
         except BaseException as startup_error:
+            child_connection.close()
             try:
                 scope.abort_startup(baseline_children)
             except BaseException as cleanup_error:

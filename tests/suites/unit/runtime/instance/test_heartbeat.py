@@ -10,6 +10,7 @@ import xpool.utils.background
 import xpool.utils.procs
 from tests.harness.support.config import reset_global_config
 from tests.harness.support.runtime.instance import (
+    ffn_profile,
     install_offline_instance_client,
     install_scripted_instance_client,
     patch_native_instance_ops,
@@ -18,16 +19,15 @@ from tests.harness.support.runtime.instance import (
     runtime_instance,
     transport_arena,
     transport_attributes,
-    workload,
 )
-from xpool.abi import ABI_VERSION
 from xpool.config import XpoolConfig
-from xpool.runtime.instance import Instance
+from xpool.native import ABI_VERSION
+from xpool.runtime.instance import InstanceRankRuntime
 from xpool.service.wire import (
     ControlPlaneWarning,
     ControlPlaneWarningKind,
     HeartbeatResponse,
-    InstanceRegistration,
+    InstanceRankRegistration,
     ProcessRef,
 )
 from xpool.transport import TransportArenaHandle
@@ -36,7 +36,7 @@ pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_offli
 
 
 def test_instance_deregister_stops_heartbeat_worker(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = runtime_config(enabled=True)
+    config = runtime_config()
     events: list[object] = []
 
     class FakeThread(threading.Thread):
@@ -61,7 +61,7 @@ def test_instance_deregister_stops_heartbeat_worker(monkeypatch: pytest.MonkeyPa
         def close(self) -> None:
             return None
 
-        def register_instance(self, registration: InstanceRegistration) -> None:
+        def register_instance(self, registration: InstanceRankRegistration) -> None:
             return None
 
         def deregister_instance(self, instance_id: str, *, rank: int, owner: object) -> None:
@@ -71,7 +71,7 @@ def test_instance_deregister_stops_heartbeat_worker(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(xpool.runtime.instance, "XpoolClient", FakeXpoolClient)
 
     instance = runtime_instance(config, monkeypatch)
-    instance.register_runtime(transport_attributes(), workload())
+    instance.register_runtime(transport_attributes(), ffn_profile())
     instance.arena_handle = transport_arena()
     instance.start_heartbeat_worker()
     heartbeat_worker = instance.heartbeat_worker
@@ -86,39 +86,43 @@ def test_instance_deregister_stops_heartbeat_worker(monkeypatch: pytest.MonkeyPa
 
 
 def test_instance_start_registers_heartbeat_without_attaching_transport(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = runtime_config(enabled=True)
+    config = runtime_config()
     events: list[str] = []
-    monkeypatch.setattr(Instance, "register_runtime", lambda self, transport, resolved: events.append("register"))
-    monkeypatch.setattr(Instance, "start_heartbeat_worker", lambda self: events.append("heartbeat"))
     monkeypatch.setattr(
-        Instance,
+        InstanceRankRuntime, "register_runtime", lambda self, transport, resolved: events.append("register")
+    )
+    monkeypatch.setattr(InstanceRankRuntime, "start_heartbeat_worker", lambda self: events.append("heartbeat"))
+    monkeypatch.setattr(
+        InstanceRankRuntime,
         "attach_arena_from_daemon",
         lambda self: pytest.fail("Transport attachment must wait for executable Fabric"),
     )
 
     instance = runtime_instance(config, monkeypatch)
-    instance.start_runtime(transport_attributes(), workload())
+    instance.start_runtime(transport_attributes(), ffn_profile())
 
     assert events == ["register", "heartbeat"]
 
 
 def test_instance_start_deregisters_when_heartbeat_start_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = runtime_config(enabled=True)
+    config = runtime_config()
     events: list[str] = []
 
-    def fail_heartbeat(self: Instance) -> None:
+    def fail_heartbeat(self: InstanceRankRuntime) -> None:
         events.append("heartbeat")
         raise RuntimeError("heartbeat failed")
 
-    monkeypatch.setattr(Instance, "register_runtime", lambda self, transport, resolved: events.append("register"))
-    monkeypatch.setattr(Instance, "start_heartbeat_worker", fail_heartbeat)
-    monkeypatch.setattr(Instance, "attach_arena_from_daemon", lambda self: events.append("attach"))
-    monkeypatch.setattr(Instance, "start_failure_monitor", lambda self: events.append("monitor"))
-    monkeypatch.setattr(Instance, "deregister_runtime", lambda self: events.append("deregister"))
+    monkeypatch.setattr(
+        InstanceRankRuntime, "register_runtime", lambda self, transport, resolved: events.append("register")
+    )
+    monkeypatch.setattr(InstanceRankRuntime, "start_heartbeat_worker", fail_heartbeat)
+    monkeypatch.setattr(InstanceRankRuntime, "attach_arena_from_daemon", lambda self: events.append("attach"))
+    monkeypatch.setattr(InstanceRankRuntime, "start_failure_monitor", lambda self: events.append("monitor"))
+    monkeypatch.setattr(InstanceRankRuntime, "deregister_runtime", lambda self: events.append("deregister"))
 
     with pytest.raises(RuntimeError, match="heartbeat failed"):
         instance = runtime_instance(config, monkeypatch)
-        instance.start_runtime(transport_attributes(), workload())
+        instance.start_runtime(transport_attributes(), ffn_profile())
 
     assert events == ["register", "heartbeat", "deregister"]
 
@@ -145,7 +149,7 @@ def test_instance_heartbeat_routes_nonfatal_atnagent_warning(
             }
         )
         if rank == 1
-        else runtime_config(enabled=True)
+        else runtime_config()
     )
     client = install_scripted_instance_client(
         monkeypatch,
@@ -173,7 +177,7 @@ def test_instance_heartbeat_routes_nonfatal_atnagent_warning(
 def test_instance_heartbeat_fail_closes_after_local_stale_atnagent_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = runtime_config(enabled=True)
+    config = runtime_config()
     stale_response = HeartbeatResponse(
         warnings=[
             ControlPlaneWarning(
@@ -210,7 +214,7 @@ def test_instance_heartbeat_retries_recoverable_response_failure(
     monkeypatch: pytest.MonkeyPatch,
     failure_kind: str,
 ) -> None:
-    config = runtime_config(enabled=True)
+    config = runtime_config()
     failure = (
         xpool.runtime.instance.XpoolClientError(
             "status",
@@ -238,7 +242,7 @@ def test_instance_heartbeat_retries_recoverable_response_failure(
 def test_instance_heartbeat_keeps_client_on_recoverable_failure_and_closes_on_stop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = runtime_config(enabled=True)
+    config = runtime_config()
     client = install_scripted_instance_client(
         monkeypatch,
         heartbeat_results=[
@@ -263,7 +267,7 @@ def test_instance_heartbeat_keeps_client_on_recoverable_failure_and_closes_on_st
 def test_instance_heartbeat_fail_closes_after_transport_error_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = runtime_config(enabled=True)
+    config = runtime_config()
     client = install_scripted_instance_client(
         monkeypatch,
         heartbeat_results=[xpool.runtime.instance.XpoolClientError("transport", "daemon unavailable")],
@@ -285,7 +289,7 @@ def test_instance_heartbeat_fail_closes_after_transport_error_deadline(
 def test_instance_heartbeat_resets_transport_recovery_deadline_during_stale_atnagent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = runtime_config(enabled=True)
+    config = runtime_config()
     client = install_scripted_instance_client(
         monkeypatch,
         heartbeat_results=[
@@ -331,7 +335,7 @@ def test_instance_heartbeat_resets_transport_recovery_deadline_during_stale_atna
 def test_instance_heartbeat_reregisters_missing_daemon_registration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = runtime_config(enabled=True)
+    config = runtime_config()
     arena = transport_arena()
     client = install_scripted_instance_client(
         monkeypatch,
@@ -360,7 +364,7 @@ def test_instance_heartbeat_reregisters_missing_daemon_registration(
 def test_instance_heartbeat_fail_closes_if_recovered_arena_handle_changes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = runtime_config(enabled=True)
+    config = runtime_config()
     install_scripted_instance_client(
         monkeypatch,
         heartbeat_results=[xpool.runtime.instance.XpoolDaemonError("not_ready", "registration missing")],
@@ -379,7 +383,7 @@ def test_instance_heartbeat_fail_closes_if_recovered_arena_handle_changes(
 def test_instance_heartbeat_retries_arena_lease_after_registration_recovers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = runtime_config(enabled=True)
+    config = runtime_config()
     arena = transport_arena()
     client = install_scripted_instance_client(
         monkeypatch,
@@ -414,7 +418,7 @@ def test_instance_heartbeat_fail_closes_on_fatal_error(
     monkeypatch: pytest.MonkeyPatch,
     failure: BaseException,
 ) -> None:
-    config = runtime_config(enabled=True)
+    config = runtime_config()
     client = install_scripted_instance_client(monkeypatch, heartbeat_results=[failure])
     monkeypatch.setattr(xpool.utils.procs.os, "_exit", lambda code: (item for item in ()).throw(SystemExit(code)))
 

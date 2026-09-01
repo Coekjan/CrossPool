@@ -13,7 +13,9 @@ def test_dispatcher_registers_only_ffn_shim() -> None:
 
 def test_dispatcher_meta_fake_preserves_shape_dtype_and_device() -> None:
     hidden_states = torch.empty((2, 4), device="meta", dtype=torch.float32)
-    output = torch.ops.xpool.ffn_shim(hidden_states, None, 0, 2, 1, 0)
+    output = torch.empty_like(hidden_states)
+    result = torch.ops.xpool.ffn_shim(hidden_states, None, output, 0, 2, 1, 0)
+    assert result is None
     assert output.shape == hidden_states.shape
     assert output.dtype == hidden_states.dtype
     assert output.device.type == "meta"
@@ -21,5 +23,6 @@ def test_dispatcher_meta_fake_preserves_shape_dtype_and_device() -> None:
 
 def test_dispatcher_has_no_cpu_kernel() -> None:
     hidden_states = torch.empty((2, 4), device="cpu", dtype=torch.float32)
+    output = torch.empty_like(hidden_states)
     with pytest.raises(NotImplementedError, match="'CPU' backend"):
-        torch.ops.xpool.ffn_shim(hidden_states, None, 0, 2, 1, 0)
+        torch.ops.xpool.ffn_shim(hidden_states, None, output, 0, 2, 1, 0)

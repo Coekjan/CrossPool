@@ -7,6 +7,7 @@ import os
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
+from http import HTTPStatus
 
 import httpx
 import pytest
@@ -16,10 +17,11 @@ import xpool.native
 import xpool.service.daemon.app
 import xpool.service.daemon.control
 from tests.harness.support.config import TEST_MODEL_ID, install_test_config
-from xpool.abi import ABI_VERSION
 from xpool.config import XpoolConfig
+from xpool.fabric import FabricParticipantPhase, FabricPlan
+from xpool.mps import MpsProbeResult
+from xpool.native import ABI_VERSION
 from xpool.service.daemon.app import create_daemon
-from xpool.service.daemon.mps import MpsProbeResult
 from xpool.utils.procs import ProcUniqId
 
 
@@ -79,7 +81,7 @@ def deterministic_daemon_dependencies(
     monkeypatch.setattr(
         xpool.service.daemon.control,
         "probe_mps_controller",
-        lambda: MpsProbeResult(True, "test MPS controller is online"),
+        lambda: MpsProbeResult(True, 100, "test MPS controller is online"),
     )
     monkeypatch.setattr(xpool.native.fabric, "create_uid", lambda: "ab" * 128)
     return clock
@@ -105,7 +107,7 @@ def instance_registration(
     instance_id: str = TEST_MODEL_ID,
     rank: int = 0,
     abi_version: int = ABI_VERSION,
-    max_tokens: int = 8,
+    payload_row_capacity: int = 8,
     atn_tp_rank: int | None = None,
     atn_tp_size: int = 1,
     atn_dp_rank: int = 0,
@@ -119,13 +121,13 @@ def instance_registration(
         "abi_version": abi_version,
         "pid": pid,
         "transport": transport_requirements(
-            max_tokens=max_tokens,
+            payload_row_capacity=payload_row_capacity,
             atn_tp_rank=rank if atn_tp_rank is None else atn_tp_rank,
             atn_tp_size=atn_tp_size,
             atn_dp_rank=atn_dp_rank,
             atn_dp_size=atn_dp_size,
         ),
-        "workload": ffn_workload(),
+        "ffn_profile": ffn_profile(),
     }
 
 
@@ -148,26 +150,55 @@ def ffnagent_registration(
     cuda_device: int = 1,
     pid: int | None = None,
     abi_version: int = ABI_VERSION,
-) -> dict[str, int]:
+    model_ids: tuple[str, ...] = (TEST_MODEL_ID,),
+) -> dict[str, object]:
     """Return one valid FfnAgent registration payload."""
 
     return {
         "pid": process_pid(pid),
         "abi_version": abi_version,
         "cuda_device": cuda_device,
+        "cuda_total_memory_bytes": 16 * 1024**3,
+        "cuda_free_memory_bytes": 12 * 1024**3,
+        "model_specs": [ffn_model_spec(model_id=model_id) for model_id in model_ids],
     }
 
 
-def ffn_workload(*, hidden_size: int = 2048) -> dict[str, object]:
-    """Return one valid rank-independent FFN workload payload."""
+def ffn_model_spec(*, model_id: str = TEST_MODEL_ID, hidden_size: int = 4) -> dict[str, object]:
+    """Return one valid generation-independent Dense FFN Model Spec."""
+
+    return {
+        "model_id": model_id,
+        "architecture_name": "Qwen3ForCausalLM",
+        "model_config_digest": "a" * 64,
+        "hidden_size": hidden_size,
+        "activation": 1,
+        "layers": [
+            {
+                "kind": 1,
+                "layer_id": 0,
+                "intermediate_size": 8,
+                "checkpoint": {
+                    "gate_weight_key": "model.layers.0.mlp.gate_proj.weight",
+                    "up_weight_key": "model.layers.0.mlp.up_proj.weight",
+                    "down_weight_key": "model.layers.0.mlp.down_proj.weight",
+                },
+            }
+        ],
+    }
+
+
+def ffn_profile(*, hidden_size: int = 4) -> dict[str, object]:
+    """Return one valid rank-independent FFN Profile payload."""
 
     return {
         "model_config_digest": "a" * 64,
-        "dtype": 1,
+        "payload_dtype": "bfloat16",
         "hidden_size": hidden_size,
         "layers": [{"layer_id": 0, "kind": 1}],
-        "max_decode_rows": 4,
-        "max_prefill_rows": 8,
+        "decode_payload_row_capacity": 4,
+        "prefill_payload_row_capacity": 8,
+        "group_sum_complete_admitted": False,
     }
 
 
@@ -195,9 +226,8 @@ def fabric_participant_report(
     generation: Mapping[str, object],
     pe: int,
     phase: str,
-    plan_digest: str,
     invocation_failure: Mapping[str, object] | None = None,
-    protocol_failure: Mapping[str, object] | None = None,
+    control_failure: str | None = None,
 ) -> dict[str, object]:
     """Return one self-contained Agent Fabric participant report."""
 
@@ -206,10 +236,77 @@ def fabric_participant_report(
         "generation": dict(generation),
         "pe": pe,
         "phase": phase,
-        "plan_digest": plan_digest,
         "invocation_failure": None if invocation_failure is None else dict(invocation_failure),
-        "protocol_failure": None if protocol_failure is None else dict(protocol_failure),
+        "control_failure": control_failure,
     }
+
+
+def register_fabric_world(
+    app: FastAPI,
+    *,
+    atnagent: Mapping[str, object] | None = None,
+    ffnagent: Mapping[str, object] | None = None,
+    instance: Mapping[str, object] | None = None,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object], FabricPlan]:
+    """Register one complete 1x1x1 generation and return its plan."""
+
+    instance_payload = dict(instance or instance_registration(instance_id="m"))
+    atnagent_payload = dict(atnagent or atnagent_registration(cuda_device=0))
+    ffnagent_payload = dict(
+        ffnagent or ffnagent_registration(cuda_device=1, model_ids=(str(instance_payload["instance_id"]),))
+    )
+    assert request(app, "POST", "/atnagent/register", json=atnagent_payload).status_code == HTTPStatus.NO_CONTENT
+    assert request(app, "POST", "/ffnagent/register", json=ffnagent_payload).status_code == HTTPStatus.NO_CONTENT
+    response = request(app, "POST", "/instance/register", json=instance_payload)
+    assert response.status_code == HTTPStatus.NO_CONTENT, response.text
+    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+    return atnagent_payload, ffnagent_payload, instance_payload, plan
+
+
+def report_fabric_phase(
+    app: FastAPI,
+    registration: Mapping[str, object],
+    plan: FabricPlan,
+    *,
+    pe: int,
+    phase: FabricParticipantPhase,
+    invocation_failure: Mapping[str, object] | None = None,
+    control_failure: str | None = None,
+) -> HTTPStatus:
+    """Submit one participant transition through the daemon HTTP boundary."""
+
+    response = request(
+        app,
+        "POST",
+        "/fabric/participant-reports",
+        json=fabric_participant_report(
+            registration,
+            generation=plan.model_dump(mode="json")["generation"],
+            pe=pe,
+            phase=phase.value,
+            invocation_failure=invocation_failure,
+            control_failure=control_failure,
+        ),
+    )
+    return HTTPStatus(response.status_code)
+
+
+def activate_fabric_world(
+    app: FastAPI,
+    plan: FabricPlan,
+    *participants: tuple[Mapping[str, object], int],
+) -> None:
+    """Advance every Fabric participant through ACTIVE."""
+
+    for phase in (
+        FabricParticipantPhase.JOIN_READY,
+        FabricParticipantPhase.JOINING,
+        FabricParticipantPhase.JOINED,
+        FabricParticipantPhase.EXECUTION_READY,
+        FabricParticipantPhase.ACTIVE,
+    ):
+        for registration, pe in participants:
+            assert report_fabric_phase(app, registration, plan, pe=pe, phase=phase) == HTTPStatus.NO_CONTENT
 
 
 def atnagent_transport_arenas(
@@ -233,7 +330,7 @@ def atnagent_transport_arena_bindings(*arenas: tuple[str, int]) -> list[dict[str
 
 def transport_requirements(
     *,
-    max_tokens: int = 8,
+    payload_row_capacity: int = 8,
     atn_tp_rank: int = 0,
     atn_tp_size: int = 1,
     atn_dp_rank: int = 0,
@@ -241,7 +338,7 @@ def transport_requirements(
 ) -> dict[str, int]:
     return {
         "hidden_size": 4,
-        "max_tokens": max_tokens,
+        "payload_row_capacity": payload_row_capacity,
         "atn_tp_rank": atn_tp_rank,
         "atn_tp_size": atn_tp_size,
         "atn_dp_rank": atn_dp_rank,

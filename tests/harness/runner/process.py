@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
-import threading
 import time
 from collections.abc import Mapping
 from contextlib import suppress
@@ -18,10 +17,8 @@ import psutil
 PROCESS_TERMINATE_TIMEOUT_SECONDS = 30.0
 PROCESS_KILL_TIMEOUT_SECONDS = 30.0
 PROCESS_OUTPUT_DRAIN_TIMEOUT_SECONDS = 30.0
-TASK_SUPERVISOR_START_TIMEOUT_SECONDS = 30.0
 PROCESS_POLL_INTERVAL_SECONDS = 0.05
 LOG_TAIL_CHARS = 12000
-spawn_environment_lock = threading.Lock()
 
 
 @dataclass(slots=True)

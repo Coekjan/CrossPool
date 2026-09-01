@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import xpool.devkit.sglang.graph_observer
+import xpool.integrations.sglang.devkit.graph_observer
 from tests.harness.support.config import install_test_config, reset_global_config
 from tests.harness.support.sglang.graph_observer import (
     graph_observer_config,
@@ -28,7 +28,7 @@ def test_graph_observer_install_truncates_process_event_file(
     install_fake_sglang_runner_classes(monkeypatch, CudaGraphRunner, PiecewiseCudaGraphRunner)
     install_test_config(config=graph_observer_config(tmp_path.resolve()))
 
-    xpool.devkit.sglang.graph_observer.install()
+    xpool.integrations.sglang.devkit.graph_observer.install()
 
     assert event_file.read_text(encoding="utf-8") == ""
 
@@ -41,12 +41,12 @@ def test_graph_observer_repeat_install_preserves_process_event_file(
     event_file = tmp_path / f"xpool.graph-observer.{os.getpid()}.jsonl"
     install_fake_sglang_runner_classes(monkeypatch, CudaGraphRunner, PiecewiseCudaGraphRunner)
     install_test_config(config=graph_observer_config(tmp_path.resolve()))
-    xpool.devkit.sglang.graph_observer.install()
+    xpool.integrations.sglang.devkit.graph_observer.install()
     first_capture = CudaGraphRunner.capture
     assert CudaGraphRunner().capture() == "captured"
     event_file_text = event_file.read_text(encoding="utf-8")
 
-    xpool.devkit.sglang.graph_observer.install()
+    xpool.integrations.sglang.devkit.graph_observer.install()
 
     assert CudaGraphRunner.capture is first_capture
     assert event_file.read_text(encoding="utf-8") == event_file_text
@@ -71,4 +71,4 @@ def test_graph_observer_install_fails_when_event_file_cannot_be_opened(
     install_test_config(config=graph_observer_config(tmp_path.resolve()))
 
     with pytest.raises(OSError):
-        xpool.devkit.sglang.graph_observer.install()
+        xpool.integrations.sglang.devkit.graph_observer.install()

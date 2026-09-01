@@ -1,6 +1,6 @@
 ---
 name: deep-review
-description: Run xpool's six-axis staged-diff review with read-only reviewer subagents. Use when preparing a commit, when the user asks for delegated/deep/pre-commit review, or when another repo-local skill needs the standard xpool review fan-out.
+description: Run xpool's six-axis staged-diff review with read-only reviewer subagents when the user requests delegated, deep, or pre-commit review, or another repo-local skill explicitly requires that fan-out.
 ---
 
 # Deep Review
@@ -15,8 +15,9 @@ memory, commit, or push.
    `git diff --cached --stat`, and the intended staged diff. Review the staged
    diff only unless the user explicitly asks for staged, unstaged, and
    untracked files.
-2. Identify the intended change, whether it is format-only, and the accepted
-   `PLAN.md` section or workflow rule the staged diff claims to satisfy.
+2. Identify the intended change, whether it is format-only, the relevant
+   current documents under `docs/designs/`, and any applicable target delta
+   under `docs/plans/`.
 3. Spawn six independent `reviewer` subagents, one per axis below. Each prompt
    must include the staged diff scope, the intended change, the assigned axis,
    and the hard read-only constraints.
@@ -35,17 +36,18 @@ memory, commit, or push.
 
 | Axis | Focus |
 |------|-------|
-| A - Code to Design | Code matches the accepted `PLAN.md` API, scope, ownership boundaries, and one-step commit scope. For reset/bootstrap commits, verify the staged repository shape matches `AGENTS.md`. |
+| A - Code to Design | Code matches the relevant current design plus any applicable active plan's scoped target delta. Unrelated design boundaries remain unchanged. For reset/bootstrap commits, verify the staged repository shape matches `AGENTS.md`. |
 | B - Code to Docstrings | Docstrings match signatures, types, tensor shapes, returns, raises, preconditions, postconditions, and side effects. |
 | C - Code to Comments | Inline comments still describe real concurrency, ordering, shape, hardware behavior, CUDA graph capture, ABI, plugin, native loader, and failure behavior. |
 | D - Stale References | Docs, tests, benchmarks, and readmes do not reference removed or renamed APIs, paths, commands, or phases. |
 | E - Environment Hardcoding | No hardcoded `/home/`, `/data/`, hostnames, ports, model paths, CUDA paths, local build directories, or cluster assumptions bypass config. Local reference paths may appear only as clearly labeled non-runtime evidence. |
-| F - Engineering Quality | Code follows `docs/code-style.md`; repository architecture, configuration, testing, and workflow remain consistent with `AGENTS.md` and the accepted `PLAN.md`. |
+| F - Engineering Quality | Code follows `docs/code-style.md`; terminology, current architecture, active target changes, configuration, testing, and workflow remain consistent with their owning repository documents. |
 
 Axis F reviewers must read `docs/code-style.md` and apply its complete current
-rules. Reviewer prompts must reference that file rather than embedding a copied
-checklist. Treat documented blocking requirements as blocking unless the
-accepted design records a scoped exception.
+rules. Read `CONTEXT.md`, current design documents, and active plans only when
+they are relevant to the staged scope. Reviewer prompts must reference the
+owning files rather than embedding copied checklists. Treat documented blocking
+requirements as blocking unless an applicable plan records a scoped exception.
 
 ## Subagent Constraints
 

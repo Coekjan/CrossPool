@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 import tests.harness.runner.gpu
@@ -79,6 +81,29 @@ def test_pool_refuses_close_with_active_lease(monkeypatch: pytest.MonkeyPatch) -
 
     pool.release(lease)
     pool.close()
+
+
+def test_physical_gpu_links_preserve_directed_raw_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        tests.harness.runner.gpu,
+        "query_physical_gpus",
+        lambda: {"0": "GPU-a", "1": "GPU-b"},
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout="\x1b[4mGPU0 GPU1 CPU Affinity\x1b[0m\nGPU0 X NV12 0-3\nGPU1 PIX X 4-7\n",
+            stderr="",
+        ),
+    )
+
+    assert tests.harness.runner.gpu.query_physical_gpu_links() == {
+        ("GPU-a", "GPU-b"): "NV12",
+        ("GPU-b", "GPU-a"): "PIX",
+    }
 
 
 def configure_inventory(monkeypatch: pytest.MonkeyPatch) -> None:

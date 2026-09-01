@@ -13,7 +13,7 @@ import tests.harness.runner.plan
 import tests.harness.runner.pytest_report
 import tests.harness.runner.suite
 import tests.harness.runner.task
-import tests.harness.sglang.parity
+import tests.harness.sglang.serving.alignment
 from tests.harness.runner.gpu import GpuPool
 from tests.harness.runner.supervisor import (
     TaskCompletion,
@@ -22,9 +22,13 @@ from tests.harness.runner.supervisor import (
     TaskScopeState,
     TaskStartFailure,
 )
-from tests.harness.sglang.graph import SglangGraphMode
-from tests.harness.sglang.parity import TOKEN_PARITY_ARTIFACT_FILENAME, TokenOutput, TokenParityArtifact
-from xpool.service.daemon.mps import MpsProbeResult
+from tests.harness.sglang.serving.alignment import (
+    SERVING_GRAPH_ARTIFACT_FILENAME,
+    ServingGraphArtifact,
+    TokenOutput,
+)
+from tests.harness.sglang.serving.graph import SglangGraphMode
+from xpool.mps import MpsProbeResult
 
 
 def test_compiler_builds_stage_tasks_with_exact_gpu_batching() -> None:
@@ -334,7 +338,7 @@ def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
     monkeypatch.setattr(
         tests.harness.runner.suite,
         "probe_mps_controller",
-        lambda: MpsProbeResult(True, "online"),
+        lambda: MpsProbeResult(True, 100, "online"),
     )
     plan = tests.harness.runner.plan.TestPlan(
         (
@@ -413,7 +417,7 @@ def test_suite_runner_classifies_gpu_lease_after_start_failure(
     monkeypatch.setattr(
         tests.harness.runner.suite,
         "probe_mps_controller",
-        lambda: MpsProbeResult(True, "online"),
+        lambda: MpsProbeResult(True, 100, "online"),
     )
     plan = tests.harness.runner.plan.TestPlan(
         (
@@ -448,7 +452,7 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
     monkeypatch.setattr(
         tests.harness.runner.suite,
         "probe_mps_controller",
-        lambda: MpsProbeResult(True, "online"),
+        lambda: MpsProbeResult(True, 100, "online"),
     )
     blocked_run_directory = tmp_path / "blocked"
     blocked_run_directory.write_text("not a directory", encoding="utf-8")
@@ -485,7 +489,7 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
                 tests.harness.runner.pytest_report.PytestCaseStatus.PASSED,
             ),
             (None, None),
-            tests.harness.sglang.parity.TokenParityGroupStatus.COMPARED,
+            tests.harness.sglang.serving.alignment.ServingGraphGroupStatus.COMPARED,
         ),
         (
             (
@@ -493,7 +497,7 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
                 tests.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
             ),
             ("missing config", "missing config"),
-            tests.harness.sglang.parity.TokenParityGroupStatus.SKIPPED,
+            tests.harness.sglang.serving.alignment.ServingGraphGroupStatus.SKIPPED,
         ),
         (
             (
@@ -501,7 +505,7 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
                 tests.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
             ),
             ("missing config", "missing weights"),
-            tests.harness.sglang.parity.TokenParityGroupStatus.INCONSISTENT,
+            tests.harness.sglang.serving.alignment.ServingGraphGroupStatus.INCONSISTENT,
         ),
         (
             (
@@ -509,7 +513,7 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
                 tests.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
             ),
             (None, "missing config"),
-            tests.harness.sglang.parity.TokenParityGroupStatus.INCONSISTENT,
+            tests.harness.sglang.serving.alignment.ServingGraphGroupStatus.INCONSISTENT,
         ),
         (
             (
@@ -517,19 +521,19 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
                 tests.harness.runner.pytest_report.PytestCaseStatus.PASSED,
             ),
             ("assertion failed", None),
-            tests.harness.sglang.parity.TokenParityGroupStatus.FAILED,
+            tests.harness.sglang.serving.alignment.ServingGraphGroupStatus.FAILED,
         ),
     ),
 )
-def test_token_parity_group_results_follow_case_outcomes(
+def test_serving_graph_group_results_follow_case_outcomes(
     statuses: tuple[
         tests.harness.runner.pytest_report.PytestCaseStatus, tests.harness.runner.pytest_report.PytestCaseStatus
     ],
     details: tuple[str | None, str | None],
-    expected_status: tests.harness.sglang.parity.TokenParityGroupStatus,
+    expected_status: tests.harness.sglang.serving.alignment.ServingGraphGroupStatus,
     tmp_path: Path,
 ) -> None:
-    runner = parity_runner(tmp_path, statuses, details)
+    runner = serving_graph_runner(tmp_path, statuses, details)
 
     (result,) = runner.artifact_group_results()
 
@@ -537,8 +541,8 @@ def test_token_parity_group_results_follow_case_outcomes(
     assert result.detail is not None and result.detail.startswith(expected_status.value)
 
 
-def test_token_parity_omits_group_without_complete_ordinary_outcomes(tmp_path: Path) -> None:
-    runner = parity_runner(
+def test_serving_graph_omits_group_without_complete_ordinary_outcomes(tmp_path: Path) -> None:
+    runner = serving_graph_runner(
         tmp_path,
         (
             tests.harness.runner.pytest_report.PytestCaseStatus.PASSED,
@@ -675,16 +679,16 @@ def requirements(
     )
 
 
-def parity_runner(
+def serving_graph_runner(
     root: Path,
     statuses: tuple[
         tests.harness.runner.pytest_report.PytestCaseStatus, tests.harness.runner.pytest_report.PytestCaseStatus
     ],
     details: tuple[str | None, str | None],
 ) -> tests.harness.runner.suite.SuiteRunner:
-    """Build one fully classified two-mode parity group without subprocesses."""
+    """Build one fully classified two-mode serving graph group without subprocesses."""
 
-    group = tests.harness.runner.artifact.ArtifactGroupRef("token_parity", "example", 2)
+    group = tests.harness.runner.artifact.ArtifactGroupRef("serving_graph", "example", 2)
     plan = tests.harness.runner.plan.TestPlan(
         (
             case(
@@ -706,7 +710,7 @@ def parity_runner(
         repository_root=root,
         run_directory=root / "run",
         strict_requirements=False,
-        artifact_group_adapters=(tests.harness.sglang.parity.TokenParityAdapter(),),
+        artifact_group_adapters=(tests.harness.sglang.serving.alignment.ServingGraphAdapter(),),
     )
     graph_modes = (SglangGraphMode.EAGER, SglangGraphMode.FULL)
     for task, status, detail, graph_mode in zip(runner.tasks, statuses, details, graph_modes, strict=True):
@@ -724,9 +728,9 @@ def parity_runner(
             directory,
         )
         if status is tests.harness.runner.pytest_report.PytestCaseStatus.PASSED:
-            TokenParityArtifact(
+            ServingGraphArtifact(
                 group="example",
                 graph_settings=graph_mode.settings(),
                 outputs=(TokenOutput("model", (1, 2, 3)),),
-            ).write(artifact_directory / TOKEN_PARITY_ARTIFACT_FILENAME)
+            ).write(artifact_directory / SERVING_GRAPH_ARTIFACT_FILENAME)
     return runner

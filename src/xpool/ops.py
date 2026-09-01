@@ -13,25 +13,28 @@ xpool.cext.ensure_native_loaded()
 
 
 @torch.library.register_fake("xpool::ffn_shim")
-def fake_ffn_shim_output(hidden_states: torch.Tensor, *args: object) -> torch.Tensor:
-    """Return shape-preserving fake output for graph tracing."""
+def fake_ffn_shim_output(
+    hidden_states: torch.Tensor, dp_rank_payload_rows: torch.Tensor | None, output: torch.Tensor, *args: object
+) -> None:
+    """Accept caller-owned fake output for graph tracing."""
 
-    return torch.empty_like(hidden_states)
+    return None
 
 
 def ffn_shim(
     hidden_states: torch.Tensor,
-    global_num_tokens_gpu: torch.Tensor | None,
+    dp_rank_payload_rows: torch.Tensor | None,
     request_metadata: FfnRequestMetadata,
 ) -> torch.Tensor:
     """Dispatch one FFN request through the native Tensor operator.
 
     Args:
         hidden_states: Contiguous CUDA tensor shaped
-            ``[num_tokens, hidden_size]``.
-        global_num_tokens_gpu: Optional contiguous CUDA int32 or int64 tensor
-            containing one token count per attention DP rank. Native transport
-            validates and stages these values as protocol uint32 counts.
+            ``[payload_rows, hidden_size]``.
+        dp_rank_payload_rows: Optional contiguous CUDA int32 or int64 tensor
+            containing one physical row span per attention DP rank. Native
+            transport validates and stages these values as protocol uint32
+            rows.
         request_metadata: Validated transport metadata for this invocation.
 
     Returns:
@@ -46,11 +49,14 @@ def ffn_shim(
         full or piecewise CUDA graphs. It does not synchronize the host.
     """
 
-    return torch.ops.xpool.ffn_shim(
+    output = torch.empty_like(hidden_states)
+    torch.ops.xpool.ffn_shim(
         hidden_states,
-        global_num_tokens_gpu,
+        dp_rank_payload_rows,
+        output,
         request_metadata.layer_ordinal,
         int(request_metadata.forward_mode),
-        int(request_metadata.result_handoff),
-        int(request_metadata.dp_padding_mode),
+        int(request_metadata.output_requirement),
+        int(request_metadata.dp_row_layout),
     )
+    return output

@@ -5,11 +5,17 @@ from dataclasses import replace
 import pytest
 
 import xpool.integrations.sglang.plugin
-from tests.harness.support.sglang.plugin import binding, ffn_workload
+from tests.harness.support.sglang.plugin import binding, ffn_profile
 
 
 @pytest.mark.parametrize(
-    ("topology", "expected_topology", "max_decode_rows", "max_prefill_rows", "expected_max_tokens"),
+    (
+        "topology",
+        "expected_topology",
+        "decode_payload_row_capacity",
+        "prefill_payload_row_capacity",
+        "expected_payload_row_capacity",
+    ),
     [
         (
             {"atn_tp_rank": 1, "atn_tp_size": 2},
@@ -27,24 +33,24 @@ from tests.harness.support.sglang.plugin import binding, ffn_workload
         ),
     ],
 )
-def test_transport_attributes_project_workload_and_attention_topology(
+def test_transport_attributes_project_ffn_profile_and_attention_topology(
     topology: dict[str, int],
     expected_topology: dict[str, int],
-    max_decode_rows: int,
-    max_prefill_rows: int,
-    expected_max_tokens: int,
+    decode_payload_row_capacity: int,
+    prefill_payload_row_capacity: int,
+    expected_payload_row_capacity: int,
 ) -> None:
     model_binding = replace(binding(), **topology)
-    workload = ffn_workload(
+    profile = ffn_profile(
         hidden_size=7168,
-        max_decode_rows=max_decode_rows,
-        max_prefill_rows=max_prefill_rows,
+        decode_payload_row_capacity=decode_payload_row_capacity,
+        prefill_payload_row_capacity=prefill_payload_row_capacity,
     )
 
-    attributes = xpool.integrations.sglang.plugin.derive_transport_attributes(model_binding, workload)
+    attributes = xpool.integrations.sglang.plugin.derive_instance_rank_transport_profile(model_binding, profile)
 
     assert attributes.model_dump() == {
         "hidden_size": 7168,
-        "max_tokens": expected_max_tokens,
+        "payload_row_capacity": expected_payload_row_capacity,
         **expected_topology,
     }

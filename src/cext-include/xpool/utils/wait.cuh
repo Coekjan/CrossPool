@@ -19,30 +19,28 @@ inline constexpr std::uint64_t kDefaultTimeoutNanoseconds = 5'000'000'000ULL;
 inline constexpr std::uint32_t kDefaultRelaxNanoseconds = 1'000U;
 
 /// Yield one device thread between unsuccessful protocol polls.
-/// \param nanoseconds Approximate sleep duration passed to the CUDA intrinsic.
-XPOOL_DEVICE_FN inline void relax(
-    std::uint32_t nanoseconds = kDefaultRelaxNanoseconds) {
-  __nanosleep(nanoseconds);
-}
+XPOOL_DEVICE_FN inline void relax(std::uint32_t nanoseconds = kDefaultRelaxNanoseconds) { __nanosleep(nanoseconds); }
 
 /// Device-global elapsed-time deadline used by polling protocols.
 class Deadline {
 public:
   /// Start a deadline at the current device-global timestamp.
-  /// \param timeout_nanoseconds Positive or zero elapsed-time budget.
-  /// \return Deadline expiring after the supplied duration.
   /// \pre timeout_nanoseconds is not UINT64_MAX; use never() instead.
   XPOOL_DEVICE_FN static Deadline after(std::uint64_t timeout_nanoseconds) {
     xpool::abort_if(timeout_nanoseconds == kNever);
     return Deadline{xpool::utils::time::now(), timeout_nanoseconds};
   }
 
+  /// Reconstruct one non-renewable deadline across one-shot graph probes.
+  XPOOL_DEVICE_FN static Deadline from_start(std::uint64_t started_at, std::uint64_t timeout_nanoseconds) {
+    xpool::abort_if(timeout_nanoseconds == kNever);
+    return Deadline{started_at, timeout_nanoseconds};
+  }
+
   /// Construct a deadline that never expires.
-  /// \return Unbounded deadline for shutdown-aware resident polling.
   XPOOL_DEVICE_FN static Deadline never() { return Deadline{0, kNever}; }
 
   /// Return whether this bounded deadline has expired.
-  /// \return False for never(); otherwise true once its elapsed budget passed.
   XPOOL_DEVICE_FN bool expired() const {
     return timeout_nanoseconds_ != kNever && xpool::utils::time::now() - started_at_ >= timeout_nanoseconds_;
   }
@@ -57,49 +55,48 @@ private:
   std::uint64_t timeout_nanoseconds_;
 };
 
-/// Poll readiness until it succeeds, cancellation wins, or a deadline expires.
-/// \tparam Ready Callable returning true when the operation completed.
-/// \tparam Cancelled Callable returning true when the operation must stop.
-/// \param deadline Elapsed-time deadline governing this wait.
-/// \param ready Readiness predicate evaluated first on every iteration.
-/// \param cancelled Cancellation predicate evaluated after readiness.
-/// \param relax_nanoseconds Sleep interval after an unsuccessful iteration.
-/// \return Terminal wait outcome.
+/// Evaluate one polling attempt without sleeping or retaining the CTA.
+/// Readiness wins over cancellation and timeout when predicates become true
+/// during the same observation.
 template <Poll Ready, Poll Cancelled>
-XPOOL_DEVICE_FN Result until(const Deadline &deadline, Ready ready, Cancelled cancelled,
-                                             std::uint32_t relax_nanoseconds = kDefaultRelaxNanoseconds) {
+XPOOL_DEVICE_FN Status poll_once(const Deadline &deadline, Ready ready, Cancelled cancelled) {
+  if (ready()) {
+    return Status::Ready;
+  }
+  if (cancelled()) {
+    return Status::Cancelled;
+  }
+  if (deadline.expired()) {
+    return Status::TimedOut;
+  }
+  return Status::Pending;
+}
+
+/// Poll readiness until it succeeds, cancellation wins, or a deadline expires.
+template <Poll Ready, Poll Cancelled>
+XPOOL_DEVICE_FN Status until(const Deadline &deadline, Ready ready, Cancelled cancelled,
+                             std::uint32_t relax_nanoseconds = kDefaultRelaxNanoseconds) {
   while (true) {
-    if (ready()) {
-      return Result::Ready;
+    switch (poll_once(deadline, ready, cancelled)) {
+    case Status::Ready:
+      return Status::Ready;
+    case Status::Cancelled:
+      return Status::Cancelled;
+    case Status::TimedOut:
+      return Status::TimedOut;
+    case Status::Pending:
+      relax(relax_nanoseconds);
+      break;
     }
-    if (cancelled()) {
-      return Result::Cancelled;
-    }
-    if (deadline.expired()) {
-      return Result::TimedOut;
-    }
-    relax(relax_nanoseconds);
   }
 }
 
 /// Poll readiness until it succeeds or a deadline expires.
-/// \tparam Ready Callable returning true when the operation completed.
-/// \param deadline Elapsed-time deadline governing this wait.
-/// \param ready Readiness predicate evaluated on every iteration.
-/// \param relax_nanoseconds Sleep interval after an unsuccessful iteration.
-/// \return Ready or TimedOut.
 template <Poll Ready>
-XPOOL_DEVICE_FN Result until(const Deadline &deadline, Ready ready,
-                                             std::uint32_t relax_nanoseconds = kDefaultRelaxNanoseconds) {
-  while (true) {
-    if (ready()) {
-      return Result::Ready;
-    }
-    if (deadline.expired()) {
-      return Result::TimedOut;
-    }
-    relax(relax_nanoseconds);
-  }
+XPOOL_DEVICE_FN Status until(const Deadline &deadline, Ready ready,
+                             std::uint32_t relax_nanoseconds = kDefaultRelaxNanoseconds) {
+  return until(
+      deadline, ready, [] { return false; }, relax_nanoseconds);
 }
 
 } // namespace xpool::utils::wait

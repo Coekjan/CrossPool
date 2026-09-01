@@ -9,17 +9,17 @@ import pytest
 import xpool.runtime.agent
 import xpool.runtime.atnagent
 from tests.harness.support.config import install_test_config
-from xpool.abi import ABI_VERSION
 from xpool.config import XpoolConfig
+from xpool.native import ABI_VERSION
 from xpool.runtime.agent import (
     Agent,
     AgentHeartbeat,
 )
 from xpool.runtime.atnagent import (
     AtnAgent,
-    AtnTransportEntry,
+    AtnAgentTransportArenaState,
 )
-from xpool.service.wire import HeartbeatResponse, InstanceRegistration
+from xpool.service.wire import HeartbeatResponse, InstanceRankRegistration
 from xpool.transport import TransportArenaHandle
 
 
@@ -112,19 +112,20 @@ def instance_registration_view(*, instance_id: str, rank: int) -> dict[str, obje
         "abi_version": ABI_VERSION,
         "transport": {
             "hidden_size": 4,
-            "max_tokens": 8,
+            "payload_row_capacity": 8,
             "atn_tp_rank": 0,
             "atn_tp_size": 1,
             "atn_dp_rank": 0,
             "atn_dp_size": 1,
         },
-        "workload": {
+        "ffn_profile": {
             "model_config_digest": "a" * 64,
-            "dtype": 1,
+            "payload_dtype": "bfloat16",
             "hidden_size": 4,
             "layers": [{"layer_id": 0, "kind": 1}],
-            "max_decode_rows": 1,
-            "max_prefill_rows": 1,
+            "decode_payload_row_capacity": 1,
+            "prefill_payload_row_capacity": 1,
+            "group_sum_complete_admitted": False,
         },
     }
 
@@ -135,12 +136,14 @@ def transport_arena(rank: int) -> dict[str, object]:
     }
 
 
-def transport_entry(*, instance_id: str, rank: int, handle_rank: int) -> AtnTransportEntry:
-    """Return one rank-local transport catalog entry."""
+def transport_entry(*, instance_id: str, rank: int, handle_rank: int) -> AtnAgentTransportArenaState:
+    """Return one rank-local transport arena state."""
 
-    registration = InstanceRegistration.model_validate(instance_registration_view(instance_id=instance_id, rank=rank))
+    registration = InstanceRankRegistration.model_validate(
+        instance_registration_view(instance_id=instance_id, rank=rank)
+    )
     handle = TransportArenaHandle(handle=f"{handle_rank:02x}" * 64)
-    return AtnTransportEntry(instance_id=instance_id, registration=registration, handle=handle)
+    return AtnAgentTransportArenaState(instance_id=instance_id, registration=registration, handle=handle)
 
 
 def patch_native_atnagent_ops(
@@ -157,7 +160,7 @@ def patch_native_atnagent_ops(
     def fake_create(
         instance_index: int,
         instance_rank: int,
-        max_tokens: int,
+        payload_row_capacity: int,
         hidden_size: int,
         dtype: int,
         atn_tp_rank: int,

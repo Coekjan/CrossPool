@@ -7,6 +7,8 @@ set(XPOOL_CUDA_ARCHITECTURES
   "75-real;80-real;89-real;90-real;100-real;120-real"
   CACHE STRING "CUDA architectures supported by the bundled NVSHMEM device archive"
 )
+# Rewrite the former release default once so existing CMake caches adopt the
+# architecture set supported by the bundled NVSHMEM device archive.
 if(XPOOL_CUDA_ARCHITECTURES STREQUAL XPOOL_LEGACY_CUDA_ARCHITECTURES)
   set(XPOOL_CUDA_ARCHITECTURES
     "75-real;80-real;89-real;90-real;100-real;120-real"
@@ -26,6 +28,8 @@ foreach(XPOOL_CUDA_ARCH IN LISTS XPOOL_EFFECTIVE_CUDA_ARCHITECTURES)
 endforeach()
 
 set(XPOOL_TORCH_CUDA_ARCH_LIST)
+# PyTorch consumes its own major.minor syntax. Preserve PTX only where the CMake
+# architecture list explicitly carries a matching virtual target.
 foreach(XPOOL_CUDA_ARCH IN LISTS XPOOL_EFFECTIVE_CUDA_ARCHITECTURES)
   if(XPOOL_CUDA_ARCH MATCHES "^([0-9]+)-real$")
     set(XPOOL_CUDA_ARCH_DIGITS "${CMAKE_MATCH_1}")

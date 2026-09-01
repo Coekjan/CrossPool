@@ -19,10 +19,10 @@ from sglang.srt.server_args import ServerArgs
 from torch import nn
 
 from xpool.config import get_global_config
-from xpool.fabric import FfnLayerKind
 from xpool.integrations.sglang.shim import FfnShimModule, iter_ffn_shims
-from xpool.integrations.sglang.topology import ModelSpec, ParallelPolicy
-from xpool.runtime.instance import Instance
+from xpool.integrations.sglang.topology import SglangAttentionTopology, SglangModelMetadata
+from xpool.native.ffn import LayerKind
+from xpool.runtime.instance import InstanceRankRuntime
 
 # A hook handler is either an SGLang around/before/after wrapper callable or a class
 # used as a REPLACE target. ``object`` (not ``Any``) is a deliberate, ANN401-safe escape
@@ -99,7 +99,7 @@ class SglangHook:
 
 
 @dataclass(frozen=True, slots=True)
-class XpoolModelBinding:
+class SglangInstanceRankBinding:
     """xpool runtime identity for one SGLang model runner.
 
     ``instance_id`` is the human-readable model id from ``XPOOL_CONFIG``; the
@@ -141,7 +141,7 @@ class XpoolModelBinding:
         server_args: ServerArgs,
         *,
         supports_dp_attention: bool,
-    ) -> XpoolModelBinding:
+    ) -> SglangInstanceRankBinding:
         """Resolve an xpool binding for one SGLang model runner.
 
         Args:
@@ -171,8 +171,8 @@ class XpoolModelBinding:
             raise RuntimeError(f"xpool config has no model entry for SGLang model path {model_path}")
 
         model, instance = matched_model_instance
-        spec = ModelSpec.load(config.model_path_of(model.id), model_id=model.id)
-        policy = ParallelPolicy.from_server_args(
+        spec = SglangModelMetadata.load(config.model_path_of(model.id), model_id=model.id)
+        policy = SglangAttentionTopology.from_server_args(
             spec,
             server_args,
             atnagent_count=config.atn_world_size,
@@ -301,20 +301,20 @@ class XpoolModelBinding:
 
 
 @dataclass(slots=True)
-class XpoolModelRuntime:
-    """Runner-owned composition of static binding and live Instance resources.
+class SglangInstanceRankRuntime:
+    """Runner-owned composition of static binding and live InstanceRankRuntime resources.
 
     Attributes:
         binding: Immutable xpool identity and topology resolved before load.
-        instance: Live daemon/native runtime installed after memory-pool setup,
+        instance_rank: Live daemon/native runtime installed after memory-pool setup,
             or ``None`` before transport startup.
     """
 
-    binding: XpoolModelBinding
-    instance: Instance | None = None
+    binding: SglangInstanceRankBinding
+    instance_rank: InstanceRankRuntime | None = None
 
     @classmethod
-    def attach(cls, model_runner: ModelRunner, binding: XpoolModelBinding) -> XpoolModelRuntime:
+    def attach(cls, model_runner: ModelRunner, binding: SglangInstanceRankBinding) -> SglangInstanceRankRuntime:
         """Attach exactly one xpool runtime owner to a model runner."""
 
         if getattr(model_runner, "xpool_runtime", None) is not None:
@@ -324,7 +324,7 @@ class XpoolModelRuntime:
         return runtime
 
     @classmethod
-    def require(cls, model_runner: ModelRunner) -> XpoolModelRuntime:
+    def require(cls, model_runner: ModelRunner) -> SglangInstanceRankRuntime:
         """Return the model runner's attached xpool runtime."""
 
         runtime = getattr(model_runner, "xpool_runtime", None)
@@ -335,14 +335,14 @@ class XpoolModelRuntime:
     def detach(self, model_runner: ModelRunner) -> None:
         """Release live resources and clear this exact runner attachment."""
 
-        if self.instance is not None:
-            self.instance.close()
-            self.instance = None
+        if self.instance_rank is not None:
+            self.instance_rank.close()
+            self.instance_rank = None
         if getattr(model_runner, "xpool_runtime", None) is self:
             setattr(model_runner, "xpool_runtime", None)
 
 
-class SglangModelAdapter(ABC):
+class SglangShimAdapter(ABC):
     """Base class for model-specific SGLang adapters.
 
     Attributes:
@@ -391,13 +391,13 @@ class SglangModelAdapter(ABC):
             Subclasses may attach adapter-specific metadata required during
             SGLang model construction.
 
-        The plugin resolves the :class:`XpoolModelBinding` (and thus the integer
+        The plugin resolves the :class:`SglangInstanceRankBinding` (and thus the integer
         instance/model identity) before calling this. The default implementation
         validates SGLang's complete tensor group; subclasses that override this
         method must call ``super().bind_runtime(model_runner)``.
         """
 
-        XpoolModelRuntime.require(model_runner).binding.validate_result_group(get_tp_group())
+        SglangInstanceRankRuntime.require(model_runner).binding.validate_result_group(get_tp_group())
 
     def validate_after_load(self, model_runner: ModelRunner) -> None:
         """Validate adapter postconditions after SGLang loads the model.
@@ -413,7 +413,7 @@ class SglangModelAdapter(ABC):
         self,
         model: nn.Module,
         *,
-        expected_layer_kinds: Sequence[FfnLayerKind],
+        expected_layer_kinds: Sequence[LayerKind],
         allowed_shim_types: tuple[type[FfnShimModule], ...],
     ) -> tuple[FfnShimModule, ...]:
         """Require complete FFN shim coverage after model loading.

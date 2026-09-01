@@ -1,24 +1,17 @@
-/// \file tests/suites/cext/fabric/scheduler_test.cu
-/// \brief Device behavior tests for FIFO and Random FFN scheduling.
-
-#include <c10/cuda/CUDAException.h>
-
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 
-#include <xpool/abi.hpp>
-#include <xpool/fabric/arena.cuh>
+#include <xpool/ffn.hpp>
 #include <xpool/fabric/scheduler.cuh>
+#include <xpool/macros.hpp>
 
 namespace {
 
-constexpr auto kModelCount = std::size_t{3};
-constexpr auto kPayloadCapacity = xpool::arena::kPayloadAlignment;
+constexpr auto kInstanceCount = std::size_t{3};
 
 ::testing::AssertionResult cuda_succeeded(cudaError_t error) {
   if (error == cudaSuccess) {
@@ -27,150 +20,58 @@ constexpr auto kPayloadCapacity = xpool::arena::kPayloadAlignment;
   return ::testing::AssertionFailure() << cudaGetErrorString(error);
 }
 
-class SchedulerArena {
-public:
-  SchedulerArena(const xpool::fabric::FfnSchedulerPolicy &policy, std::size_t executor_count)
-      : layout_(xpool::fabric::FabricArenaLayout::create(
-            1, 1, executor_count, kModelCount, kModelCount, kModelCount * kPayloadCapacity,
-            kPayloadCapacity)) {
-    auto *allocation = static_cast<void *>(nullptr);
-    C10_CUDA_CHECK(cudaMallocManaged(&allocation, layout_.header.total_bytes));
-    base_ = static_cast<std::uint8_t *>(allocation);
-    C10_CUDA_CHECK(cudaMemset(base_, 0, layout_.header.total_bytes));
-
-    std::memcpy(base_, &layout_, sizeof(layout_));
-    auto models = std::array<xpool::fabric::FabricModelLayout, kModelCount>{};
-    auto layers = std::array<xpool::fabric::FabricLayerLayout, kModelCount>{};
-    for (auto model_index = std::size_t{0}; model_index < kModelCount; ++model_index) {
-      models[model_index] = xpool::fabric::FabricModelLayout{
-          .dtype = xpool::abi::TensorDType::Fp32,
-          .hidden_size = 2,
-          .atn_tp_size = 1,
-          .atn_dp_size = 1,
-          .layer_begin = model_index,
-          .layer_count = 1,
-          .decode_payload_offset = model_index * kPayloadCapacity,
-          .decode_payload_capacity_bytes = kPayloadCapacity,
-          .prefill_payload_capacity_bytes = kPayloadCapacity,
-      };
-      layers[model_index] = xpool::fabric::FabricLayerLayout{
-          .layer_id = model_index,
-          .kind = xpool::fabric::FfnLayerKind::Dense,
-      };
-    }
-    std::memcpy(
-        base_ + layout_.model_layouts_offset, models.data(), sizeof(models));
-    std::memcpy(
-        base_ + layout_.layer_layouts_offset, layers.data(), sizeof(layers));
-    const auto scheduler = xpool::fabric::FfnScheduler::from(policy);
-    std::memcpy(base_ + layout_.scheduler_offset, &scheduler, sizeof(scheduler));
-  }
-
-  ~SchedulerArena() {
-    if (base_ != nullptr) {
-      C10_CUDA_IGNORE_ERROR(cudaFree(base_));
-    }
-  }
-
-  SchedulerArena(const SchedulerArena &) = delete;
-  SchedulerArena &operator=(const SchedulerArena &) = delete;
-
-  xpool::fabric::FabricArenaView view() const {
-    return xpool::fabric::FabricArenaView{base_};
-  }
-
-private:
-  xpool::fabric::FabricArenaLayout layout_;
-  std::uint8_t *base_ = nullptr;
-};
-
-XPOOL_HOST_DEVICE_FN xpool::fabric::FfnInvocation invocation(std::size_t model_index) {
-  return xpool::fabric::FfnInvocation{
-      .key = {.model_index = model_index, .invocation_sequence = 1},
+XPOOL_HOST_DEVICE_FN xpool::fabric::Invocation invocation(std::size_t instance_index) {
+  return {
+      .key = {.instance_index = instance_index, .invocation_sequence = 1},
       .layer_ordinal = 0,
       .payload_rows = 1,
-      .input_pe = 0,
-      .execution_mode = xpool::fabric::FfnExecutionMode::Decode,
-      .result_handoff = xpool::abi::FfnResultHandoff::ReplicatedFull,
-      .dp_padding_mode = xpool::abi::DpPaddingMode::None,
+      .output_requirement = xpool::ffn::OutputRequirement::PerRankComplete,
   };
 }
 
-__global__ void exercise_fifo(
-    xpool::fabric::FabricArenaView arena, std::size_t *observed) {
-  if (threadIdx.x != 0) {
-    return;
+XPOOL_KERNEL_FN void exercise_fifo(xpool::fabric::Scheduler scheduler, std::size_t *observed) {
+  observed[0] = scheduler.enqueue(invocation(2));
+  observed[1] = scheduler.enqueue(invocation(0));
+  observed[2] = scheduler.enqueue(invocation(1));
+  for (auto index = std::size_t{0}; index < kInstanceCount; ++index) {
+    const auto decision = scheduler.try_schedule();
+    observed[3 + index] = decision->invocation().key.instance_index;
+    observed[6 + index] = decision->executor_lane_index();
+    scheduler.release(decision->invocation().key, decision->executor_lane_index());
   }
-  auto &scheduler = arena.scheduler();
-  scheduler.enqueue(arena, invocation(2));
-  scheduler.enqueue(arena, invocation(0));
-  scheduler.enqueue(arena, invocation(1));
-  for (auto index = std::size_t{0}; index < kModelCount; ++index) {
-    const auto decision = scheduler.schedule(arena);
-    observed[index] = decision.invocation().key.model_index;
-    observed[kModelCount + index] = decision.executor_index();
-    scheduler.release(arena, decision.invocation().key, decision.executor_index());
-  }
-  observed[6] = scheduler.schedule(arena) ? 1 : 0;
-  observed[7] = arena.scheduler_entry(2).next_sequence();
+  observed[9] = scheduler.try_schedule().has_value() ? 1 : 0;
+  observed[10] = scheduler.has_unresolved_invocation(2) ? 1 : 0;
 }
 
-__global__ void exercise_concurrent_executors(
-    xpool::fabric::FabricArenaView arena, std::size_t *observed) {
-  if (threadIdx.x != 0) {
-    return;
+XPOOL_KERNEL_FN void exercise_two_lanes(xpool::fabric::Scheduler scheduler, std::size_t *observed) {
+  for (auto instance_index = std::size_t{0}; instance_index < kInstanceCount; ++instance_index) {
+    scheduler.enqueue(invocation(instance_index));
   }
-  auto &scheduler = arena.scheduler();
-  for (auto model_index = std::size_t{0}; model_index < kModelCount; ++model_index) {
-    scheduler.enqueue(arena, invocation(model_index));
-  }
-  const auto first = scheduler.schedule(arena);
-  const auto second = scheduler.schedule(arena);
-  observed[0] = first.invocation().key.model_index;
-  observed[1] = first.executor_index();
-  observed[2] = second.invocation().key.model_index;
-  observed[3] = second.executor_index();
-  observed[4] = scheduler.schedule(arena) ? 1 : 0;
-  scheduler.release(arena, first.invocation().key, first.executor_index());
-  const auto third = scheduler.schedule(arena);
-  observed[5] = third.invocation().key.model_index;
-  observed[6] = third.executor_index();
+  const auto first = scheduler.try_schedule();
+  const auto second = scheduler.try_schedule();
+  observed[0] = first->invocation().key.instance_index;
+  observed[1] = first->executor_lane_index();
+  observed[2] = second->invocation().key.instance_index;
+  observed[3] = second->executor_lane_index();
+  observed[4] = scheduler.try_schedule().has_value() ? 1 : 0;
+  const auto active = scheduler.active_decision(first->invocation().key.instance_index);
+  observed[5] = active->executor_lane_index();
+  scheduler.release(first->invocation().key, first->executor_lane_index());
+  const auto third = scheduler.try_schedule();
+  observed[6] = third->invocation().key.instance_index;
+  observed[7] = third->executor_lane_index();
 }
 
-__global__ void exercise_single_executor_queue(
-    xpool::fabric::FabricArenaView arena, std::size_t *observed) {
-  if (threadIdx.x != 0) {
-    return;
+XPOOL_KERNEL_FN void exercise_random(xpool::fabric::Scheduler scheduler, std::size_t *observed) {
+  observed[0] = scheduler.try_schedule().has_value() ? 1 : 0;
+  observed[1] = scheduler.try_schedule().has_value() ? 1 : 0;
+  for (auto instance_index = std::size_t{0}; instance_index < kInstanceCount; ++instance_index) {
+    scheduler.enqueue(invocation(instance_index));
   }
-  auto &scheduler = arena.scheduler();
-  scheduler.enqueue(arena, invocation(0));
-  scheduler.enqueue(arena, invocation(1));
-  const auto first = scheduler.schedule(arena);
-  observed[0] = first.invocation().key.model_index;
-  observed[1] = first.executor_index();
-  observed[2] = scheduler.schedule(arena) ? 1 : 0;
-  scheduler.release(arena, first.invocation().key, first.executor_index());
-  const auto second = scheduler.schedule(arena);
-  observed[3] = second.invocation().key.model_index;
-  observed[4] = second.executor_index();
-}
-
-__global__ void exercise_random(
-    xpool::fabric::FabricArenaView arena, std::size_t *observed) {
-  if (threadIdx.x != 0) {
-    return;
-  }
-  auto &scheduler = arena.scheduler();
-  for (auto attempt = 0; attempt < 3; ++attempt) {
-    observed[attempt] = scheduler.schedule(arena) ? 1 : 0;
-  }
-  for (auto model_index = std::size_t{0}; model_index < kModelCount; ++model_index) {
-    scheduler.enqueue(arena, invocation(model_index));
-  }
-  for (auto index = std::size_t{0}; index < kModelCount; ++index) {
-    const auto decision = scheduler.schedule(arena);
-    observed[3 + index] = decision.invocation().key.model_index;
-    scheduler.release(arena, decision.invocation().key, decision.executor_index());
+  for (auto index = std::size_t{0}; index < kInstanceCount; ++index) {
+    const auto decision = scheduler.try_schedule();
+    observed[2 + index] = decision->invocation().key.instance_index;
+    scheduler.release(decision->invocation().key, decision->executor_lane_index());
   }
 }
 
@@ -188,62 +89,67 @@ protected:
 
 } // namespace
 
-TEST_F(FfnSchedulerTest, FifoPreservesEnqueueOrderAndReleasesHistory) {
-  auto arena = SchedulerArena{xpool::fabric::FfnSchedulerPolicy::fifo(), 1};
+TEST_F(FfnSchedulerTest, FifoPreservesReadyOrderAndReleasesState) {
+  auto *entries = static_cast<xpool::fabric::SchedulerEntry *>(nullptr);
   auto *observed = static_cast<std::size_t *>(nullptr);
+  ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&entries, kInstanceCount * sizeof(*entries))));
+  ASSERT_TRUE(cuda_succeeded(cudaMemset(entries, 0, kInstanceCount * sizeof(*entries))));
+  ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&observed, 11 * sizeof(*observed))));
+  const auto scheduler =
+      xpool::fabric::Scheduler::from(xpool::fabric::SchedulerPolicy::fifo(), entries, kInstanceCount, 1);
+
+  exercise_fifo<<<1, 1, 0, nullptr>>>(scheduler, observed);
+  ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
+  ASSERT_TRUE(cuda_succeeded(cudaDeviceSynchronize()));
+
+  EXPECT_EQ((std::array{observed[0], observed[1], observed[2]}), (std::array<std::size_t, 3>{1, 2, 3}));
+  EXPECT_EQ((std::array{observed[3], observed[4], observed[5]}), (std::array<std::size_t, 3>{2, 0, 1}));
+  EXPECT_EQ((std::array{observed[6], observed[7], observed[8]}), (std::array<std::size_t, 3>{0, 0, 0}));
+  EXPECT_EQ(observed[9], 0U);
+  EXPECT_EQ(observed[10], 0U);
+  EXPECT_EQ(entries[2].completed_sequence, 1U);
+
+  EXPECT_TRUE(cuda_succeeded(cudaFree(observed)));
+  EXPECT_TRUE(cuda_succeeded(cudaFree(entries)));
+}
+
+TEST_F(FfnSchedulerTest, HoldsQueuedWorkUntilOneOfTwoLanesIsReleased) {
+  auto *entries = static_cast<xpool::fabric::SchedulerEntry *>(nullptr);
+  auto *observed = static_cast<std::size_t *>(nullptr);
+  ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&entries, kInstanceCount * sizeof(*entries))));
+  ASSERT_TRUE(cuda_succeeded(cudaMemset(entries, 0, kInstanceCount * sizeof(*entries))));
   ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&observed, 8 * sizeof(*observed))));
+  const auto scheduler =
+      xpool::fabric::Scheduler::from(xpool::fabric::SchedulerPolicy::fifo(), entries, kInstanceCount, 2);
 
-  exercise_fifo<<<1, 1, 0, nullptr>>>(arena.view(), observed);
+  exercise_two_lanes<<<1, 1, 0, nullptr>>>(scheduler, observed);
   ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
   ASSERT_TRUE(cuda_succeeded(cudaDeviceSynchronize()));
 
-  EXPECT_EQ((std::array{observed[0], observed[1], observed[2]}), (std::array<std::size_t, 3>{2, 0, 1}));
-  EXPECT_EQ((std::array{observed[3], observed[4], observed[5]}), (std::array<std::size_t, 3>{0, 0, 0}));
-  EXPECT_EQ(observed[6], 0U);
-  EXPECT_EQ(observed[7], 2U);
-  EXPECT_TRUE(cuda_succeeded(cudaFree(observed)));
-}
-
-TEST_F(FfnSchedulerTest, LeasesDistinctExecutorsUntilOneIsReleased) {
-  auto arena = SchedulerArena{xpool::fabric::FfnSchedulerPolicy::fifo(), 2};
-  auto *observed = static_cast<std::size_t *>(nullptr);
-  ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&observed, 7 * sizeof(*observed))));
-
-  exercise_concurrent_executors<<<1, 1, 0, nullptr>>>(arena.view(), observed);
-  ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
-  ASSERT_TRUE(cuda_succeeded(cudaDeviceSynchronize()));
-
-  EXPECT_EQ((std::array{observed[0], observed[2], observed[5]}), (std::array<std::size_t, 3>{0, 1, 2}));
-  EXPECT_EQ((std::array{observed[1], observed[3], observed[6]}), (std::array<std::size_t, 3>{0, 1, 0}));
+  EXPECT_EQ((std::array{observed[0], observed[2], observed[6]}), (std::array<std::size_t, 3>{0, 1, 2}));
+  EXPECT_EQ((std::array{observed[1], observed[3], observed[5], observed[7]}), (std::array<std::size_t, 4>{0, 1, 0, 0}));
   EXPECT_EQ(observed[4], 0U);
+
   EXPECT_TRUE(cuda_succeeded(cudaFree(observed)));
+  EXPECT_TRUE(cuda_succeeded(cudaFree(entries)));
 }
 
-TEST_F(FfnSchedulerTest, QueuesUntilTheOnlyExecutorIsReleased) {
-  auto arena = SchedulerArena{xpool::fabric::FfnSchedulerPolicy::fifo(), 1};
+TEST_F(FfnSchedulerTest, RandomSelectionIsDeterministicAndEmptyPollsDoNotAdvanceIt) {
+  auto *entries = static_cast<xpool::fabric::SchedulerEntry *>(nullptr);
   auto *observed = static_cast<std::size_t *>(nullptr);
+  ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&entries, kInstanceCount * sizeof(*entries))));
+  ASSERT_TRUE(cuda_succeeded(cudaMemset(entries, 0, kInstanceCount * sizeof(*entries))));
   ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&observed, 5 * sizeof(*observed))));
+  const auto scheduler =
+      xpool::fabric::Scheduler::from(xpool::fabric::SchedulerPolicy::random(7), entries, kInstanceCount, 1);
 
-  exercise_single_executor_queue<<<1, 1, 0, nullptr>>>(arena.view(), observed);
+  exercise_random<<<1, 1, 0, nullptr>>>(scheduler, observed);
   ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
   ASSERT_TRUE(cuda_succeeded(cudaDeviceSynchronize()));
 
-  EXPECT_EQ((std::array{observed[0], observed[3]}), (std::array<std::size_t, 2>{0, 1}));
-  EXPECT_EQ((std::array{observed[1], observed[4]}), (std::array<std::size_t, 2>{0, 0}));
-  EXPECT_EQ(observed[2], 0U);
+  EXPECT_EQ((std::array{observed[0], observed[1]}), (std::array<std::size_t, 2>{0, 0}));
+  EXPECT_EQ((std::array{observed[2], observed[3], observed[4]}), (std::array<std::size_t, 3>{1, 2, 0}));
+
   EXPECT_TRUE(cuda_succeeded(cudaFree(observed)));
-}
-
-TEST_F(FfnSchedulerTest, RandomIsDeterministicAndIgnoresEmptyPolls) {
-  auto arena = SchedulerArena{xpool::fabric::FfnSchedulerPolicy::random(7), 1};
-  auto *observed = static_cast<std::size_t *>(nullptr);
-  ASSERT_TRUE(cuda_succeeded(cudaMallocManaged(&observed, 6 * sizeof(*observed))));
-
-  exercise_random<<<1, 1, 0, nullptr>>>(arena.view(), observed);
-  ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
-  ASSERT_TRUE(cuda_succeeded(cudaDeviceSynchronize()));
-
-  EXPECT_EQ((std::array{observed[0], observed[1], observed[2]}), (std::array<std::size_t, 3>{0, 0, 0}));
-  EXPECT_EQ((std::array{observed[3], observed[4], observed[5]}), (std::array<std::size_t, 3>{1, 2, 0}));
-  EXPECT_TRUE(cuda_succeeded(cudaFree(observed)));
+  EXPECT_TRUE(cuda_succeeded(cudaFree(entries)));
 }

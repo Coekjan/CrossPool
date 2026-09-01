@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from sglang.srt.model_executor.model_runner import ModelRunner
 
-from xpool.integrations.sglang.adapter import SglangHook, SglangModelAdapter
-from xpool.integrations.sglang.models.deepseek_v2 import DeepseekV2Adapter
-from xpool.integrations.sglang.models.qwen3 import Qwen3Adapter
+from xpool.integrations.sglang.adapter import SglangHook, SglangShimAdapter
+from xpool.integrations.sglang.models.deepseek_v2 import DeepseekV2ShimAdapter
+from xpool.integrations.sglang.models.qwen3 import Qwen3ShimAdapter
 from xpool.integrations.sglang.registry import (
     MODELS_PACKAGE,
     discover_sglang_model_adapters,
@@ -19,8 +19,8 @@ from xpool.integrations.sglang.registry import (
 def test_registry_discovers_deepseek_adapter() -> None:
     adapters = discover_sglang_model_adapters(MODELS_PACKAGE)
 
-    assert any(isinstance(adapter, DeepseekV2Adapter) for adapter in adapters)
-    assert any(isinstance(adapter, Qwen3Adapter) for adapter in adapters)
+    assert any(isinstance(adapter, DeepseekV2ShimAdapter) for adapter in adapters)
+    assert any(isinstance(adapter, Qwen3ShimAdapter) for adapter in adapters)
 
 
 def test_registry_rejects_duplicate_adapter_names() -> None:
@@ -40,11 +40,11 @@ from collections.abc import Sequence
 
 from sglang.srt.model_executor.model_runner import ModelRunner
 
-from xpool.integrations.sglang.adapter import SglangHook, SglangModelAdapter
-from xpool.integrations.sglang.models.deepseek_v2 import DeepseekV2Adapter
+from xpool.integrations.sglang.adapter import SglangHook, SglangShimAdapter
+from xpool.integrations.sglang.models.deepseek_v2 import DeepseekV2ShimAdapter
 
 
-class NestedProbeAdapter(SglangModelAdapter):
+class NestedProbeAdapter(SglangShimAdapter):
     name = "nested_probe"
 
     def hooks(self) -> Sequence[SglangHook]:
@@ -76,7 +76,7 @@ def test_registry_strict_discovery_rejects_broken_adapter_modules(
         discover_sglang_model_adapters("xpool_registry_strict_fault_probe")
 
 
-class DuplicateAdapter(SglangModelAdapter):
+class DuplicateAdapter(SglangShimAdapter):
     name = "duplicate"
 
     def hooks(self) -> Sequence[SglangHook]:

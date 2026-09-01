@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-import xpool.devkit.sglang.graph_observer
+import xpool.integrations.sglang.devkit.graph_observer
 from tests.harness.support.config import install_test_config, reset_global_config
 from tests.harness.support.sglang.graph_observer import (
     FakeCudaGraphRunnerState,
@@ -27,7 +27,7 @@ def test_graph_observer_records_success_events(
     install_fake_sglang_runner_classes(monkeypatch, CudaGraphRunner, PiecewiseCudaGraphRunner)
 
     install_test_config(config=graph_observer_config(tmp_path.resolve()))
-    xpool.devkit.sglang.graph_observer.install()
+    xpool.integrations.sglang.devkit.graph_observer.install()
 
     decode_runner = CudaGraphRunner()
     pcg_runner = PiecewiseCudaGraphRunner()
@@ -76,7 +76,7 @@ def test_graph_observer_records_error_and_reraises(
 
     install_fake_sglang_runner_classes(monkeypatch, CudaGraphRunner, PiecewiseCudaGraphRunner)
     install_test_config(config=graph_observer_config(tmp_path.resolve()))
-    xpool.devkit.sglang.graph_observer.install()
+    xpool.integrations.sglang.devkit.graph_observer.install()
 
     with pytest.raises(RuntimeError, match="capture failed"):
         CudaGraphRunner().capture()
@@ -116,7 +116,7 @@ def test_graph_observer_event_fault_does_not_block_runner(
 
     install_fake_sglang_runner_classes(monkeypatch, CudaGraphRunner, PiecewiseCudaGraphRunner)
     install_test_config(config=graph_observer_config(tmp_path.resolve()))
-    xpool.devkit.sglang.graph_observer.install()
+    xpool.integrations.sglang.devkit.graph_observer.install()
 
     if fault == "write":
 
@@ -132,9 +132,9 @@ def test_graph_observer_event_fault_does_not_block_runner(
             def close(self) -> None:
                 return None
 
-        monkeypatch.setattr(xpool.devkit.sglang.graph_observer, "event_handle", BadEventHandle())
+        monkeypatch.setattr(xpool.integrations.sglang.devkit.graph_observer, "event_handle", BadEventHandle())
 
-    with caplog.at_level("WARNING", logger="xpool.devkit.sglang.graph_observer"):
+    with caplog.at_level("WARNING", logger="xpool.integrations.sglang.devkit.graph_observer"):
         assert CudaGraphRunner().capture() == "captured"
 
     assert "Failed to record xpool graph observer event" in caplog.text
