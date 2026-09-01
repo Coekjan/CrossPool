@@ -33,6 +33,9 @@ connect the GPU roles.
   membership, readiness, resource leases, failure, and orderly shutdown.
 - **GPU data plane:** CUDA IPC mailboxes connect each SGLang rank to an AtnAgent;
   an NVSHMEM Fabric coordinates distributed invocations and executor admission.
+- **Graph-backed FFN execution:** FfnAgents retain only their planned
+  tensor-parallel weight shards and execute model-defined FFN layers through
+  independently replayable Executor Lane graphs.
 - **CUDA graph integration:** the adapter and shim test matrix exercises eager
   execution, Decode full CUDA graph replay, and Prefill piecewise CUDA graph
   replay when attention data parallelism is one.
@@ -66,7 +69,10 @@ A model-layer request moves through the system as follows:
    Submission.
 4. The Fabric Coordinator forms an Invocation after all configured AtnAgents
    agree on its identity and geometry, then admits it to an Executor Lane.
-5. Completion and result state return through the Fabric and Transport
+5. The selected FfnAgents bind the target layer's resident weight shards,
+   replay the Lane Graph, and deliver the required complete or rank-local
+   output form.
+6. Completion and output state return through the Fabric and Transport
    protocols to the originating SGLang rank.
 
 External readiness is reported only after the configured processes are live,
@@ -99,10 +105,12 @@ cp .env.example .env
 cp configs/xpool.example.toml configs/dev.local.toml
 ```
 
-Edit `configs/dev.local.toml` to select the model root, model IDs, and CUDA
-devices. Edit `.env` so `XPOOL_CONFIG` points to that file and configure
-host-unique `CUDA_MPS_PIPE_DIRECTORY` and `CUDA_MPS_LOG_DIRECTORY` paths. Both
-files are ignored by Git.
+For this minimal two-GPU example, edit `configs/dev.local.toml` to retain only
+the `Qwen/Qwen3-14B` model, place its AtnAgent on GPU 0 and its FfnAgent on GPU
+1, and set `vendor.model_base_uri` to the directory containing the `Qwen/`
+subdirectory. Edit `.env` so `XPOOL_CONFIG` points to that file and configure
+host-unique `CUDA_MPS_PIPE_DIRECTORY` and `CUDA_MPS_LOG_DIRECTORY` paths. Keep
+`SGLANG_PLUGINS=xpool`. Both files are ignored by Git.
 
 Install the complete development environment and rebuild the native extension:
 
@@ -123,14 +131,59 @@ CUDA_VISIBLE_DEVICES="$(nvidia-smi --query-gpu=uuid --format=csv,noheader | past
 printf 'get_default_active_thread_percentage\n' | uv run nvidia-cuda-mps-control
 ```
 
-Run the development validation layers:
+Start the xpool processes from separate terminals in the repository root. All
+terminals must use the same configuration and GPU ordinal space; do not remap
+`CUDA_VISIBLE_DEVICES` independently for each process.
 
 ```bash
-uv run python -m tests --suite unit
-uv run python -m tests --suite integration
+# Terminal 1: control plane.
+export UV_ENV_FILE="$PWD/.env"
+uv run xpool daemon serve
 ```
 
-Stop all SGLang and xpool processes before stopping the MPS controller:
+```bash
+# Terminal 2: attention-side transport participant.
+export UV_ENV_FILE="$PWD/.env"
+uv run xpool atnagent --cuda-device 0
+```
+
+```bash
+# Terminal 3: FFN execution participant.
+export UV_ENV_FILE="$PWD/.env"
+uv run xpool ffnagent --cuda-device 1
+```
+
+After the Agents have registered, start the configured model through the pinned
+SGLang CLI. `MODEL_PATH` must resolve to the same model selected by
+`configs/dev.local.toml`.
+
+```bash
+# Terminal 4: SGLang Instance.
+export UV_ENV_FILE="$PWD/.env"
+MODEL_PATH=/absolute/path/to/models/Qwen/Qwen3-14B
+uv run sglang serve \
+  --model-path "$MODEL_PATH" \
+  --host 127.0.0.1 \
+  --port 30000
+```
+
+Once SGLang is healthy, wait for the complete xpool generation to become ready
+and send one request through the real FFN path:
+
+```bash
+export UV_ENV_FILE="$PWD/.env"
+until uv run xpool daemon check; do sleep 1; done
+
+curl -sS http://127.0.0.1:30000/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "text": "Explain pooled GPU execution in one sentence.",
+    "sampling_params": {"temperature": 0, "max_new_tokens": 32}
+  }'
+```
+
+Stop SGLang first, then the AtnAgent and FfnAgent processes, and finally the
+daemon. Stop the MPS controller only after every CUDA client has exited:
 
 ```bash
 printf 'quit\n' | uv run nvidia-cuda-mps-control
@@ -156,28 +209,29 @@ The main configuration boundaries are:
 | `devices.atn_cuda_devices` | Places AtnAgent roles. |
 | `devices.ffn_cuda_devices` | Places FfnAgent roles. |
 | `scheduler.*` | Configures attention and executor concurrency and Fabric scheduling. |
+| `ffn.loader.*` | Configures bounded checkpoint-reading parallelism. |
+| `ffn.placement.*` | Configures placement solving and explicit device-memory margin. |
+| `memory.calibration_path` | Selects an optional environment-qualified memory calibration profile. |
 
 Model paths are resolved by `XpoolConfig.model_path_of(model_id)`. Start from
 [`configs/xpool.example.toml`](configs/xpool.example.toml) and
 [`.env.example`](.env.example); keep host-specific paths in an ignored
 `*.local.toml` file.
 
+Memory calibration is optional: analytic admission works without a profile.
+When a device-local correction is useful, set an absolute
+`memory.calibration_path` and run `uv run xpool memory-profile` before starting
+the serving processes. The profiler uses a fixed model-independent corpus and
+does not load the configured model weights.
+
 ## SGLang Integration
 
 Adapters are selected from the model architecture declared in `config.json`.
 Model IDs provide configuration identity and path resolution rather than acting
-as an adapter allowlist.
-
-| Model family | Architecture | Adapter integration placements `(TP, DP)` |
-| --- | --- | --- |
-| DeepSeek-V2 | `DeepseekV2ForCausalLM` | `(1, 1)`, `(2, 1)`, `(1, 2)` |
-| Qwen3 | `Qwen3ForCausalLM` | `(1, 1)`, `(2, 1)` |
-| GLM-4.7-Flash | `Glm4MoeLiteForCausalLM` | `(1, 1)`, `(2, 1)`, `(1, 2)` |
-| Qwen3-MoE | `Qwen3MoeForCausalLM` | `(1, 1)`, `(2, 1)`, `(1, 2)` |
-
-The adapter and shim integration matrix exercises eager and Decode full CUDA
-graph paths across the listed placements. Prefill piecewise CUDA graph coverage
-applies when attention DP is one.
+as an adapter allowlist. Current qualification covers Qwen3, DeepSeek-V2-Lite,
+GLM-4.7-Flash, and Qwen3-MoE. The
+[SGLang E2E manifest](tests/harness/sglang/manifest.toml) is the authoritative
+source for serving, numerical, topology, and graph-mode cases.
 
 ## Validation and Development
 
