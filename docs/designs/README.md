@@ -20,3 +20,6 @@ changes live under `docs/plans/<task>/README.md` only while their implementation
 and acceptance are incomplete. A relevant active plan is a scoped delta over
 these current documents; source declarations and generated native stubs remain
 authoritative for exact interfaces.
+
+The [Roadmap](../plans/README.md) maps long-term candidate workstreams and their
+relationships without treating them as accepted architecture or active plans.

@@ -30,11 +30,14 @@ from the repository without relying on prior chat context, a separate worktree,
 or host-specific paths.
 
 [`docs/designs/README.md`](docs/designs/README.md) maps the current implemented
-and accepted architecture. Active target changes live under
-`docs/plans/<task>/README.md` until their implementation and acceptance are
-complete. A relevant active plan is a scoped delta over the current design;
-source declarations and generated native stubs remain authoritative for exact
-interfaces. The root [`CONTEXT.md`](CONTEXT.md) owns domain terminology.
+and accepted architecture. [`docs/plans/README.md`](docs/plans/README.md) maps
+long-term candidate workstreams and their relationships; it is not an active
+plan and does not record owners, status, or schedules. Active target changes
+live under `docs/plans/<task>/README.md` until their implementation and
+acceptance are complete. A relevant active plan is a scoped delta over the
+current design; source declarations and generated native stubs remain
+authoritative for exact interfaces. The root [`CONTEXT.md`](CONTEXT.md) owns
+domain terminology.
 
 Use the repo-local `write-plan` skill when a non-trivial change needs a tracked,
 decision-complete target design. Use the repo-local `write-design` skill after

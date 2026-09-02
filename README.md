@@ -259,6 +259,8 @@ GPU lease, endpoint, and artifact ownership.
 
 - [`docs/designs/README.md`](docs/designs/README.md) maps the current implemented
   architecture.
+- [`docs/plans/README.md`](docs/plans/README.md) maps candidate workstreams and
+  their technical relationships.
 - [`CONTEXT.md`](CONTEXT.md) defines the xpool domain language.
 - [`src/xpool/`](src/xpool/) contains configuration, runtime roles, the daemon,
   SGLang integration, and Python/native boundaries.
