@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-import xpool.bootstrap
 import xpool.devkit.registry
 from tests.harness.support.config import install_test_config, reset_global_config
 from tests.harness.support.devkit import create_observer_package, observer_enabled_config, observers_disabled_config
@@ -26,7 +25,7 @@ def test_registry_does_not_import_disabled_observer(
         {"graph_observer.py": "raise AssertionError('disabled observer imported')\n"},
     )
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setattr(xpool.bootstrap, "runtime_role", RuntimeRole.INSTANCE)
+    monkeypatch.setattr(xpool.devkit.registry, "get_runtime_role", lambda: RuntimeRole.INSTANCE)
     install_test_config(config=observers_disabled_config())
 
     xpool.devkit.registry.install(package)
@@ -54,7 +53,7 @@ def test_registry_discovers_nested_observer(
         },
     )
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setattr(xpool.bootstrap, "runtime_role", RuntimeRole.INSTANCE)
+    monkeypatch.setattr(xpool.devkit.registry, "get_runtime_role", lambda: RuntimeRole.INSTANCE)
     install_test_config(config=observer_enabled_config("graph_observer", tmp_path / "events"))
 
     xpool.devkit.registry.install(package)
@@ -84,7 +83,7 @@ def test_registry_rejects_invalid_observer_contract(
     package_name = "invalid_role_probe" if message == "runtime_roles" else "missing_install_probe"
     package = create_observer_package(tmp_path, package_name, {"graph_observer.py": source})
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setattr(xpool.bootstrap, "runtime_role", RuntimeRole.INSTANCE)
+    monkeypatch.setattr(xpool.devkit.registry, "get_runtime_role", lambda: RuntimeRole.INSTANCE)
     install_test_config(config=observer_enabled_config("graph_observer", tmp_path / "events"))
 
     with pytest.raises(RuntimeError, match=message):
@@ -114,7 +113,7 @@ def test_registry_rejects_duplicate_config_names(
         },
     )
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setattr(xpool.bootstrap, "runtime_role", RuntimeRole.INSTANCE)
+    monkeypatch.setattr(xpool.devkit.registry, "get_runtime_role", lambda: RuntimeRole.INSTANCE)
     install_test_config(config=observer_enabled_config("graph_observer", tmp_path / "events"))
 
     with pytest.raises(RuntimeError, match="ambiguous"):

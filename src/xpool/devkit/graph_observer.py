@@ -6,6 +6,8 @@ import functools
 from pathlib import Path
 from threading import Lock
 
+# cuda-python exposes this binary extension without Python type stubs.
+import cuda.bindings.runtime  # ty: ignore[unresolved-import]
 import torch
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -52,10 +54,10 @@ class FfnGraphObserverSnapshot(BaseModel):
     lane_graphs: tuple[FfnLaneGraphSnapshot, ...] = Field(min_length=1)
 
 
-def node_count_names(node_counts: dict[object, int]) -> dict[str, int]:
-    """Convert official CUDA enum keys into JSON object keys."""
+def node_count_names(node_counts: dict[int, int]) -> dict[str, int]:
+    """Resolve native CUDA node-kind values into JSON object keys."""
 
-    return {getattr(node_kind, "name"): count for node_kind, count in node_counts.items()}
+    return {cuda.bindings.runtime.cudaGraphNodeType(node_kind).name: count for node_kind, count in node_counts.items()}
 
 
 def graph_snapshot(

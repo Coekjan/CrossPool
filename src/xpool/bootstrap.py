@@ -14,8 +14,6 @@ from xpool.utils.procs import set_process_title
 
 __all__ = ["get_runtime_role", "init"]
 
-runtime_role: RuntimeRole | None = None
-runtime_cuda_device: int | None = None
 runtime_lock = Lock()
 
 
@@ -35,31 +33,16 @@ def init(cuda_device: int | None, role: RuntimeRole) -> None:
 
     Side Effects:
         Loads the native extension, selects the process CUDA device for GPU
-        roles, initializes native debug state, installs the role-specific
-        process title for the daemon and agents, and records the process-wide
-        role after initialization succeeds. Repeated calls with identical
-        arguments are idempotent.
+        roles, initializes native debug state, and installs the role-specific
+        process title for the daemon and agents. Native identity initialization
+        is idempotent; repeated calls may repeat harmless Python-side setup.
     """
 
-    global runtime_cuda_device, runtime_role
     with runtime_lock:
-        if runtime_role is not None:
-            if runtime_role != role or runtime_cuda_device != cuda_device:
-                raise RuntimeError(
-                    "xpool runtime is already initialized for "
-                    f"CUDA device {runtime_cuda_device} with role {runtime_role.name}"
-                )
-            return
-        if role is RuntimeRole.DAEMON and cuda_device is not None:
-            raise RuntimeError("xpool daemon runtime must not own a CUDA device")
-        if role is not RuntimeRole.DAEMON and cuda_device is None:
-            raise RuntimeError(f"xpool {role.name.lower()} runtime requires a CUDA device")
         xpool.cext.ensure_native_loaded()
         debug_options = get_global_config().debug.native_options()
-        if role is RuntimeRole.DAEMON:
-            xpool.native.initialize(role, None, debug_options)
-        else:
-            xpool.native.initialize(role, cuda_device, debug_options)
+        xpool.native.initialize(role, cuda_device, debug_options)
+        if role is not RuntimeRole.DAEMON:
             torch.cuda.set_device(cuda_device)
         match role:
             case RuntimeRole.DAEMON:
@@ -70,8 +53,6 @@ def init(cuda_device: int | None, role: RuntimeRole) -> None:
                 set_process_title("xpool::ffnagent")
             case RuntimeRole.INSTANCE:
                 pass
-        runtime_cuda_device = cuda_device
-        runtime_role = role
 
 
 def get_runtime_role() -> RuntimeRole:
@@ -84,6 +65,4 @@ def get_runtime_role() -> RuntimeRole:
         RuntimeError: If bootstrap has not initialized this process.
     """
 
-    if runtime_role is None:
-        raise RuntimeError("xpool runtime role is unavailable before bootstrap initialization")
-    return runtime_role
+    return xpool.native.runtime_role()

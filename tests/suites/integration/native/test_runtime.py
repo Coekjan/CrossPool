@@ -11,9 +11,15 @@ from tests.harness.native.debug import native_debug_options
 from xpool.native import RuntimeRole
 
 
+def isolated_uninitialized_runtime_role() -> None:
+    with pytest.raises(RuntimeError, match="unavailable before initialization"):
+        xpool.native.runtime_role()
+
+
 def isolated_runtime_identity() -> None:
     cuda_device = torch.cuda.current_device()
     xpool.native.initialize(RuntimeRole.INSTANCE, cuda_device, None)
+    assert xpool.native.runtime_role() is RuntimeRole.INSTANCE
     xpool.native.initialize(RuntimeRole.INSTANCE, cuda_device, None)
     with pytest.raises(RuntimeError, match="current process was initialized as instance"):
         xpool.native.initialize(RuntimeRole.ATNAGENT, cuda_device, None)
@@ -43,6 +49,7 @@ def isolated_daemon_runtime() -> None:
         xpool.native.initialize(RuntimeRole.DAEMON, 0, None)
     options = native_debug_options()
     xpool.native.initialize(RuntimeRole.DAEMON, None, options)
+    assert xpool.native.runtime_role() is RuntimeRole.DAEMON
     xpool.native.initialize(RuntimeRole.DAEMON, None, options)
     uid = xpool.native.fabric.create_uid()
     assert isinstance(uid, str)
@@ -82,6 +89,11 @@ def isolated_daemon_runtime() -> None:
             ),
             0,
         )
+
+
+@pytest.mark.requires_cuda()
+def test_runtime_role_requires_initialization(tmp_path: Path) -> None:
+    run_native_case(isolated_uninitialized_runtime_role, workdir=tmp_path / "case")
 
 
 @pytest.mark.requires_cuda()

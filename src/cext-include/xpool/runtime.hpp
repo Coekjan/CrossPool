@@ -51,6 +51,10 @@ public:
   /// previous initialization.
   void initialize(RuntimeRole role, const std::optional<c10::DeviceIndex> &cuda_device);
 
+  /// Return the process role fixed during initialization.
+  /// \throws c10::Error if the process is uninitialized.
+  RuntimeRole role() const;
+
   /// Require one exact runtime role for an operator.
   /// \throws c10::Error if the process is uninitialized or has another role.
   void require_role(RuntimeRole expected, std::string_view op_name) const { require_role({expected}, op_name); }

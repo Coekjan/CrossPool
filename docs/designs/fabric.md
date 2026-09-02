@@ -105,6 +105,10 @@ observes the canonical result, and the block returns one value. After failure,
 no new invocation is admitted and the process tree drains or terminates; there
 is no request retry or collective recovery.
 
+Host and Python failure readout exposes only the validated immutable failure
+payload. Atomic claim and publication words remain internal Fabric storage and
+are not part of the control-plane interface.
+
 The Coordinator inspects submissions, completions, and acknowledgements without
 blocking its outer progress loop. An inspection is Pending, Ready, or a Protocol
 Mismatch. This is deliberately distinct from a timed wait: inspection has no

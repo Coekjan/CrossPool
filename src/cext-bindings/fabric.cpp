@@ -26,8 +26,11 @@ c10::ScalarType require_payload_dtype(const py::object &dtype) {
   return scalar_type;
 }
 
-py::object python_dtype(c10::ScalarType dtype) {
-  return py::reinterpret_borrow<py::object>(reinterpret_cast<PyObject *>(torch::getTHPDtype(dtype)));
+std::uintptr_t require_cuda_address(const at::Tensor &tensor, const char *name) {
+  TORCH_CHECK(tensor.is_cuda(), "xpool ", name, " must be a CUDA Tensor");
+  TORCH_CHECK(tensor.numel() != 0 && tensor.is_contiguous(), "xpool ", name,
+              " must be a nonempty contiguous CUDA Tensor");
+  return reinterpret_cast<std::uintptr_t>(tensor.data_ptr());
 }
 
 } // namespace
@@ -37,6 +40,7 @@ namespace xpool::bindings {
 void bind_fabric(py::module_ &module) {
   auto fabric = module.def_submodule("fabric", "Native NVSHMEM Fabric control and lifecycle functions.");
   auto ffnagent = module.def_submodule("ffnagent", "Native FfnAgent execution lifecycle functions.");
+  fabric.attr("UID_HEX_LENGTH") = xpool::fabric::Uid::encoded_size;
 
   py::class_<xpool::fabric::InstanceLayerProjection>(fabric, "InstanceLayerProjection",
                                                            "One ordered FFN layer supplied to native Fabric join.")
@@ -51,14 +55,7 @@ void bind_fabric(py::module_ &module) {
                  .ffnagent_indices = std::move(ffnagent_indices),
              };
            }),
-           py::arg("layer_id"), py::arg("kind"), py::arg("effective_topk"), py::arg("ffnagent_indices"))
-      .def_readonly("layer_id", &xpool::fabric::InstanceLayerProjection::layer_id,
-                    "Concrete decoder layer identifier.")
-      .def_readonly("kind", &xpool::fabric::InstanceLayerProjection::kind, "FFN layer kind.")
-      .def_readonly("effective_topk", &xpool::fabric::InstanceLayerProjection::effective_topk,
-                    "Final routing width, or zero for Dense layers.")
-      .def_readonly("ffnagent_indices", &xpool::fabric::InstanceLayerProjection::ffnagent_indices,
-                    "Ordered local FfnAgent indices by FFN TP rank.");
+           py::arg("layer_id"), py::arg("kind"), py::arg("effective_topk"), py::arg("ffnagent_indices"));
 
   py::class_<xpool::fabric::InstanceProjection>(fabric, "InstanceProjection",
                                                       "One Instance supplied to native Fabric join.")
@@ -80,31 +77,7 @@ void bind_fabric(py::module_ &module) {
            }),
            py::arg("payload_dtype"), py::arg("hidden_size"), py::arg("decode_payload_row_capacity"),
            py::arg("prefill_payload_row_capacity"), py::arg("group_sum_complete_admitted"), py::arg("atn_tp_size"),
-           py::arg("atn_dp_size"), py::arg("atnagent_indices"), py::arg("layers"))
-      .def_readonly("decode_payload_row_capacity",
-                    &xpool::fabric::InstanceProjection::decode_payload_row_capacity,
-                    "Maximum physical Decode rows per invocation.")
-      .def_readonly("prefill_payload_row_capacity",
-                    &xpool::fabric::InstanceProjection::prefill_payload_row_capacity,
-                    "Maximum physical Prefill rows per invocation.")
-      .def_property_readonly(
-          "payload_dtype",
-          [](const xpool::fabric::InstanceProjection &projection) {
-            return python_dtype(projection.payload_dtype);
-          },
-          "Stable hidden-state tensor dtype value.")
-      .def_readonly("hidden_size", &xpool::fabric::InstanceProjection::hidden_size,
-                    "Model hidden width in elements.")
-      .def_readonly("group_sum_complete_admitted",
-                    &xpool::fabric::InstanceProjection::group_sum_complete_admitted,
-                    "Whether Group-Sum Complete output is admitted.")
-      .def_readonly("atn_tp_size", &xpool::fabric::InstanceProjection::atn_tp_size,
-                    "Attention tensor-parallel participant count.")
-      .def_readonly("atn_dp_size", &xpool::fabric::InstanceProjection::atn_dp_size,
-                    "Attention data-parallel participant count.")
-      .def_readonly("atnagent_indices", &xpool::fabric::InstanceProjection::atnagent_indices,
-                    "Ordered AtnAgent indices in TP-fastest rank order.")
-      .def_readonly("layers", &xpool::fabric::InstanceProjection::layers, "Ordered FFN layer metadata.");
+           py::arg("atn_dp_size"), py::arg("atnagent_indices"), py::arg("layers"));
 
   py::class_<xpool::fabric::SchedulerPolicy>(fabric, "SchedulerPolicy",
                                                 "Immutable native Fabric scheduling policy.")
@@ -132,64 +105,50 @@ void bind_fabric(py::module_ &module) {
              return projection;
            }),
            py::arg("generation_high"), py::arg("generation_low"), py::arg("uid"), py::arg("atnagent_count"),
-           py::arg("ffnagent_count"), py::arg("executor_lane_count"), py::arg("scheduler"), py::arg("instances"))
-      .def_readonly("generation_high", &xpool::fabric::ArenaProjection::generation_high,
-                    "High 64 bits of the Fabric generation identity.")
-      .def_readonly("generation_low", &xpool::fabric::ArenaProjection::generation_low,
-                    "Low 64 bits of the Fabric generation identity.")
-      .def_property_readonly(
-          "uid", [](const xpool::fabric::ArenaProjection &projection) { return projection.uid.encode(); },
-          "Opaque NVSHMEM bootstrap identity.")
-      .def_readonly("atnagent_count", &xpool::fabric::ArenaProjection::atnagent_count,
-                    "Number of AtnAgent participants.")
-      .def_readonly("ffnagent_count", &xpool::fabric::ArenaProjection::ffnagent_count,
-                    "Number of FfnAgent participants.")
-      .def_readonly("executor_lane_count", &xpool::fabric::ArenaProjection::executor_lane_count,
-                    "Number of distributed FFN Executors.")
-      .def_readonly("scheduler", &xpool::fabric::ArenaProjection::scheduler, "Coordinator scheduling policy.")
-      .def_readonly("instances", &xpool::fabric::ArenaProjection::instances,
-                    "Config-order Instance Projections.");
+           py::arg("ffnagent_count"), py::arg("executor_lane_count"), py::arg("scheduler"), py::arg("instances"));
 
   py::class_<xpool::ffnagent::DenseBindingResourceProjection>(ffnagent, "DenseBindingResourceProjection",
                                                                  "Non-owning Dense weight addresses.")
-      .def(py::init<std::uintptr_t, std::uintptr_t>(), py::arg("gate_up_weight_address"),
-           py::arg("down_weight_address"))
-      .def_readonly("gate_up_weight_address",
-                    &xpool::ffnagent::DenseBindingResourceProjection::gate_up_weight_address,
-                    "Device address of the packed gate-up weight tensor.")
-      .def_readonly("down_weight_address", &xpool::ffnagent::DenseBindingResourceProjection::down_weight_address,
-                    "Device address of the down-projection weight tensor.");
+      .def(py::init([](const at::Tensor &gate_up_weight, const at::Tensor &down_weight) {
+             return xpool::ffnagent::DenseBindingResourceProjection{
+                 .gate_up_weight_address = require_cuda_address(gate_up_weight, "Dense gate/up weight"),
+                 .down_weight_address = require_cuda_address(down_weight, "Dense down weight"),
+             };
+           }),
+           py::arg("gate_up_weight"), py::arg("down_weight"));
 
   py::class_<xpool::ffnagent::MoeRouterBindingResourceProjection>(ffnagent, "MoeRouterBindingResourceProjection",
                                                                   "Non-owning Router weight addresses.")
-      .def(py::init<std::uintptr_t, std::optional<std::uintptr_t>>(), py::arg("weight_address"),
-           py::arg("correction_bias_address"))
-      .def_readonly("weight_address", &xpool::ffnagent::MoeRouterBindingResourceProjection::weight_address,
-                    "Device address of the Router weight tensor.")
-      .def_readonly("correction_bias_address",
-                    &xpool::ffnagent::MoeRouterBindingResourceProjection::correction_bias_address,
-                    "Optional device address of the Router correction-bias tensor.");
+      .def(py::init([](const at::Tensor &weight, const std::optional<at::Tensor> &correction_bias) {
+             return xpool::ffnagent::MoeRouterBindingResourceProjection{
+                 .weight_address = require_cuda_address(weight, "MoE Router weight"),
+                 .correction_bias_address = correction_bias.has_value()
+                                                ? std::optional{require_cuda_address(*correction_bias,
+                                                                                   "MoE Router correction bias")}
+                                                : std::nullopt,
+             };
+           }),
+           py::arg("weight"), py::arg("correction_bias"));
 
   py::class_<xpool::ffnagent::MoeBindingResourceProjection>(ffnagent, "MoeBindingResourceProjection",
                                                                "Non-owning MoE weight addresses.")
-      .def(py::init<std::uintptr_t, std::uintptr_t,
-                    std::optional<xpool::ffnagent::MoeRouterBindingResourceProjection>>(),
-           py::arg("expert_gate_up_weight_address"), py::arg("expert_down_weight_address"), py::arg("router"))
-      .def_readonly("expert_gate_up_weight_address",
-                    &xpool::ffnagent::MoeBindingResourceProjection::expert_gate_up_weight_address,
-                    "Device address of the packed Expert gate-up weights.")
-      .def_readonly("expert_down_weight_address",
-                    &xpool::ffnagent::MoeBindingResourceProjection::expert_down_weight_address,
-                    "Device address of the packed Expert down weights.")
-      .def_readonly("router", &xpool::ffnagent::MoeBindingResourceProjection::router,
-                    "Router resources on the owning TP rank, or no resources otherwise.");
+      .def(py::init([](const at::Tensor &expert_gate_up_weight, const at::Tensor &expert_down_weight,
+                       std::optional<xpool::ffnagent::MoeRouterBindingResourceProjection> router) {
+             return xpool::ffnagent::MoeBindingResourceProjection{
+                 .expert_gate_up_weight_address =
+                     require_cuda_address(expert_gate_up_weight, "MoE Expert gate/up weights"),
+                 .expert_down_weight_address = require_cuda_address(expert_down_weight, "MoE Expert down weights"),
+                 .router = std::move(router),
+             };
+           }),
+           py::arg("expert_gate_up_weight"), py::arg("expert_down_weight"), py::arg("router"));
 
   py::class_<xpool::ffnagent::DenseExecutionSignatureProjection>(ffnagent, "DenseExecutionSignatureProjection",
                                                                     "Captured Dense execution signature.")
       .def(py::init([](const py::object &payload_dtype, std::size_t payload_row_capacity, std::size_t hidden_size,
                        std::size_t local_intermediate_size, std::uintptr_t primary_graph_address,
-                       std::uintptr_t control_graph_address, std::uintptr_t capture_input_address,
-                       std::uintptr_t capture_partial_address, std::uintptr_t capture_workspace_address,
+                       std::uintptr_t control_graph_address, const at::Tensor &capture_input,
+                       const at::Tensor &capture_partial, const at::Tensor &capture_workspace,
                        std::size_t compute_workspace_bytes,
                        xpool::ffnagent::DenseBindingResourceProjection primary_capture_resources,
                        xpool::ffnagent::DenseBindingResourceProjection control_capture_resources) {
@@ -200,9 +159,9 @@ void bind_fabric(py::module_ &module) {
                  .local_intermediate_size = local_intermediate_size,
                  .primary_graph_address = primary_graph_address,
                  .control_graph_address = control_graph_address,
-                 .capture_input_address = capture_input_address,
-                 .capture_partial_address = capture_partial_address,
-                 .capture_workspace_address = capture_workspace_address,
+                 .capture_input_address = require_cuda_address(capture_input, "Dense capture input"),
+                 .capture_partial_address = require_cuda_address(capture_partial, "Dense capture partial"),
+                 .capture_workspace_address = require_cuda_address(capture_workspace, "Dense capture workspace"),
                  .compute_workspace_bytes = compute_workspace_bytes,
                  .primary_capture_resources = primary_capture_resources,
                  .control_capture_resources = control_capture_resources,
@@ -210,57 +169,19 @@ void bind_fabric(py::module_ &module) {
            }),
            py::arg("payload_dtype"), py::arg("payload_row_capacity"), py::arg("hidden_size"),
            py::arg("local_intermediate_size"), py::arg("primary_graph_address"), py::arg("control_graph_address"),
-           py::arg("capture_input_address"), py::arg("capture_partial_address"), py::arg("capture_workspace_address"),
+           py::arg("capture_input"), py::arg("capture_partial"), py::arg("capture_workspace"),
            py::arg("compute_workspace_bytes"), py::arg("primary_capture_resources"),
-           py::arg("control_capture_resources"))
-      .def_property_readonly(
-          "payload_dtype",
-          [](const xpool::ffnagent::DenseExecutionSignatureProjection &value) {
-            return python_dtype(value.payload_dtype);
-          },
-          "Stable hidden-state payload dtype value.")
-      .def_readonly("payload_row_capacity",
-                    &xpool::ffnagent::DenseExecutionSignatureProjection::payload_row_capacity,
-                    "Physical row capacity captured by this Primary Graph.")
-      .def_readonly("hidden_size", &xpool::ffnagent::DenseExecutionSignatureProjection::hidden_size,
-                    "Hidden-state width in elements.")
-      .def_readonly("local_intermediate_size",
-                    &xpool::ffnagent::DenseExecutionSignatureProjection::local_intermediate_size,
-                    "Intermediate width owned by this TP rank.")
-      .def_readonly("primary_graph_address",
-                    &xpool::ffnagent::DenseExecutionSignatureProjection::primary_graph_address,
-                    "Opaque CUDA Graph address for the primary representative layer.")
-      .def_readonly("control_graph_address",
-                    &xpool::ffnagent::DenseExecutionSignatureProjection::control_graph_address,
-                    "Opaque CUDA Graph address for binding-schema control.")
-      .def_readonly("capture_input_address",
-                    &xpool::ffnagent::DenseExecutionSignatureProjection::capture_input_address,
-                    "Captured source address of the input tensor.")
-      .def_readonly("capture_partial_address",
-                    &xpool::ffnagent::DenseExecutionSignatureProjection::capture_partial_address,
-                    "Captured source address of the rank-local partial output tensor.")
-      .def_readonly("capture_workspace_address",
-                    &xpool::ffnagent::DenseExecutionSignatureProjection::capture_workspace_address,
-                    "Captured source address of the caller-owned compute workspace.")
-      .def_readonly("compute_workspace_bytes",
-                    &xpool::ffnagent::DenseExecutionSignatureProjection::compute_workspace_bytes,
-                    "Exact logical source workspace byte extent.")
-      .def_readonly("primary_capture_resources",
-                    &xpool::ffnagent::DenseExecutionSignatureProjection::primary_capture_resources,
-                    "Primary representative layer's captured weight addresses.")
-      .def_readonly("control_capture_resources",
-                    &xpool::ffnagent::DenseExecutionSignatureProjection::control_capture_resources,
-                    "Control representative layer's captured weight addresses.");
+           py::arg("control_capture_resources"));
 
   py::class_<xpool::ffnagent::MoeExecutionSignatureProjection>(ffnagent, "MoeExecutionSignatureProjection",
                                                                   "Captured MoE execution signature.")
       .def(py::init([](const py::object &payload_dtype, std::size_t payload_row_capacity, std::size_t hidden_size,
                        std::size_t local_intermediate_size, std::size_t expert_count, std::size_t effective_topk,
                        std::optional<std::size_t> routed_expert_count, std::uintptr_t primary_graph_address,
-                       std::uintptr_t control_graph_address, std::uintptr_t capture_input_address,
-                       std::uintptr_t capture_partial_address, std::uintptr_t capture_workspace_address,
-                       std::size_t compute_workspace_bytes, std::uintptr_t capture_routing_metadata_address,
-                       std::optional<std::uintptr_t> capture_payload_rows_address,
+                       std::uintptr_t control_graph_address, const at::Tensor &capture_input,
+                       const at::Tensor &capture_partial, const at::Tensor &capture_workspace,
+                       std::size_t compute_workspace_bytes, const at::Tensor &capture_routing_metadata,
+                       const std::optional<at::Tensor> &capture_payload_rows,
                        xpool::ffnagent::MoeBindingResourceProjection primary_capture_resources,
                        xpool::ffnagent::MoeBindingResourceProjection control_capture_resources) {
              return xpool::ffnagent::MoeExecutionSignatureProjection{
@@ -273,12 +194,16 @@ void bind_fabric(py::module_ &module) {
                  .routed_expert_count = routed_expert_count,
                  .primary_graph_address = primary_graph_address,
                  .control_graph_address = control_graph_address,
-                 .capture_input_address = capture_input_address,
-                 .capture_partial_address = capture_partial_address,
-                 .capture_workspace_address = capture_workspace_address,
+                 .capture_input_address = require_cuda_address(capture_input, "MoE capture input"),
+                 .capture_partial_address = require_cuda_address(capture_partial, "MoE capture partial"),
+                 .capture_workspace_address = require_cuda_address(capture_workspace, "MoE capture workspace"),
                  .compute_workspace_bytes = compute_workspace_bytes,
-                 .capture_routing_metadata_address = capture_routing_metadata_address,
-                 .capture_payload_rows_address = capture_payload_rows_address,
+                 .capture_routing_metadata_address =
+                     require_cuda_address(capture_routing_metadata, "MoE capture routing metadata"),
+                 .capture_payload_rows_address =
+                     capture_payload_rows.has_value()
+                         ? std::optional{require_cuda_address(*capture_payload_rows, "MoE capture payload rows")}
+                         : std::nullopt,
                  .primary_capture_resources = std::move(primary_capture_resources),
                  .control_capture_resources = std::move(control_capture_resources),
              };
@@ -286,112 +211,30 @@ void bind_fabric(py::module_ &module) {
            py::arg("payload_dtype"), py::arg("payload_row_capacity"), py::arg("hidden_size"),
            py::arg("local_intermediate_size"), py::arg("expert_count"), py::arg("effective_topk"),
            py::arg("routed_expert_count"), py::arg("primary_graph_address"), py::arg("control_graph_address"),
-           py::arg("capture_input_address"), py::arg("capture_partial_address"), py::arg("capture_workspace_address"),
-           py::arg("compute_workspace_bytes"), py::arg("capture_routing_metadata_address"),
-           py::arg("capture_payload_rows_address"), py::arg("primary_capture_resources"),
-           py::arg("control_capture_resources"))
-      .def_property_readonly(
-          "payload_dtype",
-          [](const xpool::ffnagent::MoeExecutionSignatureProjection &value) { return python_dtype(value.payload_dtype); },
-          "Stable hidden-state payload dtype value.")
-      .def_readonly("payload_row_capacity", &xpool::ffnagent::MoeExecutionSignatureProjection::payload_row_capacity,
-                    "Physical row capacity captured by this Primary Graph.")
-      .def_readonly("hidden_size", &xpool::ffnagent::MoeExecutionSignatureProjection::hidden_size,
-                    "Hidden-state width in elements.")
-      .def_readonly("local_intermediate_size",
-                    &xpool::ffnagent::MoeExecutionSignatureProjection::local_intermediate_size,
-                    "Intermediate width owned by this TP rank and Expert.")
-      .def_readonly("expert_count", &xpool::ffnagent::MoeExecutionSignatureProjection::expert_count,
-                    "Total routed and shared Expert slots.")
-      .def_readonly("effective_topk", &xpool::ffnagent::MoeExecutionSignatureProjection::effective_topk,
-                    "Final routed and always-selected Expert slots per row.")
-      .def_readonly("routed_expert_count", &xpool::ffnagent::MoeExecutionSignatureProjection::routed_expert_count,
-                    "Routed Expert count on the Router-owning TP rank, or None.")
-      .def_readonly("primary_graph_address",
-                    &xpool::ffnagent::MoeExecutionSignatureProjection::primary_graph_address,
-                    "Opaque CUDA Graph address for the primary representative layer.")
-      .def_readonly("control_graph_address",
-                    &xpool::ffnagent::MoeExecutionSignatureProjection::control_graph_address,
-                    "Opaque CUDA Graph address for binding-schema control.")
-      .def_readonly("capture_input_address",
-                    &xpool::ffnagent::MoeExecutionSignatureProjection::capture_input_address,
-                    "Captured source address of the input tensor.")
-      .def_readonly("capture_partial_address",
-                    &xpool::ffnagent::MoeExecutionSignatureProjection::capture_partial_address,
-                    "Captured source address of the rank-local partial output tensor.")
-      .def_readonly("capture_workspace_address",
-                    &xpool::ffnagent::MoeExecutionSignatureProjection::capture_workspace_address,
-                    "Captured source address of the caller-owned compute workspace.")
-      .def_readonly("compute_workspace_bytes",
-                    &xpool::ffnagent::MoeExecutionSignatureProjection::compute_workspace_bytes,
-                    "Exact logical source workspace byte extent.")
-      .def_readonly("capture_routing_metadata_address",
-                    &xpool::ffnagent::MoeExecutionSignatureProjection::capture_routing_metadata_address,
-                    "Captured source address of packed Expert ids and weights.")
-      .def_readonly("capture_payload_rows_address",
-                    &xpool::ffnagent::MoeExecutionSignatureProjection::capture_payload_rows_address,
-                    "Router-owner captured source address of the device-visible live-row count, or None.")
-      .def_readonly("primary_capture_resources",
-                    &xpool::ffnagent::MoeExecutionSignatureProjection::primary_capture_resources,
-                    "Primary representative layer's captured weight addresses.")
-      .def_readonly("control_capture_resources",
-                    &xpool::ffnagent::MoeExecutionSignatureProjection::control_capture_resources,
-                    "Control representative layer's captured weight addresses.");
+           py::arg("capture_input"), py::arg("capture_partial"), py::arg("capture_workspace"),
+           py::arg("compute_workspace_bytes"), py::arg("capture_routing_metadata"),
+           py::arg("capture_payload_rows"), py::arg("primary_capture_resources"),
+           py::arg("control_capture_resources"));
 
   py::class_<xpool::ffnagent::LayerExecutionProjection>(ffnagent, "LayerExecutionProjection",
                                                            "One Plan-addressed local FFN layer.")
       .def(py::init([](std::size_t instance_index, std::size_t layer_ordinal,
-                       std::vector<std::size_t> execution_signature_indices, const py::object &target) {
-             if (py::isinstance<xpool::ffnagent::DenseBindingResourceProjection>(target)) {
-               return xpool::ffnagent::LayerExecutionProjection{
-                   .instance_index = instance_index,
-                   .layer_ordinal = layer_ordinal,
-                   .execution_signature_indices = std::move(execution_signature_indices),
-                   .layer_resource_targets = target.cast<xpool::ffnagent::DenseBindingResourceProjection>(),
-               };
-             }
-             if (py::isinstance<xpool::ffnagent::MoeBindingResourceProjection>(target)) {
-               return xpool::ffnagent::LayerExecutionProjection{
-                   .instance_index = instance_index,
-                   .layer_ordinal = layer_ordinal,
-                   .execution_signature_indices = std::move(execution_signature_indices),
-                   .layer_resource_targets = target.cast<xpool::ffnagent::MoeBindingResourceProjection>(),
-               };
-             }
-             throw py::type_error("layer_resource_targets must be a Dense or MoE FFN resource projection");
+                       std::vector<std::size_t> execution_signature_indices,
+                       xpool::ffnagent::BindingResourceProjection layer_resource_targets) {
+             return xpool::ffnagent::LayerExecutionProjection{
+                 .instance_index = instance_index,
+                 .layer_ordinal = layer_ordinal,
+                 .execution_signature_indices = std::move(execution_signature_indices),
+                 .layer_resource_targets = std::move(layer_resource_targets),
+             };
            }),
            py::arg("instance_index"), py::arg("layer_ordinal"), py::arg("execution_signature_indices"),
-           py::arg("layer_resource_targets"))
-      .def_readonly("instance_index", &xpool::ffnagent::LayerExecutionProjection::instance_index,
-                    "Config-order Instance Plan index.")
-      .def_readonly("layer_ordinal", &xpool::ffnagent::LayerExecutionProjection::layer_ordinal,
-                    "Config-order FFN layer ordinal.")
-      .def_readonly("execution_signature_indices",
-                    &xpool::ffnagent::LayerExecutionProjection::execution_signature_indices,
-                    "Execution Signatures eligible for this layer in ascending capacity order.")
-      .def_property_readonly(
-          "layer_resource_targets",
-          [](const xpool::ffnagent::LayerExecutionProjection &value) {
-            return std::visit([](const auto &target) { return py::cast(target); }, value.layer_resource_targets);
-          },
-          "Installed layer weight addresses used to bind eligible Graph Templates.");
+           py::arg("layer_resource_targets"));
 
   py::class_<xpool::ffnagent::ExecutionProjection>(ffnagent, "ExecutionProjection",
                                                       "Complete one-time native FFN installation input.")
-      .def(py::init([](const py::sequence &signature_values,
+      .def(py::init([](std::vector<xpool::ffnagent::ExecutionSignatureProjection> signatures,
                        std::vector<xpool::ffnagent::LayerExecutionProjection> layers) {
-             auto signatures = std::vector<xpool::ffnagent::ExecutionSignatureProjection>{};
-             signatures.reserve(signature_values.size());
-             for (const auto item : signature_values) {
-               const auto value = py::reinterpret_borrow<py::object>(item);
-               if (py::isinstance<xpool::ffnagent::DenseExecutionSignatureProjection>(value)) {
-                 signatures.emplace_back(value.cast<xpool::ffnagent::DenseExecutionSignatureProjection>());
-               } else if (py::isinstance<xpool::ffnagent::MoeExecutionSignatureProjection>(value)) {
-                 signatures.emplace_back(value.cast<xpool::ffnagent::MoeExecutionSignatureProjection>());
-               } else {
-                 throw py::type_error("signatures must contain only Dense or MoE FFN signature projections");
-               }
-             }
              auto projection = xpool::ffnagent::ExecutionProjection{
                  .signatures = std::move(signatures),
                  .layers = std::move(layers),
@@ -399,20 +242,7 @@ void bind_fabric(py::module_ &module) {
              projection.validate();
              return projection;
            }),
-           py::arg("signatures"), py::arg("layers"))
-      .def_property_readonly(
-          "signatures",
-          [](const xpool::ffnagent::ExecutionProjection &projection) {
-            auto values = py::tuple(projection.signatures.size());
-            for (auto index = std::size_t{0}; index < projection.signatures.size(); ++index) {
-              values[index] =
-                  std::visit([](const auto &value) { return py::cast(value); }, projection.signatures[index]);
-            }
-            return values;
-          },
-          "Captured Dense and MoE execution signatures.")
-      .def_readonly("layers", &xpool::ffnagent::ExecutionProjection::layers,
-                    "Plan-addressed local FFN layer bindings.");
+           py::arg("signatures"), py::arg("layers"));
 
   py::class_<xpool::fabric::InvocationKey>(fabric, "InvocationKey", "Identity of one FFN invocation.")
       .def_readonly("instance_index", &xpool::fabric::InvocationKey::instance_index, "Config-order Instance index.")
@@ -426,12 +256,6 @@ void bind_fabric(py::module_ &module) {
       .def_readonly("key", &xpool::fabric::FailurePayload::key, "Failed invocation identity.")
       .def_readonly("layer_ordinal", &xpool::fabric::FailurePayload::layer_ordinal,
                     "Failed config-order FFN layer ordinal.");
-
-  py::class_<xpool::fabric::Failure>(fabric, "Failure", "Published canonical Fabric failure.")
-      .def_readonly("claim", &xpool::fabric::Failure::claim, "Canonical failure claim word.")
-      .def_readonly("publication", &xpool::fabric::Failure::publication, "Canonical failure publication word.")
-      .def_readonly("payload", &xpool::fabric::Failure::payload, "Published immutable failure payload.");
-
 
   py::native_enum<xpool::fabric::DeliveryVariant>(fabric, "DeliveryVariant", "enum.IntEnum",
                                                    "Observed Fabric output-delivery branch.")

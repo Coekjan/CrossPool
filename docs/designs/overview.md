@@ -92,6 +92,10 @@ creates no CUDA Device mirror and joins no NVSHMEM PE. Participant lifecycle
 functions reject the daemon role before initializing CUDA or touching Device
 resources.
 
+Native `RuntimeState` is the sole process-lifetime authority for the initialized
+role. Python bootstrap queries that authority through the root binding and does
+not retain a second role or CUDA-device identity.
+
 Native validation follows the ownership seam. Aggregate Projection construction
 validates immutable geometry, ordering, topology, referenced indices, and
 resource relationships once. Runtime installation validates live CUDA
@@ -107,6 +111,13 @@ plan projections rather than byte offsets or duplicate layout constants.
 Production allocation-size queries reuse the same native layout arithmetic as
 allocation. Observer sizing reads immutable Host Debug options and reuses its
 actual allocation geometry.
+
+Python-to-native Projection values are construction-only and opaque after
+validation. Tensor-bearing bindings accept owning Torch Tensors and extract
+their Device addresses at the native trust seam; Python runtime owners retain
+the Tensor lifetime. Opaque handle encodings derive their public character
+lengths from the owning native value types rather than duplicate Python
+constants.
 
 The native ABI uses a stopped-world compatibility version. Shared closed-set
 protocol concepts are fixed-underlying-type scoped enums in C++ and generated

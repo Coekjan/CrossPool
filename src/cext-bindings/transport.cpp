@@ -19,6 +19,7 @@ namespace xpool::bindings {
 
 void bind_transport(py::module_ &module) {
   auto transport = module.def_submodule("transport", "Native CUDA IPC transport control and lifecycle functions.");
+  transport.attr("ARENA_HANDLE_HEX_LENGTH") = xpool::transport::ArenaHandle::encoded_size;
   transport.def(
       "create_arena",
       [](std::size_t instance_index, std::size_t instance_rank, std::size_t payload_row_capacity,

@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-import xpool.bootstrap
 import xpool.config
 from tests.harness.runner.pytest_plugin import requirement_resolver_key
 from tests.harness.runner.requirements import RequirementGuard
@@ -18,11 +17,9 @@ TEST_MODEL_ID = "test-model"
 
 @pytest.fixture
 def reset_global_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Reset process-global config and bootstrap identity around one test."""
+    """Reset process-global configuration around one test."""
 
     monkeypatch.setattr(xpool.config, "global_config", None)
-    monkeypatch.setattr(xpool.bootstrap, "runtime_role", None)
-    monkeypatch.setattr(xpool.bootstrap, "runtime_cuda_device", None)
     yield
 
 

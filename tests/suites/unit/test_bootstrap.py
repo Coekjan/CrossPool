@@ -13,8 +13,8 @@ from xpool.native import RuntimeRole
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
 
-def test_bootstrap_initializes_native_runtime_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Identical bootstrap calls share one successful native initialization."""
+def test_bootstrap_initializes_native_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bootstrap delegates identity ownership before Python-side setup."""
 
     events: list[tuple[str | RuntimeRole | int | None, ...]] = []
     monkeypatch.setattr(xpool.bootstrap.xpool.cext, "ensure_native_loaded", lambda: events.append(("load",)))
@@ -26,8 +26,8 @@ def test_bootstrap_initializes_native_runtime_once(monkeypatch: pytest.MonkeyPat
         "initialize",
         lambda role, cuda_device, debug_options: events.append(("init", role, cuda_device, debug_options)),
     )
+    monkeypatch.setattr(xpool.bootstrap.xpool.native, "runtime_role", lambda: RuntimeRole.INSTANCE)
 
-    xpool.bootstrap.init(2, RuntimeRole.INSTANCE)
     xpool.bootstrap.init(2, RuntimeRole.INSTANCE)
 
     assert xpool.bootstrap.get_runtime_role() is RuntimeRole.INSTANCE
@@ -71,6 +71,7 @@ def test_bootstrap_sets_resident_process_title_after_native_initialization(
     )
     monkeypatch.setattr(torch.cuda, "set_device", lambda device: events.append(("device", device)))
     monkeypatch.setattr(xpool.bootstrap, "set_process_title", lambda value: events.append(("title", value)))
+    monkeypatch.setattr(xpool.bootstrap.xpool.native, "runtime_role", lambda: role)
 
     xpool.bootstrap.init(cuda_device, role)
 
@@ -84,29 +85,8 @@ def test_bootstrap_sets_resident_process_title_after_native_initialization(
     assert xpool.bootstrap.get_runtime_role() is role
 
 
-@pytest.mark.parametrize(
-    ("cuda_device", "role"),
-    [(3, RuntimeRole.INSTANCE), (2, RuntimeRole.ATNAGENT)],
-)
-def test_bootstrap_rejects_conflicting_reinitialization(
-    cuda_device: int,
-    role: RuntimeRole,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A process cannot change CUDA device or runtime role after bootstrap."""
-
-    monkeypatch.setattr(xpool.bootstrap.xpool.cext, "ensure_native_loaded", lambda: None)
-    monkeypatch.setattr(xpool.bootstrap, "get_global_config", lambda: SimpleNamespace(debug=DebugConfig()))
-    monkeypatch.setattr(xpool.bootstrap.xpool.native, "initialize", lambda role, cuda_device, debug_options: None)
-    monkeypatch.setattr(torch.cuda, "set_device", lambda device: None)
-    xpool.bootstrap.init(2, RuntimeRole.INSTANCE)
-
-    with pytest.raises(RuntimeError, match="already initialized"):
-        xpool.bootstrap.init(cuda_device, role)
-
-
-def test_bootstrap_does_not_commit_failed_native_initialization(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A failed native initialization leaves Python bootstrap retryable."""
+def test_bootstrap_stops_after_failed_native_initialization(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed native initialization prevents Python-side setup."""
 
     monkeypatch.setattr(xpool.bootstrap.xpool.cext, "ensure_native_loaded", lambda: None)
     monkeypatch.setattr(xpool.bootstrap, "get_global_config", lambda: SimpleNamespace(debug=DebugConfig()))
@@ -124,23 +104,32 @@ def test_bootstrap_does_not_commit_failed_native_initialization(monkeypatch: pyt
 
     with pytest.raises(RuntimeError, match="native init failed"):
         xpool.bootstrap.init(0, RuntimeRole.ATNAGENT)
-    with pytest.raises(RuntimeError, match="before bootstrap"):
-        xpool.bootstrap.get_runtime_role()
     assert process_titles == []
 
 
 def test_daemon_bootstrap_rejects_cuda_device_before_native_initialization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The host-only daemon cannot bootstrap with a CUDA device."""
+    """The host-only daemon delegates CUDA-device rejection to native."""
 
     native_loads: list[None] = []
     monkeypatch.setattr(xpool.bootstrap.xpool.cext, "ensure_native_loaded", lambda: native_loads.append(None))
+    monkeypatch.setattr(xpool.bootstrap, "get_global_config", lambda: SimpleNamespace(debug=DebugConfig()))
+
+    def reject_daemon_device(
+        role: RuntimeRole,
+        cuda_device: int | None,
+        debug_options: xpool.bootstrap.xpool.native.debug.Options,
+    ) -> None:
+        assert (role, cuda_device) == (RuntimeRole.DAEMON, 0)
+        raise RuntimeError("must not own a CUDA device")
+
+    monkeypatch.setattr(xpool.bootstrap.xpool.native, "initialize", reject_daemon_device)
 
     with pytest.raises(RuntimeError, match="must not own a CUDA device"):
         xpool.bootstrap.init(0, RuntimeRole.DAEMON)
 
-    assert native_loads == []
+    assert native_loads == [None]
 
 
 @pytest.mark.parametrize("role", [RuntimeRole.INSTANCE, RuntimeRole.ATNAGENT, RuntimeRole.FFNAGENT])
@@ -149,18 +138,28 @@ def test_gpu_runtime_bootstrap_requires_cuda_device(
     role: RuntimeRole,
 ) -> None:
     monkeypatch.setattr(xpool.bootstrap.xpool.cext, "ensure_native_loaded", lambda: None)
-    monkeypatch.setattr(
-        xpool.bootstrap.xpool.native,
-        "initialize",
-        lambda *args: pytest.fail("native initialization must not run without a CUDA device"),
-    )
+    monkeypatch.setattr(xpool.bootstrap, "get_global_config", lambda: SimpleNamespace(debug=DebugConfig()))
+
+    def reject_missing_device(
+        native_role: RuntimeRole,
+        cuda_device: int | None,
+        debug_options: xpool.bootstrap.xpool.native.debug.Options,
+    ) -> None:
+        assert (native_role, cuda_device) == (role, None)
+        raise RuntimeError("requires a CUDA device")
+
+    monkeypatch.setattr(xpool.bootstrap.xpool.native, "initialize", reject_missing_device)
 
     with pytest.raises(RuntimeError, match="requires a CUDA device"):
         xpool.bootstrap.init(None, role)
 
 
-def test_get_runtime_role_requires_bootstrap() -> None:
+def test_get_runtime_role_requires_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     """Runtime role access fails clearly before process bootstrap."""
 
+    def fail_role() -> RuntimeRole:
+        raise RuntimeError("before bootstrap")
+
+    monkeypatch.setattr(xpool.bootstrap.xpool.native, "runtime_role", fail_role)
     with pytest.raises(RuntimeError, match="before bootstrap"):
         xpool.bootstrap.get_runtime_role()

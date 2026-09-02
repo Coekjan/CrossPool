@@ -35,7 +35,7 @@ def fabric_debug_options(
 def fabric_trace_report(
     role: RuntimeRole,
     snapshot: xpool.native.devkit.fabric_observer.Snapshot,
-    failure: xpool.native.fabric.Failure | None,
+    failure: xpool.native.fabric.FailurePayload | None,
     graph_snapshot: xpool.native.devkit.graph_observer.Snapshot | None,
     routing_snapshot: xpool.native.devkit.ffn_routing_observer.Snapshot | None,
 ) -> FabricParticipantReport:
@@ -105,13 +105,11 @@ def fabric_trace_report(
             None
             if failure is None
             else FabricFailureEvidence(
-                claim=failure.claim,
-                publication=failure.publication,
-                result_code=failure.payload.result_code,
-                origin_pe=failure.payload.origin_pe,
-                instance_index=failure.payload.key.instance_index,
-                invocation_sequence=failure.payload.key.invocation_sequence,
-                layer_ordinal=failure.payload.layer_ordinal,
+                result_code=failure.result_code,
+                origin_pe=failure.origin_pe,
+                instance_index=failure.key.instance_index,
+                invocation_sequence=failure.key.invocation_sequence,
+                layer_ordinal=failure.layer_ordinal,
             )
         ),
         graph_snapshot=(

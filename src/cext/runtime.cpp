@@ -37,6 +37,12 @@ void RuntimeState::initialize(RuntimeRole role, const std::optional<c10::DeviceI
   device_ = cuda_device;
 }
 
+RuntimeRole RuntimeState::role() const {
+  const auto lock = std::lock_guard<std::mutex>{mutex_};
+  TORCH_CHECK(role_.has_value(), "xpool runtime role is unavailable before initialization");
+  return *role_;
+}
+
 void RuntimeState::require_role(std::initializer_list<RuntimeRole> expected, std::string_view op_name) const {
   std::lock_guard<std::mutex> lock(mutex_);
   TORCH_CHECK(role_.has_value(), "xpool op ", op_name, " requires xpool.init first");

@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 import torch
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_serializer, field_validator, model_validator
 
+import xpool.native
 from xpool.config import FfnSchedulingPolicy
 from xpool.native.ffn import LayerKind
 
@@ -35,7 +36,7 @@ __all__ = [
     "RandomSchedulerPolicy",
 ]
 
-FABRIC_UID_HEX_LENGTH = 256
+FABRIC_UID_HEX_LENGTH = int(xpool.native.fabric.UID_HEX_LENGTH)
 """Character count of a lowercase hexadecimal NVSHMEM unique id."""
 
 UINT64_MAX = 2**64 - 1

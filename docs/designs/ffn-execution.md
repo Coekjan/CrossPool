@@ -27,9 +27,11 @@ execution model implements gated formulas.
 
 The FFN path uses the pinned low-level Expert implementation from the supported
 SGLang environment for admitted BF16 and FP16 devices. Only
-`xpool.runtime.ffnagent.operators` may import the fused-MoE Triton
-configuration and Kernel implementation. Startup selects immutable launch
-configuration and Graph Capture executes the Expert kernels.
+`xpool.runtime.ffnagent.operators` may import reusable low-level Expert and
+TopK operations, including the fused-MoE Triton configuration and Kernel
+implementation. Model adapters retain model-specific geometry, validation, and
+routing semantics. Startup selects immutable launch configuration and Graph
+Capture executes the Expert kernels.
 
 Any temporary adaptation of SGLang global arguments is scoped and
 unconditionally restored. No SGLang runtime object, callable, or state is

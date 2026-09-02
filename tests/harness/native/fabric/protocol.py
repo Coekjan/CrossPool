@@ -169,8 +169,6 @@ class FabricRoutingSnapshotEvidence:
 class FabricFailureEvidence:
     """One PE's host-observed canonical Fabric failure state."""
 
-    claim: int
-    publication: int
     result_code: ResultCode
     origin_pe: int
     instance_index: int

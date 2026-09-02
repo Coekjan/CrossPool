@@ -273,7 +273,7 @@ bool Runtime::drain_pending() {
   return false;
 }
 
-std::optional<Failure> Runtime::failure() const {
+std::optional<FailurePayload> Runtime::failure() const {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(phase_ == Phase::Joined || phase_ == Phase::Draining || phase_ == Phase::Drained,
               "xpool Fabric failure is unavailable outside a joined generation");
@@ -296,7 +296,7 @@ std::optional<Failure> Runtime::failure() const {
   TORCH_CHECK(state.failure.payload.layer_ordinal <
                   projection_->instances[state.failure.payload.key.instance_index].layers.size(),
               "xpool Fabric failure has an invalid layer ordinal");
-  return state.failure;
+  return state.failure.payload;
 }
 
 void Runtime::finalize() {

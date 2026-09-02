@@ -164,13 +164,12 @@ class Agent(ABC):
         try:
             failure = xpool.native.fabric.failure()
             if failure is not None:
-                payload = failure.payload
                 invocation_failure = FabricInvocationFailure(
-                    result_code=payload.result_code,
-                    origin_pe=payload.origin_pe,
-                    instance_index=payload.key.instance_index,
-                    invocation_sequence=payload.key.invocation_sequence,
-                    layer_ordinal=payload.layer_ordinal,
+                    result_code=failure.result_code,
+                    origin_pe=failure.origin_pe,
+                    instance_index=failure.key.instance_index,
+                    invocation_sequence=failure.key.invocation_sequence,
+                    layer_ordinal=failure.layer_ordinal,
                 )
                 if report.invocation_failure != invocation_failure:
                     self.report_fabric_phase(report.phase, invocation_failure=invocation_failure)

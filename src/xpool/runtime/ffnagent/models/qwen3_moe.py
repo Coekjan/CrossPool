@@ -8,7 +8,7 @@ import torch
 
 from xpool import ffn
 from xpool.native.ffn import LayerKind
-from xpool.runtime.ffnagent import architecture, weights
+from xpool.runtime.ffnagent import architecture, operators, weights
 
 
 class Qwen3MoeAdapter(architecture.MoeFfnModelAdapter):
@@ -44,8 +44,6 @@ class Qwen3MoeAdapter(architecture.MoeFfnModelAdapter):
     ) -> None:
         """Run Qwen3-MoE projection and public caller-output TopK."""
 
-        import sgl_kernel
-
         payload_dtype = hidden_states.dtype
         if payload_dtype not in (torch.bfloat16, torch.float16):
             raise ValueError("Qwen3-MoE Router requires BF16 or FP16 payloads")
@@ -77,7 +75,12 @@ class Qwen3MoeAdapter(architecture.MoeFfnModelAdapter):
             raise ValueError("Qwen3-MoE Router tensors must share one CUDA device")
         logits = workspace.view(payload_dtype).view(row_capacity, routed_expert_count)
         torch.mm(hidden_states, router_weights.weight.t(), out=logits)
-        sgl_kernel.topk_softmax(routed_weights, routed_ids, logits, renormalize=renormalize)
+        operators.compute_softmax_topk(
+            logits=logits,
+            routed_ids=routed_ids,
+            routed_weights=routed_weights,
+            renormalize=renormalize,
+        )
 
     @classmethod
     def compile(

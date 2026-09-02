@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import xpool.native
 from xpool.native.ffn import DpRowLayout, ForwardMode, OutputRequirement
 
 __all__ = ["TRANSPORT_ARENA_HANDLE_HEX_LENGTH", "FfnRequestMetadata", "TransportArenaHandle"]
 
-TRANSPORT_ARENA_HANDLE_HEX_LENGTH = 128
+TRANSPORT_ARENA_HANDLE_HEX_LENGTH = int(xpool.native.transport.ARENA_HANDLE_HEX_LENGTH)
 """Character count of a lowercase hexadecimal CUDA IPC memory handle."""
 
 

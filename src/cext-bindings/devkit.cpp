@@ -223,11 +223,10 @@ void bind_transport_observer_types(py::module_ &module) {
                     "Every open Transport endpoint in this process.");
 }
 
-py::dict graph_node_counts(const std::map<cudaGraphNodeType, std::size_t> &counts) {
-  const auto node_type = py::module_::import("cuda.bindings.runtime").attr("cudaGraphNodeType");
+py::dict python_node_counts(const std::map<cudaGraphNodeType, std::size_t> &counts) {
   auto result = py::dict{};
   for (const auto &[kind, count] : counts) {
-    result[node_type(static_cast<int>(kind))] = count;
+    result[py::int_(static_cast<int>(kind))] = count;
   }
   return result;
 }
@@ -251,7 +250,7 @@ void bind_devkit(py::module_ &module) {
       .def_property_readonly(
           "node_counts",
           [](const xpool::devkit::graph_observer::PrimaryGraphSnapshot &value) {
-            return graph_node_counts(value.node_counts);
+            return python_node_counts(value.node_counts);
           },
           "Observed Primary Graph node counts keyed by CUDA node type.")
       .def_readonly("binding_site_count", &xpool::devkit::graph_observer::PrimaryGraphSnapshot::binding_site_count,
@@ -262,7 +261,7 @@ void bind_devkit(py::module_ &module) {
       .def_property_readonly(
           "node_counts",
           [](const xpool::devkit::graph_observer::LaneGraphSnapshot &value) {
-            return graph_node_counts(value.node_counts);
+            return python_node_counts(value.node_counts);
           },
           "Observed recursive Lane Graph node counts keyed by CUDA node type.")
       .def_readonly("compute_branch_count", &xpool::devkit::graph_observer::LaneGraphSnapshot::compute_branch_count,

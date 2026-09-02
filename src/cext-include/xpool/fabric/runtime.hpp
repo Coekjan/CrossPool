@@ -66,7 +66,7 @@ public:
   bool drain_pending();
 
   /// Return the locally published canonical Fabric failure when present.
-  std::optional<Failure> failure() const;
+  std::optional<FailurePayload> failure() const;
 
   /// Collectively release symmetric storage and finalize this local PE.
   /// \pre Local drain completed and every generation participant enters this

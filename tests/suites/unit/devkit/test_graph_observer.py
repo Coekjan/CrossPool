@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import importlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import cuda.bindings.runtime  # ty: ignore[unresolved-import]
 import pytest
 
 import xpool.native
@@ -16,7 +16,6 @@ from xpool.fabric import FabricGenerationId
 from xpool.runtime.ffnagent.agent import FfnAgent
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
-cuda_graph_node_type = importlib.import_module("cuda.bindings.runtime").cudaGraphNodeType
 
 
 def test_graph_snapshot_serializes_native_observations(
@@ -40,13 +39,13 @@ def test_graph_snapshot_serializes_native_observations(
         SimpleNamespace(
             primary_graphs=(
                 SimpleNamespace(
-                    node_counts={cuda_graph_node_type.cudaGraphNodeTypeKernel: 3},
+                    node_counts={int(cuda.bindings.runtime.cudaGraphNodeType.cudaGraphNodeTypeKernel): 3},
                     binding_site_count=7,
                 ),
             ),
             lane_graphs=(
                 SimpleNamespace(
-                    node_counts={cuda_graph_node_type.cudaGraphNodeTypeConditional: 2},
+                    node_counts={int(cuda.bindings.runtime.cudaGraphNodeType.cudaGraphNodeTypeConditional): 2},
                     compute_branch_count=1,
                     delivery_branch_count=2,
                 ),

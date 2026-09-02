@@ -20,6 +20,9 @@ template <typename T>
   requires std::is_trivially_copyable_v<T>
 class HexValue {
 public:
+  /// Character count of the canonical lowercase hexadecimal projection.
+  static constexpr std::size_t encoded_size = sizeof(T) * 2;
+
   /// Construct a zero-initialized value.
   HexValue() = default;
   /// Construct from one complete native value.
@@ -28,7 +31,7 @@ public:
   /// Decode one canonical lowercase hexadecimal value.
   /// \throws c10::Error for incorrect length or a non-lowercase hexadecimal digit.
   static HexValue decode(std::string_view text) {
-    TORCH_CHECK(text.size() == sizeof(T) * 2, "xpool hexadecimal value has unexpected byte length");
+    TORCH_CHECK(text.size() == encoded_size, "xpool hexadecimal value has unexpected byte length");
     auto result = HexValue{};
     auto *bytes = reinterpret_cast<unsigned char *>(&result.value_);
     const auto decode_nibble = [](char value) -> unsigned int {
@@ -51,7 +54,7 @@ public:
   std::string encode() const {
     static constexpr auto digits = std::string_view{"0123456789abcdef"};
     const auto *bytes = reinterpret_cast<const unsigned char *>(&value_);
-    auto result = std::string(sizeof(T) * 2, '0');
+    auto result = std::string(encoded_size, '0');
     for (auto index = std::size_t{0}; index < sizeof(T); ++index) {
       result[index * 2] = digits[bytes[index] >> 4U];
       result[index * 2 + 1] = digits[bytes[index] & 0x0fU];

@@ -56,3 +56,6 @@ Routing evidence follows the collective `RoutingMetadataPublished` event after
 the production payload and identity are published. Graph evidence records
 Primary captures and installed Lane Graphs at their owning lifecycle Points.
 Observers never replace execution, provide readiness, or mutate Graph topology.
+Native Graph snapshots expose CUDA node kinds as underlying integers; the
+Python Graph Observer resolves official cuda-python enum names only when
+constructing its JSON presentation.

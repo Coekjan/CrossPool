@@ -53,19 +53,19 @@ def binding_resource_projection(
 
     if isinstance(layer_weights, weights.DenseFfnWeights):
         return xpool.native.ffnagent.DenseBindingResourceProjection(
-            gate_up_weight_address=layer_weights.gate_up_weight.data_ptr(),
-            down_weight_address=layer_weights.down_weight.data_ptr(),
+            gate_up_weight=layer_weights.gate_up_weight,
+            down_weight=layer_weights.down_weight,
         )
     router = layer_weights.router
     return xpool.native.ffnagent.MoeBindingResourceProjection(
-        expert_gate_up_weight_address=layer_weights.expert_gate_up_weight.data_ptr(),
-        expert_down_weight_address=layer_weights.expert_down_weight.data_ptr(),
+        expert_gate_up_weight=layer_weights.expert_gate_up_weight,
+        expert_down_weight=layer_weights.expert_down_weight,
         router=(
             None
             if router is None
             else xpool.native.ffnagent.MoeRouterBindingResourceProjection(
-                weight_address=router.weight.data_ptr(),
-                correction_bias_address=(None if router.correction_bias is None else router.correction_bias.data_ptr()),
+                weight=router.weight,
+                correction_bias=router.correction_bias,
             )
         ),
     )
@@ -255,9 +255,9 @@ def capture_dense_signature(
         local_intermediate_size=signature.local_intermediate_size,
         primary_graph_address=primary_graph.raw_cuda_graph(),
         control_graph_address=control_graph.raw_cuda_graph(),
-        capture_input_address=hidden_states.data_ptr(),
-        capture_partial_address=partial.data_ptr(),
-        capture_workspace_address=workspace.data_ptr(),
+        capture_input=hidden_states,
+        capture_partial=partial,
+        capture_workspace=workspace,
         compute_workspace_bytes=workspace.numel(),
         primary_capture_resources=primary_resources,
         control_capture_resources=control_resources,
@@ -388,12 +388,12 @@ def capture_moe_signature(
         routed_expert_count=(None if signature.router is None else signature.router.routed_expert_count),
         primary_graph_address=primary_graph.raw_cuda_graph(),
         control_graph_address=control_graph.raw_cuda_graph(),
-        capture_input_address=hidden_states.data_ptr(),
-        capture_partial_address=partial.data_ptr(),
-        capture_workspace_address=workspace.allocation.data_ptr(),
+        capture_input=hidden_states,
+        capture_partial=partial,
+        capture_workspace=workspace.allocation,
         compute_workspace_bytes=workspace.allocation.numel(),
-        capture_routing_metadata_address=routing_storage.data_ptr(),
-        capture_payload_rows_address=None if payload_rows is None else payload_rows.data_ptr(),
+        capture_routing_metadata=routing_storage,
+        capture_payload_rows=payload_rows,
         primary_capture_resources=primary_resources,
         control_capture_resources=control_resources,
     )

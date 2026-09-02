@@ -83,6 +83,20 @@ def sglang_moe_config_selection() -> Generator[None, None, None]:
         setattr(fused_moe_triton_config, "get_global_server_args", previous)
 
 
+def compute_softmax_topk(
+    *,
+    logits: torch.Tensor,
+    routed_ids: torch.Tensor,
+    routed_weights: torch.Tensor,
+    renormalize: bool,
+) -> None:
+    """Write SGLang-kernel Softmax TopK results into caller-owned tensors."""
+
+    import sgl_kernel
+
+    sgl_kernel.topk_softmax(routed_weights, routed_ids, logits, renormalize=renormalize)
+
+
 def copy_moe_kernel_config(config: object, *, name: str) -> dict[str, int]:
     """Copy one selected private-launcher configuration into plain values."""
 
