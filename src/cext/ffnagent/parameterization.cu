@@ -94,7 +94,10 @@ void parameterize_graph_recursive(
         // Any uncovered byte delta changes behavior rather than merely naming
         // a resource that the runtime intends to rebind.
         TORCH_CHECK(primary_value.bytes[byte_offset] == control_value.bytes[byte_offset] || covered[byte_offset],
-                    "xpool Primary Graph contains an undeclared parameter-byte delta");
+                    "xpool Primary Graph contains an undeclared parameter-byte delta at node ", node_index,
+                    ", argument ", parameter_index, ", byte ", byte_offset, ": primary=",
+                    std::to_integer<unsigned int>(primary_value.bytes[byte_offset]),
+                    ", control=", std::to_integer<unsigned int>(control_value.bytes[byte_offset]));
       }
 
       // Phase: Relocate Lane Addresses - Captured input, output, routing, and

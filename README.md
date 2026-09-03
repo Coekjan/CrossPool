@@ -37,7 +37,7 @@ connect the GPU roles.
   tensor-parallel weight shards and execute model-defined FFN layers through
   independently replayable Executor Lane graphs.
 - **CUDA graph integration:** the adapter and shim test matrix exercises eager
-  execution, Decode full CUDA graph replay, and Prefill piecewise CUDA graph
+  execution, Decode Full CUDA Graph replay, and Prefill Breakable CUDA Graph
   replay when attention data parallelism is one.
 - **Observable validation:** native and Python observers record graph, transport,
   and Fabric evidence, while the repository test runner owns GPU leases and

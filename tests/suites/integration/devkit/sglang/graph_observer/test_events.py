@@ -7,8 +7,8 @@ import pytest
 import xpool.integrations.sglang.devkit.graph_observer
 from tests.harness.support.config import install_test_config, reset_global_config
 from tests.harness.support.sglang.graph_observer import (
-    FakeCudaGraphRunnerState,
-    FakePiecewiseCudaGraphRunnerState,
+    FakeDecodeCudaGraphRunnerState,
+    FakePrefillCudaGraphRunnerState,
     graph_observer_config,
     install_fake_sglang_runner_classes,
     read_events,
@@ -23,118 +23,105 @@ def test_graph_observer_records_success_events(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    CudaGraphRunner, PiecewiseCudaGraphRunner = successful_runner_classes()
-    install_fake_sglang_runner_classes(monkeypatch, CudaGraphRunner, PiecewiseCudaGraphRunner)
+    DecodeCudaGraphRunner, PrefillCudaGraphRunner = successful_runner_classes()
+    install_fake_sglang_runner_classes(monkeypatch, DecodeCudaGraphRunner, PrefillCudaGraphRunner)
 
     install_test_config(config=graph_observer_config(tmp_path.resolve()))
     xpool.integrations.sglang.devkit.graph_observer.install()
 
-    decode_runner = CudaGraphRunner()
-    pcg_runner = PiecewiseCudaGraphRunner()
+    decode_runner = DecodeCudaGraphRunner()
+    prefill_runner = PrefillCudaGraphRunner()
 
     assert decode_runner.capture() == "captured"
-    assert decode_runner.replay() == "replayed"
-    assert pcg_runner.capture() == "pcg-captured"
-    assert pcg_runner.replay() == "pcg-replayed"
+    assert decode_runner.execute() == "executed"
+    assert prefill_runner.capture() == "prefill-captured"
+    assert prefill_runner.execute() == "prefill-executed"
 
     events = read_events(tmp_path)
-    assert [(event["kind"], event["phase"]) for event in events] == [
-        ("full_cuda_graph", "capture_begin"),
-        ("full_cuda_graph", "capture_end"),
-        ("full_cuda_graph", "replay_begin"),
-        ("full_cuda_graph", "replay_end"),
-        ("piecewise_cuda_graph", "capture_begin"),
-        ("piecewise_cuda_graph", "capture_end"),
-        ("piecewise_cuda_graph", "replay_begin"),
-        ("piecewise_cuda_graph", "replay_end"),
+    assert [(event["forward_phase"], event["event"]) for event in events] == [
+        ("decode", "capture_begin"),
+        ("decode", "capture_end"),
+        ("decode", "execute_begin"),
+        ("decode", "execute_end"),
+        ("prefill", "capture_begin"),
+        ("prefill", "capture_end"),
+        ("prefill", "execute_begin"),
+        ("prefill", "execute_end"),
     ]
-    assert events[0]["capture_forward_mode"] == "DECODE"
-    assert events[0]["capture_bs"] == [1, 2]
-    assert events[0]["max_num_tokens"] == 2
-    assert events[4]["capture_forward_mode"] == "EXTEND"
-    assert events[4]["capture_num_tokens"] == [4, 8]
-    assert events[4]["max_num_tokens"] == 8
+    assert {event["backend_class"] for event in events[:4]} == {"FullCudaGraphBackend"}
+    assert {event["backend_class"] for event in events[4:]} == {"BreakableCudaGraphBackend"}
 
 
 def test_graph_observer_records_error_and_reraises(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class CudaGraphRunner(FakeCudaGraphRunnerState):
+    class DecodeCudaGraphRunner(FakeDecodeCudaGraphRunnerState):
         def capture(self) -> None:
             raise RuntimeError("capture failed")
 
-        def replay(self) -> None:
+        def execute(self) -> None:
             return None
 
-    class PiecewiseCudaGraphRunner(FakePiecewiseCudaGraphRunnerState):
+    class PrefillCudaGraphRunner(FakePrefillCudaGraphRunnerState):
         def capture(self) -> None:
             return None
 
-        def replay(self) -> None:
+        def execute(self) -> None:
             return None
 
-    install_fake_sglang_runner_classes(monkeypatch, CudaGraphRunner, PiecewiseCudaGraphRunner)
+    install_fake_sglang_runner_classes(monkeypatch, DecodeCudaGraphRunner, PrefillCudaGraphRunner)
     install_test_config(config=graph_observer_config(tmp_path.resolve()))
     xpool.integrations.sglang.devkit.graph_observer.install()
 
     with pytest.raises(RuntimeError, match="capture failed"):
-        CudaGraphRunner().capture()
+        DecodeCudaGraphRunner().capture()
 
     events = read_events(tmp_path)
-    assert [(event["kind"], event["phase"]) for event in events] == [
-        ("full_cuda_graph", "capture_begin"),
-        ("full_cuda_graph", "capture_error"),
+    assert [(event["forward_phase"], event["event"]) for event in events] == [
+        ("decode", "capture_begin"),
+        ("decode", "capture_error"),
     ]
 
 
-@pytest.mark.parametrize("fault", ["payload", "write"])
 def test_graph_observer_event_fault_does_not_block_runner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-    fault: str,
 ) -> None:
-    class CudaGraphRunner(FakeCudaGraphRunnerState):
-        def __init__(self) -> None:
-            super().__init__()
-            if fault == "payload":
-                self.capture_forward_mode = None
-
+    class DecodeCudaGraphRunner(FakeDecodeCudaGraphRunnerState):
         def capture(self) -> str:
             return "captured"
 
-        def replay(self) -> str:
-            return "replayed"
+        def execute(self) -> str:
+            return "executed"
 
-    class PiecewiseCudaGraphRunner(FakePiecewiseCudaGraphRunnerState):
+    class PrefillCudaGraphRunner(FakePrefillCudaGraphRunnerState):
         def capture(self) -> str:
-            return "pcg-captured"
+            return "prefill-captured"
 
-        def replay(self) -> str:
-            return "pcg-replayed"
+        def execute(self) -> str:
+            return "prefill-executed"
 
-    install_fake_sglang_runner_classes(monkeypatch, CudaGraphRunner, PiecewiseCudaGraphRunner)
+    install_fake_sglang_runner_classes(monkeypatch, DecodeCudaGraphRunner, PrefillCudaGraphRunner)
     install_test_config(config=graph_observer_config(tmp_path.resolve()))
     xpool.integrations.sglang.devkit.graph_observer.install()
 
-    if fault == "write":
+    class BadEventHandle:
+        closed = False
 
-        class BadEventHandle:
-            closed = False
+        def write(self, line: str) -> int:
+            raise OSError("write failed")
 
-            def write(self, line: str) -> int:
-                raise OSError("write failed")
+        def flush(self) -> None:
+            return None
 
-            def flush(self) -> None:
-                return None
+        def close(self) -> None:
+            return None
 
-            def close(self) -> None:
-                return None
-
-        monkeypatch.setattr(xpool.integrations.sglang.devkit.graph_observer, "event_handle", BadEventHandle())
+    monkeypatch.setattr(xpool.integrations.sglang.devkit.graph_observer, "event_handle", BadEventHandle())
 
     with caplog.at_level("WARNING", logger="xpool.integrations.sglang.devkit.graph_observer"):
-        assert CudaGraphRunner().capture() == "captured"
+        assert DecodeCudaGraphRunner().capture() == "captured"
 
     assert "Failed to record xpool graph observer event" in caplog.text

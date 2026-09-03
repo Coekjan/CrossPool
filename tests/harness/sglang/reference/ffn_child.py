@@ -94,8 +94,8 @@ def run_ffn_reference_rank(
         enable_dp_lm_head=True,
         moe_a2a_backend="none",
         moe_runner_backend="auto",
-        disable_cuda_graph=True,
-        disable_piecewise_cuda_graph=True,
+        cuda_graph_backend_decode="disabled",
+        cuda_graph_backend_prefill="disabled",
         disable_custom_all_reduce=True,
     )
     sglang.srt.server_args.set_global_server_args_for_scheduler(server_args)

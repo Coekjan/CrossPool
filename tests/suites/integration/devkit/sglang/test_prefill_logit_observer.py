@@ -9,6 +9,7 @@ import pytest
 import torch
 from safetensors import safe_open
 from safetensors.torch import load_file
+from sglang.srt.distributed.parallel_state_wrapper import ParallelState
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.model_executor.model_runner import ModelRunner, ModelRunnerOutput
@@ -43,7 +44,7 @@ def test_prefill_logit_observer_records_first_rank_zero_extend(
     monkeypatch.setattr(ModelRunner, "forward", forward)
     install_test_config(config=observer_config(tmp_path))
     xpool.integrations.sglang.devkit.prefill_logit_observer.install()
-    runner = cast(ModelRunner, SimpleNamespace(tp_rank=0))
+    runner = cast(ModelRunner, SimpleNamespace(ps=ParallelState.trivial()))
 
     ModelRunner.forward(runner, forward_batch(ForwardMode.DECODE, ["decode-rid"]))
     assert not tuple(tmp_path.glob("xpool.prefill-logits.*.safetensors"))
@@ -74,7 +75,7 @@ def test_prefill_logit_observer_skips_nonzero_tp_rank(
     xpool.integrations.sglang.devkit.prefill_logit_observer.install()
 
     ModelRunner.forward(
-        cast(ModelRunner, SimpleNamespace(tp_rank=1)),
+        cast(ModelRunner, SimpleNamespace(ps=ParallelState.trivial(tp_rank=1))),
         forward_batch(ForwardMode.EXTEND, ["xpool-serving-graph-request-rid"]),
     )
 

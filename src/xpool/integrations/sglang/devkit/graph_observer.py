@@ -1,4 +1,4 @@
-"""SGLang Devkit observer for CUDA Graph capture and replay events."""
+"""SGLang Devkit observer for CUDA Graph capture and execution events."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Literal, TextIO
 
-from sglang.srt.model_executor.cuda_graph_runner import CudaGraphRunner
-from sglang.srt.model_executor.piecewise_cuda_graph_runner import PiecewiseCudaGraphRunner
+from sglang.srt.model_executor.runner.decode_cuda_graph_runner import DecodeCudaGraphRunner
+from sglang.srt.model_executor.runner.prefill_cuda_graph_runner import PrefillCudaGraphRunner
 
 from xpool.config import get_global_config
 from xpool.native import RuntimeRole
@@ -24,9 +24,10 @@ runtime_roles = frozenset({RuntimeRole.INSTANCE})
 
 logger = logging.getLogger(__name__)
 
-type GraphRunner = CudaGraphRunner | PiecewiseCudaGraphRunner
-type GraphKind = Literal["full_cuda_graph", "piecewise_cuda_graph"]
-type JsonValue = str | int | float | bool | list[int] | None
+type GraphRunner = DecodeCudaGraphRunner | PrefillCudaGraphRunner
+type ForwardPhase = Literal["decode", "prefill"]
+type GraphOperation = Literal["capture", "execute"]
+type JsonValue = str | int
 type GraphEvent = dict[str, JsonValue]
 
 event_file: Path | None = None
@@ -49,7 +50,7 @@ def install() -> None:
 
     Side Effects:
         Creates the configured output directory if needed and monkeypatches
-        SGLang's full CUDA graph and piecewise CUDA graph runner classes. Each
+        SGLang's decode and prefill CUDA graph runner classes. Each
         event is appended to a per-process JSONL file and flushed immediately.
     """
 
@@ -77,39 +78,39 @@ def install() -> None:
         event_handle.flush()
 
         setattr(
-            CudaGraphRunner,
+            DecodeCudaGraphRunner,
             "capture",
-            wrap_graph_method("full_cuda_graph", "capture", CudaGraphRunner.capture),
+            wrap_graph_method("decode", "capture", DecodeCudaGraphRunner.capture),
         )
         setattr(
-            CudaGraphRunner,
-            "replay",
-            wrap_graph_method("full_cuda_graph", "replay", CudaGraphRunner.replay),
+            DecodeCudaGraphRunner,
+            "execute",
+            wrap_graph_method("decode", "execute", DecodeCudaGraphRunner.execute),
         )
         setattr(
-            PiecewiseCudaGraphRunner,
+            PrefillCudaGraphRunner,
             "capture",
-            wrap_graph_method("piecewise_cuda_graph", "capture", PiecewiseCudaGraphRunner.capture),
+            wrap_graph_method("prefill", "capture", PrefillCudaGraphRunner.capture),
         )
         setattr(
-            PiecewiseCudaGraphRunner,
-            "replay",
-            wrap_graph_method("piecewise_cuda_graph", "replay", PiecewiseCudaGraphRunner.replay),
+            PrefillCudaGraphRunner,
+            "execute",
+            wrap_graph_method("prefill", "execute", PrefillCudaGraphRunner.execute),
         )
         installed = True
 
 
 def wrap_graph_method[R](
-    kind: GraphKind,
-    method_name: str,
+    forward_phase: ForwardPhase,
+    operation: GraphOperation,
     original: Callable[..., R],
 ) -> Callable[..., R]:
     """Wrap one SGLang graph method with begin, error, and end events.
 
     Args:
-        kind: Graph implementation being observed.
-        method_name: SGLang method name recorded in each event.
-        original: Original bound-method implementation.
+        forward_phase: Decode or prefill runner being observed.
+        operation: Capture or execution operation being observed.
+        original: Original unbound method implementation.
 
     Returns:
         Wrapped method preserving the original callable metadata.
@@ -117,25 +118,24 @@ def wrap_graph_method[R](
 
     @functools.wraps(original)
     def wrapped(runner: GraphRunner, *args: object, **kwargs: object) -> R:
-        write_event(kind, f"{method_name}_begin", method_name, runner)
+        write_event(forward_phase, f"{operation}_begin", runner)
         try:
             result = original(runner, *args, **kwargs)
         except BaseException:
-            write_event(kind, f"{method_name}_error", method_name, runner)
+            write_event(forward_phase, f"{operation}_error", runner)
             raise
-        write_event(kind, f"{method_name}_end", method_name, runner)
+        write_event(forward_phase, f"{operation}_end", runner)
         return result
 
     return wrapped
 
 
-def write_event(kind: GraphKind, phase: str, method_name: str, runner: GraphRunner) -> None:
+def write_event(forward_phase: ForwardPhase, event: str, runner: GraphRunner) -> None:
     """Write one graph event without disrupting SGLang execution.
 
     Args:
-        kind: Graph implementation being observed.
-        phase: Capture or replay lifecycle phase.
-        method_name: SGLang method that emitted the event.
+        forward_phase: Decode or prefill runner being observed.
+        event: Capture or execution lifecycle transition.
         runner: Active SGLang graph runner.
 
     Side Effects:
@@ -149,21 +149,9 @@ def write_event(kind: GraphKind, phase: str, method_name: str, runner: GraphRunn
         payload: GraphEvent = {
             "pid": os.getpid(),
             "time_ns": time.monotonic_ns(),
-            "kind": kind,
-            "phase": phase,
-            "method": method_name,
-            "runner_class": runner.__class__.__name__,
-            "device": str(runner.device),
-            "tp_size": runner.tp_size,
-            "dp_size": runner.dp_size,
-            "pp_size": runner.pp_size,
-            "capture_forward_mode": runner.capture_forward_mode.name,
-            "capture_bs": list(runner.capture_bs) if isinstance(runner, CudaGraphRunner) else None,
-            "capture_num_tokens": (
-                list(runner.capture_num_tokens) if isinstance(runner, PiecewiseCudaGraphRunner) else None
-            ),
-            "max_bs": runner.max_bs,
-            "max_num_tokens": runner.max_num_token if isinstance(runner, CudaGraphRunner) else runner.max_num_tokens,
+            "forward_phase": forward_phase,
+            "backend_class": type(runner.backend).__name__,
+            "event": event,
         }
         line = json.dumps(payload, sort_keys=True) + "\n"
         with write_lock:

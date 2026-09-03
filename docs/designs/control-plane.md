@@ -41,8 +41,8 @@ split by model family. A model adapter owns architecture extraction, checkpoint
 key mapping, activation selection, routing function selection, and reference
 binding for that family.
 
-Outer graph mode is an attention-side concept. Eager, decode full graph, and
-prefill piecewise graph modes all invoke the same FFN data-plane protocol.
+Outer graph mode is an attention-side concept. Eager, Decode Full, and Prefill
+Breakable graph modes all invoke the same FFN data-plane protocol.
 FfnAgent execution is always graph-backed and does not receive an outer graph
 mode field.
 

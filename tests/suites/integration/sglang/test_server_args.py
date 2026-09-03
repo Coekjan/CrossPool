@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import pytest
+from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
 from sglang.srt.model_executor.model_runner import ModelRunner
-from sglang.srt.server_args import ServerArgs
 
 import xpool.integrations.sglang.plugin
 from tests.harness.support.config import reset_global_config
@@ -27,13 +27,6 @@ def test_model_runner_hook_rejects_server_args_before_xpool_config(monkeypatch: 
 
 def test_global_server_arg_gate_allows_default_sglang_features() -> None:
     validate_sglang_server_args(server_args())
-    validate_sglang_server_args(server_args(piecewise_cuda_graph_compiler="eager"))
-
-
-def test_global_server_arg_gate_allows_resolved_sglang_defaults() -> None:
-    args = ServerArgs(model_path="dummy")
-
-    validate_sglang_server_args(args)
 
 
 def test_global_server_arg_gate_allows_dp_atn_when_parallel_policy_matches() -> None:
@@ -49,9 +42,26 @@ def test_global_server_arg_gate_allows_dp_atn_when_parallel_policy_matches() -> 
         ({"cpu_offload_gb": 1}, "SGLang CPU Offload"),
         ({"enable_lora": True}, "LoRA"),
         ({"enable_torch_compile": True}, "Torch Compile"),
-        ({"piecewise_cuda_graph_compiler": "inductor"}, "Piecewise CUDA Graph Compiler"),
+        (
+            {
+                "cuda_graph_config": CudaGraphConfig(
+                    decode=PhaseConfig(backend="breakable"),
+                    prefill=PhaseConfig(backend="disabled"),
+                )
+            },
+            "Decode CUDA Graph Backend",
+        ),
         ({"attn_cp_size": 2}, "Attention Context Parallelism"),
-        ({"enforce_piecewise_cuda_graph": True}, "Piecewise CUDA Graph Enforcement"),
+        (
+            {
+                "cuda_graph_config": CudaGraphConfig(
+                    decode=PhaseConfig(backend="disabled"),
+                    prefill=PhaseConfig(backend="tc_piecewise"),
+                )
+            },
+            "Prefill CUDA Graph Backend",
+        ),
+        ({"enable_waterfill": True}, "DeepEP Waterfill"),
         ({"enable_mixed_chunk": True}, "Mixed Chunked Prefill"),
         ({"disaggregation_mode": "prefill"}, "PD Disaggregation"),
         ({"dllm_algorithm": "next_block"}, "Diffusion LLM"),

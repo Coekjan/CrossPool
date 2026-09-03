@@ -9,7 +9,10 @@ from functools import partial
 from typing import Concatenate
 
 import torch
+from sglang.srt.managers.scheduler import Scheduler
+from sglang.srt.model_executor.cuda_graph_config import Backend, PhaseConfig
 from sglang.srt.model_executor.model_runner import ModelRunner
+from sglang.srt.model_executor.pool_configurator import MemoryPoolConfig
 from sglang.srt.plugins.hook_registry import HookRegistry, HookType
 from sglang.srt.server_args import ServerArgs
 
@@ -30,8 +33,8 @@ from xpool.runtime.instance import InstanceRankRuntime
 from xpool.runtime.transport import InstanceRankTransportProfile
 
 MODEL_RUNNER_LOAD_MODEL = "sglang.srt.model_executor.model_runner.ModelRunner.load_model"
-MODEL_RUNNER_INITIALIZE = "sglang.srt.model_executor.model_runner.ModelRunner.initialize"
-MODEL_RUNNER_INIT_MEMORY_POOL = "sglang.srt.model_executor.model_runner.ModelRunner.init_memory_pool"
+MODEL_RUNNER_ALLOC_MEMORY_POOL = "sglang.srt.model_executor.model_runner.ModelRunner.alloc_memory_pool"
+SCHEDULER_INIT_MODEL_WORKER = "sglang.srt.managers.scheduler.Scheduler.init_model_worker"
 XPOOL_REQUIRED_HOOK_TARGETS: set[str] = set()
 SGLANG_DEVKIT_PACKAGE = "xpool.integrations.sglang.devkit"
 logger = logging.getLogger(__name__)
@@ -44,8 +47,9 @@ def install() -> None:
         Imports and instantiates all repo-owned SGLang model adapters, registers
         their hooks in SGLang's global ``HookRegistry``, and wraps
         ``ModelRunner.load_model`` for adapter validation, and wraps
-        ``ModelRunner.init_memory_pool`` to start transport after SGLang
-        resolves request concurrency.
+        ``ModelRunner.alloc_memory_pool`` to start transport after SGLang
+        resolves request concurrency, and wraps ``Scheduler.init_model_worker``
+        to publish readiness after graph capture completes.
 
     Raises:
         SystemExit: If config initialization, adapter discovery, or hook
@@ -67,20 +71,20 @@ def install() -> None:
             HookType.AROUND,
         )
         HookRegistry.register(
-            MODEL_RUNNER_INIT_MEMORY_POOL,
-            after_model_runner_init_memory_pool,
+            MODEL_RUNNER_ALLOC_MEMORY_POOL,
+            after_model_runner_alloc_memory_pool,
             HookType.AFTER,
         )
         HookRegistry.register(
-            MODEL_RUNNER_INITIALIZE,
-            after_model_runner_initialize,
+            SCHEDULER_INIT_MODEL_WORKER,
+            after_scheduler_init_model_worker,
             HookType.AFTER,
         )
         required_targets.update(
             (
                 MODEL_RUNNER_LOAD_MODEL,
-                MODEL_RUNNER_INIT_MEMORY_POOL,
-                MODEL_RUNNER_INITIALIZE,
+                MODEL_RUNNER_ALLOC_MEMORY_POOL,
+                SCHEDULER_INIT_MODEL_WORKER,
             )
         )
         XPOOL_REQUIRED_HOOK_TARGETS.update(required_targets)
@@ -205,21 +209,21 @@ def around_model_runner_load_model[**P, R](
     return result
 
 
-def after_model_runner_init_memory_pool[R](
+def after_model_runner_alloc_memory_pool[R](
     result: R,
     model_runner: ModelRunner,
-    pre_model_load_memory: int,
+    memory_pool_config: MemoryPoolConfig | None = None,
 ) -> R:
     """Start xpool transport after SGLang resolves memory-pool concurrency.
 
     Args:
-        result: Return value from SGLang's original ``init_memory_pool`` call.
+        result: Return value from SGLang's original ``alloc_memory_pool`` call.
         model_runner: Loaded runner with an applied memory-pool configuration.
-        pre_model_load_memory: SGLang memory sample forwarded to the original
-            method; already consumed before this hook runs.
+        memory_pool_config: Optional SGLang memory-pool configuration forwarded
+            to the original method; already consumed before this hook runs.
 
     Returns:
-        The original ``init_memory_pool`` return value unchanged.
+        The original ``alloc_memory_pool`` return value unchanged.
 
     Raises:
         RuntimeError: If the load hook did not attach a binding, transport
@@ -251,20 +255,18 @@ def after_model_runner_init_memory_pool[R](
     return result
 
 
-def after_model_runner_initialize[R](
+def after_scheduler_init_model_worker[R](
     result: R,
-    model_runner: ModelRunner,
-    pre_model_load_memory: float,
+    scheduler: Scheduler,
 ) -> R:
-    """Publish SGLang's post-initialize barrier for production execution.
+    """Publish SGLang's post-graph barrier for production execution.
 
     Args:
-        result: Return value from SGLang's original ``initialize`` method.
-        model_runner: Runner whose model and CUDA graphs are fully initialized.
-        pre_model_load_memory: Memory sample already consumed by SGLang.
+        result: Return value from SGLang's original ``init_model_worker`` method.
+        scheduler: Scheduler whose model and CUDA graphs are fully initialized.
 
     Returns:
-        The original ``initialize`` return value unchanged.
+        The original ``init_model_worker`` return value unchanged.
 
     Raises:
         RuntimeError: If production startup did not retain the executable plan.
@@ -274,9 +276,9 @@ def after_model_runner_initialize[R](
         generation-wide readiness.
     """
 
-    runtime = SglangInstanceRankRuntime.require(model_runner)
+    runtime = SglangInstanceRankRuntime.require(scheduler.tp_worker.model_runner)
     if runtime.instance_rank is None:
-        raise RuntimeError("xpool ModelRunner.initialize hook requires a started Instance-rank runtime")
+        raise RuntimeError("xpool Scheduler.init_model_worker hook requires a started Instance-rank runtime")
     runtime.instance_rank.publish_initialized()
     runtime.instance_rank.wait_for_ready()
     return result
@@ -326,19 +328,18 @@ def derive_instance_ffn_profile(
         raise RuntimeError("xpool cannot derive positive eager decode rows from ModelRunner.max_running_requests")
     if not isinstance(max_prefill_tokens, int) or isinstance(max_prefill_tokens, bool) or max_prefill_tokens <= 0:
         raise RuntimeError("xpool cannot derive positive eager prefill rows from ServerArgs.max_prefill_tokens")
+    cuda_graph_config = server_args.cuda_graph_config
+    if cuda_graph_config is None:
+        raise RuntimeError("xpool cannot derive FFN row capacities before SGLang resolves cuda_graph_config")
     max_decode_rows = resolved_graph_capacity(
         eager_capacity=max_running_requests,
-        enabled=not server_args.disable_cuda_graph,
-        buckets=getattr(server_args, "cuda_graph_bs", None),
-        maximum=getattr(server_args, "cuda_graph_max_bs", None),
+        phase_config=cuda_graph_config.decode,
         label="decode CUDA graph",
     )
     max_prefill_rows = resolved_graph_capacity(
         eager_capacity=max_prefill_tokens,
-        enabled=not server_args.disable_piecewise_cuda_graph,
-        buckets=getattr(server_args, "piecewise_cuda_graph_tokens", None),
-        maximum=getattr(server_args, "piecewise_cuda_graph_max_tokens", None),
-        label="piecewise prefill CUDA graph",
+        phase_config=cuda_graph_config.prefill,
+        label="prefill CUDA graph",
     )
 
     model_config_path = binding.model_path / "config.json"
@@ -356,32 +357,33 @@ def derive_instance_ffn_profile(
 def resolved_graph_capacity(
     *,
     eager_capacity: int,
-    enabled: bool,
-    buckets: object,
-    maximum: object,
+    phase_config: PhaseConfig,
     label: str,
 ) -> int:
     """Resolve one ffn_profile capacity from eager and enabled graph geometry.
 
-    Disabled graph paths contribute no capacity even when SGLang retains stale
-    bucket fields. Enabled paths accept the concrete bucket list and resolved
-    maximum exposed by the pinned ``ServerArgs`` object.
+    Disabled graph paths contribute no graph capacity. Enabled paths accept the
+    concrete bucket list and resolved maximum exposed by SGLang's phase config.
     """
 
-    if not enabled:
+    if phase_config.backend == Backend.DISABLED:
         return eager_capacity
     candidates = [eager_capacity]
-    if buckets is not None:
-        if not isinstance(buckets, (list, tuple)):
+    if phase_config.bs is not None:
+        if not isinstance(phase_config.bs, (list, tuple)):
             raise RuntimeError(f"xpool cannot derive positive {label} buckets from resolved ServerArgs")
-        for row in buckets:
+        for row in phase_config.bs:
             if not isinstance(row, int) or isinstance(row, bool) or row <= 0:
                 raise RuntimeError(f"xpool cannot derive positive {label} buckets from resolved ServerArgs")
             candidates.append(row)
-    if maximum is not None:
-        if not isinstance(maximum, int) or isinstance(maximum, bool) or maximum <= 0:
+    if phase_config.max_bs is not None:
+        if (
+            not isinstance(phase_config.max_bs, int)
+            or isinstance(phase_config.max_bs, bool)
+            or phase_config.max_bs <= 0
+        ):
             raise RuntimeError(f"xpool cannot derive a positive {label} maximum from resolved ServerArgs")
-        candidates.append(maximum)
+        candidates.append(phase_config.max_bs)
     return max(candidates)
 
 

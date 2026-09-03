@@ -8,6 +8,7 @@ import torch
 from sglang.srt.layers import dp_attention
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.srt.models.deepseek_v2 import DeepseekV2ForCausalLM, DeepseekV2MLP, DeepseekV2MoE
+from sglang.srt.runtime_context import get_forward
 from torch import nn
 
 import xpool.config
@@ -85,17 +86,13 @@ def test_shim_forward_accepts_sglang_decoder_layer_call_contract() -> None:
     """Shim forward() must accept the positional args the decoder layer passes.
 
     ``DeepseekV2DecoderLayer.forward`` calls its FFN module as
-    ``self.mlp(hidden_states, forward_batch, should_allreduce_fusion,
-    use_reduce_scatter, gemm_output_zero_allocator)``: five positional args. The real
-    ``DeepseekV2MoE.forward`` also declares trailing ``input_ids``/``input_ids_global``
-    kwargs, but those are only consumed by internal MoE sub-paths that the shim replaces
-    wholesale, so the decoder layer never passes them. Binding the decoder-layer call to
-    the shim signature guards the real integration contract against SGLang drift without
-    needing a GPU; a full forward-signature equality check would be too strict.
+    ``self.mlp(hidden_states, forward_batch, gemm_output_zero_allocator)``.
+    Binding that call to the shim signature guards the real integration
+    contract against SGLang drift without requiring a GPU.
     """
 
     sentinel = object()
-    decoder_call_args = (sentinel, sentinel, False, False, None)
+    decoder_call_args = (sentinel, sentinel, None)
 
     for shim_class in (XpoolDeepseekV2MLP, XpoolDeepseekV2MoE):
         signature = inspect.signature(shim_class.forward)
@@ -104,8 +101,6 @@ def test_shim_forward_accepts_sglang_decoder_layer_call_contract() -> None:
         assert tuple(bound.arguments)[1:] == (
             "hidden_states",
             "forward_batch",
-            "should_allreduce_fusion",
-            "use_reduce_scatter",
             "gemm_output_zero_allocator",
         )
 
@@ -121,8 +116,17 @@ def test_shim_forward_rejects_unsupported_allreduce_fusion_path() -> None:
     )
     hidden_states = torch.zeros((1, 2048), dtype=torch.bfloat16)
 
-    with pytest.raises(ShimUnavailableError, match="all-reduce fusion"):
-        shim(hidden_states, should_allreduce_fusion=True)
+    with get_forward().scoped(fuse_mlp_allreduce=True):
+        with pytest.raises(ShimUnavailableError, match="all-reduce fusion"):
+            shim(hidden_states, forward_batch(ForwardMode.DECODE))
+
+
+def test_shim_forward_rejects_gemm_output_zero_allocator() -> None:
+    shim = bound_shim()
+    hidden_states = torch.zeros((1, 2048), dtype=torch.bfloat16)
+
+    with pytest.raises(ShimUnavailableError, match="GEMM zero allocator"):
+        shim(hidden_states, forward_batch(ForwardMode.DECODE), object())
 
 
 def test_shim_forward_maps_sglang_reduce_scatter_handoff(
@@ -143,7 +147,8 @@ def test_shim_forward_maps_sglang_reduce_scatter_handoff(
     hidden_states = torch.zeros((1, 2048), dtype=torch.bfloat16)
     monkeypatch.setattr(xpool.ops, "ffn_shim", fake_ffn_shim)
 
-    output = shim(hidden_states, forward_batch(ForwardMode.DECODE), use_reduce_scatter=True)
+    with get_forward().scoped(mlp_reduce_scatter=True):
+        output = shim(hidden_states, forward_batch(ForwardMode.DECODE))
 
     assert torch.equal(output, hidden_states)
 

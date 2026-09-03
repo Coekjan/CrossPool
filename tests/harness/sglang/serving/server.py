@@ -7,6 +7,8 @@ import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Barrier
+from typing import cast
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
@@ -15,7 +17,7 @@ from safetensors import SafetensorError, safe_open
 from tests.harness.native.readiness import ReadinessEvidence
 from tests.harness.runner.process import OwnedProcessGroup, wait_for_process_group
 from tests.harness.sglang.serving.endpoints import SglangEndpointFamily, SglangEndpointFamilyLease
-from tests.harness.sglang.serving.graph import SglangGraphSettings
+from tests.harness.sglang.serving.graph import SglangGraphBackend, SglangGraphSettings
 from tests.harness.sglang.serving.launch import E2eLaunch, E2eLaunchModel, model_id_slug
 
 PROMPT = "The quick brown fox jumps over the lazy dog. " * 8
@@ -159,8 +161,17 @@ class SglangServerProcess:
                     f"{self.owner.name} is retrying an invalid TCPStore peer at {self.endpoint.host}:{port}"
                 )
 
-    def result(self) -> SglangServerResult:
-        """Read resolved graph settings and execute one deterministic request."""
+    def result(self, request_barrier: Barrier | None = None) -> SglangServerResult:
+        """Read graph settings and execute one deterministic request.
+
+        Args:
+            request_barrier: Optional synchronization point reached immediately
+                before sending the request, used to overlap multi-model serving.
+
+        Raises:
+            BrokenBarrierError: If peer requests do not reach the barrier before
+                the HTTP timeout.
+        """
 
         request_id = f"xpool-serving-graph-{model_id_slug(self.model.model_id)}"
         request: dict[str, JsonValue] = {
@@ -178,8 +189,10 @@ class SglangServerProcess:
             server_info = client.get("/server_info")
             server_info.raise_for_status()
             info = server_info.json()
-            disable_cuda_graph = require_bool(info, "disable_cuda_graph")
-            disable_piecewise_cuda_graph = require_bool(info, "disable_piecewise_cuda_graph")
+            decode_backend = require_graph_backend(info, "decode")
+            prefill_backend = require_graph_backend(info, "prefill")
+            if request_barrier is not None:
+                request_barrier.wait(timeout=HTTP_TIMEOUT_SECONDS)
             response = client.post("/generate", json=request)
             try:
                 payload: JsonValue = response.json()
@@ -204,8 +217,8 @@ class SglangServerProcess:
         return SglangServerResult(
             model_id=self.model.model_id,
             resolved_graph_settings=SglangGraphSettings(
-                cuda_graph=not disable_cuda_graph,
-                piecewise_cuda_graph=not disable_piecewise_cuda_graph,
+                decode_backend=decode_backend,
+                prefill_backend=prefill_backend,
             ),
             output_ids=tuple(output_ids),
             prefill_logits_path=self.read_prefill_logits_path(request_id),
@@ -299,17 +312,23 @@ def server_command(
     ]
     if model.atn_dp_size > 1:
         command.append("--enable-dp-attention")
-    if not graph_settings.cuda_graph:
-        command.append("--disable-cuda-graph")
-    if model.atn_dp_size == 1 and not graph_settings.piecewise_cuda_graph:
-        command.append("--disable-piecewise-cuda-graph")
+    command.extend(
+        (
+            "--cuda-graph-backend-decode",
+            graph_settings.decode_backend,
+            "--cuda-graph-backend-prefill",
+            graph_settings.prefill_backend,
+        )
+    )
     return command
 
 
-def require_bool(payload: object, name: str) -> bool:
-    """Read one strict boolean from a server-info object."""
+def require_graph_backend(payload: object, phase: str) -> SglangGraphBackend:
+    """Read one supported phase backend from a server-info object."""
 
-    value = payload.get(name) if isinstance(payload, dict) else None
-    if not isinstance(value, bool):
-        raise RuntimeError(f"SGLang /server_info returned invalid {name}: {value!r}")
-    return value
+    cuda_graph_config = payload.get("cuda_graph_config") if isinstance(payload, dict) else None
+    phase_config = cuda_graph_config.get(phase) if isinstance(cuda_graph_config, dict) else None
+    backend = phase_config.get("backend") if isinstance(phase_config, dict) else None
+    if backend not in {"disabled", "full", "breakable"}:
+        raise RuntimeError(f"SGLang /server_info returned invalid {phase} CUDA Graph backend: {backend!r}")
+    return cast(SglangGraphBackend, backend)

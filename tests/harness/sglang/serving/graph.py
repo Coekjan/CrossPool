@@ -6,45 +6,45 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 type JsonValue = str | int | float | bool | list[int] | None
 
 type GraphEvent = dict[str, JsonValue]
 
-type GraphSettings = tuple[bool, bool]
+type SglangGraphBackend = Literal["disabled", "full", "breakable"]
 
 
 @dataclass(frozen=True, slots=True)
 class SglangGraphSettings:
-    """Requested full and piecewise CUDA graph modes for one SGLang server run."""
+    """Requested decode and prefill CUDA graph backends for one server run."""
 
-    cuda_graph: bool
-    piecewise_cuda_graph: bool
+    decode_backend: SglangGraphBackend
+    prefill_backend: SglangGraphBackend
 
     def id(self) -> str:
         """Return a deterministic artifact suffix for this graph mode."""
 
-        return f"full-{int(self.cuda_graph)}-piecewise-{int(self.piecewise_cuda_graph)}"
+        return f"decode-{self.decode_backend}-prefill-{self.prefill_backend}"
 
 
 class SglangGraphMode(StrEnum):
     """Declarative graph modes accepted by the E2E manifest."""
 
     EAGER = "eager"
-    FULL = "full"
-    PIECEWISE = "piecewise"
+    DECODE_FULL = "decode-full"
+    PREFILL_BREAKABLE = "prefill-breakable"
 
     def settings(self) -> SglangGraphSettings:
         """Project this manifest value to concrete SGLang graph settings."""
 
         match self:
             case SglangGraphMode.EAGER:
-                return SglangGraphSettings(cuda_graph=False, piecewise_cuda_graph=False)
-            case SglangGraphMode.FULL:
-                return SglangGraphSettings(cuda_graph=True, piecewise_cuda_graph=False)
-            case SglangGraphMode.PIECEWISE:
-                return SglangGraphSettings(cuda_graph=False, piecewise_cuda_graph=True)
+                return SglangGraphSettings(decode_backend="disabled", prefill_backend="disabled")
+            case SglangGraphMode.DECODE_FULL:
+                return SglangGraphSettings(decode_backend="full", prefill_backend="disabled")
+            case SglangGraphMode.PREFILL_BREAKABLE:
+                return SglangGraphSettings(decode_backend="disabled", prefill_backend="breakable")
 
 
 def read_graph_events(outdir: Path) -> list[GraphEvent]:

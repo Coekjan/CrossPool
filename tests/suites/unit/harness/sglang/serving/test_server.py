@@ -27,33 +27,29 @@ from xpool.config import XpoolConfig
 
 
 @pytest.mark.parametrize(
-    ("model", "settings", "expected", "absent"),
+    ("model", "settings", "enable_dp_attention"),
     [
         (
             E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 1),
-            SglangGraphSettings(False, False),
-            {"--disable-cuda-graph", "--disable-piecewise-cuda-graph"},
-            {"--enable-dp-attention"},
+            SglangGraphSettings("disabled", "disabled"),
+            False,
         ),
         (
             E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 1),
-            SglangGraphSettings(False, True),
-            {"--disable-cuda-graph"},
-            {"--disable-piecewise-cuda-graph", "--enable-dp-attention"},
+            SglangGraphSettings("disabled", "breakable"),
+            False,
         ),
         (
             E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 16_384, 1, 2),
-            SglangGraphSettings(False, True),
-            {"--disable-cuda-graph", "--enable-dp-attention"},
-            {"--disable-piecewise-cuda-graph"},
+            SglangGraphSettings("disabled", "breakable"),
+            True,
         ),
     ],
 )
 def test_server_command_projects_pinned_cli_policy(
     model: E2eLaunchModel,
     settings: SglangGraphSettings,
-    expected: set[str],
-    absent: set[str],
+    enable_dp_attention: bool,
     tmp_path: Path,
 ) -> None:
     command = server_command(
@@ -68,8 +64,9 @@ def test_server_command_projects_pinned_cli_policy(
     assert command[command.index("--nccl-port") + 1] == "19001"
     assert command[command.index("--tensor-parallel-size") + 1] == str(model.atn_tp_size * model.atn_dp_size)
     assert command[command.index("--data-parallel-size") + 1] == str(model.atn_dp_size)
-    assert expected <= set(command)
-    assert not absent & set(command)
+    assert command[command.index("--cuda-graph-backend-decode") + 1] == settings.decode_backend
+    assert command[command.index("--cuda-graph-backend-prefill") + 1] == settings.prefill_backend
+    assert ("--enable-dp-attention" in command) is enable_dp_attention
 
 
 def test_server_start_projects_process_specific_grpc_environment(
@@ -106,7 +103,7 @@ def test_server_start_projects_process_specific_grpc_environment(
     server = SglangServerProcess.start(
         launch=launch,
         model=model,
-        graph_settings=SglangGraphSettings(False, False),
+        graph_settings=SglangGraphSettings("disabled", "disabled"),
         endpoint=endpoint,
         workdir=tmp_path,
     )
@@ -331,7 +328,14 @@ def test_server_result_reads_resolved_modes_and_exact_output_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     responses = {
-        "/server_info": FakeResponse({"disable_cuda_graph": False, "disable_piecewise_cuda_graph": True}),
+        "/server_info": FakeResponse(
+            {
+                "cuda_graph_config": {
+                    "decode": {"backend": "full"},
+                    "prefill": {"backend": "disabled"},
+                }
+            }
+        ),
         "/generate": FakeResponse({"output_ids": list(range(8))}),
     }
     monkeypatch.setattr(tests.harness.sglang.serving.server.httpx, "Client", lambda **kwargs: FakeClient(responses))
@@ -354,7 +358,7 @@ def test_server_result_reads_resolved_modes_and_exact_output_ids(
     result = server.result()
 
     assert result.model_id == "organization/model"
-    assert result.resolved_graph_settings == SglangGraphSettings(True, False)
+    assert result.resolved_graph_settings == SglangGraphSettings("full", "disabled")
     assert result.output_ids == tuple(range(8))
     assert result.prefill_logits_path == prefill_logits_path
     record = TypeAdapter(SglangInferenceRecord).validate_json(server.inference_path.read_bytes())
@@ -368,7 +372,14 @@ def test_server_result_reads_resolved_modes_and_exact_output_ids(
 
 def test_server_result_rejects_boolean_token_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     responses = {
-        "/server_info": FakeResponse({"disable_cuda_graph": True, "disable_piecewise_cuda_graph": True}),
+        "/server_info": FakeResponse(
+            {
+                "cuda_graph_config": {
+                    "decode": {"backend": "disabled"},
+                    "prefill": {"backend": "disabled"},
+                }
+            }
+        ),
         "/generate": FakeResponse({"output_ids": [0, 1, 2, 3, 4, 5, 6, True]}),
     }
     monkeypatch.setattr(tests.harness.sglang.serving.server.httpx, "Client", lambda **kwargs: FakeClient(responses))

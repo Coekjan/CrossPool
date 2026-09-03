@@ -37,11 +37,11 @@ cases exercise other TP cardinalities with the same topology-test logic and an
 unsharded reference. These evidence surfaces are orthogonal; qualification does
 not duplicate every model across every topology.
 
-Serving graph qualification has two verdicts. Decode compares eager and full
-graph token IDs. Prefill compares eager and piecewise first-prefill logits with
-full-distribution forward KL while the Graph Observer proves that piecewise
-execution actually occurred. Piecewise token identity is diagnostic, not a
-correctness requirement.
+Serving graph qualification has two verdicts. Decode compares Eager and Decode
+Full token IDs. Prefill compares Eager and Prefill Breakable first-prefill
+logits with full-distribution forward KL while the Graph Observer proves that
+Breakable execution actually occurred. Prefill token identity is diagnostic,
+not a correctness requirement.
 
 ## Topology evidence
 

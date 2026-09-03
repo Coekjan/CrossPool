@@ -66,8 +66,8 @@ def test_plugin_apply_hooks_guard_fails_closed_with_pinned_sglang_registry(
 def install_fake_hook(monkeypatch: pytest.MonkeyPatch, target: str) -> None:
     target_names = {
         "MODEL_RUNNER_LOAD_MODEL": "hook_target_load",
-        "MODEL_RUNNER_INIT_MEMORY_POOL": "hook_target_memory_pool",
-        "MODEL_RUNNER_INITIALIZE": "hook_target_initialize",
+        "MODEL_RUNNER_ALLOC_MEMORY_POOL": "hook_target_alloc_memory_pool",
+        "SCHEDULER_INIT_MODEL_WORKER": "hook_target_init_model_worker",
     }
     for constant, name in target_names.items():
         monkeypatch.setattr(

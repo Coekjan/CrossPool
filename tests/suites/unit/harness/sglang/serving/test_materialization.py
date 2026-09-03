@@ -82,8 +82,8 @@ def test_materialize_writes_config_policy_and_sanitizes_environment(
     ("graph_mode", "expected_enable"),
     [
         (SglangGraphMode.EAGER, True),
-        (SglangGraphMode.FULL, False),
-        (SglangGraphMode.PIECEWISE, True),
+        (SglangGraphMode.DECODE_FULL, False),
+        (SglangGraphMode.PREFILL_BREAKABLE, True),
     ],
 )
 def test_materialize_enables_prefill_logit_observer_for_alignment_modes(

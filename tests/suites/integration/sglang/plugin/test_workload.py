@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
 from sglang.srt.server_args import ServerArgs
 from torch import nn
 
@@ -21,12 +22,10 @@ from xpool.native.ffn import LayerKind
 def test_ffn_profile_includes_only_enabled_graph_capacities(tmp_path: Path) -> None:
     args = server_args(
         max_prefill_tokens=48,
-        disable_cuda_graph=False,
-        cuda_graph_bs=[1, 64],
-        cuda_graph_max_bs=32,
-        disable_piecewise_cuda_graph=False,
-        piecewise_cuda_graph_tokens=[64, 256],
-        piecewise_cuda_graph_max_tokens=128,
+        cuda_graph_config=CudaGraphConfig(
+            decode=PhaseConfig(backend="full", bs=[1, 64], max_bs=32),
+            prefill=PhaseConfig(backend="breakable", bs=[64, 256], max_bs=128),
+        ),
     )
     runner, model_binding = workload_inputs(
         tmp_path,
@@ -52,12 +51,10 @@ def test_ffn_profile_includes_only_enabled_graph_capacities(tmp_path: Path) -> N
 def test_ffn_profile_ignores_retained_buckets_for_disabled_graph_paths(tmp_path: Path) -> None:
     args = server_args(
         max_prefill_tokens=33,
-        disable_cuda_graph=True,
-        cuda_graph_bs=[1024],
-        cuda_graph_max_bs=2048,
-        disable_piecewise_cuda_graph=True,
-        piecewise_cuda_graph_tokens=[4096],
-        piecewise_cuda_graph_max_tokens=8192,
+        cuda_graph_config=CudaGraphConfig(
+            decode=PhaseConfig(backend="disabled", bs=[1024], max_bs=2048),
+            prefill=PhaseConfig(backend="disabled", bs=[4096], max_bs=8192),
+        ),
     )
     runner, model_binding = workload_inputs(
         tmp_path,
@@ -74,10 +71,17 @@ def test_ffn_profile_ignores_retained_buckets_for_disabled_graph_paths(tmp_path:
 @pytest.mark.parametrize(
     "args",
     [
-        server_args(disable_cuda_graph=False, cuda_graph_bs=[1, 0]),
         server_args(
-            disable_piecewise_cuda_graph=False,
-            piecewise_cuda_graph_max_tokens=0,
+            cuda_graph_config=CudaGraphConfig(
+                decode=PhaseConfig(backend="full", bs=[1, 0]),
+                prefill=PhaseConfig(backend="disabled"),
+            )
+        ),
+        server_args(
+            cuda_graph_config=CudaGraphConfig(
+                decode=PhaseConfig(backend="disabled"),
+                prefill=PhaseConfig(backend="breakable", max_bs=0),
+            )
         ),
     ],
 )

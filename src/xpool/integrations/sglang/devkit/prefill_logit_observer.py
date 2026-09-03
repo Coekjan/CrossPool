@@ -68,7 +68,7 @@ def capture_prefill_logits(
     """Record one rank-zero, single-request EXTEND result without affecting serving."""
 
     global captured
-    if captured or model_runner.tp_rank != 0 or forward_batch.forward_mode is not ForwardMode.EXTEND:
+    if captured or model_runner.ps.tp_rank != 0 or forward_batch.forward_mode is not ForwardMode.EXTEND:
         return
     rids = forward_batch.rids
     if not rids:

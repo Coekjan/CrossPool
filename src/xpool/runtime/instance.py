@@ -450,7 +450,7 @@ class InstanceRankRuntime:
         raise InstanceRankError("timed out waiting for executable fabric generation")
 
     def publish_initialized(self) -> None:
-        """Publish the post-ModelRunner.initialize startup barrier.
+        """Publish the post-Scheduler.init_model_worker startup barrier.
 
         Raises:
             InstanceRankError: If this runtime did not observe an executable plan.

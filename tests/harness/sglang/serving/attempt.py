@@ -6,7 +6,9 @@ import errno
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from itertools import repeat
 from pathlib import Path
+from threading import Barrier
 
 import httpx
 
@@ -194,8 +196,9 @@ class ProbeAttempt:
 
             assert self.cluster is not None
             try:
+                request_barrier = Barrier(len(self.servers))
                 with ThreadPoolExecutor(max_workers=len(self.servers)) as executor:
-                    results = tuple(executor.map(SglangServerProcess.result, self.servers))
+                    results = tuple(executor.map(SglangServerProcess.result, self.servers, repeat(request_barrier)))
             except BaseException as inference_error:
                 diagnostics = self.diagnostics()
                 try:

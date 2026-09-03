@@ -712,7 +712,7 @@ def serving_graph_runner(
         strict_requirements=False,
         artifact_group_adapters=(tests.harness.sglang.serving.alignment.ServingGraphAdapter(),),
     )
-    graph_modes = (SglangGraphMode.EAGER, SglangGraphMode.FULL)
+    graph_modes = (SglangGraphMode.EAGER, SglangGraphMode.DECODE_FULL)
     for task, status, detail, graph_mode in zip(runner.tasks, statuses, details, graph_modes, strict=True):
         directory = root / task.key
         artifact_directory = directory / "artifacts"

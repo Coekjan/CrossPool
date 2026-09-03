@@ -3,49 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from math import prod
 
 import torch
 
 from xpool import ffn
 from xpool.native.ffn import LayerKind
-from xpool.runtime.ffnagent import architecture, weights
-from xpool.utils import align_up
+from xpool.runtime.ffnagent import architecture, operators, weights
 
 
 class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
     """Compile the strict mixed Dense/MoE DeepSeek-V2 FFN profile."""
 
     architecture_name = "DeepseekV2ForCausalLM"
-
-    @staticmethod
-    def router_workspace_layout(
-        *,
-        payload_dtype: torch.dtype,
-        payload_row_capacity: int,
-        routed_expert_count: int,
-        routed_topk: int,
-    ) -> tuple[tuple[tuple[torch.dtype, tuple[int, ...]], ...], tuple[int, ...], int]:
-        """Return DeepSeek Router scratch regions and aligned byte offsets."""
-
-        if payload_dtype not in (torch.bfloat16, torch.float16):
-            raise ValueError("DeepSeek Router requires BF16 or FP16 payloads")
-        if min(payload_row_capacity, routed_expert_count, routed_topk) <= 0 or routed_topk > routed_expert_count:
-            raise ValueError("DeepSeek Router dimensions are inconsistent")
-        regions = (
-            (payload_dtype, (payload_row_capacity, routed_expert_count)),
-            (payload_dtype, (payload_row_capacity, routed_expert_count)),
-            (payload_dtype, (payload_row_capacity, routed_topk)),
-            (torch.int64, (payload_row_capacity, routed_topk)),
-            (torch.float32, (payload_row_capacity, 1)),
-        )
-        offsets = []
-        cursor = 0
-        for dtype, shape in regions:
-            cursor = align_up(cursor, 16)
-            offsets.append(cursor)
-            cursor += prod(shape) * dtype.itemsize
-        return regions, tuple(offsets), cursor
 
     @staticmethod
     def router_workspace_bytes(
@@ -55,14 +24,13 @@ class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
         routed_expert_count: int,
         routed_topk: int,
     ) -> int:
-        """Return the aligned DeepSeek Router scratch extent."""
+        """Return the caller-owned FP32 Router-logit extent."""
 
-        return DeepseekV2Adapter.router_workspace_layout(
-            payload_dtype=payload_dtype,
-            payload_row_capacity=payload_row_capacity,
-            routed_expert_count=routed_expert_count,
-            routed_topk=routed_topk,
-        )[2]
+        if payload_dtype not in (torch.bfloat16, torch.float16):
+            raise ValueError("DeepSeek Router requires BF16 or FP16 payloads")
+        if min(payload_row_capacity, routed_expert_count, routed_topk) <= 0 or routed_topk > routed_expert_count:
+            raise ValueError("DeepSeek Router dimensions are inconsistent")
+        return payload_row_capacity * routed_expert_count * torch.float32.itemsize
 
     @staticmethod
     def compute_routed_topk(
@@ -94,7 +62,7 @@ class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
         routed_topk = routed_ids.shape[1]
         if routed_ids.shape[0] != row_capacity or router_weights.correction_bias is not None:
             raise ValueError("DeepSeek Router resources disagree with the admitted profile")
-        regions, offsets, expected_bytes = DeepseekV2Adapter.router_workspace_layout(
+        expected_bytes = DeepseekV2Adapter.router_workspace_bytes(
             payload_dtype=payload_dtype,
             payload_row_capacity=row_capacity,
             routed_expert_count=routed_expert_count,
@@ -105,19 +73,14 @@ class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
         tensors = (router_weights.weight, workspace, routed_ids, routed_weights)
         if any(tensor.device != hidden_states.device for tensor in tensors):
             raise ValueError("DeepSeek Router tensors must share one CUDA device")
-        views = tuple(
-            workspace[offset : offset + prod(shape) * dtype.itemsize].view(dtype).view(shape)
-            for offset, (dtype, shape) in zip(offsets, regions, strict=True)
+        logits = workspace.view(torch.float32).view(row_capacity, routed_expert_count)
+        torch.mm(hidden_states, router_weights.weight.t(), out=logits, out_dtype=torch.float32)
+        operators.compute_softmax_topk(
+            logits=logits,
+            routed_ids=routed_ids,
+            routed_weights=routed_weights,
+            renormalize=renormalize,
         )
-        logits, scores, selected_values, selected_ids, row_sums = views
-        torch.mm(hidden_states, router_weights.weight.t(), out=logits)
-        torch.softmax(logits, dim=-1, out=scores)
-        torch.topk(scores, routed_topk, dim=-1, sorted=False, out=(selected_values, selected_ids))
-        routed_ids.copy_(selected_ids)
-        routed_weights.copy_(selected_values)
-        if renormalize:
-            torch.sum(selected_values, dim=-1, keepdim=True, dtype=torch.float32, out=row_sums)
-            routed_weights.div_(row_sums)
 
     @classmethod
     def compile(

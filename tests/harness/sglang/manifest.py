@@ -77,8 +77,6 @@ class E2eServingCase(BaseModel):
             raise ValueError("every E2E model must use the same attention topology")
         if not self.graph_modes or len(self.graph_modes) != len(set(self.graph_modes)):
             raise ValueError("E2E serving case graph_modes must be nonempty and unique")
-        if self.models[0].atn_dp_size > 1 and SglangGraphMode.PIECEWISE in self.graph_modes:
-            raise ValueError("E2E attention DP does not support piecewise CUDA graph mode")
         return self
 
     @property

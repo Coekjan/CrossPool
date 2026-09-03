@@ -33,33 +33,22 @@ def reset_graph_observer(
     monkeypatch.setattr(xpool.integrations.sglang.devkit.graph_observer, "installed", False)
 
 
-class FakeMode:
-    def __init__(self, name: str) -> None:
-        self.name = name
+class FullCudaGraphBackend:
+    """Fake backend whose name matches SGLang's full backend evidence."""
 
 
-class FakeCudaGraphRunnerState:
+class FakeDecodeCudaGraphRunnerState:
     def __init__(self) -> None:
-        self.device = "cuda"
-        self.tp_size = 1
-        self.dp_size = 1
-        self.pp_size = 1
-        self.capture_forward_mode = FakeMode("DECODE")
-        self.capture_bs = [1, 2]
-        self.max_bs = 2
-        self.max_num_token = 2
+        self.backend = FullCudaGraphBackend()
 
 
-class FakePiecewiseCudaGraphRunnerState:
+class BreakableCudaGraphBackend:
+    """Fake backend whose name matches SGLang's Breakable backend evidence."""
+
+
+class FakePrefillCudaGraphRunnerState:
     def __init__(self) -> None:
-        self.device = "cuda"
-        self.tp_size = 1
-        self.dp_size = 1
-        self.pp_size = 1
-        self.capture_forward_mode = FakeMode("EXTEND")
-        self.capture_num_tokens = [4, 8]
-        self.max_bs = 2
-        self.max_num_tokens = 8
+        self.backend = BreakableCudaGraphBackend()
 
 
 class SuccessfulGraphRunner(Protocol):
@@ -67,39 +56,43 @@ class SuccessfulGraphRunner(Protocol):
 
     def capture(self) -> str: ...
 
-    def replay(self) -> str: ...
+    def execute(self) -> str: ...
 
 
 def successful_runner_classes() -> tuple[type[SuccessfulGraphRunner], type[SuccessfulGraphRunner]]:
-    """Return full and piecewise runner classes with deterministic successful calls."""
+    """Return decode and prefill runner classes with deterministic calls."""
 
-    class CudaGraphRunner(FakeCudaGraphRunnerState):
+    class DecodeCudaGraphRunner(FakeDecodeCudaGraphRunnerState):
         def capture(self) -> str:
             return "captured"
 
-        def replay(self) -> str:
-            return "replayed"
+        def execute(self) -> str:
+            return "executed"
 
-    class PiecewiseCudaGraphRunner(FakePiecewiseCudaGraphRunnerState):
+    class PrefillCudaGraphRunner(FakePrefillCudaGraphRunnerState):
         def capture(self) -> str:
-            return "pcg-captured"
+            return "prefill-captured"
 
-        def replay(self) -> str:
-            return "pcg-replayed"
+        def execute(self) -> str:
+            return "prefill-executed"
 
-    return CudaGraphRunner, PiecewiseCudaGraphRunner
+    return DecodeCudaGraphRunner, PrefillCudaGraphRunner
 
 
 def install_fake_sglang_runner_classes(
     monkeypatch: pytest.MonkeyPatch,
-    cuda_graph_runner: type[object],
-    piecewise_cuda_graph_runner: type[object],
+    decode_cuda_graph_runner: type[object],
+    prefill_cuda_graph_runner: type[object],
 ) -> None:
-    monkeypatch.setattr(xpool.integrations.sglang.devkit.graph_observer, "CudaGraphRunner", cuda_graph_runner)
     monkeypatch.setattr(
         xpool.integrations.sglang.devkit.graph_observer,
-        "PiecewiseCudaGraphRunner",
-        piecewise_cuda_graph_runner,
+        "DecodeCudaGraphRunner",
+        decode_cuda_graph_runner,
+    )
+    monkeypatch.setattr(
+        xpool.integrations.sglang.devkit.graph_observer,
+        "PrefillCudaGraphRunner",
+        prefill_cuda_graph_runner,
     )
 
 

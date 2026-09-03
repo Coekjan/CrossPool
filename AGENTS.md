@@ -123,12 +123,12 @@ test task materializes a private config containing only its selected manifest
 models. Do not make an E2E case wait for unrelated models listed in the user's
 runtime config.
 
-Shim graph-mode coverage must distinguish eager execution, decode full CUDA
-graph replay, and prefill piecewise CUDA graph replay. SGLang integration
-evidence compares token ids between eager and full Decode execution. Prefill
-evidence compares eager and piecewise first-prefill logits with forward KL and
-uses Devkit graph-observer evidence to prove piecewise execution occurred;
-piecewise token ids are diagnostic only.
+Shim graph-mode coverage must distinguish Eager execution, Decode Full CUDA
+Graph replay, and Prefill Breakable CUDA Graph replay. SGLang integration
+evidence compares token IDs between Eager and Decode Full execution. Prefill
+evidence compares Eager and Prefill Breakable first-prefill logits with forward
+KL and uses Devkit Graph Observer evidence to prove Breakable execution
+occurred; Prefill token IDs are diagnostic only.
 
 ## Build Style
 

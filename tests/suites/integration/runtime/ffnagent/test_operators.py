@@ -164,7 +164,7 @@ def test_deepseek_router_matches_admitted_softmax_formula(payload_dtype: torch.d
         renormalize=False,
     )
 
-    scores = torch.softmax(hidden_states, dim=-1)
+    scores = torch.softmax(hidden_states.float(), dim=-1)
     expected_weights, expected_ids = torch.topk(scores, 2, dim=-1, sorted=False)
 
     torch.testing.assert_close(routed_ids, expected_ids.to(torch.int32), rtol=0, atol=0)
@@ -319,13 +319,13 @@ def test_finalize_moe_routing_replays_one_graph_for_dynamic_live_rows() -> None:
 def test_sglang_moe_config_selection_restores_exact_function_after_failure() -> None:
     from sglang.srt.layers.moe.moe_runner.triton_utils import fused_moe_triton_config
 
-    previous = fused_moe_triton_config.get_global_server_args
+    previous = fused_moe_triton_config.get_exec
     with pytest.raises(RuntimeError, match="selection failure"):
         with operators.sglang_moe_config_selection():
-            assert fused_moe_triton_config.get_global_server_args is not previous
-            assert not fused_moe_triton_config.get_global_server_args().enable_deterministic_inference
+            assert fused_moe_triton_config.get_exec is not previous
+            assert not fused_moe_triton_config.get_exec().deterministic.enable_deterministic_inference
             raise RuntimeError("selection failure")
-    assert fused_moe_triton_config.get_global_server_args is previous
+    assert fused_moe_triton_config.get_exec is previous
 
 
 @pytest.mark.parametrize("payload_dtype", (torch.bfloat16, torch.float16), ids=("bfloat16", "float16"))

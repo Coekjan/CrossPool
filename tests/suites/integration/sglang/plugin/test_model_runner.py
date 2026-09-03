@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.model_executor.model_runner import ModelRunner
 
 import xpool.config
@@ -206,12 +208,10 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         "validate_after_load",
     ]
 
-    pool_result = xpool.integrations.sglang.plugin.after_model_runner_init_memory_pool(
-        None, runner.as_model_runner(), 0
-    )
-    initialize_result = xpool.integrations.sglang.plugin.after_model_runner_initialize(
-        None, runner.as_model_runner(), 0.0
-    )
+    pool_result = xpool.integrations.sglang.plugin.after_model_runner_alloc_memory_pool(None, runner.as_model_runner())
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.tp_worker = SimpleNamespace(model_runner=runner.as_model_runner())
+    initialize_result = xpool.integrations.sglang.plugin.after_scheduler_init_model_worker(None, scheduler)
 
     assert result == "loaded"
     assert pool_result is None
@@ -281,7 +281,7 @@ def test_model_runner_hook_clears_binding_when_instance_start_fails(
         == "loaded"
     )
     with pytest.raises(RuntimeError, match="install failed"):
-        xpool.integrations.sglang.plugin.after_model_runner_init_memory_pool(None, runner.as_model_runner(), 0)
+        xpool.integrations.sglang.plugin.after_model_runner_alloc_memory_pool(None, runner.as_model_runner())
 
     assert events == [
         "validate_before_load",
@@ -328,7 +328,7 @@ def test_model_runner_hook_cleans_up_when_post_executable_transport_attach_fails
         (adapter,), lambda model_runner: None, runner.as_model_runner()
     )
     with pytest.raises(RuntimeError, match="attach failed"):
-        xpool.integrations.sglang.plugin.after_model_runner_init_memory_pool(None, runner.as_model_runner(), 0)
+        xpool.integrations.sglang.plugin.after_model_runner_alloc_memory_pool(None, runner.as_model_runner())
 
     assert events[-4:] == [
         "start_instance",
@@ -372,7 +372,7 @@ def test_model_runner_hook_waits_for_executable_fabric(
         (adapter,), lambda model_runner: None, runner.as_model_runner()
     )
 
-    result = xpool.integrations.sglang.plugin.after_model_runner_init_memory_pool(None, runner.as_model_runner(), 0)
+    result = xpool.integrations.sglang.plugin.after_model_runner_alloc_memory_pool(None, runner.as_model_runner())
 
     assert result is None
     assert runner.xpool_runtime is not None

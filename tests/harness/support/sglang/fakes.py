@@ -7,8 +7,10 @@ from types import SimpleNamespace
 from typing import cast
 
 import torch
+from sglang.srt.distributed.parallel_state_wrapper import ParallelState
 from sglang.srt.layers.communicator import LayerScatterModes, ScatterMode
 from sglang.srt.layers.dp_attention import DpPaddingMode
+from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.server_args import ServerArgs
@@ -30,6 +32,10 @@ def server_args(**overrides: object) -> ServerArgs:
     """Return real SGLang server args with a dummy model path for tests."""
 
     args = ServerArgs(model_path="dummy")
+    args.cuda_graph_config = CudaGraphConfig(
+        decode=PhaseConfig(backend="full"),
+        prefill=PhaseConfig(backend="breakable"),
+    )
     for name, value in overrides.items():
         if not hasattr(args, name):
             raise AttributeError(f"SGLang ServerArgs has no field {name!r}")
@@ -74,12 +80,7 @@ class FakeModelRunner:
     model_config: FakeModelConfig = field(default_factory=FakeModelConfig)
     server_args: ServerArgs = field(default_factory=server_args)
     gpu_id: int = 0
-    tp_rank: int = 0
-    tp_size: int = 1
-    dp_rank: int | None = None
-    dp_size: int = 1
-    attn_cp_rank: int | None = None
-    attn_cp_size: int = 1
+    ps: ParallelState = field(default_factory=ParallelState.trivial)
     max_running_requests: int = 1
     model: nn.Module | None = None
     xpool_ffn_shim_count: int = 0

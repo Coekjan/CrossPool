@@ -23,7 +23,7 @@ id = "deepseek-v2-lite-tp1-dp1-f1-e1"
 models = [{ model = "deepseek_v2_lite", atn_tp_size = 1, atn_dp_size = 1 }]
 ffnagent_count = 1
 executor_lane_count = 1
-graph_modes = ["eager", "full", "piecewise"]
+graph_modes = ["eager", "decode-full", "prefill-breakable"]
 estimated_duration_seconds = 600
 timeout_seconds = 3600
 transport_record_capacity = 32768
@@ -34,7 +34,7 @@ id = "deepseek-v2-lite-tp1-dp2-f1-e1"
 models = [{ model = "deepseek_v2_lite", atn_tp_size = 1, atn_dp_size = 2 }]
 ffnagent_count = 1
 executor_lane_count = 1
-graph_modes = ["eager", "full"]
+graph_modes = ["eager", "decode-full"]
 estimated_duration_seconds = 800
 timeout_seconds = 3600
 transport_record_capacity = 32768
@@ -45,7 +45,7 @@ id = "qwen3-14b-tp1-dp1-f1-e1"
 models = [{ model = "qwen3_14b", atn_tp_size = 1, atn_dp_size = 1 }]
 ffnagent_count = 1
 executor_lane_count = 1
-graph_modes = ["eager", "full", "piecewise"]
+graph_modes = ["eager", "decode-full", "prefill-breakable"]
 estimated_duration_seconds = 600
 timeout_seconds = 3600
 transport_record_capacity = 32768
@@ -56,7 +56,7 @@ id = "qwen3-14b-tp2-dp1-f1-e1"
 models = [{ model = "qwen3_14b", atn_tp_size = 2, atn_dp_size = 1 }]
 ffnagent_count = 1
 executor_lane_count = 1
-graph_modes = ["eager", "full", "piecewise"]
+graph_modes = ["eager", "decode-full", "prefill-breakable"]
 estimated_duration_seconds = 700
 timeout_seconds = 3600
 transport_record_capacity = 32768
@@ -81,7 +81,7 @@ id = "glm4-7-flash-tp1-dp1-f2-e1"
 models = [{ model = "glm4_7_flash", atn_tp_size = 1, atn_dp_size = 1 }]
 ffnagent_count = 2
 executor_lane_count = 1
-graph_modes = ["eager", "full", "piecewise"]
+graph_modes = ["eager", "decode-full", "prefill-breakable"]
 estimated_duration_seconds = 700
 timeout_seconds = 3600
 transport_record_capacity = 32768
@@ -92,7 +92,7 @@ id = "qwen3-30b-a3b-tp1-dp1-f2-e1"
 models = [{ model = "qwen3_30b_a3b", atn_tp_size = 1, atn_dp_size = 1 }]
 ffnagent_count = 2
 executor_lane_count = 1
-graph_modes = ["eager", "full", "piecewise"]
+graph_modes = ["eager", "decode-full", "prefill-breakable"]
 estimated_duration_seconds = 800
 timeout_seconds = 3600
 transport_record_capacity = 32768

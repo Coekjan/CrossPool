@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from sglang.srt.model_executor.cuda_graph_config import Backend
 from sglang.srt.server_args import ServerArgs
 
 
@@ -53,15 +54,27 @@ SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (
         "Speculative MoE A2A Backend",
         lambda args: disabled_string_option(args.speculative_moe_a2a_backend),
     ),
-    ServerArgRule("DeepEP Waterfill", lambda args: not args.enable_deepep_waterfill),
+    ServerArgRule("DeepEP Waterfill", lambda args: not args.enable_waterfill),
     ServerArgRule("Elastic Expert Parallelism", lambda args: args.elastic_ep_backend is None),
     ServerArgRule("EPLB", lambda args: not args.enable_eplb),
     ServerArgRule("Expert Distribution Recorder", lambda args: args.expert_distribution_recorder_mode is None),
     ServerArgRule("Two-Batch Overlap", lambda args: not args.enable_two_batch_overlap),
     ServerArgRule("Single-Batch Overlap", lambda args: not args.enable_single_batch_overlap),
     ServerArgRule("Torch Compile", lambda args: not args.enable_torch_compile),
-    ServerArgRule("Piecewise CUDA Graph Compiler", lambda args: args.piecewise_cuda_graph_compiler == "eager"),
-    ServerArgRule("Piecewise CUDA Graph Enforcement", lambda args: not args.enforce_piecewise_cuda_graph),
+    ServerArgRule(
+        "Decode CUDA Graph Backend",
+        lambda args: (
+            args.cuda_graph_config is not None
+            and args.cuda_graph_config.decode.backend in {Backend.DISABLED, Backend.FULL}
+        ),
+    ),
+    ServerArgRule(
+        "Prefill CUDA Graph Backend",
+        lambda args: (
+            args.cuda_graph_config is not None
+            and args.cuda_graph_config.prefill.backend in {Backend.DISABLED, Backend.BREAKABLE}
+        ),
+    ),
     ServerArgRule("Mixed Chunked Prefill", lambda args: not args.enable_mixed_chunk),
     ServerArgRule("Attention TP Input Scattering", lambda args: not args.enable_attn_tp_input_scattered),
     ServerArgRule("Prefill Context Parallelism", lambda args: not args.enable_prefill_context_parallel),

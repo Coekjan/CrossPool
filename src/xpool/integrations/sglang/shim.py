@@ -7,6 +7,7 @@ from collections.abc import Iterator
 import torch
 from sglang.srt.layers import dp_attention
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
+from sglang.srt.runtime_context import get_forward
 from torch import nn
 
 import xpool.native.ffn
@@ -91,8 +92,6 @@ class FfnShimModule(nn.Module):
         self,
         hidden_states: torch.Tensor,
         forward_batch: ForwardBatch | None = None,
-        should_allreduce_fusion: bool = False,
-        use_reduce_scatter: bool = False,
         gemm_output_zero_allocator: object | None = None,
     ) -> torch.Tensor:
         """Forward hidden states through the configured xpool FFN shim op.
@@ -100,15 +99,8 @@ class FfnShimModule(nn.Module):
         Args:
             hidden_states: Contiguous CUDA tensor with shape
                 ``[num_tokens, hidden_size]`` and a supported floating dtype.
-                FakeTensor or Meta dispatch is handled only by the registered
-                dispatcher fake implementation during graph tracing.
             forward_batch: SGLang forward-batch metadata used to derive the
                 exact xpool forward mode.
-            should_allreduce_fusion: SGLang all-reduce fusion flag. Must be
-                false because the current shim ABI has no fused all-reduce path.
-            use_reduce_scatter: SGLang reduce-scatter flag. True selects the
-                Group-Sum Complete output requirement; false selects Per-Rank
-                Complete.
             gemm_output_zero_allocator: Optional SGLang allocator hook. Must be
                 absent because the shim owns native output placement.
 
@@ -118,7 +110,8 @@ class FfnShimModule(nn.Module):
 
         Raises:
             ShimUnavailableError: If the shim is unbound or receives unsupported
-                SGLang runtime modes before dispatcher invocation.
+                SGLang runtime modes or collective flags before dispatcher
+                invocation.
             RuntimeError: Propagated from the selected native dispatcher op,
                 including synchronous Tensor, attachment, and launch
                 precondition failures.
@@ -127,14 +120,15 @@ class FfnShimModule(nn.Module):
             Dispatches through ``xpool.ops.ffn_shim``. The SGLang plugin binds
             runtime layer metadata after model load and the Instance-rank runtime
             attaches the daemon-brokered Transport arena before serving. The
-            fake implementation preserves symbolic token dimensions for
-            piecewise CUDA graph warmup. Canonical native protocol failures are
-            sticky: they poison output with NaNs and the Instance-rank
-            failure monitor terminates the serving process after observing the
-            failure; they are not synchronously raised by this call.
+            active SGLang forward context selects the output requirement.
+            Canonical native protocol failures are sticky: they poison output
+            with NaNs and the Instance-rank failure monitor terminates the
+            serving process after observing the failure; they are not
+            synchronously raised by this call.
         """
 
-        if should_allreduce_fusion:
+        forward_context = get_forward()
+        if forward_context.fuse_mlp_allreduce:
             raise ShimUnavailableError("xpool FFN shim does not yet support SGLang all-reduce fusion")
         if gemm_output_zero_allocator is not None:
             raise ShimUnavailableError("xpool FFN shim does not yet support SGLang GEMM zero allocator output")
@@ -145,10 +139,8 @@ class FfnShimModule(nn.Module):
                 f"xpool FFN shim for {self.model_architecture} layer {self.layer_id} has no bound "
                 "runtime metadata; the xpool plugin must bind the shim after load"
             )
-        # Match by exact SGLang ForwardMode value, not by is_decode()/is_extend():
-        # those predicates fold MIXED/SPLIT_PREFILL/DLLM_EXTEND/TARGET_VERIFY/
-        # DRAFT_EXTEND into "extend", but the current xpool shim ABI only publishes
-        # plain DECODE, EXTEND, and IDLE requests.
+        # Match exact values because SGLang's predicates admit additional modes;
+        # the xpool shim ABI publishes only DECODE, EXTEND, and IDLE requests.
         match forward_batch.forward_mode:
             case mode if mode is ForwardMode.DECODE:
                 forward_mode = xpool.native.ffn.ForwardMode.DECODE
@@ -185,7 +177,9 @@ class FfnShimModule(nn.Module):
             layer_ordinal=self.layer_ordinal,
             forward_mode=forward_mode,
             output_requirement=(
-                OutputRequirement.GROUP_SUM_COMPLETE if use_reduce_scatter else OutputRequirement.PER_RANK_COMPLETE
+                OutputRequirement.GROUP_SUM_COMPLETE
+                if forward_context.mlp_reduce_scatter
+                else OutputRequirement.PER_RANK_COMPLETE
             ),
             dp_row_layout=dp_row_layout,
         )

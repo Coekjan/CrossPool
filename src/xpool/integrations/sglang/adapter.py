@@ -179,7 +179,7 @@ class SglangInstanceRankBinding:
             supports_dp_attention=supports_dp_attention,
         )
         placement = SglangCudaPlacement.derive(config.devices.atn_cuda_devices)
-        worker_rank = model_runner.tp_rank
+        worker_rank = model_runner.ps.tp_rank
         cuda_device = model_runner.gpu_id
         if (
             not isinstance(worker_rank, int)
@@ -187,14 +187,14 @@ class SglangInstanceRankBinding:
             or not 0 <= worker_rank < policy.worker_world_size
         ):
             raise RuntimeError(
-                f"xpool SGLang plugin requires ModelRunner.tp_rank in [0, {policy.worker_world_size}), "
+                f"xpool SGLang plugin requires ModelRunner.ps.tp_rank in [0, {policy.worker_world_size}), "
                 f"got {worker_rank!r}"
             )
-        attn_cp_size = getattr(model_runner, "attn_cp_size", 1)
+        attn_cp_size = model_runner.ps.attn_cp_size
         if not isinstance(attn_cp_size, int) or isinstance(attn_cp_size, bool) or attn_cp_size <= 0:
-            raise RuntimeError("xpool SGLang plugin requires positive integer ModelRunner.attn_cp_size")
+            raise RuntimeError("xpool SGLang plugin requires positive integer ModelRunner.ps.attn_cp_size")
         if attn_cp_size != 1:
-            raise RuntimeError(f"xpool SGLang plugin requires ModelRunner.attn_cp_size=1, got {attn_cp_size}")
+            raise RuntimeError(f"xpool SGLang plugin requires ModelRunner.ps.attn_cp_size=1, got {attn_cp_size}")
         atn_tp_rank, atn_tp_size, atn_dp_rank, atn_dp_size = compute_dp_attention_world_info(
             policy.atn_dp_size > 1,
             worker_rank,
@@ -290,8 +290,6 @@ class SglangInstanceRankBinding:
                 raise RuntimeError(
                     f"xpool config expects SGLang {label}={expected} for {self.instance_id}, got {actual}"
                 )
-        if self.atn_dp_size > 1 and not server_args.disable_piecewise_cuda_graph:
-            raise RuntimeError("xpool requires piecewise CUDA graph to resolve disabled with SGLang DP attention")
         expected_cuda_device = self.sglang_base_gpu_id + self.worker_rank * self.sglang_gpu_id_step
         if self.cuda_device != expected_cuda_device:
             raise RuntimeError(

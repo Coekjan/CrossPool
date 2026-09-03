@@ -1,4 +1,4 @@
-"""Compile-visible xpool Tensor operators."""
+"""xpool Tensor operators."""
 
 from __future__ import annotations
 
@@ -10,15 +10,6 @@ from xpool.transport import FfnRequestMetadata
 __all__ = ["ffn_shim"]
 
 xpool.cext.ensure_native_loaded()
-
-
-@torch.library.register_fake("xpool::ffn_shim")
-def fake_ffn_shim_output(
-    hidden_states: torch.Tensor, dp_rank_payload_rows: torch.Tensor | None, output: torch.Tensor, *args: object
-) -> None:
-    """Accept caller-owned fake output for graph tracing."""
-
-    return None
 
 
 def ffn_shim(
@@ -46,7 +37,7 @@ def ffn_shim(
 
     Side Effects:
         Enqueues stream-ordered transport work and remains safe to capture in
-        full or piecewise CUDA graphs. It does not synchronize the host.
+        an outer CUDA Graph. It does not synchronize the host.
     """
 
     output = torch.empty_like(hidden_states)

@@ -75,8 +75,9 @@ Each E2E SGLang server writes a versionless `*.inference.json` beside its log.
 It contains the exact public `/generate` request and response and is written
 before HTTP-status and token-shape validation. JUnit describes case outcome,
 `*.duration.json` records timing and resolved graph mode. Serving-graph
-artifacts compare Eager and Full token output plus Eager and Piecewise prefill
-logits, while observer files prove internal graph and transport/fabric behavior.
+artifacts compare Eager and Decode Full token output plus Eager and Prefill
+Breakable logits, while observer files prove internal graph and
+transport/fabric behavior.
 
 ## Commands
 

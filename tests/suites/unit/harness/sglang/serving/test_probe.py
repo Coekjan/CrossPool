@@ -50,7 +50,7 @@ def test_probe_retries_only_complete_endpoint_conflicts(tmp_path: Path, monkeypa
         probe_manifest(),
         probe_case(),
         base_config=probe_launch(tmp_path).config,
-        graph_settings=SglangGraphSettings(False, False),
+        graph_settings=SglangGraphSettings("disabled", "disabled"),
         workdir=tmp_path / "run",
     )
 
@@ -77,7 +77,7 @@ def test_probe_does_not_retry_non_conflict_failure(tmp_path: Path, monkeypatch: 
             probe_manifest(),
             probe_case(),
             base_config=probe_launch(tmp_path).config,
-            graph_settings=SglangGraphSettings(False, False),
+            graph_settings=SglangGraphSettings("disabled", "disabled"),
             workdir=tmp_path / "run",
         )
 
@@ -195,7 +195,9 @@ def test_attempt_terminal_paths_cleanup_classify_and_release_endpoints(
         if outcome == "startup":
             raise RuntimeError("startup failed")
 
-    def server_result(server: SglangServerProcess) -> SglangServerResult:
+    def server_result(server: SglangServerProcess, request_barrier: object) -> SglangServerResult:
+        del server
+        assert request_barrier is not None
         if outcome == "inference":
             raise RuntimeError("inference failed")
         return cast(SglangServerResult, object())
@@ -236,7 +238,7 @@ def probe_attempt(tmp_path: Path) -> ProbeAttempt:
         probe_manifest(),
         probe_case(),
         launch.config,
-        SglangGraphSettings(False, False),
+        SglangGraphSettings("disabled", "disabled"),
         tmp_path / "attempt",
     )
 

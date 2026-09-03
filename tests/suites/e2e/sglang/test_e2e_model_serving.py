@@ -94,10 +94,10 @@ def test_e2e_model_serving(
         if prefill_logits_paths:
             shutil.copyfile(prefill_logits_paths[0], task_artifact_dir / PREFILL_LOGITS_ARTIFACT_FILENAME)
     durations = {
-        "cuda_graph": run.graph_settings.cuda_graph,
+        "decode_backend": run.graph_settings.decode_backend,
         "daemon_startup_seconds": run.daemon_startup_seconds,
         "duration_seconds": run.duration_seconds,
-        "piecewise_cuda_graph": run.graph_settings.piecewise_cuda_graph,
+        "prefill_backend": run.graph_settings.prefill_backend,
     }
     serialized_durations = json.dumps(durations, indent=2, sort_keys=True) + "\n"
     if task_artifact_dir is not None:

@@ -101,8 +101,8 @@ def materialize(
         transport_record_capacity=case.transport_record_capacity,
         fabric_record_capacity=case.fabric_record_capacity,
         prefill_logit_observer=(
-            SglangGraphMode.PIECEWISE in case.graph_modes
-            and graph_settings in {SglangGraphMode.EAGER.settings(), SglangGraphMode.PIECEWISE.settings()}
+            SglangGraphMode.PREFILL_BREAKABLE in case.graph_modes
+            and graph_settings in {SglangGraphMode.EAGER.settings(), SglangGraphMode.PREFILL_BREAKABLE.settings()}
         ),
     )
     config = XpoolConfig.from_file(config_path, env=environment)

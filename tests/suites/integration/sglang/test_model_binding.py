@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 from sglang.srt.distributed.parallel_state import GroupCoordinator
+from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
 
 from tests.harness.support.sglang.fakes import server_args
 from tests.harness.support.sglang.plugin import binding
@@ -33,7 +34,7 @@ def test_model_binding_rejects_reordered_or_incomplete_result_group(ranks: list[
         model_binding.validate_result_group(result_group(ranks=ranks, rank=0, rank_in_group=0))
 
 
-def test_model_binding_requires_piecewise_graphs_disabled_for_attention_dp() -> None:
+def test_model_binding_accepts_breakable_graphs_for_attention_dp() -> None:
     model_binding = replace(
         binding(),
         worker_world_size=2,
@@ -44,11 +45,13 @@ def test_model_binding_requires_piecewise_graphs_disabled_for_attention_dp() -> 
         tp_size=2,
         dp_size=2,
         enable_dp_attention=True,
-        disable_piecewise_cuda_graph=False,
+        cuda_graph_config=CudaGraphConfig(
+            decode=PhaseConfig(backend="disabled"),
+            prefill=PhaseConfig(backend="breakable"),
+        ),
     )
 
-    with pytest.raises(RuntimeError, match="piecewise CUDA graph"):
-        model_binding.validate_server_args(args)
+    model_binding.validate_server_args(args)
 
 
 def result_group(

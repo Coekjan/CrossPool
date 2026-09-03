@@ -165,14 +165,14 @@ def hook_target_load() -> str:
     return "load"
 
 
-def hook_target_memory_pool() -> str:
-    """Synthetic valid target for the plugin's required memory-pool hook."""
+def hook_target_alloc_memory_pool() -> str:
+    """Synthetic valid target for the plugin's pool-allocation hook."""
 
     return "memory_pool"
 
 
-def hook_target_initialize() -> str:
-    """Synthetic valid target for the plugin's required initialize hook."""
+def hook_target_init_model_worker() -> str:
+    """Synthetic valid target for the plugin's model-worker hook."""
 
     return "initialize"
 

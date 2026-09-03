@@ -60,27 +60,29 @@ def finalize_moe_routing_kernel(
 
 @contextlib.contextmanager
 def sglang_moe_config_selection() -> Generator[None, None, None]:
-    """Supply the pinned MoE selector's sole startup ServerArgs value.
+    """Supply the pinned MoE selector's sole startup execution value.
 
     Side Effects:
         Temporarily replaces the selector module's bound
-        ``get_global_server_args`` function and restores the exact previous
+        ``get_exec`` function and restores the exact previous
         function before returning or propagating an exception. The context is
         single-owner startup state and is not safe for concurrent use.
     """
 
     from sglang.srt.layers.moe.moe_runner.triton_utils import fused_moe_triton_config
 
-    previous = fused_moe_triton_config.get_global_server_args
+    previous = fused_moe_triton_config.get_exec
     setattr(
         fused_moe_triton_config,
-        "get_global_server_args",
-        lambda: types.SimpleNamespace(enable_deterministic_inference=False),
+        "get_exec",
+        lambda: types.SimpleNamespace(
+            deterministic=types.SimpleNamespace(enable_deterministic_inference=False),
+        ),
     )
     try:
         yield
     finally:
-        setattr(fused_moe_triton_config, "get_global_server_args", previous)
+        setattr(fused_moe_triton_config, "get_exec", previous)
 
 
 def compute_softmax_topk(
@@ -138,9 +140,9 @@ def select_moe_kernel_configs(
         RuntimeError: If the pinned selector returns an invalid mapping.
 
     Side Effects:
-        Imports and consults pinned SGLang startup configuration while the
-        dedicated scoped ServerArgs view is installed. No process-global
-        SGLang ServerArgs object remains after return.
+        Imports and consults pinned SGLang startup configuration while a
+        dedicated execution context is installed. The original context getter
+        is restored before return.
     """
 
     expert_count = layer_weights.expert_gate_up_weight.shape[0]
@@ -385,7 +387,7 @@ def compute_moe_partial(
         raise ValueError("MoE Expert tensors must share one CUDA device")
 
     import sgl_kernel
-    from sglang.srt.layers.moe.moe_runner.triton_utils import fused_moe_triton_kernels
+    from sglang.kernels.ops.moe.fused_moe_triton_kernels import invoke_fused_moe_kernel
 
     output_dtype = language.bfloat16 if payload_dtype is torch.bfloat16 else language.float16
     # The pinned extension writes the three caller-owned alignment buffers;
@@ -402,7 +404,7 @@ def compute_moe_partial(
     )
     # Pinned SGLang exposes this launcher positionally: W13 consumes hidden
     # states and semantic routes, then writes the caller-owned Gate/Up tensor.
-    fused_moe_triton_kernels.invoke_fused_moe_kernel(
+    invoke_fused_moe_kernel(
         hidden_states,
         layer_weights.expert_gate_up_weight,
         None,
@@ -431,7 +433,7 @@ def compute_moe_partial(
         raise RuntimeError("sgl_kernel.silu_and_mul did not preserve caller-owned output")
     # W2 reuses the same aligned route metadata and writes one output per route;
     # the following combine is the only row-level reduction.
-    fused_moe_triton_kernels.invoke_fused_moe_kernel(
+    invoke_fused_moe_kernel(
         activated,
         layer_weights.expert_down_weight,
         None,

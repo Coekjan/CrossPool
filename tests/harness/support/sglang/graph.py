@@ -12,37 +12,32 @@ def assert_run_graph_evidence(run: ProbeRun) -> None:
     assert len(run.results) == len(run.launch.models)
     for result, model in zip(run.results, run.launch.models, strict=True):
         assert result.model_id == model.model_id
-        assert result.resolved_graph_settings.cuda_graph is run.graph_settings.cuda_graph
-        if run.graph_settings.piecewise_cuda_graph:
-            assert result.resolved_graph_settings.piecewise_cuda_graph is (model.atn_dp_size == 1)
-        else:
-            assert result.resolved_graph_settings.piecewise_cuda_graph is False
-    resolved_piecewise = any(result.resolved_graph_settings.piecewise_cuda_graph for result in run.results)
-    assert_graph_events(run.graph_settings, run.events, resolved_piecewise_cuda_graph=resolved_piecewise)
+        assert result.resolved_graph_settings == run.graph_settings
+    assert_graph_events(run.graph_settings, run.events)
 
 
 def assert_graph_events(
     graph_settings: SglangGraphSettings,
     events: list[GraphEvent],
-    *,
-    resolved_piecewise_cuda_graph: bool,
 ) -> None:
-    """Require capture and replay evidence for every resolved graph mode."""
+    """Require capture and execution evidence for every resolved graph mode."""
 
-    full_graph_phases = graph_phases(events, kind="full_cuda_graph")
-    piecewise_graph_phases = graph_phases(events, kind="piecewise_cuda_graph")
-    expected_phases = {"capture_begin", "capture_end", "replay_begin", "replay_end"}
-    if graph_settings.cuda_graph:
-        assert expected_phases <= full_graph_phases
+    decode_events = graph_events(events, forward_phase="decode")
+    prefill_events = graph_events(events, forward_phase="prefill")
+    expected_events = {"capture_begin", "capture_end", "execute_begin", "execute_end"}
+    if graph_settings.decode_backend == "full":
+        assert expected_events <= {event.get("event") for event in decode_events}
+        assert {event.get("backend_class") for event in decode_events} == {"FullCudaGraphBackend"}
     else:
-        assert full_graph_phases == set()
-    if resolved_piecewise_cuda_graph:
-        assert expected_phases <= piecewise_graph_phases
+        assert decode_events == []
+    if graph_settings.prefill_backend == "breakable":
+        assert expected_events <= {event.get("event") for event in prefill_events}
+        assert {event.get("backend_class") for event in prefill_events} == {"BreakableCudaGraphBackend"}
     else:
-        assert piecewise_graph_phases == set()
+        assert prefill_events == []
 
 
-def graph_phases(events: list[GraphEvent], *, kind: str) -> set[str]:
-    """Collect observed phases for one graph-observer event kind."""
+def graph_events(events: list[GraphEvent], *, forward_phase: str) -> list[GraphEvent]:
+    """Collect observed events for one graph runner phase."""
 
-    return {phase for event in events if event.get("kind") == kind and isinstance((phase := event.get("phase")), str)}
+    return [event for event in events if event.get("forward_phase") == forward_phase]

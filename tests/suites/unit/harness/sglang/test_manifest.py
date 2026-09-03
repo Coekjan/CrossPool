@@ -102,14 +102,6 @@ def test_serving_case_rejects_heterogeneous_attention_topology() -> None:
         )
 
 
-def test_serving_case_rejects_piecewise_graph_under_attention_dp() -> None:
-    with pytest.raises(ValidationError, match="attention DP does not support piecewise"):
-        serving_case(
-            models=(E2eModelPlacement(model="synthetic", atn_tp_size=1, atn_dp_size=2),),
-            graph_modes=(SglangGraphMode.PIECEWISE,),
-        )
-
-
 def serving_case(
     *,
     models: tuple[E2eModelPlacement, ...],

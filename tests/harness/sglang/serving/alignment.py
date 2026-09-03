@@ -108,14 +108,18 @@ def assert_serving_graph_alignment(
     """Require decode output parity and, when present, prefill logit alignment."""
 
     eager_settings = SglangGraphMode.EAGER.settings()
-    full_settings = SglangGraphMode.FULL.settings()
-    piecewise_settings = SglangGraphMode.PIECEWISE.settings()
+    decode_full_settings = SglangGraphMode.DECODE_FULL.settings()
+    prefill_breakable_settings = SglangGraphMode.PREFILL_BREAKABLE.settings()
     artifacts_by_settings = {artifact.graph_settings: artifact for artifact in artifacts}
     if len(artifacts_by_settings) != len(artifacts):
         raise AssertionError("serving graph alignment contains duplicate graph modes")
-    if eager_settings not in artifacts_by_settings or full_settings not in artifacts_by_settings:
-        raise AssertionError("serving graph alignment requires exactly one Eager and one Full artifact")
-    unexpected_settings = artifacts_by_settings.keys() - {eager_settings, full_settings, piecewise_settings}
+    if eager_settings not in artifacts_by_settings or decode_full_settings not in artifacts_by_settings:
+        raise AssertionError("serving graph alignment requires exactly one Eager and one Decode Full artifact")
+    unexpected_settings = artifacts_by_settings.keys() - {
+        eager_settings,
+        decode_full_settings,
+        prefill_breakable_settings,
+    }
     if unexpected_settings:
         raise AssertionError(f"serving graph alignment contains unsupported graph settings: {unexpected_settings}")
 
@@ -132,20 +136,24 @@ def assert_serving_graph_alignment(
                 f"expected {tuple(eager_outputs)}, received {tuple(sorted(model_ids))}"
             )
 
-    full_outputs = {output.model_id: output.output_ids for output in artifacts_by_settings[full_settings].outputs}
+    full_outputs = {
+        output.model_id: output.output_ids for output in artifacts_by_settings[decode_full_settings].outputs
+    }
     if full_outputs != eager_outputs:
         raise AssertionError(
             f"decode output parity failed for {group}: expected {eager_outputs}, received {full_outputs}"
         )
 
-    if piecewise_settings not in artifacts_by_settings:
+    if prefill_breakable_settings not in artifacts_by_settings:
         if prefill_logits:
-            raise AssertionError("serving graph group without Piecewise must not contain prefill logits")
+            raise AssertionError("serving graph group without Prefill Breakable must not contain prefill logits")
         return
     if len(eager_outputs) != 1:
-        raise AssertionError("Piecewise serving graph alignment requires exactly one model")
-    if set(prefill_logits) != {eager_settings, piecewise_settings}:
-        raise AssertionError("Piecewise serving graph alignment requires exactly Eager and Piecewise prefill logits")
+        raise AssertionError("Prefill Breakable serving graph alignment requires exactly one model")
+    if set(prefill_logits) != {eager_settings, prefill_breakable_settings}:
+        raise AssertionError(
+            "Prefill Breakable serving graph alignment requires exactly Eager and Prefill Breakable logits"
+        )
     for settings, logits in prefill_logits.items():
         if logits.dtype is not torch.float32:
             raise AssertionError(f"prefill logits for {settings.id()} must use torch.float32")
@@ -154,9 +162,9 @@ def assert_serving_graph_alignment(
         if not torch.isfinite(logits).all():
             raise AssertionError(f"prefill logits for {settings.id()} must be finite")
     eager_log_probs = torch.nn.functional.log_softmax(prefill_logits[eager_settings], dim=-1)
-    piecewise_log_probs = torch.nn.functional.log_softmax(prefill_logits[piecewise_settings], dim=-1)
+    breakable_log_probs = torch.nn.functional.log_softmax(prefill_logits[prefill_breakable_settings], dim=-1)
     prefill_kl_divergence = torch.nn.functional.kl_div(
-        piecewise_log_probs,
+        breakable_log_probs,
         eager_log_probs,
         reduction="batchmean",
         log_target=True,
@@ -225,11 +233,13 @@ class ServingGraphAdapter:
                     ServingGraphArtifact.read(directory / SERVING_GRAPH_ARTIFACT_FILENAME)
                     for directory in artifact_directories
                 )
-                if any(artifact.graph_settings == SglangGraphMode.PIECEWISE.settings() for artifact in artifacts):
+                if any(
+                    artifact.graph_settings == SglangGraphMode.PREFILL_BREAKABLE.settings() for artifact in artifacts
+                ):
                     for artifact, directory in zip(artifacts, artifact_directories, strict=True):
                         if artifact.graph_settings not in {
                             SglangGraphMode.EAGER.settings(),
-                            SglangGraphMode.PIECEWISE.settings(),
+                            SglangGraphMode.PREFILL_BREAKABLE.settings(),
                         }:
                             continue
                         tensors = load_file(directory / PREFILL_LOGITS_ARTIFACT_FILENAME, device="cpu")
