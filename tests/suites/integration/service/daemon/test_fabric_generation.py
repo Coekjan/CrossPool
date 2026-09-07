@@ -26,12 +26,14 @@ from tests.harness.support.service.daemon import (
 )
 from xpool.config import FfnSchedulingPolicy, XpoolConfig
 from xpool.fabric import (
+    FabricGenerationId,
     FabricGenerationPhase,
     FabricParticipantPhase,
     FabricPlan,
     FifoSchedulerPolicy,
     RandomSchedulerPolicy,
 )
+from xpool.service.wire import ServingListener
 from xpool.utils.procs import ProcUniqId
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
@@ -78,9 +80,16 @@ def test_registration_and_reports_form_executable_ready_generation() -> None:
     assert heartbeat["fabric_phase"] == FabricGenerationPhase.PREPARING_JOIN
     activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
 
+    executable = request(app, "GET", "/ready").json()
+    assert executable["ready"] is False
+    assert executable["fabric_phase"] == FabricGenerationPhase.EXECUTABLE
+    assert executable["instances_initialized"] is False
+    assert app.state.control_plane.capture_serving_health_targets() is None
+
     initialized = {
         "owner": process_ref(instance),
         "generation": plan.model_dump(mode="json")["generation"],
+        "serving_listener": {"host": "127.0.0.1", "port": 30000},
     }
     assert request(app, "POST", "/instance/m/initialized?rank=0", json=initialized).status_code == HTTPStatus.NO_CONTENT
     readiness = request(app, "GET", "/ready").json()
@@ -91,6 +100,88 @@ def test_registration_and_reports_form_executable_ready_generation() -> None:
     assert readiness["fabric_invocation_failure"] is None
     assert readiness["fabric_owner_failure"] is None
     assert readiness["fabric_control_failure"] is None
+
+    targets = app.state.control_plane.capture_serving_health_targets()
+    assert targets is not None
+    assert targets.generation == plan.generation
+    assert targets.listeners == (("m", ServingListener(host="127.0.0.1", port=30000)),)
+    stale_generation = FabricGenerationId.create()
+    while stale_generation == targets.generation:
+        stale_generation = FabricGenerationId.create()
+    stale_targets = xpool.service.daemon.control.ServingHealthTargets(
+        generation=stale_generation,
+        listeners=targets.listeners,
+    )
+    assert not app.state.control_plane.confirm_serving_health(stale_targets)
+    assert app.state.control_plane.confirm_serving_health(targets)
+    assert not app.state.control_plane.confirm_serving_health(targets)
+    assert app.state.control_plane.capture_serving_health_targets() is None
+
+
+def test_instance_initialized_listener_mismatch_is_atomic() -> None:
+    config = XpoolConfig.from_mapping(
+        {
+            "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
+            "models": [{"id": "m", "path": "/models/m"}],
+        }
+    )
+    app = create_app(config)
+    atnagent0 = atnagent_registration(cuda_device=0)
+    atnagent1 = atnagent_registration(cuda_device=1)
+    ffnagent = ffnagent_registration(cuda_device=2, model_ids=("m",))
+    rank0 = instance_registration(instance_id="m", rank=0, atn_tp_size=2)
+    rank1 = instance_registration(instance_id="m", rank=1, atn_tp_size=2)
+    for payload, path in (
+        (atnagent0, "/atnagent/register"),
+        (atnagent1, "/atnagent/register"),
+        (ffnagent, "/ffnagent/register"),
+        (rank0, "/instance/register"),
+        (rank1, "/instance/register"),
+    ):
+        assert request(app, "POST", path, json=payload).status_code == HTTPStatus.NO_CONTENT
+    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+    activate_fabric_world(app, plan, (atnagent0, 0), (atnagent1, 1), (ffnagent, 2))
+    generation = plan.model_dump(mode="json")["generation"]
+    rank0_initialized = {
+        "owner": process_ref(rank0),
+        "generation": generation,
+        "serving_listener": {"host": "127.0.0.1", "port": 30000},
+    }
+    assert (
+        request(app, "POST", "/instance/m/initialized?rank=0", json=rank0_initialized).status_code
+        == HTTPStatus.NO_CONTENT
+    )
+    assert (
+        request(app, "POST", "/instance/m/initialized?rank=0", json=rank0_initialized).status_code
+        == HTTPStatus.NO_CONTENT
+    )
+
+    mismatch = request(
+        app,
+        "POST",
+        "/instance/m/initialized?rank=1",
+        json={
+            "owner": process_ref(rank1),
+            "generation": generation,
+            "serving_listener": {"host": "127.0.0.1", "port": 30001},
+        },
+    )
+
+    assert mismatch.status_code == HTTPStatus.CONFLICT
+    assert request(app, "GET", "/ready").json()["instances_initialized"] is False
+    assert (
+        request(
+            app,
+            "POST",
+            "/instance/m/initialized?rank=1",
+            json={
+                **rank0_initialized,
+                "owner": process_ref(rank1),
+            },
+        ).status_code
+        == HTTPStatus.NO_CONTENT
+    )
+    assert request(app, "GET", "/ready").json()["instances_initialized"] is True
 
 
 def test_generation_allows_instance_to_use_atnagent_prefix() -> None:
@@ -644,6 +735,7 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
             stop_proc(process)
         app.state.control_plane.watchdog()
         assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
+        assert app.state.control_plane.capture_serving_health_targets() is None
 
         assert request(app, "POST", "/atnagent/register", json=new_atnagent).status_code == HTTPStatus.NO_CONTENT
         assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE

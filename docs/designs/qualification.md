@@ -16,7 +16,7 @@ Tests are divided by responsibility:
 - E2E tests launch installed subprocesses and exercise real model weights and
   serving workflows.
 
-`python -m tests` is the complete-suite composition root. It runs CTest, Unit,
+`xtest run` is the complete-suite composition root. It runs CTest, Unit,
 Integration, and E2E in the repository-defined order. Resource requirements
 skip by default when unavailable and fail under strict requirements. E2E uses
 only the config selected by `XPOOL_CONFIG` and materializes a private per-case

@@ -43,6 +43,17 @@ def validate_sglang_server_args(server_args: ServerArgs) -> None:
 
 SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (
     ServerArgRule("Pipeline Parallelism", lambda args: args.pp_size == 1),
+    ServerArgRule("gRPC-only Serving", lambda args: not args.grpc_mode and not args.smg_grpc_mode),
+    ServerArgRule(
+        "TLS Serving",
+        lambda args: (
+            args.ssl_keyfile is None
+            and args.ssl_certfile is None
+            and args.ssl_ca_certs is None
+            and args.ssl_keyfile_password is None
+            and not args.enable_ssl_refresh
+        ),
+    ),
     ServerArgRule("Attention Context Parallelism", lambda args: args.attn_cp_size == 1),
     ServerArgRule("Speculative Decoding", lambda args: disabled_string_option(args.speculative_algorithm)),
     ServerArgRule("LoRA", lambda args: not args.enable_lora and not args.lora_paths),

@@ -22,6 +22,7 @@ from xpool.config import MissingRequiredConfig
 from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
 from xpool.native import RuntimeRole
 from xpool.runtime.transport import InstanceRankTransportProfile
+from xpool.service.wire import ServingListener
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, reset_plugin_required_hook_targets.__name__)
 
@@ -141,6 +142,7 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     installs: list[tuple[str, int]] = []
     registrations: list[tuple[str, int, int]] = []
     profiles: list[object] = []
+    listeners: list[ServingListener] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
     configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
@@ -168,8 +170,9 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         def start_failure_monitor(self) -> None:
             events.append("start_failure_monitor")
 
-        def publish_initialized(self) -> None:
+        def publish_initialized(self, serving_listener: ServingListener) -> None:
             events.append("publish_initialized")
+            listeners.append(serving_listener)
 
         def wait_for_ready(self) -> None:
             events.append("wait_for_ready")
@@ -213,11 +216,13 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     pool_result = xpool.integrations.sglang.plugin.after_model_runner_alloc_memory_pool(None, runner.as_model_runner())
     scheduler = Scheduler.__new__(Scheduler)
     scheduler.tp_worker = SimpleNamespace(model_runner=runner.as_model_runner())
-    initialize_result = xpool.integrations.sglang.plugin.after_scheduler_init_model_worker(None, scheduler)
+    scheduler.server_args = runner.server_args
+    init_info = {"status": "ready"}
+    initialize_result = xpool.integrations.sglang.plugin.after_scheduler_get_init_info(init_info, scheduler)
 
     assert result == "loaded"
     assert pool_result is None
-    assert initialize_result is None
+    assert initialize_result is init_info
     assert events == [
         f"init:0:{int(RuntimeRole.INSTANCE)}",
         "devkit",
@@ -236,6 +241,7 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     assert registrations == [(TEST_MODEL_ID, 0, 8)]
     assert installs == [(TEST_MODEL_ID, 0)]
     assert profiles == [profile]
+    assert listeners == [ServingListener(host=runner.server_args.host, port=runner.server_args.port)]
 
 
 def test_model_runner_hook_validates_before_daemon_registration(

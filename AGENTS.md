@@ -108,7 +108,7 @@ native extension is a suite failure, never a skip. E2E files use
 `requires_model_weights`; unavailable resources skip by default and fail under
 `--strict-requirements`, while invalid
 explicit configuration always fails. E2E configuration comes only from the
-`XPOOL_CONFIG` environment variable. `python -m tests` is the canonical
+`XPOOL_CONFIG` environment variable. `xtest run` is the canonical
 complete-suite composition root and runs CTest, Unit, Integration, and E2E in
 their accepted order. Direct pytest and CTest commands are focused debugging
 interfaces. E2E tests run without strict mode whenever every declared and

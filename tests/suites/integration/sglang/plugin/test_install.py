@@ -67,7 +67,7 @@ def install_fake_hook(monkeypatch: pytest.MonkeyPatch, target: str) -> None:
     target_names = {
         "MODEL_RUNNER_LOAD_MODEL": "hook_target_load",
         "MODEL_RUNNER_ALLOC_MEMORY_POOL": "hook_target_alloc_memory_pool",
-        "SCHEDULER_INIT_MODEL_WORKER": "hook_target_init_model_worker",
+        "SCHEDULER_GET_INIT_INFO": "hook_target_get_init_info",
     }
     for constant, name in target_names.items():
         monkeypatch.setattr(

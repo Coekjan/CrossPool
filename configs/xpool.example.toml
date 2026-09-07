@@ -12,6 +12,22 @@ atn_concurrency = 1
 # Executor Lane count materialized for each Fabric generation.
 ffn_concurrency = 1
 ffn_policy = "fifo"
+# Optional and used only when ffn_policy = "random"; omitted means generated.
+# ffn_random_seed = 1
+
+[ffn.loader]
+parallelism = 4
+
+[ffn.placement]
+device_memory_extra_margin_bytes = 0
+
+[ffn.placement.optimizer]
+parallelism = 4
+timeout_seconds = 60
+
+[memory]
+# Optional environment-qualified profile produced by xpool memory-profile.
+# calibration_path = "/absolute/path/to/memory-calibration.json"
 
 [vendor]
 model_base_uri = "/absolute/path/to/models"
@@ -22,6 +38,10 @@ ffn_cuda_devices = [1]
 
 [[models]]
 id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+# Optional absolute override instead of vendor.model_base_uri resolution.
+# path = "/absolute/path/to/deepseek-ai/DeepSeek-V2-Lite-Chat"
+# Optional fixed FFN tensor-parallel width; defaults to the FfnAgent fleet width.
+# ffn_tp_size = 1
 
 [[models]]
 id = "Qwen/Qwen3-14B"

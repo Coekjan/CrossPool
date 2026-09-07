@@ -36,6 +36,7 @@ dependencies = [
 
 [project.scripts]
 xpool = "xpool.cli:main"
+xtest = "xtest:main"
 
 [project.entry-points."sglang.srt.plugins"]
 xpool = "xpool.integrations.sglang.plugin:install"
@@ -68,7 +69,7 @@ required-version = ">=0.11.19"
 build-dir = "build/{wheel_tag}"
 cmake.version = ">=3.26"
 ninja.version = ">=1.11"
-wheel.packages = ["src/xpool"]
+wheel.packages = ["src/xpool", "src/xtest"]
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
@@ -78,7 +79,7 @@ markers = [
     "requires_cuda(min_devices=1): requires visible CUDA devices",
     "requires_mps: requires a responsive CUDA MPS controller",
     "requires_model_weights(model_id): requires model weights resolved through XPOOL_CONFIG",
-    "estimated_duration(seconds): estimated runtime used by python -m tests scheduling",
+    "estimated_duration(seconds): estimated runtime used by xtest run scheduling",
     "serving_graph_group(name, expected_case_count): complete cross-task serving graph group",
 ]
 testpaths = ["tests/suites"]

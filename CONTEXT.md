@@ -15,6 +15,29 @@ One SGLang worker process within an Instance, owning rank-local attention
 execution and one Transport attachment.
 _Avoid_: InstanceRankRuntime rank, Instance process
 
+**Fabric Executable**:
+A Fabric generation whose participants have activated their data-plane
+resources, allowing Instance Ranks to attach Transport. It does not imply that
+an Instance scheduler or public serving endpoint has finished starting.
+_Avoid_: System ready, Serving healthy
+
+**System Ready**:
+The daemon verdict that the configured xpool processes and generation-scoped
+data plane are ready for every Instance scheduler. It is distinct from public
+serving-endpoint health.
+_Avoid_: Fabric executable, HTTP ready
+
+**Serving Listener**:
+The host and port declared by one Instance for its public serving interface.
+It is a bind target, not evidence that the socket is accepting requests.
+_Avoid_: Instance Rank endpoint, healthy endpoint
+
+**Serving Healthy**:
+The one-time post-System-Ready observation that every configured Instance's
+public HTTP health check has succeeded for the current listener snapshot. It
+is not continuous availability monitoring or a Fabric lifecycle phase.
+_Avoid_: System ready, Fabric executable, serving monitor
+
 **FFN Execution Installation**:
 The generation-scoped assembly of FFN computation and the resources needed to
 run it.

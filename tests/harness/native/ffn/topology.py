@@ -32,6 +32,7 @@ from xpool.fabric import FfnSchedulerPolicy, RandomSchedulerPolicy
 from xpool.native import RuntimeRole
 from xpool.ops import ffn_shim
 from xpool.runtime.instance import InstanceRankRuntime
+from xpool.service.wire import ServingListener
 from xpool.transport import FfnRequestMetadata
 
 
@@ -281,7 +282,7 @@ def run_ffn_instance(connection: Connection, spec: FfnInstanceSpec) -> None:
             )
         runtime.attach_arena_from_daemon()
         runtime.start_failure_monitor()
-        runtime.publish_initialized()
+        runtime.publish_initialized(ServingListener(host="127.0.0.1", port=1))
         runtime.wait_for_ready()
         connection.send(
             FfnInstanceReady(

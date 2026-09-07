@@ -1,4 +1,4 @@
-"""Canonical xpool Python test-suite composition root."""
+"""Canonical xpool test command implementation."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from xpool.utils.sighandler import sighandle
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MPS_POOL_PROBE_TIMEOUT_SECONDS = 60.0
 SUITE_ORDER = ("cext", "unit", "integration", "e2e")
+DEFAULT_KEEP_RUNS = 20
 
 
 def run_mps_pool_probe() -> int:
@@ -44,13 +45,65 @@ def run_mps_pool_probe() -> int:
 
 
 def main(arguments: list[str] | None = None) -> int:
-    """Collect, plan, and execute the selected Python suite."""
+    """Run the source-checkout test command."""
 
-    parser = argparse.ArgumentParser(description="run the complete supervised xpool Python test suite")
-    parser.add_argument("--strict-requirements", action="store_true")
-    parser.add_argument("--suite", action="append", choices=SUITE_ORDER, dest="suites")
-    parser.add_argument("--mps-pool-probe", action="store_true", help=argparse.SUPPRESS)
-    options, selectors = parser.parse_known_args(arguments)
+    parser = argparse.ArgumentParser(prog="xtest", description="xpool test command")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run_parser = subparsers.add_parser("run", help="run the supervised xpool test suite")
+    run_parser.add_argument("--strict-requirements", action="store_true")
+    run_parser.add_argument("--suite", action="append", choices=SUITE_ORDER, dest="suites")
+    run_parser.add_argument("--mps-pool-probe", action="store_true", help=argparse.SUPPRESS)
+
+    clean_parser = subparsers.add_parser("clean", help="clean durable test results")
+    clean_selection = clean_parser.add_mutually_exclusive_group()
+    clean_selection.add_argument("--all", action="store_true", dest="remove_all")
+    clean_selection.add_argument("--keep", type=positive_integer, metavar="N")
+    clean_parser.add_argument("--dry-run", action="store_true")
+
+    options, remaining = parser.parse_known_args(arguments)
+    if options.command == "clean":
+        if remaining:
+            clean_parser.error(f"unrecognized arguments: {' '.join(remaining)}")
+        return clean_test_results(
+            keep_runs=0 if options.remove_all else options.keep or DEFAULT_KEEP_RUNS,
+            dry_run=options.dry_run,
+        )
+    return run_tests(options, tuple(remaining), run_parser)
+
+
+def positive_integer(value: str) -> int:
+    """Parse one strictly positive command-line integer."""
+
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def clean_test_results(*, keep_runs: int, dry_run: bool) -> int:
+    """Clean inactive durable results using one explicit retention policy."""
+
+    try:
+        cleanup = TestResultStore(REPOSITORY_ROOT / ".xpool-cache" / "test-runs").cleanup(
+            keep_runs=keep_runs,
+            dry_run=dry_run,
+        )
+    except (OSError, ValueError) as error:
+        print(f"xpool test result cleanup failure: {error}", file=sys.stderr)
+        return 1
+    for path in cleanup.removable:
+        print(f"remove {path}")
+    for path in cleanup.retained:
+        print(f"keep {path}")
+    for path in cleanup.active:
+        print(f"active {path}")
+    return 0
+
+
+def run_tests(options: argparse.Namespace, selectors: tuple[str, ...], parser: argparse.ArgumentParser) -> int:
+    """Collect, plan, and execute the selected test suites."""
+
     if options.mps_pool_probe:
         if selectors or options.strict_requirements:
             parser.error("--mps-pool-probe is an internal standalone mode")
@@ -63,7 +116,7 @@ def main(arguments: list[str] | None = None) -> int:
         parser.error("pytest selectors require a Python suite")
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{time.monotonic_ns()}"
     try:
-        result_store = TestResultStore.from_environment(REPOSITORY_ROOT / ".xpool-cache" / "test-runs")
+        result_store = TestResultStore(REPOSITORY_ROOT / ".xpool-cache" / "test-runs")
         test_run = result_store.start(run_id)
     except (OSError, ValueError) as error:
         print(f"xpool test result setup failure: {error}", file=sys.stderr)
@@ -80,7 +133,6 @@ def main(arguments: list[str] | None = None) -> int:
             test_run.complete()
         except OSError as error:
             print(f"xpool test result completion failure: {error}", file=sys.stderr)
-        result_store.cleanup()
 
 
 def execute_test_run(
@@ -173,7 +225,7 @@ def prove_gpu_pool(gpu_pool: GpuPool, run_directory: Path) -> None:
     environment["PYTHONPYCACHEPREFIX"] = str(REPOSITORY_ROOT / ".xpool-cache" / "pycache")
     completion = SupervisedTaskScope.run(
         "mps-pool-probe",
-        [sys.executable, "-m", "tests", "--mps-pool-probe"],
+        [sys.executable, "-m", "tests.cli", "run", "--mps-pool-probe"],
         cwd=REPOSITORY_ROOT,
         env=environment,
         log_path=probe_directory / "probe.log",

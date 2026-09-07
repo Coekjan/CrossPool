@@ -17,6 +17,7 @@ from xpool.service.wire import (
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
     ProcessRef,
+    ServingListener,
 )
 from xpool.transport import TransportArenaHandle
 from xpool.utils.background import BackgroundThread
@@ -363,8 +364,11 @@ class InstanceRankRuntime:
                     raise InstanceRankError(f"fabric entered {phase.value} during startup{detail}")
         raise InstanceRankError("timed out waiting for executable fabric generation")
 
-    def publish_initialized(self) -> None:
-        """Publish the post-Scheduler.init_model_worker startup barrier.
+    def publish_initialized(self, serving_listener: ServingListener) -> None:
+        """Publish the completed Scheduler construction startup barrier.
+
+        Args:
+            serving_listener: Public HTTP listener shared by this Instance's ranks.
 
         Raises:
             InstanceRankError: If this runtime did not observe an executable plan.
@@ -379,6 +383,7 @@ class InstanceRankRuntime:
             publication=InstanceRankInitializedPublication(
                 owner=self.process_ref,
                 generation=plan.generation,
+                serving_listener=serving_listener,
             ),
         )
 

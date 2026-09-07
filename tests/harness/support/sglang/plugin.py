@@ -171,8 +171,8 @@ def hook_target_alloc_memory_pool() -> str:
     return "memory_pool"
 
 
-def hook_target_init_model_worker() -> str:
-    """Synthetic valid target for the plugin's model-worker hook."""
+def hook_target_get_init_info() -> str:
+    """Synthetic valid target for the plugin's scheduler-handshake hook."""
 
     return "initialize"
 

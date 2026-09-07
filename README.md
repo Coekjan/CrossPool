@@ -236,7 +236,7 @@ source for serving, numerical, topology, and graph-mode cases.
 
 ## Validation and Development
 
-`python -m tests` is the canonical composition root. It runs native CTest,
+`xtest run` is the canonical composition root. It runs native CTest,
 Unit, Integration, and E2E stages in their accepted order, schedules GPU work
 against explicit resource requirements, and retains artifacts under
 `.xpool-cache/test-runs/`.
@@ -245,11 +245,11 @@ against explicit resource requirements, and retains artifacts under
 if [ -f .env ]; then export UV_ENV_FILE="$PWD/.env"; fi
 
 # Complete resource-eligible suite.
-uv run python -m tests
+uv run xtest run
 
 # Selected canonical stages.
-uv run python -m tests --suite cext --suite integration
-uv run python -m tests --suite e2e --strict-requirements
+uv run xtest run --suite cext --suite integration
+uv run xtest run --suite e2e --strict-requirements
 ```
 
 See [tests/README.md](tests/README.md) for suite placement, requirements, and

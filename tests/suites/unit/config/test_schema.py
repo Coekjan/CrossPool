@@ -15,6 +15,11 @@ def test_example_config_defines_documented_topology() -> None:
 
     assert config.devices.atn_cuda_devices == [0]
     assert config.devices.ffn_cuda_devices == [1]
+    assert config.ffn.loader.parallelism == 4
+    assert config.ffn.placement.device_memory_extra_margin_bytes == 0
+    assert config.ffn.placement.optimizer.parallelism == 4
+    assert config.ffn.placement.optimizer.timeout_seconds == 60
+    assert config.memory.calibration_path is None
     assert config.models[0].id == "deepseek-ai/DeepSeek-V2-Lite-Chat"
     assert config.model_path_of("deepseek-ai/DeepSeek-V2-Lite-Chat") == Path(
         "/absolute/path/to/models/deepseek-ai/DeepSeek-V2-Lite-Chat"

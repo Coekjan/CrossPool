@@ -32,10 +32,11 @@ from xpool.integrations.sglang.shim import iter_ffn_shims
 from xpool.native import RuntimeRole
 from xpool.runtime.instance import InstanceRankRuntime
 from xpool.runtime.transport import InstanceRankTransportProfile
+from xpool.service.wire import ServingListener
 
 MODEL_RUNNER_LOAD_MODEL = "sglang.srt.model_executor.model_runner.ModelRunner.load_model"
 MODEL_RUNNER_ALLOC_MEMORY_POOL = "sglang.srt.model_executor.model_runner.ModelRunner.alloc_memory_pool"
-SCHEDULER_INIT_MODEL_WORKER = "sglang.srt.managers.scheduler.Scheduler.init_model_worker"
+SCHEDULER_GET_INIT_INFO = "sglang.srt.managers.scheduler.Scheduler.get_init_info"
 XPOOL_REQUIRED_HOOK_TARGETS: set[str] = set()
 SGLANG_DEVKIT_PACKAGE = "xpool.integrations.sglang.devkit"
 logger = logging.getLogger(__name__)
@@ -49,8 +50,8 @@ def install() -> None:
         their hooks in SGLang's global ``HookRegistry``, and wraps
         ``ModelRunner.load_model`` for adapter validation, and wraps
         ``ModelRunner.alloc_memory_pool`` to start transport after SGLang
-        resolves request concurrency, and wraps ``Scheduler.init_model_worker``
-        to publish readiness after graph capture completes.
+        resolves request concurrency, and wraps ``Scheduler.get_init_info`` to
+        publish readiness after scheduler construction completes.
 
     Raises:
         SystemExit: If config initialization, adapter discovery, or hook
@@ -77,15 +78,15 @@ def install() -> None:
             HookType.AFTER,
         )
         HookRegistry.register(
-            SCHEDULER_INIT_MODEL_WORKER,
-            after_scheduler_init_model_worker,
+            SCHEDULER_GET_INIT_INFO,
+            after_scheduler_get_init_info,
             HookType.AFTER,
         )
         required_targets.update(
             (
                 MODEL_RUNNER_LOAD_MODEL,
                 MODEL_RUNNER_ALLOC_MEMORY_POOL,
-                SCHEDULER_INIT_MODEL_WORKER,
+                SCHEDULER_GET_INIT_INFO,
             )
         )
         XPOOL_REQUIRED_HOOK_TARGETS.update(required_targets)
@@ -270,31 +271,36 @@ def after_model_runner_alloc_memory_pool[R](
     return result
 
 
-def after_scheduler_init_model_worker[R](
+def after_scheduler_get_init_info[R](
     result: R,
     scheduler: Scheduler,
 ) -> R:
-    """Publish SGLang's post-graph barrier for production execution.
+    """Publish xpool readiness during SGLang's scheduler startup handshake.
 
     Args:
-        result: Return value from SGLang's original ``init_model_worker`` method.
-        scheduler: Scheduler whose model and CUDA graphs are fully initialized.
+        result: Return value from SGLang's original ``get_init_info`` method.
+        scheduler: Fully constructed Scheduler publishing its initialization information.
 
     Returns:
-        The original ``init_model_worker`` return value unchanged.
+        The original ``get_init_info`` return value unchanged.
 
     Raises:
-        RuntimeError: If production startup did not retain the executable plan.
+        RuntimeError: If startup did not retain the executable plan.
 
     Side Effects:
         Publishes this rank's initialized barrier to the daemon and waits for
-        generation-wide readiness.
+        System Ready before SGLang sends its scheduler handshake to the parent.
     """
 
     runtime = SglangInstanceRankRuntime.require(scheduler.tp_worker.model_runner)
     if runtime.instance_rank is None:
-        raise RuntimeError("xpool Scheduler.init_model_worker hook requires a started Instance-rank runtime")
-    runtime.instance_rank.publish_initialized()
+        raise RuntimeError("xpool Scheduler.get_init_info hook requires a started Instance-rank runtime")
+    runtime.instance_rank.publish_initialized(
+        ServingListener(
+            host=scheduler.server_args.host,
+            port=scheduler.server_args.port,
+        )
+    )
     runtime.instance_rank.wait_for_ready()
     binding = runtime.binding
     logger.info(

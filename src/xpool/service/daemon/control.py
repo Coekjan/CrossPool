@@ -8,6 +8,7 @@ import secrets
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from time import monotonic, sleep
 
 import xpool.native
@@ -61,6 +62,7 @@ from xpool.service.wire import (
     ProcessRef,
     ReadinessSnapshot,
     ReadinessStatus,
+    ServingListener,
 )
 from xpool.transport import TransportArenaHandle
 from xpool.utils.procs import ProcUniqId
@@ -80,6 +82,23 @@ MPS_READINESS_CACHE_S = 1.0
 logger = logging.getLogger(__name__)
 
 
+@dataclass(slots=True)
+class ServingStartupState:
+    """Generation-scoped Instance listeners and serving-health confirmation."""
+
+    generation: FabricGenerationId | None = None
+    listeners: dict[str, ServingListener] = field(default_factory=dict)
+    confirmed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ServingHealthTargets:
+    """Immutable ordered listener snapshot for one Fabric generation."""
+
+    generation: FabricGenerationId
+    listeners: tuple[tuple[str, ServingListener], ...]
+
+
 class ControlPlane:
     """Authoritative daemon control plane shared by FastAPI route handlers.
 
@@ -88,6 +107,8 @@ class ControlPlane:
         registrations: Process identities and declared registration contracts.
         transport_broker: Transport publications and Instance-rank leases.
         fabric_controller: Installed Fabric generation state.
+        serving_startup: Generation-scoped Instance listeners and one-time
+            serving-health confirmation.
         fabric_plan_formation_lock: Serializes expensive generation formation
             without blocking ordinary domain reads and writes.
         lock: Reentrant domain lock protecting every mutable control-plane
@@ -106,6 +127,7 @@ class ControlPlane:
         self.registrations = RegistrationBook()
         self.transport_broker = TransportBroker()
         self.fabric_controller = FabricController()
+        self.serving_startup = ServingStartupState()
         self.membership_revision = 0
         self.warning_cache_at = float("-inf")
         self.warning_cache: tuple[ControlPlaneWarning, ...] = ()
@@ -252,6 +274,7 @@ class ControlPlane:
         with self.lock:
             if self.fabric_controller.generation is fabric and not any_alive:
                 self.fabric_controller.generation = None
+                self.serving_startup = ServingStartupState()
 
     def register_atnagent(self, registration: AtnAgentRegistrationState) -> None:
         """Install a atnagent registration after draining a dead generation.
@@ -582,6 +605,7 @@ class ControlPlane:
                         instance_owners=dict(membership.instance_owners),
                     )
                 )
+                self.serving_startup = ServingStartupState(generation=installed_plan.generation)
             logger.info(
                 "fabric plan installed generation=%s model_count=%s pe_count=%s elapsed=%.3fs",
                 installed_plan.generation.format(),
@@ -656,7 +680,7 @@ class ControlPlane:
         rank: int,
         publication: InstanceRankInitializedPublication,
     ) -> None:
-        """Record one SGLang rank's post-initialize graph-capture barrier."""
+        """Record one Instance Rank's scheduler construction and listener."""
 
         self.validate_instance_rank(rank)
         instance = InstanceRankId(instance_id=instance_id, rank=rank)
@@ -670,11 +694,15 @@ class ControlPlane:
                 raise XpoolDaemonError("not_ready", "fabric generation retired during initialization")
             if self.registrations.instances.query(instance) is not registration:
                 raise XpoolDaemonError("not_ready", "instance registration changed during initialization")
+            listener = self.serving_startup.listeners.get(instance_id)
+            if listener is not None and listener != publication.serving_listener:
+                raise XpoolDaemonError("conflict", "serving listener disagrees across instance ranks")
             self.fabric_controller.record_initialized(
                 registration.instance,
                 registration.proc,
                 generation=publication.generation,
             )
+            self.serving_startup.listeners.setdefault(instance_id, publication.serving_listener)
 
     def heartbeat_response(self, now: float) -> HeartbeatResponse:
         """Build the unified heartbeat response from authoritative state."""
@@ -1005,6 +1033,60 @@ class ControlPlane:
                 transport=self.transport_broker,
                 fabric=self.fabric_controller,
             ).readiness
+
+    def capture_serving_health_targets(self) -> ServingHealthTargets | None:
+        """Return current ordered Instance listeners once System Ready is true."""
+
+        config = get_global_config()
+        now = monotonic()
+        with self.lock:
+            fabric = self.fabric_controller.generation
+            startup = self.serving_startup
+            if (
+                fabric is None
+                or startup.generation != fabric.plan.generation
+                or startup.confirmed
+                or not ControlPlaneProjection.capture(
+                    config=config,
+                    now=now,
+                    mps_online=self.mps_cache_result is not None and self.mps_cache_result.online,
+                    registrations=self.registrations,
+                    transport=self.transport_broker,
+                    fabric=self.fabric_controller,
+                ).readiness.ready
+            ):
+                return None
+            instance_ids = tuple(instance.id for instance in config.instances)
+            if set(startup.listeners) != set(instance_ids):
+                return None
+            return ServingHealthTargets(
+                generation=fabric.plan.generation,
+                listeners=tuple((instance_id, startup.listeners[instance_id]) for instance_id in instance_ids),
+            )
+
+    def confirm_serving_health(self, targets: ServingHealthTargets) -> bool:
+        """Confirm the first successful probe of the unchanged current targets."""
+
+        config = get_global_config()
+        with self.lock:
+            fabric = self.fabric_controller.generation
+            startup = self.serving_startup
+            if (
+                fabric is None
+                or fabric.phase is not FabricGenerationPhase.EXECUTABLE
+                or fabric.plan.generation != targets.generation
+                or startup.generation != targets.generation
+                or startup.confirmed
+            ):
+                return False
+            instance_ids = tuple(instance.id for instance in config.instances)
+            if set(startup.listeners) != set(instance_ids):
+                return False
+            listeners = tuple((instance_id, startup.listeners[instance_id]) for instance_id in instance_ids)
+            if listeners != targets.listeners:
+                return False
+            startup.confirmed = True
+            return True
 
     def acquire_instance_transport_arena(
         self,

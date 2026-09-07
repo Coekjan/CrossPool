@@ -1,6 +1,6 @@
 # Test Architecture
 
-`python -m tests` is the canonical composition root. It collects pytest cases,
+`xtest run` is the canonical composition root. It collects pytest cases,
 derives their resource requirements, runs CTest and Python stages in order, and
 keeps one GPU pool locked until every supervised process scope is reaped.
 Direct pytest and CTest commands are focused debugging interfaces only.
@@ -66,10 +66,10 @@ The package runner performs these steps:
 5. Parse JUnit and E2E artifacts, evaluate declared serving-graph groups, and
    retain logs under `.xpool-cache/test-runs/`.
 
-Set `XPOOL_TEST_KEEP_RUNS` to a positive integer to retain only that many
-recognized runs, including interrupted runs. When unset, the runner does not
-remove old results. Concurrent active runs and unrecognized directories are
-never cleanup candidates.
+`xtest clean` explicitly removes inactive historical results. It keeps the
+newest 20 inactive entries by default; use `--keep N`, `--all`, and
+`--dry-run` to select or preview another cleanup. Concurrent active runs are
+never removed.
 
 Each E2E SGLang server writes a versionless `*.inference.json` beside its log.
 It contains the exact public `/generate` request and response and is written
@@ -85,12 +85,17 @@ transport/fabric behavior.
 if [ -f .env ]; then export UV_ENV_FILE="$PWD/.env"; fi
 
 # Complete resource-eligible repository suite.
-uv run python -m tests
+uv run xtest run
 
 # One or more canonical stages.
-uv run python -m tests --suite unit
-uv run python -m tests --suite cext --suite integration
-uv run python -m tests --suite e2e --strict-requirements
+uv run xtest run --suite unit
+uv run xtest run --suite cext --suite integration
+uv run xtest run --suite e2e --strict-requirements
+
+# Explicit durable-result cleanup; default is --keep 20.
+uv run xtest clean --dry-run
+uv run xtest clean --keep 5
+uv run xtest clean --all
 
 # Focused debugging without cross-task scheduling or parity aggregation.
 uv run pytest tests/suites/unit/config/test_schema.py

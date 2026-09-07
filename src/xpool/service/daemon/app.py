@@ -12,6 +12,7 @@ from http import HTTPStatus
 from importlib.metadata import version
 from time import monotonic
 
+import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
@@ -39,6 +40,7 @@ from xpool.service.wire import (
     InstanceRankRegistration,
     ProcessRef,
     ReadinessSnapshot,
+    ServingListener,
     XpoolDaemonErrorDetail,
 )
 from xpool.transport import TransportArenaHandle
@@ -65,6 +67,18 @@ class DaemonFailure:
             self.exception = exception
 
 
+async def probe_serving_listener(client: httpx.AsyncClient, listener: ServingListener) -> bool:
+    """Return whether one Instance listener answers its HTTP health check."""
+
+    host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(listener.host, listener.host)
+    url = httpx.URL(scheme="http", host=host, port=listener.port, path="/health")
+    try:
+        response = await client.get(url)
+    except httpx.RequestError:
+        return False
+    return response.is_success
+
+
 def create_daemon() -> FastAPI:
     """Create the FastAPI daemon application for the process-global config.
 
@@ -72,7 +86,9 @@ def create_daemon() -> FastAPI:
         Configured daemon application.
 
     Side Effects:
-        Initializes the process-wide native daemon role.
+        Initializes the process-wide native daemon role. The application
+        lifespan owns the daemon watchdog and one-time serving-health monitor
+        and records their unrecoverable failures.
     """
 
     bootstrap.init(None, RuntimeRole.DAEMON)
@@ -92,14 +108,68 @@ def create_daemon() -> FastAPI:
                 logger.exception("daemon watchdog failed")
                 daemon_failure.record(exception)
 
+        async def monitor_serving_health() -> None:
+            observed_targets = None
+            healthy_instance_ids: set[str] = set()
+            try:
+                async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+                    while True:
+                        targets = await asyncio.to_thread(control_plane.capture_serving_health_targets)
+                        if targets is None:
+                            observed_targets = None
+                            healthy_instance_ids.clear()
+                        else:
+                            if targets != observed_targets:
+                                observed_targets = targets
+                                healthy_instance_ids.clear()
+                            pending = tuple(
+                                (instance_id, listener)
+                                for instance_id, listener in targets.listeners
+                                if instance_id not in healthy_instance_ids
+                            )
+                            results = await asyncio.gather(
+                                *(probe_serving_listener(client, listener) for _, listener in pending)
+                            )
+                            healthy_instance_ids.update(
+                                instance_id
+                                for (instance_id, _), healthy in zip(pending, results, strict=True)
+                                if healthy
+                            )
+                            if len(healthy_instance_ids) == len(targets.listeners) and await asyncio.to_thread(
+                                control_plane.confirm_serving_health,
+                                targets,
+                            ):
+                                logger.info(
+                                    "serving healthy generation=%s instance_count=%s",
+                                    targets.generation.format(),
+                                    len(targets.listeners),
+                                )
+                                for instance_id, listener in targets.listeners:
+                                    logger.info(
+                                        "serving listener instance=%s host=%s port=%s",
+                                        instance_id,
+                                        listener.host,
+                                        listener.port,
+                                    )
+                        await asyncio.sleep(1.0)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exception:
+                logger.exception("serving health monitor failed")
+                daemon_failure.record(exception)
+
         config = get_global_config()
         logger.info("process started host=%s port=%s pid=%s", config.daemon.host, config.daemon.port, os.getpid())
-        task = asyncio.create_task(run_watchdog(), name="xpool-daemon-watchdog")
+        tasks = (
+            asyncio.create_task(run_watchdog(), name="xpool-daemon-watchdog"),
+            asyncio.create_task(monitor_serving_health(), name="xpool-serving-health"),
+        )
         try:
             yield
         finally:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     app = FastAPI(title="xpool daemon", version=version("xpool"), lifespan=lifespan)
     app.state.control_plane = control_plane

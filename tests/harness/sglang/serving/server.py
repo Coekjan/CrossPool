@@ -128,7 +128,7 @@ class SglangServerProcess:
                 evidence.record_error(error)
             raise error
         try:
-            response = httpx.get(f"{self.url()}/health", timeout=1.0)
+            response = httpx.get(f"{self.url()}/health", timeout=HTTP_TIMEOUT_SECONDS)
         except httpx.HTTPError as error:
             if evidence is not None:
                 evidence.record_error(error)

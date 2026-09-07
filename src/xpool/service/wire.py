@@ -213,11 +213,21 @@ class InstanceRankRegistration(InstanceRankRef):
     )
 
 
+class ServingListener(WireModel):
+    """Public HTTP listener declared by one Instance."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    host: str = Field(min_length=1, description="Host bound by the Instance serving process.")
+    port: int = Field(ge=1, le=65535, description="TCP port bound by the Instance serving process.")
+
+
 class InstanceRankInitializedPublication(WireModel):
-    """Owner-bound publication that one SGLang rank completed graph capture."""
+    """Owner-bound publication that one Instance Rank completed scheduler construction."""
 
     owner: ProcessRef = Field(description="Process identity owning the instance-rank registration.")
     generation: FabricGenerationId = Field(description="Executable fabric generation observed by the rank.")
+    serving_listener: ServingListener = Field(description="Public HTTP listener shared by every rank in the Instance.")
 
 
 class ReadinessStatus(StrEnum):

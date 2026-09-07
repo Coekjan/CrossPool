@@ -53,7 +53,7 @@ repos:
         entry: >-
           sh -c '
             if [ -f .env ]; then export UV_ENV_FILE="$PWD/.env"; fi;
-            exec uv run python -m tests
+            exec uv run xtest run
           '
         language: system
         pass_filenames: false

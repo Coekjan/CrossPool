@@ -1,6 +1,6 @@
 # Test Harness Architecture
 
-`python -m tests` is the repository test composition root. The harness under
+`xtest run` is the repository test composition root. The harness under
 this directory implements collection, resource-aware scheduling, supervised
 process ownership, and durable result aggregation. Harness modules are reusable
 test infrastructure; they must not import collected modules from
@@ -12,7 +12,7 @@ test infrastructure; they must not import collected modules from
    records their resource markers and scheduling metadata.
 2. `runner/plan.py` validates that metadata and builds the typed suite plan.
 3. `runner/task.py` groups compatible cases into independently supervised
-   tasks. `tests/__main__.py` executes CTest and then creates a `SuiteRunner`
+   tasks. `tests/cli.py` executes CTest and then creates a `SuiteRunner`
    for Unit, Integration, and E2E in that order, admitting E2E only after
    Integration succeeds.
 4. GPU tasks are ordered by GPU count and estimated duration, then backfilled
@@ -79,8 +79,15 @@ also retain exact inference request/response JSON, graph-mode timing, token
 parity, and enabled observer output. Artifacts are written before semantic
 validation where possible so a failed request remains diagnosable.
 
-`XPOOL_TEST_KEEP_RUNS` bounds recognized historical runs. Active runs are
-protected by locks, and unrecognized directories are never cleanup targets.
+`xtest clean` owns explicit retention cleanup. It keeps the newest 20 inactive
+entries by default and accepts `--keep N`, `--all`, and `--dry-run`. Active
+runs are protected by locks; legacy entries are cleanup candidates because the
+result root is dedicated test storage. Run creation and cleanup resolve the
+result root once and serialize through `.cleanup.lock` before acquiring or
+probing any `.run.lock`. The result root or one of its parents may be a symbolic
+link, but symbolic-link entries inside the resolved root are unlinked without
+following their targets. Test execution never performs implicit retention
+cleanup.
 
 ## Module Boundaries
 

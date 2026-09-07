@@ -46,6 +46,25 @@ Breakable graph modes all invoke the same FFN data-plane protocol.
 FfnAgent execution is always graph-backed and does not receive an outer graph
 mode field.
 
+Fabric Executable is the earlier data-plane barrier that permits Instance
+Ranks to attach Transport while their serving schedulers are still starting.
+An Instance Rank publishes initialization from SGLang's scheduler handshake
+after scheduler construction completes. That publication includes an immutable
+Serving Listener shared by every rank of the Instance; a conflicting rank
+publication is rejected atomically. Daemon System Ready requires every expected
+publication in addition to executable Fabric, healthy processes, Transport,
+MPS, and failure-free generation state.
+
+After System Ready, the daemon concurrently probes the public HTTP `/health`
+endpoint of every configured Instance. Successful listeners remain satisfied
+while their peers finish starting. The daemon confirms and logs Serving Healthy
+once only when the generation and complete ordered listener snapshot still
+match. Wildcard bind hosts are normalized to loopback only for local probes;
+published and logged listener values remain unchanged. Serving Healthy is a
+one-time startup observation rather than a readiness phase or continuous
+availability monitor. The integration supports this boundary for plain HTTP
+serving and rejects gRPC-only and TLS serving modes.
+
 ## Operational logging
 
 Every process configures the process-local `xpool` logger after resolving the

@@ -35,6 +35,10 @@ def test_global_server_arg_gate_allows_dp_atn_when_parallel_policy_matches() -> 
     validate_sglang_server_args(args)
 
 
+def test_global_server_arg_gate_allows_grpc_beside_http() -> None:
+    validate_sglang_server_args(server_args(grpc_port=30001))
+
+
 @pytest.mark.parametrize(
     ("override", "label"),
     [
@@ -66,6 +70,13 @@ def test_global_server_arg_gate_allows_dp_atn_when_parallel_policy_matches() -> 
         ({"disaggregation_mode": "prefill"}, "PD Disaggregation"),
         ({"dllm_algorithm": "next_block"}, "Diffusion LLM"),
         ({"enable_pdmux": True}, "PD Multiplexing"),
+        ({"grpc_mode": True}, "gRPC-only Serving"),
+        ({"smg_grpc_mode": True}, "gRPC-only Serving"),
+        ({"ssl_keyfile": "/tmp/key.pem"}, "TLS Serving"),
+        ({"ssl_certfile": "/tmp/cert.pem"}, "TLS Serving"),
+        ({"ssl_ca_certs": "/tmp/ca.pem"}, "TLS Serving"),
+        ({"ssl_keyfile_password": "secret"}, "TLS Serving"),
+        ({"enable_ssl_refresh": True}, "TLS Serving"),
     ],
 )
 def test_global_server_arg_gate_rejects_unsupported_features(
