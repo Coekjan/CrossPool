@@ -13,6 +13,15 @@ than caching selected values elsewhere. CLI values override allowlisted
 environment variables, which override TOML, which overrides registry defaults.
 Model paths are resolved through `XpoolConfig.model_path_of`.
 
+Required settings without defaults fail fast. Most settings are config-file
+only; `.env` primarily supplies SGLang/bootstrap settings such as `XPOOL_CONFIG`
+and `SGLANG_PLUGINS`. Every accepted `XPOOL_*` variable is declared in the config
+registry, and unknown names produce a warning. Debug settings use nested names
+such as `debug.graph_observer.enable` and `debug.graph_observer.outdir`.
+
+`ModelConfig.path` is the schema's explicit override, not a runtime lookup API.
+Machine-local paths belong in ignored `*.local.toml` files.
+
 Every process receives the same effective configuration. The daemon compares
 declared process identity and topology against that configuration during
 registration; processes do not negotiate independent settings.

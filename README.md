@@ -47,9 +47,10 @@ connect the GPU roles.
 
 xpool has four process roles:
 
-1. **SGLang Instance** owns one model process and its attention-side runtime.
-   The xpool plugin binds the model, derives workload geometry, and routes the
-   model's shim calls into a rank-local Transport arena.
+1. **SGLang Instance** is one model-serving deployment containing one or more
+   Instance Ranks. Each rank owns its attention-side runtime; the xpool plugin
+   binds the model, derives workload geometry, and routes shim calls into that
+   rank's Transport arena.
 2. **xpool daemon** is the host-only control plane. It owns registration,
    generation planning, Transport leases, readiness, failure selection, and
    shutdown coordination. It does not own a CUDA device.
@@ -93,6 +94,9 @@ controller is responsive.
 
 The native extension is built through uv and scikit-build-core. CUDA bindings,
 Torch, SGLang, and the NVIDIA NVSHMEM runtime are direct project dependencies.
+uv uses the interpreter pinned in `.python-version` with managed Python
+downloads enabled. NVSHMEM runs through the native C++/CUDA implementation;
+Python NVSHMEM bindings are not required.
 
 ## Quick Start
 
@@ -130,6 +134,9 @@ CUDA_VISIBLE_DEVICES="$(nvidia-smi --query-gpu=uuid --format=csv,noheader | past
   uv run nvidia-cuda-mps-control -d
 printf 'get_default_active_thread_percentage\n' | uv run nvidia-cuda-mps-control
 ```
+
+MPS starts its server lazily when the first CUDA client connects. The controller
+must cover every GPU enumerated by those clients; UUIDs avoid ordinal remapping.
 
 Start the xpool processes from separate terminals in the repository root. All
 terminals must use the same configuration and GPU ordinal space; do not remap
@@ -208,7 +215,8 @@ The main configuration boundaries are:
 | `models[].id` / `models[].path` | Identifies a model and optionally overrides its absolute path. |
 | `atn.devices` | Places AtnAgent roles. |
 | `ffn.devices` | Places FfnAgent roles. |
-| `scheduler.*` | Configures attention and executor concurrency and Fabric scheduling. |
+| `scheduler.ffn_concurrency` / `scheduler.ffn_policy` | Configures Executor Lane count and Fabric scheduling. |
+| `scheduler.atn_concurrency` | Reserved for future attention admission; currently has no runtime effect. |
 | `logging.*` | Configures runtime log level and terminal color on stderr. |
 | `ffn.loader.*` | Configures bounded checkpoint-reading parallelism. |
 | `ffn.placement.*` | Configures placement solving. |
@@ -219,6 +227,9 @@ Model paths are resolved by `XpoolConfig.model_path_of(model_id)`. Start from
 [`configs/xpool.example.toml`](configs/xpool.example.toml) and
 [`.env.example`](.env.example); keep host-specific paths in an ignored
 `*.local.toml` file.
+
+The [Control Plane design](docs/designs/control-plane.md#configuration-and-integration)
+owns configuration semantics and validation contracts.
 
 Memory calibration is optional: analytic admission works without a profile.
 When a device-local correction is useful, set an absolute
@@ -256,6 +267,11 @@ uv run xtest run --suite e2e --strict-requirements
 See [tests/README.md](tests/README.md) for suite placement, requirements, and
 commands, and [tests/harness/README.md](tests/harness/README.md) for process,
 GPU lease, endpoint, and artifact ownership.
+
+CMake uses ccache for C, C++, and CUDA when available and no compiler launcher
+is already configured. To disable it for a build, add
+`--config-settings-package xpool:cmake.define.XPOOL_ENABLE_CCACHE=OFF`
+to the development-environment sync command above.
 
 ## Repository Guide
 

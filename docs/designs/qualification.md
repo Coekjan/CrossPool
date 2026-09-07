@@ -4,24 +4,6 @@ This document defines the evidence required to claim xpool readiness. Detailed
 suite placement and developer commands live in
 [tests/README.md](../../tests/README.md).
 
-## Test layers
-
-Tests are divided by responsibility:
-
-- native CTest covers C++/CUDA value types, layouts, protocols, graph helpers,
-  and device mechanisms;
-- Unit tests cover pure Python behavior without CUDA, subprocesses, or weights;
-- Integration tests cover Python/native, CUDA component, pinned integration,
-  and harness contracts; and
-- E2E tests launch installed subprocesses and exercise real model weights and
-  serving workflows.
-
-`xtest run` is the complete-suite composition root. It runs CTest, Unit,
-Integration, and E2E in the repository-defined order. Resource requirements
-skip by default when unavailable and fail under strict requirements. E2E uses
-only the config selected by `XPOOL_CONFIG` and materializes a private per-case
-model set from the manifest.
-
 ## Numerical and graph evidence
 
 Dtype-specific component coverage exercises BF16 and FP16 weight conversion,
@@ -99,11 +81,12 @@ telemetry solely to keep a stale runner working. If the required evidence is not
 observable through the accepted public and Devkit boundaries, stop for design
 review instead of widening the product surface implicitly.
 
-Qualification proceeds without user interruption while every resource check
-passes. Any memory underprediction or memory-pressure startup failure pauses
-execution with the affected case, measured deviation, and raw evidence. Runner
-adaptation also pauses if it would require a production-interface change or new
-telemetry.
+Memory underprediction or memory-pressure startup failure invalidates that
+qualification result. Preserve the affected case, measured deviation, and raw
+evidence, then continue authorized diagnosis and implementation fixes. Obtain a
+design decision before changing the estimator contract, production interfaces,
+or acceptance criteria. Runner adaptation that requires new telemetry likewise
+requires a design decision.
 
 ## Acceptance and invalidation
 
@@ -111,8 +94,10 @@ No alternate debug execution or test-only responder counts as FFN evidence.
 Derived-plan checks never replace observer evidence where actual graph or
 protocol behavior is the subject of qualification.
 
-During implementation, focused checks establish each corrected boundary. Final
-acceptance requires, on one frozen source and native-module identity:
+During implementation, run focused checks for each affected boundary. Commit
+hooks are a separate check of the submitted changes; a resource-eligible suite
+pass does not establish strict acceptance. Final acceptance of runtime or
+build-semantic changes requires, on one frozen source and native-module identity:
 
 1. canonical build and generated-stub completion;
 2. the complete strict-requirements test suite with no unexpected skip;
@@ -122,8 +107,15 @@ acceptance requires, on one frozen source and native-module identity:
 Documentation-only changes do not reopen behavioral acceptance when they change
 no executable statement, declaration, configuration value, or build behavior.
 They rerun the documentation and static quality checks affected by the change.
-Any runtime or build-semantic edit reopens its focused behavior checks and the
-complete strict suite.
+Any runtime or build-semantic edit invalidates the prior complete-suite verdict
+and the focused or qualification evidence whose scope it changes. Reuse valid
+evidence for the final source and build; do not repeat checks solely because
+another workflow step requests their result. Complete the strict suite on that
+final version rather than after every intermediate edit.
+
+Isolated agent-tool changes use focused tool-behavior and static checks; they
+do not require GPU qualification or serving-suite execution when runtime,
+build behavior, and test acceptance contracts are unchanged.
 
 Native CTest owns invalid Projection behavior; Unit does not duplicate the
 native constructor contract.

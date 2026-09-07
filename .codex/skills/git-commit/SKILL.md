@@ -22,9 +22,10 @@ review-ready changes for the task are complete.
    durable task decisions into their owners, and removed the completed task
    directory. A local change that does not alter accepted design needs no design
    edit.
-5. Invoke the repo-local `self-evolve` skill and consume its reviewer report.
-   Persist only accepted lessons through their owning repository document or
-   the active memory mechanism.
+5. Use `self-evolve` to check the current task for new durable lessons. The main
+   agent performs this check; delegation and history scanning are not required.
+   Persist only accepted lessons through their owning document or an explicitly
+   authorized memory mechanism.
 6. Fix blocking findings, restage, and rerun checks affected by those fixes.
 7. Write a concise English commit message with the required trailers and run
    `git commit -F <message-file>`.
@@ -70,5 +71,5 @@ authorization, or change git identity configuration.
 Run non-hook checks proportional to the staged diff. Let installed pre-commit
 hooks run normally during `git commit`; a manual all-files run is reserved for
 an explicit request, hook configuration changes, or hook-failure diagnosis.
-Use the canonical commands and environment policy in `AGENTS.md`, and inspect
-`.pre-commit-config.yaml` when exact hook composition matters.
+Use the canonical commands and environment policy in `tests/README.md` and
+inspect `.pre-commit-config.yaml` when exact hook composition matters.

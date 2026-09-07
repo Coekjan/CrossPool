@@ -23,10 +23,14 @@ target that is still being designed or implemented remains under `docs/plans/`.
    declarations and generated stubs.
 5. Update `CONTEXT.md` when the accepted implementation changes the domain
    language. Keep it a glossary without implementation details.
-6. Update `docs/designs/README.md`, the repository README, or instruction
-   pointers only when the document set or its routing changes.
-7. Fold every durable fact from a completed task directory into its owning
-   design or glossary, then remove the complete `docs/plans/<task>/` directory.
+6. Update the design index and instruction pointers when document routing
+   changes. Update the repository README when supported capabilities,
+   configuration, or user-facing commands change.
+7. Fold durable facts from the completed task, including any task-local `adr/`
+   decisions, into their owning design, glossary, or repository guidance. For
+   instruction-only tasks, update the owning instructions without inventing a
+   runtime architecture change. Then remove the complete `docs/plans/<task>/`
+   directory. Git retains the task and ADR history.
 
 Current design documents contain no task status, changelog, superseded design,
 implementation diary, test run log, or speculative future architecture. Keep

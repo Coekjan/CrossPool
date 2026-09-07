@@ -5,6 +5,10 @@ computation while retaining one generation-scoped data plane.
 
 ## Language
 
+Avoidance notes distinguish domain concepts in discussion and documentation.
+They do not prohibit citing existing implementation symbols by their actual
+names or require those symbols to be renamed.
+
 **Instance**:
 A configured model-serving deployment whose SGLang workers share one identity
 and one Fabric Instance Plan.

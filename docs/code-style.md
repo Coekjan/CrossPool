@@ -5,8 +5,8 @@
 This document is the canonical source for code-level conventions in xpool. It
 applies to production code, tests, native bindings, and build definitions.
 Current architecture belongs under `docs/designs/`, active target changes under
-`docs/plans/`, and configuration, test layering, environment, and workflow
-policy in `AGENTS.md`.
+`docs/plans/`, configuration semantics in `docs/designs/control-plane.md`, test
+organization in `tests/README.md`, and repository workflow routing in `AGENTS.md`.
 
 Use English for documentation, comments, identifiers, tests, and commit
 messages.
@@ -28,9 +28,10 @@ Tests do not need module docstrings when their path and names already describe
 their behavioral scope. Add documentation when a test has a non-obvious
 prerequisite, boundary, or acceptance strategy.
 
-Use phase comments only for functions with at least three genuine protocol or
-lifecycle phases. A phase comment names the phase and its invariant; it must not
-justify mixing unrelated responsibilities.
+Use phase comments when they clarify meaningful protocol or lifecycle
+boundaries. Name the phase and its invariant; omit labels that merely narrate
+adjacent statements. Phase comments do not justify mixing unrelated
+responsibilities.
 
 Build and configuration comments explain only non-obvious toolchain,
 dependency-discovery, ordering, package-layout, or side-effect constraints. Do

@@ -13,13 +13,15 @@ steps does not need a tracked plan.
 
 1. Read `CONTEXT.md`, the relevant current documents under `docs/designs/`,
    adjacent source and tests, and an existing task plan when one exists.
-2. Establish the task's baseline and every material decision. If the current
-   request also invokes `grill-with-docs`, consume its accepted decisions. In
-   other cases, build a dependency tree and ask one round containing every
-   currently unblocked question with a recommended answer. Continue until the
-   decision frontier is empty.
-3. Respect the requested review boundary. Present the proposed plan in the
-   conversation until the user authorizes repository writes.
+2. Resolve repository facts and previously accepted decisions before asking
+   questions. Ask about unresolved choices that materially affect behavior,
+   interfaces, ownership, resource use, or acceptance. Do not reopen settled
+   decisions without conflicting evidence.
+3. Follow the user's requested discussion granularity and review boundary.
+   Distinguish proposals from accepted decisions and wait for confirmation when
+   the user requests review before implementation. Existing authorization does
+   not require repeated approval; permission to write a plan alone does not
+   authorize its implementation.
 4. Create or revise `docs/plans/<task>/README.md`. Use a descriptive kebab-case
    task name; add directly named supporting documents in that directory only
    when the main plan cannot carry an independently useful decision, research
@@ -42,17 +44,30 @@ Use these sections when they apply:
 - Out of Scope
 - Open Questions
 
-Name exact old and new symbols, signatures, ownership and lifecycle semantics,
-failure behavior, compatibility policy, and field types or wire order for every
-affected interface or data structure. Write `None` when an explicitly reviewed
-boundary is unchanged. Keep implementation phases large enough to build and
-validate coherent dependency layers.
+Describe changed interfaces and data structures precisely enough to implement
+them. Include old and new symbols, signatures, field types, ordering, ownership,
+lifecycle, failure behavior, and compatibility policy where their exact form
+matters. Omit unchanged inventories and ceremonial `None` sections. Keep
+implementation phases large enough to build and validate coherent dependency
+layers; leave implemented interface details to authoritative source declarations.
 
 The plan describes the target delta, not chat history or project management.
 Exclude owners, status enums, progress logs, test run counts, host paths, and
-completed-work narration. Do not create fixed `adr`, `research`, `prototype`,
-or archive subdirectories. A rare task-local decision document is justified
-only by a hard-to-reverse, surprising trade-off.
+completed-work narration. Keep ordinary decisions in the task README and create
+supporting documents only when they are independently useful.
+
+## Grilling And ADRs
+
+The workflow above works without personal skills. When `grill-with-docs` is
+available and invoked, incorporate its accepted decisions. If it recommends an
+ADR for the current discussion, put the ADR under `docs/plans/<task>/adr/`.
+Create that directory only when needed, not as empty scaffolding. Repository
+document ownership takes precedence over a generic suggestion to use a root
+`docs/adr/` directory. Keep resolved domain terms in `CONTEXT.md`.
+
+At completion, `write-design` folds durable decisions, including ADRs, into their
+owning current documents before removing the completed task directory. Git
+retains the history; no separate archive is required.
 
 The plan is complete when a new engineer can implement it from the repository,
-all material decisions are settled, and the Open Questions frontier is empty.
+all material decisions are settled, and no unresolved question blocks execution.

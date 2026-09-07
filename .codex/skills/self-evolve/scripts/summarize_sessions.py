@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import datetime as dt
+import datetime
 import json
 import os
 import re
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 MARKERS = (
@@ -86,12 +85,6 @@ PREFERENCE_MARKERS = (
 )
 
 
-@dataclass(frozen=True)
-class SessionFile:
-    path: Path
-    date: dt.date | None
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Print Codex session excerpts for self-evolve review.",
@@ -105,12 +98,12 @@ def main() -> int:
         "--since",
         help=(
             "UTC or local date/time, for example 2026-06-01. If omitted, use "
-            "the last-file timestamp or scan all sessions when no timestamp exists."
+            "the last-file timestamp; --since is required when no timestamp exists."
         ),
     )
     parser.add_argument(
         "--last-file",
-        default=str(_default_last_file()),
+        default=str(default_last_file()),
         help="Timestamp file used when --since is omitted.",
     )
     parser.add_argument(
@@ -127,9 +120,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    run_started = dt.datetime.now(dt.UTC)
+    run_started = datetime.datetime.now(datetime.UTC)
     last_file = Path(args.last_file).expanduser()
-    since = _load_since(args.since, last_file)
+    since = load_since(args.since, last_file)
     sessions_root = Path(args.sessions_root).expanduser()
     if not sessions_root.exists():
         raise SystemExit(f"sessions root does not exist: {sessions_root}")
@@ -137,27 +130,24 @@ def main() -> int:
     printed = 0
     limit_reached = False
     seen_preference_keys: set[str] = set()
-    for session_file in _index_session_files(sessions_root):
-        if session_file.date is not None and session_file.date < since.date():
-            continue
-        for line_number, line in enumerate(
-            session_file.path.read_text(encoding="utf-8", errors="replace").splitlines(),
-            1,
-        ):
-            excerpt = _session_excerpt(line, since, args.mode)
-            if excerpt is None:
-                continue
-            if args.mode == "preferences":
-                key = _dedup_key(excerpt)
-                if key in seen_preference_keys:
+    # A session can resume long after its directory's date; filter each record.
+    for session_file in sorted(sessions_root.rglob("*.jsonl")):
+        with session_file.open(encoding="utf-8", errors="replace") as lines:
+            for line_number, line in enumerate(lines, 1):
+                excerpt = session_excerpt(line, since, args.mode)
+                if excerpt is None:
                     continue
-                seen_preference_keys.add(key)
-            print(f"\n## {session_file.path}:{line_number}")
-            print(excerpt)
-            printed += 1
-            if printed >= args.limit:
-                limit_reached = True
-                break
+                if args.mode == "preferences":
+                    key = dedup_key(excerpt)
+                    if key in seen_preference_keys:
+                        continue
+                    seen_preference_keys.add(key)
+                print(f"\n## {session_file}:{line_number}")
+                print(excerpt)
+                printed += 1
+                if printed >= args.limit:
+                    limit_reached = True
+                    break
         if limit_reached:
             break
     if limit_reached:
@@ -169,114 +159,91 @@ def main() -> int:
     if args.no_update_last:
         print(f"self-evolve last file not updated due to --no-update-last: {last_file}", file=sys.stderr)
         return 0
-    _write_last_file(last_file, run_started)
+    write_last_file(last_file, run_started)
     print(f"updated self-evolve last file: {last_file}", file=sys.stderr)
     return 0
 
 
-def _default_last_file() -> Path:
+def default_last_file() -> Path:
     for parent in Path(__file__).resolve().parents:
         if parent.name == ".codex":
             return parent / "self-evolve-last.txt"
     return Path.cwd() / ".codex" / "self-evolve-last.txt"
 
 
-def _load_since(value: str | None, last_file: Path) -> dt.datetime:
+def load_since(value: str | None, last_file: Path) -> datetime.datetime:
     if value:
-        return _parse_since(value)
+        return parse_since(value)
     if last_file.exists():
         last_value = last_file.read_text(encoding="utf-8").strip()
         if last_value:
-            return _parse_since(last_value)
-    print(
-        f"no previous self-evolve timestamp found at {last_file}; scanning all sessions",
-        file=sys.stderr,
-    )
-    return dt.datetime.min.replace(tzinfo=dt.UTC)
+            return parse_since(last_value)
+    raise SystemExit(f"no previous self-evolve timestamp found at {last_file}; provide --since")
 
 
-def _write_last_file(path: Path, timestamp: dt.datetime) -> None:
+def write_last_file(path: Path, timestamp: datetime.datetime) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{_format_timestamp(timestamp)}\n", encoding="utf-8")
+    path.write_text(f"{format_timestamp(timestamp)}\n", encoding="utf-8")
 
 
-def _format_timestamp(timestamp: dt.datetime) -> str:
-    return timestamp.astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
+def format_timestamp(timestamp: datetime.datetime) -> str:
+    return timestamp.astimezone(datetime.UTC).isoformat().replace("+00:00", "Z")
 
 
-def _parse_since(value: str) -> dt.datetime:
+def parse_since(value: str) -> datetime.datetime:
     normalized = value.strip().replace("Z", "+00:00")
     try:
-        parsed = dt.datetime.fromisoformat(normalized)
+        parsed = datetime.datetime.fromisoformat(normalized)
     except ValueError:
-        parsed = dt.datetime.fromisoformat(f"{normalized}T00:00:00")
-    return _to_utc(parsed)
+        parsed = datetime.datetime.fromisoformat(f"{normalized}T00:00:00")
+    return to_utc(parsed)
 
 
-def _to_utc(value: dt.datetime) -> dt.datetime:
+def to_utc(value: datetime.datetime) -> datetime.datetime:
     if value.tzinfo is None:
         value = value.astimezone()
-    return value.astimezone(dt.UTC)
+    return value.astimezone(datetime.UTC)
 
 
-def _index_session_files(sessions_root: Path) -> list[SessionFile]:
-    session_files = [
-        SessionFile(path=path, date=_session_date_from_path(path)) for path in sessions_root.rglob("*.jsonl")
-    ]
-    return sorted(session_files, key=lambda item: (item.date or dt.date.min, str(item.path)))
-
-
-def _session_date_from_path(path: Path) -> dt.date | None:
-    parts = path.parts
-    for index, part in enumerate(parts):
-        if part != "sessions" or index + 3 >= len(parts):
-            continue
-        try:
-            return dt.date(int(parts[index + 1]), int(parts[index + 2]), int(parts[index + 3]))
-        except ValueError:
-            return None
-    return None
-
-
-def _session_excerpt(line: str, since: dt.datetime, mode: str) -> str | None:
+def session_excerpt(line: str, since: datetime.datetime, mode: str) -> str | None:
     try:
         record = json.loads(line)
     except json.JSONDecodeError:
         return None
-    timestamp = _record_time(record)
+    timestamp = record_time(record)
     if timestamp is None or timestamp < since:
         return None
-    text = _extract_text(record)
+    text = extract_text(record)
     if not text:
         return None
     if mode == "preferences":
         if not text.startswith("user\n"):
             return None
         body = text.removeprefix("user\n")
-        if _looks_like_review_task(body):
+        if looks_like_review_task(body):
             return None
         lowered_body = body.lower()
         if not any(marker in lowered_body for marker in PREFERENCE_MARKERS):
             return None
-        return _truncate(f"user-preference\n{body}", 4000)
+        return truncate(f"user-preference\n{body}", 4000)
     lowered = text.lower()
     if not any(marker in lowered for marker in MARKERS):
         return None
-    return _truncate(text, 2000)
+    return truncate(text, 2000)
 
 
-def _record_time(record: dict[str, object]) -> dt.datetime | None:
+def record_time(record: dict[str, object]) -> datetime.datetime | None:
     raw = record.get("timestamp")
     if not isinstance(raw, str):
         return None
     try:
-        parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return _to_utc(parsed)
+    return to_utc(parsed)
 
 
-def _extract_text(record: dict[str, object]) -> str | None:
+def extract_text(record: dict[str, object]) -> str | None:
     record_type = record.get("type")
     payload = record.get("payload")
     if not isinstance(payload, dict):
@@ -288,7 +255,7 @@ def _extract_text(record: dict[str, object]) -> str | None:
         role = payload.get("role")
         if role not in {"assistant", "user"}:
             return None
-        text = _collect_text(payload.get("content"))
+        text = collect_text(payload.get("content"))
         if text.startswith("# AGENTS.md instructions for "):
             return None
         if text:
@@ -296,12 +263,12 @@ def _extract_text(record: dict[str, object]) -> str | None:
         return None
     if payload_type == "function_call_output":
         output = payload.get("output")
-        if isinstance(output, str) and _tool_output_interesting(output):
-            return f"command-output\n{_normalize(output)}"
+        if isinstance(output, str) and tool_output_interesting(output):
+            return f"command-output\n{normalize(output)}"
     return None
 
 
-def _collect_text(value: object) -> str:
+def collect_text(value: object) -> str:
     parts: list[str] = []
 
     def visit(node: object) -> None:
@@ -309,7 +276,7 @@ def _collect_text(value: object) -> str:
             for key in ("text", "input_text", "output_text", "message"):
                 value = node.get(key)
                 if isinstance(value, str):
-                    parts.append(_normalize(value))
+                    parts.append(normalize(value))
             for value in node.values():
                 if isinstance(value, dict | list):
                     visit(value)
@@ -321,11 +288,11 @@ def _collect_text(value: object) -> str:
     return "\n".join(parts)
 
 
-def _normalize(text: str) -> str:
+def normalize(text: str) -> str:
     return " ".join(text.split())
 
 
-def _truncate(text: str, limit: int) -> str:
+def truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     print(
@@ -335,11 +302,11 @@ def _truncate(text: str, limit: int) -> str:
     return text[:limit]
 
 
-def _dedup_key(text: str) -> str:
+def dedup_key(text: str) -> str:
     return re.sub(r"\W+", " ", text.lower()).strip()[:240]
 
 
-def _looks_like_review_task(text: str) -> bool:
+def looks_like_review_task(text: str) -> bool:
     return text.startswith(
         (
             "Pre-commit review for ",
@@ -352,7 +319,7 @@ def _looks_like_review_task(text: str) -> bool:
     )
 
 
-def _tool_output_interesting(text: str) -> bool:
+def tool_output_interesting(text: str) -> bool:
     lowered = text.lower()
     if "process exited with code 0" in lowered:
         return (

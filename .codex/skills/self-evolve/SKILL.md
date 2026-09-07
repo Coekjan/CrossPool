@@ -1,104 +1,57 @@
 ---
 name: self-evolve
-description: Use when Codex needs to review xpool Codex session history for durable workflow lessons, user preferences, repository instruction conflicts, new tools, validation expectations, or recurring failure modes; normally invoked by the git-commit skill before committing.
+description: Check an xpool task for durable workflow lessons before committing, consulting session history when needed or explicitly requested.
 ---
 
 # Self-Evolve
 
-Use this skill to turn recent Codex session history into candidate durable
-lessons. The output is advisory: the main session decides what to persist and
-where. Bundled-resource paths in this skill are relative to this skill
-directory.
+The main agent checks the current task for useful durable lessons. No reviewer
+subagent or history scan is required for an ordinary commit. A finding is a
+candidate rule change, not permission to persist it.
 
 ## Workflow
 
-1. Inspect the staged diff and current repo instructions that may be affected:
-   `AGENTS.md`, `.codex/skills/`, and `.codex/agents/`.
-2. Read recent Codex session excerpts. The main session may run the bundled
-   script because it owns repo-local state updates. A read-only delegated
-   reviewer should consume excerpts supplied by the main session, or run the
-   script only with `--no-update-last`.
+1. Review the current task's user corrections and execution problems.
+2. Check the owning code-style, workflow, design, glossary, or skill document.
+   If it already covers the lesson, add no duplicate rule. Determine whether the
+   issue was noncompliance or unclear wording.
+3. Propose only lessons useful beyond this patch. Repeated corrections are
+   evidence to inspect, not an automatic trigger for another prohibition.
+4. Record accepted changes in their owning documents within the user's
+   authorization. Use the current task context when sufficient; consult
+   relevant history only to resolve a missing fact or when historical review
+   is requested.
 
-   To scan from an explicit point in time:
+## Historical Lookup
 
-   ```bash
-   uv run python scripts/summarize_sessions.py --since 2026-06-01
-   ```
+Paths below are relative to this skill directory. To inspect a specific range:
 
-   When `--since` is omitted, the script reads the repo-level
-   `.codex/self-evolve-last.txt`. If that file is absent or empty, it scans all
-   available sessions and reports that fallback on stderr. After a successful
-   full scan, the script records the scan start timestamp. Later runs should
-   normally omit `--since`:
+```bash
+uv run python scripts/summarize_sessions.py --since 2026-06-01 --no-update-last
+```
 
-   ```bash
-   uv run python scripts/summarize_sessions.py
-   ```
+Without `--since`, the scanner uses `.codex/self-evolve-last.txt`. If neither
+an explicit range nor a nonempty marker is available, it exits nonzero and asks
+for `--since`; it does not default to all history. The range filters record
+timestamps, not session-directory dates, so resumed sessions remain eligible.
+`--mode preferences` limits excerpts to user corrections. The scanner is a
+reading aid, not proof that all relevant lessons have been found.
 
-   The script first indexes session files from the `sessions/YYYY/MM/DD`
-   directory layout, then reads matching JSONL files and filters individual
-   records by their JSON `timestamp`. If the output limit is reached, the script
-   exits without updating the last timestamp so unreviewed excerpts are not
-   skipped.
+A completed scan updates the marker to its start time unless
+`--no-update-last` is supplied. Reaching the excerpt limit exits without
+updating it. Read-only reviewers, when explicitly assigned, must use
+`--no-update-last` and report findings without modifying files.
 
-   Read-only review mode:
+## Persistence
 
-   ```bash
-   uv run python scripts/summarize_sessions.py --no-update-last
-   ```
+Use the existing owner: code conventions in `docs/code-style.md`, repository
+routing in `AGENTS.md`, vocabulary in `CONTEXT.md`, current architecture in
+`docs/designs/`, target changes in `docs/plans/<task>/`, and reusable
+procedures in their skill. Improve an existing rule before adding a new one.
 
-   Preference-focused review mode:
+Memory writes require explicit user authorization and must use the active
+memory mechanism. Neither this skill nor commit preparation grants it.
+The scanner never writes memory.
 
-   ```bash
-   uv run python scripts/summarize_sessions.py --mode preferences --no-update-last
-   ```
-
-3. Treat the script as an index, not as the self-evolve decision. For long or
-   emotionally corrective sessions, also review the current conversation and run
-   a targeted read-only search over recent session files for repeated user
-   corrections, preferences, and workflow complaints. Do not conclude "no
-   lesson" merely because the marker-filtered script returned sparse excerpts or
-   because a delegated reviewer did not see a direct instruction conflict.
-4. Run an explicit preference extraction pass for user corrections when recent
-   history includes code-quality, configuration, testing, review, or workflow
-   complaints. Cluster repeated corrections by theme and compare them against
-   `docs/code-style.md`, `AGENTS.md`, `CONTEXT.md`, relevant current design and
-   active plan documents, `.codex/skills/`, `.codex/agents/`, and existing
-   memory before deciding whether they are new, covered, or conflicting.
-5. Extract only lessons that are durable beyond the current patch:
-   user preferences, workflow rules, tool availability, validation standards,
-   recurring failure modes, and instruction conflicts.
-6. Drop lessons already covered by `docs/code-style.md`, `AGENTS.md`,
-   `CONTEXT.md`, relevant design or plan documents, `.codex/skills/`,
-   `.codex/agents/`, or existing memory.
-7. Report candidate lessons and exact instruction conflicts. Do not write memory
-   or edit files from a delegated reviewer/self-evolve subagent.
-
-If the self-evolve reviewer subagent cannot be spawned because of quota, tool
-unavailability, or agent infrastructure failure, do not skip the self-evolve
-decision. The main session should run the scanner in non-mutating mode, inspect
-the staged diff and recent task context itself, record the fallback in the final
-report, and apply the same persistence rules below.
-
-## Persistence Rules
-
-The main session owns persistence. For each accepted lesson:
-
-- Update the relevant repo instruction when user intent conflicts with the
-  repository's current workflow.
-- If a code-quality, configuration, or testing correction appears at least twice
-  in the same conversation or across recent excerpts, explicitly route it by
-  ownership: code-level rules belong in `docs/code-style.md`; repository
-  workflow in `AGENTS.md`; domain language in `CONTEXT.md`; implemented
-  architecture in the relevant `docs/designs/` document; unimplemented target
-  changes in the relevant `docs/plans/` task; reusable procedures in their
-  owning skill; and personal or session-only context in memory when authorized.
-  Do not leave repeated corrections as only transient chat context.
-- Persist memory according to the active git-commit workflow.
-- Add `Self-Evolved: <lesson>` to the commit message only when the lesson was
-  actually persisted.
-
-If no lesson is accepted and persisted, omit `Self-Evolved:` entirely.
-
-The bundled script is a reading aid only. It must not become an automatic memory
-writer.
+Include a `Self-Evolved:` trailer only for a lesson actually accepted and
+persisted. Otherwise omit the trailer; no extra report or document is required.

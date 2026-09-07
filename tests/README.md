@@ -7,12 +7,21 @@ Direct pytest and CTest commands are focused debugging interfaces only.
 The process tree, scheduler, GPU lease, endpoint, and artifact internals are
 documented in [`tests/harness/README.md`](harness/README.md).
 
+Tests prove behavior visible at public boundaries. Avoid tests that mirror
+registry internals, config table structure, or implementation text. Source-text
+inspection is reserved for explicit quality gates such as documentation coverage
+and allowlisted environment references. If a test still passes when its claimed
+public behavior is broken, replace it with a behavior test.
+
 ## Placement
 
 - `tests/suites/unit/` mirrors Python modules and owns deterministic behavior.
   Unit tests do not execute native operations, initialize CUDA, launch
   subprocesses, or load weights. The mandatory session native/dispatcher
   preflight still runs.
+  Unit tests may construct immutable bound values when native operations are
+  mocked and the subject is a pure Python projection; importing a bound value
+  type alone does not require Integration placement.
 - `tests/suites/integration/` owns cross-module, pinned-SGLang, native binding,
   component CUDA, daemon, CLI, and real process-management contracts.
 - `tests/suites/e2e/` owns installed `xpool` and `sglang serve` workflows,
@@ -30,6 +39,10 @@ do not create implicit fixture dependencies through directory `conftest.py`
 imports. E2E files use `test_e2e_*.py` names. Model IDs, topology matrices,
 trace capacities, graph modes, and test-only KV limits belong in
 `tests/harness/sglang/manifest.toml`, not Python test code.
+
+Keep common and subsystem-specific fixtures separate so each fixture owns one
+coherent reset boundary. Use pinned SGLang concrete types, such as `ServerArgs`,
+rather than handwritten substitutes when those types are available.
 
 One layer should own each expensive behavioral verdict. Higher layers assert
 only their integration seam instead of replaying lower-level protocol details.
@@ -50,6 +63,16 @@ Unavailable resources skip by default and fail with
 pytest session preflights `xpool.native` and the sole `xpool.ops.ffn_shim`
 dispatcher registration. CTest CUDA cases declare one CTest GPU resource and
 perform their own MPS preflight.
+
+A missing or ABI-incompatible native extension is a session failure, including
+for Unit-only sessions, never a resource skip. E2E tests run without strict mode
+when all declared and derived requirements are available. Their configuration
+comes only from `XPOOL_CONFIG`; each task materializes a private config containing
+its selected manifest models, without waiting for unrelated configured models.
+
+Graph-mode acceptance criteria belong to
+[Qualification](../docs/designs/qualification.md#numerical-and-graph-evidence).
+Keep Eager, Decode Full, and Prefill Breakable evidence distinct.
 
 ## Execution Flow
 
@@ -81,6 +104,10 @@ transport/fabric behavior.
 
 ## Commands
 
+Before canonical commands, conditionally set `UV_ENV_FILE` as below so uv loads
+optional local configuration. Shell-exported values retain precedence; pytest
+does not parse dotenv files.
+
 ```bash
 if [ -f .env ]; then export UV_ENV_FILE="$PWD/.env"; fi
 
@@ -105,3 +132,16 @@ uv run pytest tests/suites/integration/native/test_transport_lifecycle.py -s
 Use `pytest --collect-only` to inspect concrete parameterized cases. Build and
 install the native extension with the repository's canonical uv/scikit-build
 command before running native or E2E tests.
+
+## Verification And Commit Hooks
+
+Use affected focused checks during iteration. The installed hooks run normally
+during commit; their complete-suite run is resource-eligible and is not proof
+of strict final acceptance. Follow
+[Qualification](../docs/designs/qualification.md#acceptance-and-invalidation)
+for final evidence and reuse rules.
+
+Keep hook definitions directly in `.pre-commit-config.yaml`. File-scoped hooks
+check the paths supplied by pre-commit; whole-project checks may use
+`pass_filenames: false` but must not recursively scan ignored environments such
+as `.venv/`. Do not add a separate hook wrapper script.
