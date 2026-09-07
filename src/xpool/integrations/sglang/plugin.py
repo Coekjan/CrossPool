@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from collections.abc import Callable, Sequence
 from functools import partial
 from typing import Concatenate
@@ -196,6 +197,13 @@ def around_model_runner_load_model[**P, R](
     adapter.validate_before_load(model_runner)
 
     runtime = SglangInstanceRankRuntime.attach(model_runner, binding)
+    logger.info(
+        "bound instance=%s rank=%s device=%s pid=%s",
+        binding.instance_id,
+        binding.worker_rank,
+        binding.cuda_device,
+        os.getpid(),
+    )
     try:
         adapter.bind_runtime(model_runner)
 
@@ -248,6 +256,13 @@ def after_model_runner_alloc_memory_pool[R](
         )
         runtime.instance_rank.wait_for_fabric_executable()
         runtime.instance_rank.attach_arena_from_daemon()
+        logger.info(
+            "transport attached instance=%s rank=%s device=%s pid=%s",
+            binding.instance_id,
+            binding.worker_rank,
+            binding.cuda_device,
+            os.getpid(),
+        )
         runtime.instance_rank.start_failure_monitor()
     except Exception:
         runtime.detach(model_runner)
@@ -281,6 +296,17 @@ def after_scheduler_init_model_worker[R](
         raise RuntimeError("xpool Scheduler.init_model_worker hook requires a started Instance-rank runtime")
     runtime.instance_rank.publish_initialized()
     runtime.instance_rank.wait_for_ready()
+    binding = runtime.binding
+    logger.info(
+        "ready instance=%s rank=%s device=%s pid=%s generation=%s",
+        binding.instance_id,
+        binding.worker_rank,
+        binding.cuda_device,
+        os.getpid(),
+        runtime.instance_rank.fabric_plan.generation.format()
+        if runtime.instance_rank.fabric_plan is not None
+        else "unknown",
+    )
     return result
 
 

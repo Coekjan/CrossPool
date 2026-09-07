@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -88,9 +89,11 @@ def create_daemon() -> FastAPI:
             except asyncio.CancelledError:
                 raise
             except BaseException as exception:
-                logger.exception("xpool daemon watchdog failed")
+                logger.exception("daemon watchdog failed")
                 daemon_failure.record(exception)
 
+        config = get_global_config()
+        logger.info("process started host=%s port=%s pid=%s", config.daemon.host, config.daemon.port, os.getpid())
         task = asyncio.create_task(run_watchdog(), name="xpool-daemon-watchdog")
         try:
             yield

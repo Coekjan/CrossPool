@@ -96,4 +96,4 @@ def capture_prefill_logits(
         )
         captured = True
     except Exception:
-        logger.warning("Failed to record xpool first-prefill logits", exc_info=True)
+        logger.warning("failed to record xpool first-prefill logits", exc_info=True)

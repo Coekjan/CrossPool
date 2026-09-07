@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import cast
 
@@ -62,7 +63,7 @@ def test_heartbeat_surfaces_unrecoverable_daemon_error() -> None:
     worker.close()
 
 
-def test_heartbeat_retries_recoverable_client_errors() -> None:
+def test_heartbeat_retries_recoverable_client_errors(caplog: pytest.LogCaptureFixture) -> None:
     heartbeat_count = 0
 
     def sender() -> HeartbeatResponse:
@@ -76,7 +77,10 @@ def test_heartbeat_retries_recoverable_client_errors() -> None:
         agent=cast(Agent, HeartbeatAgent(sender)),
         interval_s=0.01,
     )
-    worker.start()
-    assert wait_until(lambda: heartbeat_count >= 2)
+    with caplog.at_level(logging.DEBUG, logger="xpool.runtime.agent"):
+        worker.start()
+        assert wait_until(lambda: heartbeat_count >= 2)
     worker.close()
     worker.raise_if_failed()
+
+    assert [record.levelno for record in caplog.records] == [logging.DEBUG]

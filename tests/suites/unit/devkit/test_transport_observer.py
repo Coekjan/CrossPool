@@ -211,7 +211,7 @@ def test_snapshot_write_failure_warns_without_blocking_quiesce(
     with caplog.at_level("WARNING", logger="xpool.devkit.transport_observer"):
         assert runtime.quiesce() is None
 
-    assert "Failed to record xpool transport observer snapshot" in caplog.text
+    assert "failed to record xpool transport observer snapshot" in caplog.text
     assert quiesced == ["m"]
 
 

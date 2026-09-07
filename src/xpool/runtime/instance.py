@@ -14,7 +14,6 @@ from xpool.native.ffn import ResultCode
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.client import XpoolClient, XpoolClientError, XpoolDaemonError
 from xpool.service.wire import (
-    HeartbeatResponse,
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
     ProcessRef,
@@ -31,7 +30,6 @@ __all__ = [
 ]
 
 INSTANCE_HEARTBEAT_INTERVAL_S = 5.0
-STALE_ATNAGENT_RECOVERY_GRACE_S = 60.0
 TRANSPORT_METADATA_RECOVERY_DEADLINE_S = 60.0
 INSTANCE_TRANSPORT_ACQUIRE_INTERVAL_S = 0.5
 INSTANCE_HEARTBEAT_STOP_JOIN_TIMEOUT_S = 5.0
@@ -87,7 +85,7 @@ class InstanceRankFailureMonitor:
         if failure != ResultCode.OK:
             bail(
                 logger,
-                "xpool transport executor failed for instance %s rank %s: %s",
+                "transport executor failed for instance %s rank %s: %s",
                 self.instance_id,
                 self.rank,
                 failure.name,
@@ -96,24 +94,17 @@ class InstanceRankFailureMonitor:
 
 
 class InstanceRankHeartbeat:
-    """Background heartbeat owner for one registered instance rank.
+    """Background heartbeat owner for one registered Instance Rank.
 
     Args:
         instance_id: Configured instance id.
         rank: ATN rank-local SGLang process index.
-        local_cuda_device: CUDA device represented by ``rank``.
-        registration: Stable registration payload used to repair missing daemon
-            registration state.
         heartbeat: Stable heartbeat payload for the current process.
 
     Attributes:
         client: Dedicated daemon client used only by the heartbeat thread.
-        arena_handle: Original attached CUDA IPC arena handle, if attachment
-            has completed.
-        arena_lease_recovery_pending: Whether daemon restart recovery still
-            needs to reacquire a lease for ``arena_handle``.
-        recovery_deadline: Deadline for transient daemon metadata failures.
-        stale_atnagent_deadline: Deadline for a local stale-agent warning.
+        transport_deadline: Deadline for transient daemon communication
+            failures.
         worker: Periodic background thread that invokes :meth:`step`.
     """
 
@@ -122,22 +113,15 @@ class InstanceRankHeartbeat:
         *,
         instance_id: str,
         rank: int,
-        local_cuda_device: int,
-        registration: InstanceRankRegistration,
         heartbeat: ProcessRef,
     ) -> None:
         """Create a stopped heartbeat worker owner."""
 
         self.instance_id = instance_id
         self.rank = rank
-        self.local_cuda_device = local_cuda_device
-        self.registration = registration
         self.heartbeat = heartbeat
         self.client = XpoolClient()
-        self.arena_handle: TransportArenaHandle | None = None
-        self.arena_lease_recovery_pending = False
-        self.recovery_deadline: float | None = None
-        self.stale_atnagent_deadline: float | None = None
+        self.transport_deadline: float | None = None
         self.worker = BackgroundThread.periodic(
             name=f"xpool-instance-heartbeat-{self.instance_id}-{self.rank}",
             interval_s=INSTANCE_HEARTBEAT_INTERVAL_S,
@@ -162,125 +146,59 @@ class InstanceRankHeartbeat:
         """Run one heartbeat tick and keep the periodic worker alive."""
 
         try:
-            response = self.heartbeat_once()
-            self.recovery_deadline = None
-            self.handle_warnings(response)
-        except (XpoolDaemonError, XpoolClientError) as exc:
-            self.handle_recoverable_failure(exc)
+            degraded = self.transport_deadline is not None
+            self.client.heartbeat_instance(
+                self.instance_id,
+                rank=self.rank,
+                heartbeat=self.heartbeat,
+            )
+            self.transport_deadline = None
+            if degraded:
+                logger.info("heartbeat transport restored instance=%s rank=%s", self.instance_id, self.rank)
+        except XpoolDaemonError as exc:
+            bail(
+                logger,
+                "instance heartbeat rejected instance=%s rank=%s detail=%s",
+                self.instance_id,
+                self.rank,
+                exc,
+            )
+        except XpoolClientError as exc:
+            self.handle_transport_failure(exc)
         except Exception as exc:
             bail(
                 logger,
-                "xpool instance heartbeat failed with unexpected error for rank %s: %s",
+                "instance heartbeat failed with unexpected error instance=%s rank=%s detail=%s",
+                self.instance_id,
                 self.rank,
                 exc,
             )
         return True
 
-    def heartbeat_once(self) -> HeartbeatResponse:
-        """Refresh this instance registration, repairing missing daemon state once."""
-
-        try:
-            response = self.client.heartbeat_instance(
-                self.instance_id,
-                rank=self.rank,
-                heartbeat=self.heartbeat,
-            )
-        except XpoolDaemonError as exc:
-            if exc.kind != "not_ready":
-                bail(
-                    logger,
-                    "xpool instance heartbeat received unrecoverable daemon error for rank %s: %s",
-                    self.rank,
-                    exc,
-                )
-            logger.warning(
-                "xpool instance registration for %s rank %s is missing; re-registering",
-                self.instance_id,
-                self.rank,
-            )
-            self.client.register_instance(self.registration)
-            self.arena_lease_recovery_pending = self.arena_handle is not None
-            self.recover_arena_lease()
-            response = self.client.heartbeat_instance(
-                self.instance_id,
-                rank=self.rank,
-                heartbeat=self.heartbeat,
-            )
-        self.recover_arena_lease()
-        return response
-
-    def recover_arena_lease(self) -> None:
-        """Reacquire the original arena lease after daemon registration loss."""
-
-        if not self.arena_lease_recovery_pending or self.arena_handle is None:
-            return
-        recovered_handle = self.client.acquire_instance_transport_arena(
-            self.instance_id,
-            rank=self.rank,
-            owner=ProcessRef(abi_version=self.heartbeat.abi_version, pid=self.heartbeat.pid),
-        )
-        if recovered_handle != self.arena_handle:
-            bail(
-                logger,
-                "daemon returned a different transport arena after instance recovery for %s rank %s",
-                self.instance_id,
-                self.rank,
-            )
-        self.arena_lease_recovery_pending = False
-
-    def handle_warnings(self, response: HeartbeatResponse) -> None:
-        """Apply fail-closed policy for daemon heartbeat warnings."""
-
-        warning_kinds = {warning.kind for warning in response.warnings if warning.cuda_device == self.local_cuda_device}
-        if "quiescing_atnagent" in warning_kinds:
-            logger.warning(
-                "xpool daemon reported quiescing agent on CUDA device %s for instance %s rank %s; "
-                "waiting for daemon-scoped quiesce",
-                self.local_cuda_device,
-                self.instance_id,
-                self.rank,
-            )
-        if "stale_atnagent" not in warning_kinds:
-            self.stale_atnagent_deadline = None
-            return
-        now = time.monotonic()
-        if self.stale_atnagent_deadline is None:
-            self.stale_atnagent_deadline = now + STALE_ATNAGENT_RECOVERY_GRACE_S
-        if now >= self.stale_atnagent_deadline:
-            bail(
-                logger,
-                "xpool daemon reported stale agent on CUDA device %s for instance %s rank %s beyond recovery grace",
-                self.local_cuda_device,
-                self.instance_id,
-                self.rank,
-            )
-        logger.warning(
-            "xpool daemon reported stale agent on CUDA device %s for instance %s rank %s; waiting for recovery",
-            self.local_cuda_device,
-            self.instance_id,
-            self.rank,
-        )
-
-    def handle_recoverable_failure(self, exc: XpoolDaemonError | XpoolClientError) -> None:
-        """Apply retry and fail-closed policy for heartbeat transport failures."""
+    def handle_transport_failure(self, exc: XpoolClientError) -> None:
+        """Apply the bounded retry policy for daemon communication failures."""
 
         if not exc.is_recoverable:
             bail(
                 logger,
-                "xpool instance heartbeat received unrecoverable daemon error for rank %s: %s",
+                "instance heartbeat received unrecoverable client error instance=%s rank=%s detail=%s",
+                self.instance_id,
                 self.rank,
                 exc,
             )
-        if self.recovery_deadline is None:
-            self.recovery_deadline = time.monotonic() + TRANSPORT_METADATA_RECOVERY_DEADLINE_S
-        if time.monotonic() >= self.recovery_deadline:
+        entered = self.transport_deadline is None
+        if entered:
+            self.transport_deadline = time.monotonic() + TRANSPORT_METADATA_RECOVERY_DEADLINE_S
+        if time.monotonic() >= self.transport_deadline:
             bail(
                 logger,
-                "xpool transport arena did not recover for instance rank %s: %s",
+                "heartbeat transport did not restore instance=%s rank=%s detail=%s",
+                self.instance_id,
                 self.rank,
                 exc,
             )
-        logger.warning("xpool instance heartbeat failed: %s", exc)
+        log = logger.warning if entered else logger.debug
+        log("heartbeat transport degraded instance=%s rank=%s detail=%s", self.instance_id, self.rank, exc)
 
 
 class InstanceRankRuntime:
@@ -290,10 +208,8 @@ class InstanceRankRuntime:
     instance_id: str
     instance_index: int
     rank: int
-    local_cuda_device: int
     process_ref: ProcessRef
     registration: InstanceRankRegistration | None
-    heartbeat: ProcessRef
     heartbeat_worker: InstanceRankHeartbeat | None
     failure_monitor: InstanceRankFailureMonitor | None
     arena_handle: TransportArenaHandle | None
@@ -325,10 +241,8 @@ class InstanceRankRuntime:
         self.instance_id = instance_id
         self.instance_index = config_instance.instance_index
         self.rank = rank
-        self.local_cuda_device = config.devices.atn_cuda_devices[rank]
         self.process_ref = ProcessRef(abi_version=ABI_VERSION, pid=pid)
         self.registration = None
-        self.heartbeat = self.process_ref
         self.heartbeat_worker = None
         self.failure_monitor = None
         self.arena_handle = None
@@ -385,7 +299,7 @@ class InstanceRankRuntime:
             try:
                 self.deregister_runtime()
             except Exception as cleanup_exc:
-                logger.warning("failed to clean up xpool instance registration: %s", cleanup_exc)
+                logger.warning("failed to clean up instance registration: %s", cleanup_exc)
             raise
 
     def register_runtime(self, transport: InstanceRankTransportProfile, ffn_profile: InstanceFfnProfile) -> None:
@@ -530,9 +444,6 @@ class InstanceRankRuntime:
             return
         xpool.native.transport.attach_arena(self.instance_index, self.rank, handle.handle)
         self.arena_handle = handle
-        if self.heartbeat_worker is not None:
-            self.heartbeat_worker.arena_handle = handle
-            self.heartbeat_worker.arena_lease_recovery_pending = False
 
     def detach_arena(self) -> None:
         """Detach this rank's native transport arena, if one is attached."""
@@ -542,9 +453,6 @@ class InstanceRankRuntime:
             return
         xpool.native.transport.detach_arena()
         self.arena_handle = None
-        if self.heartbeat_worker is not None:
-            self.heartbeat_worker.arena_handle = None
-            self.heartbeat_worker.arena_lease_recovery_pending = False
 
     def attach_arena_from_daemon(self) -> None:
         """Acquire this rank's daemon-published arena and attach it natively."""
@@ -573,11 +481,8 @@ class InstanceRankRuntime:
             self.heartbeat_worker = InstanceRankHeartbeat(
                 instance_id=self.instance_id,
                 rank=self.rank,
-                local_cuda_device=self.local_cuda_device,
-                registration=self.registration,
-                heartbeat=self.heartbeat,
+                heartbeat=self.process_ref,
             )
-            self.heartbeat_worker.arena_handle = self.arena_handle
         self.heartbeat_worker.start()
 
     def stop_heartbeat_worker(self) -> None:

@@ -138,7 +138,9 @@ class ControlPlane:
             self.mps_cache_result = result
         if previous is None or previous.online != result.online:
             log = logger.info if result.online else logger.warning
-            log("CUDA MPS readiness changed to %s: %s", "online" if result.online else "offline", result.diagnostic)
+            log(
+                "mps readiness changed status=%s detail=%s", "online" if result.online else "offline", result.diagnostic
+            )
 
     def check_config(self, client_config: XpoolConfig) -> None:
         """Require a runtime participant's effective config to match the daemon.
@@ -207,7 +209,13 @@ class ControlPlane:
             return self.registrations.instance_views()
 
     def global_warnings(self, now: float) -> list[ControlPlaneWarning]:
-        """Return warnings visible to any heartbeat sender."""
+        """Return daemon-owned warnings and log device-scoped state edges.
+
+        Returned warning details remain per contributor. Logging aggregates
+        them so the first warning for a ``(kind, device)`` condition emits its
+        entry edge and removal of the final matching warning emits its clear
+        edge.
+        """
 
         with self.lock:
             if now - self.warning_cache_at < GLOBAL_WARNING_CACHE_S:
@@ -220,9 +228,17 @@ class ControlPlane:
                 transport=self.transport_broker,
                 fabric=self.fabric_controller,
             )
+            previous_warnings = self.warning_cache
             self.warning_cache_at = now
             self.warning_cache = projection.warnings
-            return list(projection.warnings)
+            warnings = projection.warnings
+        previous_by_key = {(warning.kind, warning.cuda_device) for warning in previous_warnings}
+        current_by_key = {(warning.kind, warning.cuda_device) for warning in warnings}
+        for kind, cuda_device in sorted(current_by_key - previous_by_key):
+            logger.warning("global warning entered kind=%s device=%s", kind, cuda_device)
+        for kind, cuda_device in sorted(previous_by_key - current_by_key):
+            logger.info("global warning cleared kind=%s device=%s", kind, cuda_device)
+        return list(warnings)
 
     def retire_terminal_generation(self) -> None:
         """Retire terminal generation state after every old owner has exited."""
@@ -305,6 +321,12 @@ class ControlPlane:
                     if self.registrations.instances.query(owner.instance) is owner:
                         self.registrations.instances.remove_snapshot(owner.instance, owner)
                         self.transport_broker.remove_instance(owner.instance)
+                        logger.info(
+                            "registration removed role=instance instance=%s rank=%s pid=%s",
+                            owner.instance.instance_id,
+                            owner.instance.rank,
+                            owner.proc.pid,
+                        )
                 if self.registrations.atnagents.query(registration.cuda_device) is not existing:
                     raise XpoolDaemonError("not_ready", "atnagent registration changed during generation cleanup")
         with self.lock:
@@ -319,6 +341,11 @@ class ControlPlane:
             self.transport_broker.install_atnagent(registration.cuda_device, installed.proc)
             if changed:
                 self.membership_revision += 1
+                logger.info(
+                    "registration accepted role=atnagent device=%s pid=%s",
+                    registration.cuda_device,
+                    registration.proc.pid,
+                )
         self.ensure_fabric_plan()
 
     def register_ffnagent(
@@ -375,6 +402,11 @@ class ControlPlane:
                 self.registrations.ffn_model_specs = model_specs
             if changed:
                 self.membership_revision += 1
+                logger.info(
+                    "registration accepted role=ffnagent device=%s pid=%s",
+                    registration.cuda_device,
+                    registration.proc.pid,
+                )
         self.ensure_fabric_plan()
 
     def register_instance(self, registration: InstanceRankRegistrationState) -> None:
@@ -442,6 +474,13 @@ class ControlPlane:
             if changed:
                 self.transport_broker.remove_instance(registration.instance)
                 self.membership_revision += 1
+                logger.info(
+                    "registration accepted role=instance instance=%s rank=%s pid=%s device=%s",
+                    registration.instance.instance_id,
+                    registration.instance.rank,
+                    registration.proc.pid,
+                    get_global_config().devices.atn_cuda_devices[registration.instance.rank],
+                )
         self.ensure_fabric_plan()
 
     def deregister_instance(self, instance_id: str, rank: int, owner: ProcessRef) -> None:
@@ -470,6 +509,12 @@ class ControlPlane:
                 termination_requested=lease is not None and lease.termination_requested,
                 now=monotonic(),
             )
+        logger.info(
+            "registration removed role=instance instance=%s rank=%s pid=%s",
+            instance_id,
+            rank,
+            registration.proc.pid,
+        )
 
     def ensure_fabric_plan(self) -> FabricPlan | None:
         """Create a Fabric plan from one complete membership snapshot.
@@ -494,6 +539,7 @@ class ControlPlane:
 
             # Plan: materialize the scheduler and immutable plan without
             # holding the domain lock.
+            plan_started_at = monotonic()
             if config.scheduler.ffn_policy is FfnSchedulingPolicy.FIFO:
                 scheduler = FifoSchedulerPolicy()
             else:
@@ -524,7 +570,7 @@ class ControlPlane:
                     return self.fabric_controller.generation.plan
                 if self.membership_revision != membership.revision:
                     return None
-                return self.fabric_controller.install(
+                installed_plan = self.fabric_controller.install(
                     FabricGenerationState(
                         plan=plan,
                         phase=FabricGenerationPhase.PREPARING_JOIN,
@@ -536,6 +582,14 @@ class ControlPlane:
                         instance_owners=dict(membership.instance_owners),
                     )
                 )
+            logger.info(
+                "fabric plan installed generation=%s model_count=%s pe_count=%s elapsed=%.3fs",
+                installed_plan.generation.format(),
+                len(installed_plan.model_plans),
+                len(installed_plan.pe_placements),
+                monotonic() - plan_started_at,
+            )
+            return installed_plan
 
     def require_fabric_plan(self) -> FabricPlan:
         """Return the installed immutable Fabric plan without forming one."""

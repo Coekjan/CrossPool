@@ -40,6 +40,7 @@ __all__ = [
     "FfnSchedulingPolicy",
     "GraphObserverDebugConfig",
     "InstanceConfig",
+    "LoggingConfig",
     "MissingRequiredConfig",
     "ModelConfig",
     "PrefillLogitObserverDebugConfig",
@@ -280,6 +281,24 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         cli="--config",
         env_var="XPOOL_CONFIG",
         description="Bootstrap TOML config path used before repository config can be loaded.",
+    ),
+    ConfigSetting(
+        name="logging_level",
+        path=("logging", "level"),
+        parser="str",
+        allowed_sources=(ConfigSource.CLI, ConfigSource.ENV, ConfigSource.CONFIG, ConfigSource.DEFAULT),
+        default="info",
+        cli="--log-level",
+        env_var="XPOOL_LOG_LEVEL",
+        description="Minimum level emitted by xpool runtime loggers.",
+    ),
+    ConfigSetting(
+        name="logging_color",
+        path=("logging", "color"),
+        parser="bool",
+        allowed_sources=(ConfigSource.CONFIG, ConfigSource.DEFAULT),
+        default=True,
+        description="Whether xpool runtime log levels use ANSI color on TTY stderr.",
     ),
     ConfigSetting(
         name="debug_graph_observer_enable",
@@ -580,6 +599,21 @@ class XpoolDaemonConfig(BaseModel):
         if not address.is_loopback:
             raise ValueError("daemon.host must be localhost or a loopback IP address")
         return self
+
+
+class LoggingConfig(BaseModel):
+    """Process-local xpool runtime logging policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    level: Literal["debug", "info", "warning", "error", "critical"] = Field(
+        default="info",
+        description="Minimum level emitted by xpool runtime loggers.",
+    )
+    color: bool = Field(
+        default=True,
+        description="Whether xpool runtime log levels use ANSI color on TTY stderr.",
+    )
 
 
 class SchedulerConfig(BaseModel):
@@ -1049,6 +1083,7 @@ class XpoolConfig(BaseModel):
     _sources: tuple[ConfigSourceRecord, ...] = PrivateAttr(default_factory=tuple)
 
     daemon: XpoolDaemonConfig = Field(description="Daemon control-plane config.")
+    logging: LoggingConfig = Field(default_factory=LoggingConfig, description="Runtime logging policy.")
     scheduler: SchedulerConfig = Field(description="Scheduler resource-concurrency config.")
     ffn: FfnConfig = Field(default_factory=FfnConfig, description="FFN startup policy.")
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Device-memory calibration input.")
@@ -1151,7 +1186,7 @@ class XpoolConfig(BaseModel):
                 sorted(name for name in effective_env if name.startswith("XPOOL_") and name not in allowed_env_vars)
             )
             if unknown_env_vars:
-                logger.warning("Ignoring unknown xpool environment variables: %s", ", ".join(unknown_env_vars))
+                logger.warning("ignoring unknown xpool environment variables: %s", ", ".join(unknown_env_vars))
 
         for setting in CONFIG_REGISTRY:
             if setting.path is None or ConfigSource.CONFIG in setting.allowed_sources:

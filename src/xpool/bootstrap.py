@@ -7,6 +7,7 @@ from threading import Lock
 import torch
 
 import xpool.cext
+import xpool.logging
 import xpool.native
 from xpool.config import get_global_config
 from xpool.native import RuntimeRole
@@ -32,15 +33,18 @@ def init(cuda_device: int | None, role: RuntimeRole) -> None:
             incompatible.
 
     Side Effects:
-        Loads the native extension, selects the process CUDA device for GPU
-        roles, initializes native debug state, and installs the role-specific
-        process title for the daemon and agents. Native identity initialization
-        is idempotent; repeated calls may repeat harmless Python-side setup.
+        Loads the native extension, installs role-specific runtime logging,
+        selects the process CUDA device for GPU roles, initializes native debug
+        state, and installs the role-specific process title for the daemon and
+        agents. Native identity initialization is idempotent; repeated calls
+        may repeat harmless Python-side setup.
     """
 
     with runtime_lock:
         xpool.cext.ensure_native_loaded()
-        debug_options = get_global_config().debug.native_options()
+        config = get_global_config()
+        xpool.logging.configure(role)
+        debug_options = config.debug.native_options()
         xpool.native.initialize(role, cuda_device, debug_options)
         if role is not RuntimeRole.DAEMON:
             torch.cuda.set_device(cuda_device)

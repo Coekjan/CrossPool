@@ -32,7 +32,6 @@ class ScriptedInstanceClient:
     """Response scripts and call observations for one Instance-rank heartbeat test."""
 
     heartbeat_results: list[HeartbeatResponse | BaseException] = field(default_factory=list)
-    arena_results: list[TransportArenaHandle | BaseException] = field(default_factory=list)
     calls: list[tuple[object, ...]] = field(default_factory=list)
     close_count: int = 0
 
@@ -50,22 +49,6 @@ class ScriptedInstanceClient:
         self.calls.append(("heartbeat", instance_id, rank, heartbeat))
         return self.consume(self.heartbeat_results, "heartbeat")
 
-    def register_instance(self, registration: InstanceRankRegistration) -> None:
-        self.calls.append(("register", registration))
-
-    def deregister_instance(self, instance_id: str, *, rank: int, owner: ProcessRef) -> None:
-        self.calls.append(("deregister", instance_id, rank, owner))
-
-    def acquire_instance_transport_arena(
-        self,
-        instance_id: str,
-        *,
-        rank: int,
-        owner: ProcessRef,
-    ) -> TransportArenaHandle:
-        self.calls.append(("acquire", instance_id, rank, owner))
-        return self.consume(self.arena_results, "arena acquisition")
-
     @staticmethod
     def consume[T](script: list[T | BaseException], operation: str) -> T:
         if not script:
@@ -80,14 +63,10 @@ def install_scripted_instance_client(
     monkeypatch: pytest.MonkeyPatch,
     *,
     heartbeat_results: list[HeartbeatResponse | BaseException],
-    arena_results: list[TransportArenaHandle | BaseException] | None = None,
 ) -> ScriptedInstanceClient:
     """Install one isolated scripted client for an Instance-rank heartbeat."""
 
-    client = ScriptedInstanceClient(
-        heartbeat_results=list(heartbeat_results),
-        arena_results=list(arena_results or ()),
-    )
+    client = ScriptedInstanceClient(heartbeat_results=list(heartbeat_results))
     monkeypatch.setattr(xpool.runtime.instance, "XpoolClient", lambda: client)
     return client
 
@@ -147,20 +126,10 @@ def runtime_heartbeat(
     monkeypatch.setattr(xpool.runtime.instance.os, "getpid", lambda: pid)
     install_test_config(config)
     instance_id = "m"
-    local_cuda_device = config.devices.atn_cuda_devices[rank]
     heartbeat = ProcessRef(abi_version=ABI_VERSION, pid=pid)
     return InstanceRankHeartbeat(
         instance_id=instance_id,
         rank=rank,
-        local_cuda_device=local_cuda_device,
-        registration=InstanceRankRegistration(
-            instance_id=instance_id,
-            rank=rank,
-            abi_version=ABI_VERSION,
-            pid=pid,
-            transport=transport_attributes(),
-            ffn_profile=ffn_profile(),
-        ),
         heartbeat=heartbeat,
     )
 

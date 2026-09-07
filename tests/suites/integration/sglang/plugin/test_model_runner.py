@@ -156,6 +156,8 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     )
 
     class FakeInstanceRuntime:
+        fabric_plan = None
+
         def wait_for_fabric_executable(self) -> object:
             events.append("wait_for_fabric_executable")
             return object()

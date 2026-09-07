@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import signal
+import threading
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Literal, cast
@@ -12,8 +13,9 @@ import pytest
 import xpool.runtime.agent
 from tests.harness.support.config import reset_global_config
 from tests.harness.support.runtime.atnagent import reset_agent_runtime
+from xpool.fabric import FabricPlan
 from xpool.native import RuntimeRole
-from xpool.runtime.agent import Agent
+from xpool.runtime.agent import Agent, AgentError
 from xpool.service.client import XpoolClient
 from xpool.service.wire import HeartbeatResponse
 
@@ -294,3 +296,43 @@ def test_agent_run_continues_pre_join_cleanup_after_owner_close_failure(monkeypa
         agent.run()
 
     assert events == ["register", "heartbeat:start", "heartbeat:close", "role:close", "client:close"]
+
+
+def test_agent_reregisters_missing_registration_before_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    shutdown_requested = threading.Event()
+    agent = RunLoopAgent(
+        events=events,
+        request_shutdown=lambda: None,
+        shutdown_point="advance",
+    )
+    agent.registered = True
+    monkeypatch.setattr(agent.heartbeat_worker, "consume_registration_missing", lambda: True)
+
+    def register() -> None:
+        events.append("register")
+        agent.registered = True
+        shutdown_requested.set()
+
+    monkeypatch.setattr(agent, "register", register)
+
+    agent.run_control_loop(shutdown_requested)
+
+    assert events == ["heartbeat:stop", "register", "heartbeat:start"]
+
+
+def test_agent_fails_when_registration_disappears_after_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    agent = RunLoopAgent(
+        events=events,
+        request_shutdown=lambda: None,
+        shutdown_point="advance",
+    )
+    agent.registered = True
+    agent.fabric_plan = cast(FabricPlan, object())
+    monkeypatch.setattr(agent.heartbeat_worker, "consume_registration_missing", lambda: True)
+
+    with pytest.raises(AgentError):
+        agent.run_control_loop(threading.Event())
+
+    assert events == ["heartbeat:stop"]

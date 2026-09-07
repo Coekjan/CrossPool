@@ -19,7 +19,6 @@ from xpool.service.wire import (
     AtnAgentTransportArenaBinding,
     AtnAgentTransportArenaUpsertRequest,
     AtnAgentTransportLeaseQuiesceResponse,
-    ControlPlaneWarning,
     FabricParticipantReport,
     FabricQuiesceRequest,
     FfnAgentRegistration,
@@ -83,7 +82,7 @@ class XpoolClient:
             except (XpoolClientError, XpoolDaemonError) as error:
                 if not error.is_recoverable:
                     raise
-                logger.warning(
+                logger.debug(
                     "daemon health check failed on attempt %s/%s: %s",
                     attempt + 1,
                     DAEMON_HEALTH_RETRY_ATTEMPTS,
@@ -125,17 +124,6 @@ class XpoolClient:
             daemon_error.message,
             status_code=status_code,
         )
-
-    def log_warnings(self, warnings: list[ControlPlaneWarning]) -> None:
-        """Log warnings returned by a daemon control-plane operation."""
-
-        for warning in warnings:
-            logger.warning(
-                "xpool daemon warning [%s cuda_device=%s]: %s",
-                warning.kind,
-                warning.cuda_device,
-                warning.message,
-            )
 
     def request(
         self,
@@ -262,9 +250,7 @@ class XpoolClient:
         """Refresh one FfnAgent heartbeat and return daemon warnings."""
 
         response = self.request("POST", f"/ffnagent/{cuda_device}/heartbeat", json=heartbeat.model_dump(mode="json"))
-        heartbeat_response = self.decode_model(response, HeartbeatResponse, "ffnagent heartbeat")
-        self.log_warnings(heartbeat_response.warnings)
-        return heartbeat_response
+        return self.decode_model(response, HeartbeatResponse, "ffnagent heartbeat")
 
     def heartbeat_atnagent(self, cuda_device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
         """Refresh one AtnAgent heartbeat and return daemon warnings.
@@ -280,14 +266,10 @@ class XpoolClient:
             XpoolClientError: If the request fails or the response is invalid.
             XpoolDaemonError: If the daemon rejects the heartbeat.
 
-        Side Effects:
-            Logs every control-plane warning returned by the daemon.
         """
 
         response = self.request("POST", f"/atnagent/{cuda_device}/heartbeat", json=heartbeat.model_dump(mode="json"))
-        heartbeat_response = self.decode_model(response, HeartbeatResponse, "atnagent heartbeat")
-        self.log_warnings(heartbeat_response.warnings)
-        return heartbeat_response
+        return self.decode_model(response, HeartbeatResponse, "atnagent heartbeat")
 
     def upsert_atnagent_transport_arenas(
         self,
@@ -421,7 +403,7 @@ class XpoolClient:
         )
 
     def heartbeat_instance(self, instance_id: str, *, rank: int, heartbeat: ProcessRef) -> HeartbeatResponse:
-        """Refresh one instance-rank heartbeat and log daemon warnings."""
+        """Refresh one instance-rank heartbeat and return daemon warnings."""
 
         instance_path = quote(instance_id, safe="/")
         response = self.request(
@@ -430,9 +412,7 @@ class XpoolClient:
             params={"rank": rank},
             json=heartbeat.model_dump(mode="json"),
         )
-        heartbeat_response = self.decode_model(response, HeartbeatResponse, "instance heartbeat")
-        self.log_warnings(heartbeat_response.warnings)
-        return heartbeat_response
+        return self.decode_model(response, HeartbeatResponse, "instance heartbeat")
 
     def acquire_instance_transport_arena(
         self,

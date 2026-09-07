@@ -158,4 +158,4 @@ def write_event(forward_phase: ForwardPhase, event: str, runner: GraphRunner) ->
             current_handle.write(line)
             current_handle.flush()
     except Exception:
-        logger.warning("Failed to record xpool graph observer event", exc_info=True)
+        logger.warning("failed to record xpool graph observer event", exc_info=True)

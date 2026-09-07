@@ -41,6 +41,15 @@ Documentation gates cover supported declarations, not every implementation
 parameter. They must not require ceremonial parameter, return-value, override,
 or helper descriptions merely to satisfy a coverage rule.
 
+Runtime logs are low-frequency operational records, not a second protocol or
+trace stream. Keep messages and field names lowercase, include process identity
+relevant to the event owner explicitly, and write runtime logs to stderr while
+keeping CLI data on stdout. Log state edges and completed slow phases at the
+owning layer; keep retries, polling, and acknowledgements at debug level, and
+report a failure only at the layer that terminates the operation. Prefer the
+standard library logging package and one process-local formatter over
+module-specific wrappers or context registries.
+
 ## Ownership And Abstraction
 
 Put behavior at the narrowest layer that owns it. Model-specific behavior

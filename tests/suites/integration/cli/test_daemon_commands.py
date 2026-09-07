@@ -114,11 +114,11 @@ def test_daemon_check_reports_daemon_error(monkeypatch, capsys) -> None:
 def test_daemon_serve_runs_uvicorn(monkeypatch) -> None:
     failure = xpool.cli.subcommands.daemon.DaemonFailure()
     app = SimpleNamespace(state=SimpleNamespace(daemon_failure=failure))
-    calls: list[tuple[object, str, int, object]] = []
+    calls: list[tuple[object, str, int, bool, object]] = []
 
     class FakeDaemonServer:
         def __init__(self, config, server_failure) -> None:
-            calls.append((config.app, config.host, config.port, server_failure))
+            calls.append((config.app, config.host, config.port, config.access_log, server_failure))
 
         def run(self) -> None:
             pass
@@ -128,7 +128,7 @@ def test_daemon_serve_runs_uvicorn(monkeypatch) -> None:
 
     assert main(["daemon", "serve", "--config", "configs/xpool.example.toml"]) == 0
 
-    assert calls == [(app, "127.0.0.1", 9810, failure)]
+    assert calls == [(app, "127.0.0.1", 9810, False, failure)]
 
 
 def test_daemon_serve_returns_nonzero_after_watchdog_failure(monkeypatch) -> None:

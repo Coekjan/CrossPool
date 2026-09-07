@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import cast
 
 import pytest
@@ -121,6 +122,37 @@ def test_agent_construction_initializes_role_and_devkit(
     agent_type(cuda_device=cuda_device)
 
     assert events == [("init", cuda_device, role), ("devkit",)]
+
+
+@pytest.mark.parametrize(
+    "agent_type",
+    [AtnAgent, FfnAgent],
+    ids=["atnagent", "ffnagent"],
+)
+def test_agent_startup_registration_failure_is_debug(
+    caplog: pytest.LogCaptureFixture,
+    agent_type: type[AtnAgent] | type[FfnAgent],
+) -> None:
+    class UnavailableClient:
+        def register_atnagent(self, registration: object) -> None:
+            raise XpoolClientError("transport", "daemon unavailable")
+
+        def register_ffnagent(self, registration: object) -> None:
+            raise XpoolClientError("transport", "daemon unavailable")
+
+    agent = object.__new__(agent_type)
+    agent.client = cast(XpoolClient, UnavailableClient())
+    agent.cuda_device = 0
+    agent.registration = object()
+    agent.registered = True
+    if isinstance(agent, AtnAgent):
+        agent.registration_epoch = 0
+
+    with caplog.at_level(logging.DEBUG, logger=agent_type.__module__):
+        agent.register()
+
+    assert not agent.registered
+    assert [record.levelno for record in caplog.records] == [logging.DEBUG]
 
 
 def test_cuda_device_selection_rejects_unknown_device() -> None:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 
 import uvicorn
 
@@ -12,6 +14,8 @@ from xpool.config import XpoolConfig
 from xpool.service.client import XpoolClient, XpoolClientError, XpoolDaemonError
 from xpool.service.daemon import create_daemon
 from xpool.service.daemon.app import DaemonFailure
+
+logger = logging.getLogger(__name__)
 
 type DaemonCheckPayload = dict[str, object]
 
@@ -53,10 +57,13 @@ class DaemonServeCommand(RunnableCliCommand):
 
         app = create_daemon()
         server = DaemonServer(
-            uvicorn.Config(app, host=config.daemon.host, port=config.daemon.port),
+            uvicorn.Config(app, host=config.daemon.host, port=config.daemon.port, access_log=False),
             app.state.daemon_failure,
         )
-        server.run()
+        try:
+            server.run()
+        finally:
+            logger.info("process stopped pid=%s", os.getpid())
         return int(app.state.daemon_failure.failed)
 
 

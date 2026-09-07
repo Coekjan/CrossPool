@@ -67,5 +67,5 @@ def install(package_name: str = DEVKIT_PACKAGE) -> None:
         entry = getattr(module, "install", None)
         if not callable(entry):
             raise RuntimeError(f"xpool devkit observer {module.__name__} does not expose install()")
-        logger.debug("Installing xpool devkit observer %s", module_info.name)
+        logger.debug("installing devkit observer=%s", module_info.name)
         cast(ObserverInstaller, entry)()

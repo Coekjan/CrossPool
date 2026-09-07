@@ -209,6 +209,7 @@ The main configuration boundaries are:
 | `devices.atn_cuda_devices` | Places AtnAgent roles. |
 | `devices.ffn_cuda_devices` | Places FfnAgent roles. |
 | `scheduler.*` | Configures attention and executor concurrency and Fabric scheduling. |
+| `logging.*` | Configures runtime log level and terminal color on stderr. |
 | `ffn.loader.*` | Configures bounded checkpoint-reading parallelism. |
 | `ffn.placement.*` | Configures placement solving and explicit device-memory margin. |
 | `memory.calibration_path` | Selects an optional environment-qualified memory calibration profile. |

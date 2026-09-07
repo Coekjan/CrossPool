@@ -124,4 +124,4 @@ def test_graph_observer_event_fault_does_not_block_runner(
     with caplog.at_level("WARNING", logger="xpool.integrations.sglang.devkit.graph_observer"):
         assert DecodeCudaGraphRunner().capture() == "captured"
 
-    assert "Failed to record xpool graph observer event" in caplog.text
+    assert "failed to record xpool graph observer event" in caplog.text

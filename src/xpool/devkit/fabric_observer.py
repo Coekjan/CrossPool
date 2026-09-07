@@ -212,7 +212,7 @@ def install() -> None:
                 if snapshot is not None:
                     write_fabric_snapshot(plan.generation, snapshot)
             except Exception:
-                logger.warning("Failed to record xpool Fabric observer snapshot", exc_info=True)
+                logger.warning("failed to record xpool fabric observer snapshot", exc_info=True)
 
         setattr(Agent, "advance_fabric_lifecycle", observed_advance)
         installed = True

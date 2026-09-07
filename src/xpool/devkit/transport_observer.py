@@ -112,7 +112,7 @@ def install_atnagent_observer() -> None:
                     snapshot=endpoint,
                 )
         except Exception:
-            logger.warning("Failed to record xpool transport observer snapshot", exc_info=True)
+            logger.warning("failed to record xpool transport observer snapshot", exc_info=True)
 
     setattr(AtnAgentTransportRuntime, "quiesce", observed_quiesce)
 
@@ -137,7 +137,7 @@ def install_instance_observer() -> None:
                         snapshot=snapshot.endpoints[0],
                     )
             except Exception:
-                logger.warning("Failed to record xpool transport observer snapshot", exc_info=True)
+                logger.warning("failed to record xpool transport observer snapshot", exc_info=True)
         original_detach(runtime)
 
     setattr(InstanceRankRuntime, "detach_arena", observed_detach)

@@ -46,6 +46,20 @@ Breakable graph modes all invoke the same FFN data-plane protocol.
 FfnAgent execution is always graph-backed and does not receive an outer graph
 mode field.
 
+## Operational logging
+
+Every process configures the process-local `xpool` logger after resolving the
+global configuration. Runtime records use the configured level and
+terminal-aware color policy, write to stderr, and do not replace the root,
+Uvicorn, or SGLang logging policy. CLI result data remains on stdout.
+
+Runtime logs describe low-frequency lifecycle transitions, completed slow
+startup phases, and recoverable communication state edges. Observer records
+remain authoritative for per-request, protocol, routing, and Graph evidence.
+The layer that terminates an operation owns its failure log. The daemon logs the
+first entry and final clearance of each global warning aggregated by
+`(kind, device)`; heartbeat clients do not duplicate unchanged warning state.
+
 ## Generation planning
 
 One daemon-authored `FabricPlan` describes a stopped-world Fabric generation.
@@ -159,6 +173,13 @@ Startup is monotonic:
 7. Instance ranks observe the executable barrier, attach their Transport
    arenas, and publish initialization readiness; and
 8. the daemon reports ready only after all required owners are initialized.
+
+An AtnAgent or FfnAgent may repeat registration only before retaining a Fabric
+Plan. Registration loss after Plan acquisition is terminal because participants
+cannot recover into a retained Generation. An Instance rank may retry temporary
+daemon transport failures within its existing bounded deadline, but a daemon
+response that its registration is missing is terminal; it does not re-register
+or reacquire its Transport lease.
 
 Readiness never derives from process existence alone. It requires live
 registrations, MPS availability, a retained admitted plan, usable Transport

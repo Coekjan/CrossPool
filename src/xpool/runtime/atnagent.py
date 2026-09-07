@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -10,7 +11,7 @@ import xpool.native
 from xpool.config import get_global_config
 from xpool.fabric import FabricGenerationPhase, FabricParticipantPhase
 from xpool.native import ABI_VERSION, RuntimeRole
-from xpool.runtime.agent import AGENT_SHUTDOWN_POLL_INTERVAL_S, Agent, AgentError, AgentHeartbeat, logger
+from xpool.runtime.agent import AGENT_SHUTDOWN_POLL_INTERVAL_S, Agent, AgentError, AgentHeartbeat
 from xpool.service.client import XpoolClient, XpoolClientError
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
@@ -23,6 +24,8 @@ from xpool.service.wire import (
 from xpool.transport import TransportArenaHandle
 
 __all__ = ["AtnAgent", "AtnAgentTransportArenaState", "AtnAgentTransportRuntime"]
+
+logger = logging.getLogger(__name__)
 
 TRANSPORT_PUBLICATION_RECOVERY_S = 60.0
 TRANSPORT_SHUTDOWN_DEADLINE_S = 60.0
@@ -112,7 +115,7 @@ class AtnAgentTransportRuntime:
         self.publication_deadline = deadline
         if time.monotonic() >= deadline:
             raise AgentError("atnagent transport arenas were not published before the recovery deadline") from error
-        logger.warning("waiting to publish atnagent transport arenas: %s", error)
+        logger.debug("waiting to publish transport arenas: %s", error)
         return False
 
     def prepare(self, registration_epoch: int, instance_ranks: Mapping[str, int]) -> bool:
@@ -208,8 +211,8 @@ class AtnAgentTransportRuntime:
         if not complete:
             missing = configured - frozenset(registrations)
             if missing:
-                logger.info(
-                    "waiting for local instance registrations on CUDA device %s rank %s; missing instances: %s",
+                logger.debug(
+                    "waiting for local instance registrations device=%s rank=%s missing=%s",
                     self.cuda_device,
                     self.local_rank,
                     ", ".join(sorted(missing)),
@@ -249,13 +252,13 @@ class AtnAgentTransportRuntime:
             except (XpoolClientError, XpoolDaemonError) as error:
                 if not error.is_recoverable:
                     raise AgentError("failed to quiesce AtnAgent transport leases") from error
-                logger.warning("failed to quiesce AtnAgent transport leases: %s", error)
+                logger.debug("failed to quiesce transport leases: %s", error)
                 time.sleep(AGENT_SHUTDOWN_POLL_INTERVAL_S)
                 continue
             if not response.in_use:
                 return
-            logger.info(
-                "waiting for transport arena leases on rank %s: %s",
+            logger.debug(
+                "waiting for transport arena leases rank=%s in_use=%s",
                 self.local_rank,
                 ", ".join(f"{entry.instance_id}:{entry.rank}" for entry in response.in_use),
             )
@@ -333,10 +336,11 @@ class AtnAgent(Agent):
             self.registered = False
             if not error.is_recoverable:
                 raise AgentError(f"AtnAgent registration received unrecoverable daemon error: {error}") from error
-            logger.warning("AtnAgent registration failed: %s", error)
+            logger.debug("registration failed device=%s detail=%s", self.cuda_device, error)
             return
         self.registered = True
         self.registration_epoch += 1
+        logger.info("registered device=%s pid=%s", self.cuda_device, self.proc_id.pid)
 
     def send_heartbeat(self) -> HeartbeatResponse:
         """Publish this AtnAgent's heartbeat."""
@@ -354,7 +358,15 @@ class AtnAgent(Agent):
             for rank, atnagent_index in enumerate(instance_plan.instance_rank_topology.atnagent_indices)
             if atnagent_index == self.local_rank
         }
-        return self.transport.prepare(self.registration_epoch, instance_ranks)
+        prepared = self.transport.prepare(self.registration_epoch, instance_ranks)
+        if prepared:
+            logger.info(
+                "transport prepared device=%s rank=%s instance_count=%s",
+                self.cuda_device,
+                self.local_rank,
+                len(instance_ranks),
+            )
+        return prepared
 
     def prepare_fabric_execution(self) -> None:
         """Require no AtnAgent resource binding between join and activation."""

@@ -191,7 +191,7 @@ class FabricGenerationState:
                 f"Fabric generation cannot transition from {self.phase.value} to {phase.value}",
             )
         logger.info(
-            "Fabric generation %s transitioned from %s to %s",
+            "generation phase changed generation=%s from=%s to=%s",
             self.plan.generation.format(),
             self.phase.value,
             phase.value,
@@ -366,8 +366,8 @@ class FabricController:
             generation.record_invocation_failure(report.invocation_failure)
         if report.control_failure is not None:
             generation.record_control_failure(report.control_failure)
-        logger.info(
-            "Fabric participant PE %s acknowledged %s for generation %s",
+        logger.debug(
+            "participant acknowledged pe=%s phase=%s generation=%s",
             report.pe,
             report.phase.value,
             report.generation.format(),

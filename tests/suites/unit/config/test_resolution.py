@@ -69,6 +69,8 @@ def test_defaults_fill_missing_optional_sections() -> None:
     assert config.scheduler.atn_concurrency == 1
     assert config.scheduler.ffn_concurrency == 1
     assert config.ffn.loader.parallelism == 4
+    assert config.logging.level == "info"
+    assert config.logging.color is True
     assert config.memory.calibration_path is None
     assert config.vendor.model_base_uri is None
 
@@ -90,6 +92,39 @@ def test_ffn_loader_parallelism_uses_cli_env_config_default_precedence() -> None
         ).ffn.loader.parallelism
         == 5
     )
+
+
+def test_logging_level_uses_cli_env_config_default_precedence() -> None:
+    payload = {
+        "logging": {"level": "warning"},
+        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "models": [{"id": "m", "path": "/models/m"}],
+    }
+
+    assert XpoolConfig.from_mapping(payload).logging.level == "warning"
+    assert XpoolConfig.from_mapping(payload, env={"XPOOL_LOG_LEVEL": "debug"}).logging.level == "debug"
+    assert (
+        XpoolConfig.from_mapping(
+            payload,
+            cli={"logging_level": "error"},
+            env={"XPOOL_LOG_LEVEL": "debug"},
+        ).logging.level
+        == "error"
+    )
+
+
+def test_logging_color_uses_toml_and_ignores_environment_override(caplog: pytest.LogCaptureFixture) -> None:
+    payload = {
+        "logging": {"color": False},
+        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "models": [{"id": "m", "path": "/models/m"}],
+    }
+
+    with caplog.at_level("WARNING", logger="xpool.config"):
+        config = XpoolConfig.from_mapping(payload, env={"XPOOL_LOGGING_COLOR": "1"})
+
+    assert config.logging.color is False
+    assert "ignoring unknown xpool environment variables" in caplog.text
 
 
 def test_memory_calibration_path_uses_env_before_config() -> None:

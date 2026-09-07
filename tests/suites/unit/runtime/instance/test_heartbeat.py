@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from http import HTTPStatus
 
@@ -20,17 +21,13 @@ from tests.harness.support.runtime.instance import (
     transport_arena,
     transport_attributes,
 )
-from xpool.config import XpoolConfig
 from xpool.native import ABI_VERSION
 from xpool.runtime.instance import InstanceRankRuntime
 from xpool.service.wire import (
-    ControlPlaneWarning,
-    ControlPlaneWarningKind,
     HeartbeatResponse,
     InstanceRankRegistration,
     ProcessRef,
 )
-from xpool.transport import TransportArenaHandle
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_offline_instance_client.__name__)
 
@@ -127,88 +124,6 @@ def test_instance_start_deregisters_when_heartbeat_start_fails(monkeypatch: pyte
     assert events == ["register", "heartbeat", "deregister"]
 
 
-@pytest.mark.parametrize(
-    ("warning_kind", "warning_cuda_device", "rank"),
-    [
-        ("stale_atnagent", 0, 1),
-        ("quiescing_atnagent", 0, 0),
-        ("stale_atnagent", 0, 0),
-    ],
-)
-def test_instance_heartbeat_routes_nonfatal_atnagent_warning(
-    monkeypatch: pytest.MonkeyPatch,
-    warning_kind: ControlPlaneWarningKind,
-    warning_cuda_device: int,
-    rank: int,
-) -> None:
-    config = (
-        XpoolConfig.from_mapping(
-            {
-                "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
-                "models": [{"id": "m", "path": "/models/m"}],
-            }
-        )
-        if rank == 1
-        else runtime_config()
-    )
-    client = install_scripted_instance_client(
-        monkeypatch,
-        heartbeat_results=[
-            HeartbeatResponse(
-                warnings=[
-                    ControlPlaneWarning(
-                        kind=warning_kind,
-                        cuda_device=warning_cuda_device,
-                        message=f"atnagent {warning_kind}",
-                    )
-                ]
-            )
-        ],
-    )
-    monkeypatch.setattr(xpool.utils.procs.os, "_exit", lambda code: pytest.fail(f"unexpected os._exit({code})"))
-
-    runtime_heartbeat(config, monkeypatch, rank=rank).step()
-
-    assert client.calls == [
-        ("heartbeat", "m", rank, ProcessRef(abi_version=ABI_VERSION, pid=123)),
-    ]
-
-
-def test_instance_heartbeat_fail_closes_after_local_stale_atnagent_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = runtime_config()
-    stale_response = HeartbeatResponse(
-        warnings=[
-            ControlPlaneWarning(
-                kind="stale_atnagent",
-                cuda_device=0,
-                message="atnagent is stale",
-            )
-        ]
-    )
-    client = install_scripted_instance_client(
-        monkeypatch,
-        heartbeat_results=[stale_response, stale_response],
-    )
-
-    monotonic_values = iter([0.0, xpool.runtime.instance.STALE_ATNAGENT_RECOVERY_GRACE_S + 1.0])
-
-    monkeypatch.setattr(xpool.runtime.instance.time, "monotonic", lambda: next(monotonic_values))
-    monkeypatch.setattr(xpool.utils.procs.os, "_exit", lambda code: (item for item in ()).throw(SystemExit(code)))
-    heartbeat = runtime_heartbeat(config, monkeypatch)
-
-    heartbeat.step()
-    with pytest.raises(SystemExit) as exc_info:
-        heartbeat.step()
-
-    assert exc_info.value.code == 1
-    assert client.calls == [
-        ("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123)),
-        ("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123)),
-    ]
-
-
 @pytest.mark.parametrize("failure_kind", ["status", "transport"])
 def test_instance_heartbeat_retries_recoverable_response_failure(
     monkeypatch: pytest.MonkeyPatch,
@@ -241,6 +156,7 @@ def test_instance_heartbeat_retries_recoverable_response_failure(
 
 def test_instance_heartbeat_keeps_client_on_recoverable_failure_and_closes_on_stop(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     config = runtime_config()
     client = install_scripted_instance_client(
@@ -252,8 +168,9 @@ def test_instance_heartbeat_keeps_client_on_recoverable_failure_and_closes_on_st
     )
     heartbeat = runtime_heartbeat(config, monkeypatch)
 
-    heartbeat.step()
-    heartbeat.step()
+    with caplog.at_level(logging.DEBUG, logger="xpool.runtime.instance"):
+        heartbeat.step()
+        heartbeat.step()
     heartbeat.stop()
 
     assert client.calls == [
@@ -262,6 +179,7 @@ def test_instance_heartbeat_keeps_client_on_recoverable_failure_and_closes_on_st
         ("close",),
     ]
     assert client.close_count == 1
+    assert [record.levelno for record in caplog.records] == [logging.WARNING, logging.INFO]
 
 
 def test_instance_heartbeat_fail_closes_after_transport_error_deadline(
@@ -286,125 +204,21 @@ def test_instance_heartbeat_fail_closes_after_transport_error_deadline(
     ]
 
 
-def test_instance_heartbeat_resets_transport_recovery_deadline_during_stale_atnagent(
+def test_instance_heartbeat_fail_closes_when_daemon_registration_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = runtime_config()
     client = install_scripted_instance_client(
-        monkeypatch,
-        heartbeat_results=[
-            xpool.runtime.instance.XpoolClientError("transport", "daemon unavailable"),
-            HeartbeatResponse(
-                warnings=[
-                    ControlPlaneWarning(
-                        kind="stale_atnagent",
-                        cuda_device=0,
-                        message="atnagent is stale",
-                    )
-                ]
-            ),
-            xpool.runtime.instance.XpoolClientError("transport", "daemon unavailable"),
-        ],
-    )
-
-    monotonic_values = iter(
-        [
-            0.0,
-            1.0,
-            10.0,
-            xpool.runtime.instance.STALE_ATNAGENT_RECOVERY_GRACE_S + 5.0,
-            xpool.runtime.instance.STALE_ATNAGENT_RECOVERY_GRACE_S + 5.0,
-        ]
-    )
-
-    monkeypatch.setattr(xpool.runtime.instance.time, "monotonic", lambda: next(monotonic_values))
-    monkeypatch.setattr(xpool.utils.procs.os, "_exit", lambda code: pytest.fail(f"unexpected os._exit({code})"))
-    heartbeat = runtime_heartbeat(config, monkeypatch)
-
-    heartbeat.step()
-    heartbeat.step()
-    heartbeat.step()
-
-    assert client.calls == [
-        ("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123)),
-        ("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123)),
-        ("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123)),
-    ]
-
-
-def test_instance_heartbeat_reregisters_missing_daemon_registration(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = runtime_config()
-    arena = transport_arena()
-    client = install_scripted_instance_client(
-        monkeypatch,
-        heartbeat_results=[
-            xpool.runtime.instance.XpoolDaemonError("not_ready", "registration missing"),
-            HeartbeatResponse(warnings=[]),
-        ],
-        arena_results=[arena],
-    )
-
-    heartbeat = runtime_heartbeat(config, monkeypatch)
-    heartbeat.arena_handle = arena
-    heartbeat.step()
-
-    assert client.calls[0] == ("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123))
-    assert client.calls[1] == ("register", heartbeat.registration)
-    assert client.calls[2] == (
-        "acquire",
-        "m",
-        0,
-        ProcessRef(abi_version=ABI_VERSION, pid=123),
-    )
-    assert client.calls[3] == ("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123))
-
-
-def test_instance_heartbeat_fail_closes_if_recovered_arena_handle_changes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = runtime_config()
-    install_scripted_instance_client(
         monkeypatch,
         heartbeat_results=[xpool.runtime.instance.XpoolDaemonError("not_ready", "registration missing")],
-        arena_results=[TransportArenaHandle(handle="11" * 64)],
     )
     monkeypatch.setattr(xpool.utils.procs.os, "_exit", lambda code: (item for item in ()).throw(SystemExit(code)))
-    heartbeat = runtime_heartbeat(config, monkeypatch)
-    heartbeat.arena_handle = transport_arena()
 
     with pytest.raises(SystemExit) as exc_info:
-        heartbeat.step()
+        runtime_heartbeat(config, monkeypatch).step()
 
     assert exc_info.value.code == 1
-
-
-def test_instance_heartbeat_retries_arena_lease_after_registration_recovers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = runtime_config()
-    arena = transport_arena()
-    client = install_scripted_instance_client(
-        monkeypatch,
-        heartbeat_results=[
-            xpool.runtime.instance.XpoolDaemonError("not_ready", "registration missing"),
-            HeartbeatResponse(warnings=[]),
-        ],
-        arena_results=[
-            xpool.runtime.instance.XpoolDaemonError("not_ready", "arena not republished"),
-            arena,
-        ],
-    )
-    heartbeat = runtime_heartbeat(config, monkeypatch)
-    heartbeat.arena_handle = arena
-
-    heartbeat.step()
-    assert heartbeat.arena_lease_recovery_pending
-    heartbeat.step()
-
-    assert not heartbeat.arena_lease_recovery_pending
-    assert [call[0] for call in client.calls] == ["heartbeat", "register", "acquire", "heartbeat", "acquire"]
+    assert client.calls == [("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123))]
 
 
 @pytest.mark.parametrize(

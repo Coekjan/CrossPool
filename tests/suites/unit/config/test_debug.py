@@ -305,4 +305,4 @@ def test_init_global_config_warns_once_for_unknown_xpool_env(
         init_global_config(config_path=config_path)
 
     messages = [record.message for record in caplog.records if "XPOOL_UNKNOWN" in record.message]
-    assert messages == ["Ignoring unknown xpool environment variables: XPOOL_UNKNOWN"]
+    assert messages == ["ignoring unknown xpool environment variables: XPOOL_UNKNOWN"]

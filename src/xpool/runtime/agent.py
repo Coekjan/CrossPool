@@ -114,6 +114,7 @@ class Agent(ABC):
         self.participant_report: FabricParticipantReport | None = None
         self.fabric_stopped = False
         self.heartbeat_worker: AgentHeartbeat
+        logger.info("starting device=%s pid=%s", self.cuda_device, self.proc_id.pid)
 
     @abstractmethod
     def activate_fabric(self) -> None:
@@ -189,6 +190,7 @@ class Agent(ABC):
                 raise AgentError(f"Fabric plan acquisition failed: {error}") from error
             self.fabric_plan = plan
             self.fabric_phase = FabricGenerationPhase.PREPARING_JOIN
+            logger.info("fabric plan acquired generation=%s device=%s", plan.generation.format(), self.cuda_device)
 
         report = self.participant_report
         try:
@@ -208,6 +210,11 @@ class Agent(ABC):
                             raise AgentError("Fabric join requires the retained Arena Projection")
                         xpool.native.fabric.join(projection, self.fabric_pe())
                         self.report_fabric_phase(FabricParticipantPhase.JOINED)
+                        logger.info(
+                            "fabric joined pe=%s generation=%s",
+                            self.fabric_pe(),
+                            self.fabric_plan.generation.format(),
+                        )
                 case FabricGenerationPhase.PREPARING_EXECUTION if report is not None:
                     if report.phase is FabricParticipantPhase.JOINED:
                         self.prepare_fabric_execution()
@@ -216,6 +223,11 @@ class Agent(ABC):
                     if report.phase is FabricParticipantPhase.EXECUTION_READY:
                         self.activate_fabric()
                         self.report_fabric_phase(FabricParticipantPhase.ACTIVE)
+                        logger.info(
+                            "active pe=%s generation=%s",
+                            self.fabric_pe(),
+                            self.fabric_plan.generation.format(),
+                        )
                 case FabricGenerationPhase.ABORTING:
                     raise AgentError("daemon selected fail-stop Fabric abort")
                 case FabricGenerationPhase.QUIESCING if report is not None:
@@ -322,7 +334,7 @@ class Agent(ABC):
                 control_failure=message,
             )
         except AgentError:
-            logger.exception("failed to report local Fabric control failure")
+            logger.exception("failed to report local fabric control failure")
 
     def fabric_pe(self) -> int:
         """Return this Agent's unique immutable Fabric PE index."""
@@ -358,6 +370,8 @@ class Agent(ABC):
             self.heartbeat_worker.raise_if_failed()
             if self.heartbeat_worker.consume_registration_missing():
                 self.heartbeat_worker.stop()
+                if self.fabric_plan is not None:
+                    raise AgentError("agent registration disappeared after fabric plan acquisition")
                 self.registered = False
             response = self.heartbeat_worker.consume_response()
             if response is not None:
@@ -386,6 +400,7 @@ class Agent(ABC):
         shutdown_requested = threading.Event()
 
         def request_shutdown(signal_number: int, frame: object) -> None:
+            logger.info("shutdown requested device=%s pid=%s", self.cuda_device, self.proc_id.pid)
             shutdown_requested.set()
 
         with (
@@ -395,7 +410,10 @@ class Agent(ABC):
             try:
                 self.run_control_loop(shutdown_requested)
             except Exception:
-                logger.exception("xpool Agent failed and will exit without unsafe native cleanup")
+                logger.exception(
+                    "agent failed and will exit without unsafe native cleanup device=%s",
+                    self.cuda_device,
+                )
                 if self.participant_report is None:
                     owners = (
                         ("heartbeat worker", self.heartbeat_worker.close),
@@ -406,18 +424,22 @@ class Agent(ABC):
                         try:
                             close()
                         except Exception:
-                            logger.exception("failed to close pre-join %s", name)
+                            logger.exception("failed to close pre-join %s device=%s", name, self.cuda_device)
                 bail(code=1)
             try:
                 self.shutdown_fabric()
             except Exception:
-                logger.exception("coordinated Fabric shutdown failed; skipping unsafe native cleanup")
+                logger.exception(
+                    "coordinated fabric shutdown failed; skipping unsafe native cleanup device=%s",
+                    self.cuda_device,
+                )
                 bail(code=1)
             self.heartbeat_worker.close()
             try:
                 self.close_role()
             finally:
                 self.client.close()
+            logger.info("stopped device=%s pid=%s", self.cuda_device, self.proc_id.pid)
 
 
 class AgentHeartbeat:
@@ -506,7 +528,7 @@ class AgentHeartbeat:
                 self.latest_response = response
         except XpoolDaemonError as error:
             if error.is_recoverable:
-                logger.warning("Agent registration for CUDA device %s is missing", self.agent.cuda_device)
+                logger.debug("registration missing device=%s", self.agent.cuda_device)
                 with self.lock:
                     self.registration_missing = True
                 return False
@@ -514,7 +536,7 @@ class AgentHeartbeat:
         except XpoolClientError as error:
             if not error.is_recoverable:
                 raise AgentError(f"Agent heartbeat received unrecoverable client error: {error}") from error
-            logger.warning("xpool Agent heartbeat failed: %s", error)
+            logger.debug("heartbeat failed device=%s detail=%s", self.agent.cuda_device, error)
         except Exception as error:
             raise AgentError(f"Agent heartbeat failed with unexpected error: {error}") from error
         return True

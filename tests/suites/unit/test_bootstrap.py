@@ -13,11 +13,23 @@ from xpool.native import RuntimeRole
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
 
+@pytest.fixture(autouse=True)
+def disable_runtime_logging(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep bootstrap tests focused on native initialization ordering."""
+
+    monkeypatch.setattr(xpool.bootstrap.xpool.logging, "configure", lambda role: None)
+
+
 def test_bootstrap_initializes_native_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bootstrap delegates identity ownership before Python-side setup."""
 
     events: list[tuple[str | RuntimeRole | int | None, ...]] = []
     monkeypatch.setattr(xpool.bootstrap.xpool.cext, "ensure_native_loaded", lambda: events.append(("load",)))
+    monkeypatch.setattr(
+        xpool.bootstrap.xpool.logging,
+        "configure",
+        lambda role: events.append(("logging", role)),
+    )
     monkeypatch.setattr(xpool.bootstrap, "get_global_config", lambda: SimpleNamespace(debug=DebugConfig()))
     monkeypatch.setattr(xpool.bootstrap, "set_process_title", lambda title: events.append(("title", title)))
     monkeypatch.setattr(torch.cuda, "set_device", lambda device: events.append(("device", device)))
@@ -32,15 +44,16 @@ def test_bootstrap_initializes_native_runtime(monkeypatch: pytest.MonkeyPatch) -
 
     assert xpool.bootstrap.get_runtime_role() is RuntimeRole.INSTANCE
     assert events[0] == ("load",)
-    assert events[1][:3] == ("init", RuntimeRole.INSTANCE, 2)
-    debug_options = events[1][3]
+    assert events[1] == ("logging", RuntimeRole.INSTANCE)
+    assert events[2][:3] == ("init", RuntimeRole.INSTANCE, 2)
+    debug_options = events[2][3]
     assert isinstance(debug_options, xpool.bootstrap.xpool.native.debug.Options)
     assert debug_options.transport_observer.record_capacity == 8192
     assert debug_options.fabric_observer.record_capacity == 8192
     assert debug_options.graph_observer.enable is False
     assert debug_options.ffn_routing_observer.record_capacity == 8
-    assert events[2] == ("device", 2)
-    assert len(events) == 3
+    assert events[3] == ("device", 2)
+    assert len(events) == 4
 
 
 @pytest.mark.parametrize(

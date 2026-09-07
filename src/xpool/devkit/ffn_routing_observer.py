@@ -108,7 +108,7 @@ def install() -> None:
                 if snapshot is not None:
                     write_routing_snapshot(plan.generation, agent.fabric_pe(), snapshot)
             except Exception:
-                logger.warning("Failed to record xpool FFN Routing Observer snapshot", exc_info=True)
+                logger.warning("failed to record xpool ffn routing observer snapshot", exc_info=True)
 
         setattr(FfnAgent, "advance_fabric_lifecycle", observed_advance)
         installed = True

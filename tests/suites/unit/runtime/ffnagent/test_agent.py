@@ -41,7 +41,7 @@ def test_ffnagent_installs_zero_workspace_policy_before_bootstrap(monkeypatch: p
         lambda self, **kwargs: setattr(self, "proc_id", SimpleNamespace(pid=1)),
     )
     monkeypatch.setattr(xpool.runtime.ffnagent.agent, "ensure_supported_cuda_allocator", lambda: None)
-    monkeypatch.setattr(xpool.runtime.ffnagent.agent, "load", lambda **kwargs: SimpleNamespace())
+    monkeypatch.setattr(xpool.runtime.ffnagent.agent, "load", lambda **kwargs: SimpleNamespace(layers=()))
     monkeypatch.setattr(xpool.runtime.ffnagent.agent, "FfnAgentRegistration", lambda **kwargs: object())
     monkeypatch.setattr(xpool.runtime.ffnagent.agent, "AgentHeartbeat", lambda **kwargs: object())
 
@@ -121,7 +121,7 @@ def test_ffnagent_prepares_weights_then_installs_execution(monkeypatch: pytest.M
     agent.layer_weights = None
     agent.execution_registry = None
     layer_weights = cast(tuple[tuple[FfnLayerWeights | None, ...], ...], (("weights",),))
-    registry = cast(FfnExecutionRegistry, object())
+    registry = cast(FfnExecutionRegistry, SimpleNamespace(layer_weights=layer_weights))
     observed: list[tuple[str, object]] = []
     monkeypatch.setattr(agent, "fabric_pe", lambda: 0)
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
