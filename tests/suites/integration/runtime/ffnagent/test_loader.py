@@ -28,8 +28,8 @@ def install_loader_config() -> None:
     install_test_config(
         XpoolConfig.from_mapping(
             {
-                "ffn": {"loader": {"parallelism": 2}},
-                "devices": {"atn_cuda_devices": [1], "ffn_cuda_devices": [0]},
+                "atn": {"devices": [1]},
+                "ffn": {"devices": [0], "loader": {"parallelism": 2}},
                 "models": [{"id": "model", "path": "/models/model"}],
             }
         )

@@ -55,7 +55,8 @@ def test_client_brackets_ipv6_loopback_host(monkeypatch: pytest.MonkeyPatch) -> 
     config = XpoolConfig.from_mapping(
         {
             "daemon": {"host": "::1", "port": 9810},
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )

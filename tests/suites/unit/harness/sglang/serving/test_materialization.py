@@ -62,7 +62,8 @@ def test_materialize_writes_config_policy_and_sanitizes_environment(
         "ffn_concurrency": case.executor_lane_count,
         "ffn_policy": "fifo",
     }
-    assert raw["devices"] == {"atn_cuda_devices": [0], "ffn_cuda_devices": [1, 2]}
+    assert raw["atn"] == {"devices": [0]}
+    assert raw["ffn"] == {"devices": [1, 2]}
     assert raw["models"] == [{"id": model.model_id} for model in launch.models]
     assert raw["vendor"] == {"model_base_uri": str(base_config.vendor.model_base_uri)}
     assert "debug" not in raw
@@ -141,7 +142,8 @@ def base_e2e_config(manifest: E2eManifest, tmp_path: Path) -> XpoolConfig:
     return XpoolConfig.from_mapping(
         {
             "vendor": {"model_base_uri": str(model_base_uri)},
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1, 2]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1, 2]},
             "models": [{"id": "external/model-not-owned-by-tests"}],
         },
         env={},

@@ -23,7 +23,8 @@ def test_materialization_installs_exact_topology_without_integration_policy(
         {
             "daemon": {"host": "127.0.0.1", "port": 19000},
             "vendor": {"model_base_uri": str(model_root)},
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "base"}],
         },
         env={},
@@ -40,8 +41,8 @@ def test_materialization_installs_exact_topology_without_integration_policy(
         workdir=tmp_path / "run",
     )
 
-    assert launch.config.devices.atn_cuda_devices == [0, 1]
-    assert launch.config.devices.ffn_cuda_devices == [2, 3, 4, 5]
+    assert launch.config.atn.devices == [0, 1]
+    assert launch.config.ffn.devices == [2, 3, 4, 5]
     assert tuple(model.ffn_tp_size for model in launch.config.models) == (4, 2)
     assert launch.config.scheduler.ffn_random_seed == 17
     assert "SGLANG_PLUGINS" not in launch.environment

@@ -96,7 +96,8 @@ def test_agent_construction_initializes_role_and_devkit(
 ) -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )
@@ -165,7 +166,8 @@ def test_cuda_device_selection_rejects_unknown_device() -> None:
 def test_participant_report_commits_only_after_daemon_acknowledgement(monkeypatch: pytest.MonkeyPatch) -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )
@@ -208,7 +210,8 @@ def test_post_join_value_error_is_reported_as_control_failure(monkeypatch: pytes
 
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )
@@ -250,7 +253,8 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
 
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         },
     )

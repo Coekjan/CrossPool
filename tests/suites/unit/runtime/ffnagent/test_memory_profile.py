@@ -12,7 +12,6 @@ import pytest
 
 from tests.harness.support.config import install_test_config, reset_global_config, synthetic_config
 from xpool import ffn
-from xpool.config import MemoryConfig
 from xpool.fabric import FabricPlan, FabricRole
 from xpool.memory import FfnMemoryCalibrationCoefficients, MemoryCalibrationGpu
 from xpool.mps import MpsProbeResult
@@ -103,8 +102,9 @@ def test_profile_ffn_memory_runs_fixed_complete_fleet_matrix(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    config = synthetic_config(ffn_cuda_devices=(1, 2)).model_copy(
-        update={"memory": MemoryConfig(calibration_path=tmp_path / "profile.json")}
+    config = synthetic_config(ffn_cuda_devices=(1, 2))
+    config = config.model_copy(
+        update={"ffn": config.ffn.model_copy(update={"device_memory_calibration": tmp_path / "profile.json"})}
     )
     install_test_config(config)
     world = fitting.MemoryProfileWorld(

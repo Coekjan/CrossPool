@@ -69,12 +69,14 @@ def profile() -> XpoolMemoryCalibrationProfile:
 def install_config(path: Path | None) -> None:
     """Install one single-agent config with an optional Profile path."""
 
+    ffn: dict[str, object] = {"devices": [1]}
     payload: dict[str, object] = {
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": ffn,
         "models": [{"id": "m", "path": "/models/m"}],
     }
     if path is not None:
-        payload["memory"] = {"calibration_path": str(path)}
+        ffn["device_memory_calibration"] = str(path)
     install_test_config(XpoolConfig.from_mapping(payload))
 
 

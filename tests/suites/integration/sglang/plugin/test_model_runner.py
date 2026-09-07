@@ -87,9 +87,11 @@ port = 9810
 atn_concurrency = 1
 ffn_concurrency = 1
 
-[devices]
-atn_cuda_devices = [0]
-ffn_cuda_devices = [1]
+[atn]
+devices = [0]
+
+[ffn]
+devices = [1]
 
 [[models]]
 id = "test/model"

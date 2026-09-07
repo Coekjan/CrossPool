@@ -78,7 +78,8 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
 ) -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )
@@ -159,7 +160,8 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
 def test_daemon_accepts_transport_topology_using_atnagent_prefix() -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
+            "atn": {"devices": [0, 1]},
+            "ffn": {"devices": [2]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )
@@ -178,7 +180,8 @@ def test_daemon_accepts_transport_topology_using_atnagent_prefix() -> None:
 def test_daemon_rejects_transport_topology_exceeding_atnagent_world() -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )
@@ -200,7 +203,8 @@ def test_daemon_rejects_transport_topology_exceeding_atnagent_world() -> None:
 def test_daemon_accepts_dp_transport_with_tp_fastest_rank_order() -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
+            "atn": {"devices": [0, 1]},
+            "ffn": {"devices": [2]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )
@@ -226,7 +230,8 @@ def test_daemon_accepts_dp_transport_with_tp_fastest_rank_order() -> None:
 def test_daemon_rejects_transport_coordinates_that_do_not_use_tp_fastest_order() -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
+            "atn": {"devices": [0, 1]},
+            "ffn": {"devices": [2]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )
@@ -246,7 +251,8 @@ def test_daemon_rejects_transport_coordinates_that_do_not_use_tp_fastest_order()
 def test_daemon_rejects_cross_rank_transport_geometry_mismatch() -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
+            "atn": {"devices": [0, 1]},
+            "ffn": {"devices": [2]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )
@@ -268,7 +274,8 @@ def test_daemon_rejects_cross_rank_transport_geometry_mismatch() -> None:
 def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instance() -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
+            "atn": {"devices": [0, 1]},
+            "ffn": {"devices": [2]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )
@@ -321,7 +328,8 @@ def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instan
 def test_daemon_rejects_atnagent_transport_arena_with_wrong_rank_device() -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0, 1], "ffn_cuda_devices": [2]},
+            "atn": {"devices": [0, 1]},
+            "ffn": {"devices": [2]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )
@@ -385,7 +393,8 @@ def test_daemon_rejects_duplicate_atnagent_transport_arena() -> None:
 def test_daemon_rejects_duplicate_transport_arena_handle() -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "a", "path": "/models/a"}, {"id": "b", "path": "/models/b"}],
         }
     )

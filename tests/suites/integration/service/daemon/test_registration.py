@@ -130,7 +130,7 @@ def test_daemon_reports_all_effective_config_differences() -> None:
     app = create_app(config)
     client_config = config.model_dump(mode="json")
     client_config["daemon"]["port"] = 9811
-    client_config["devices"]["ffn_cuda_devices"] = [2]
+    client_config["ffn"]["devices"] = [2]
 
     response = request(app, "POST", "/config/check", json=client_config)
 
@@ -141,7 +141,7 @@ def test_daemon_reports_all_effective_config_differences() -> None:
             "message": (
                 "client xpool config differs from daemon config:\n"
                 "- daemon.port: client=9811, daemon=9810\n"
-                "- devices.ffn_cuda_devices[0]: client=2, daemon=1"
+                "- ffn.devices[0]: client=2, daemon=1"
             ),
         }
     }
@@ -150,7 +150,7 @@ def test_daemon_reports_all_effective_config_differences() -> None:
 def test_daemon_rejects_invalid_config_check_body() -> None:
     app = create_app(synthetic_config())
 
-    response = request(app, "POST", "/config/check", json={"devices": {}})
+    response = request(app, "POST", "/config/check", json={"atn": {}})
 
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 

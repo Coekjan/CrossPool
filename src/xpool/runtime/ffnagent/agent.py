@@ -137,7 +137,7 @@ class FfnAgent(Agent):
         estimate = estimator.estimate(fabric_plan=plan, ffnagent_index=ffnagent_index)
         torch.cuda.empty_cache()
         free_memory_bytes, _ = torch.cuda.mem_get_info(self.cuda_device)
-        extra_margin_bytes = get_global_config().ffn.placement.device_memory_extra_margin_bytes
+        extra_margin_bytes = get_global_config().ffn.device_memory_extra_margin_bytes
         required_bytes = estimate.peak_bytes + extra_margin_bytes
         admission = "calibrated" if estimator.coefficients is not None else "analytic"
         if required_bytes > free_memory_bytes:

@@ -32,7 +32,8 @@ def config(*, tp_size: int | None = None) -> XpoolConfig:
         model["ffn_tp_size"] = tp_size
     return XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1, 2]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1, 2]},
             "models": [model],
         }
     )
@@ -86,7 +87,8 @@ def test_equal_optimum_placement_uses_lowest_index_groups() -> None:
     install_test_config(
         XpoolConfig.from_mapping(
             {
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1, 2, 3, 4]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1, 2, 3, 4]},
                 "models": [
                     {"id": "wide", "path": "/models/wide", "ffn_tp_size": 4},
                     {"id": "narrow", "path": "/models/narrow", "ffn_tp_size": 2},

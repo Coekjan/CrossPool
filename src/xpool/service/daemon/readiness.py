@@ -72,14 +72,14 @@ class ControlPlaneProjection:
             tuple(
                 (instance.id, rank, cuda_device)
                 for instance in config.instances
-                for rank, cuda_device in enumerate(config.devices.atn_cuda_devices)
+                for rank, cuda_device in enumerate(config.atn.devices)
             )
             if generation is None
             else tuple(
                 (
                     instance_plan.instance_id,
                     rank,
-                    config.devices.atn_cuda_devices[atnagent_index],
+                    config.atn.devices[atnagent_index],
                 )
                 for instance_plan in generation.plan.instance_plans
                 for rank, atnagent_index in enumerate(instance_plan.instance_rank_topology.atnagent_indices)
@@ -99,9 +99,7 @@ class ControlPlaneProjection:
 
         # Warning projection: derive heartbeat and Transport-quiesce diagnostics
         # from the same role snapshot used by readiness.
-        quiescing_devices = {
-            cuda_device for cuda_device in config.devices.atn_cuda_devices if transport.is_quiescing(cuda_device)
-        }
+        quiescing_devices = {cuda_device for cuda_device in config.atn.devices if transport.is_quiescing(cuda_device)}
         warnings: list[ControlPlaneWarning] = []
         for entry in atnagents:
             if entry.status is not ReadinessStatus.ONLINE:

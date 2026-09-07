@@ -107,7 +107,8 @@ def read_events(event_dir: Path) -> list[dict[str, object]]:
 def graph_observer_config(outdir: Path) -> XpoolConfig:
     return XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         },
         env={

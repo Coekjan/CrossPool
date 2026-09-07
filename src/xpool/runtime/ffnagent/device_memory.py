@@ -114,7 +114,7 @@ class DeviceMemoryEstimator:
         """Resolve one configured Model's fixed FFN TP width."""
 
         model = self.config.models[model_plan_index]
-        return model.ffn_tp_size or len(self.config.devices.ffn_cuda_devices)
+        return model.ffn_tp_size or len(self.config.ffn.devices)
 
     def packed_weight_storage_bytes(
         self,
@@ -191,8 +191,8 @@ class DeviceMemoryEstimator:
     def fabric_arena_bytes(self) -> int:
         """Return exact native Fabric Arena bytes from semantic geometry."""
 
-        atnagent_count = len(self.config.devices.atn_cuda_devices)
-        ffnagent_count = len(self.config.devices.ffn_cuda_devices)
+        atnagent_count = len(self.config.atn.devices)
+        ffnagent_count = len(self.config.ffn.devices)
         instance_count = len(self.model_specs)
         executor_lane_count = self.config.scheduler.ffn_concurrency
         layer_count = sum(len(spec.layers) for spec in self.model_specs)
@@ -243,7 +243,7 @@ class DeviceMemoryEstimator:
     ) -> tuple[DeviceMemoryPoint, ...]:
         """Compose ledgers from Model Plans before their Fabric Plan is installed."""
 
-        ffnagent_count = len(self.config.devices.ffn_cuda_devices)
+        ffnagent_count = len(self.config.ffn.devices)
         if not 0 <= ffnagent_index < ffnagent_count:
             raise ValueError("device-memory FfnAgent index is outside the configured Fleet")
         if len(model_plans) != len(self.model_specs):

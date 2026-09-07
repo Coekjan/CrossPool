@@ -37,7 +37,8 @@ def estimator_and_plan() -> tuple[device_memory.DeviceMemoryEstimator, FabricPla
 
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1, 2]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1, 2]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )

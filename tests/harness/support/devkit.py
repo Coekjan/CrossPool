@@ -26,7 +26,8 @@ def observer_enabled_config(observer_name: str, outdir: Path) -> XpoolConfig:
     env_prefix = f"XPOOL_DEBUG_{observer_name.upper()}"
     return XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         },
         env={
@@ -41,7 +42,8 @@ def observers_disabled_config() -> XpoolConfig:
 
     return XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         }
     )

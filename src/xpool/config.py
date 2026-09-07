@@ -17,25 +17,24 @@ from threading import Lock
 from types import MappingProxyType
 from typing import Literal, TypedDict, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 import xpool.native
 
 __all__ = [
     "CONFIG_REGISTRY",
     "AtnAgentConfig",
+    "AtnConfig",
     "ConfigError",
     "ConfigSetting",
     "ConfigSource",
     "ConfigSourceRecord",
     "DebugConfig",
-    "DevicesConfig",
     "FabricObserverDebugConfig",
     "FfnAgentConfig",
     "FfnConfig",
     "FfnLoaderConfig",
     "FfnPlacementConfig",
-    "FfnPlacementOptimizerConfig",
     "FfnRoutingObserverDebugConfig",
     "FfnSchedulingPolicy",
     "GraphObserverDebugConfig",
@@ -425,6 +424,39 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Absolute local model-cache root used to resolve model ids such as org/name into weight paths.",
     ),
     ConfigSetting(
+        name="atn_devices",
+        path=("atn", "devices"),
+        parser="raw",
+        allowed_sources=CONFIG_REQUIRED,
+        required=True,
+        description="CUDA devices that host attention execution and attention-side xpool agents.",
+    ),
+    ConfigSetting(
+        name="ffn_devices",
+        path=("ffn", "devices"),
+        parser="raw",
+        allowed_sources=CONFIG_REQUIRED,
+        required=True,
+        description="CUDA devices that host FFN-side xpool agents.",
+    ),
+    ConfigSetting(
+        name="ffn_device_memory_calibration",
+        path=("ffn", "device_memory_calibration"),
+        parser="raw",
+        allowed_sources=(ConfigSource.ENV, ConfigSource.CONFIG, ConfigSource.DEFAULT),
+        default=None,
+        env_var="XPOOL_FFN_DEVICE_MEMORY_CALIBRATION",
+        description="Absolute path to one environment-qualified xpool memory calibration Profile.",
+    ),
+    ConfigSetting(
+        name="ffn_device_memory_extra_margin_bytes",
+        path=("ffn", "device_memory_extra_margin_bytes"),
+        parser="int",
+        allowed_sources=(ConfigSource.CONFIG, ConfigSource.DEFAULT),
+        default=0,
+        description="Explicit extra device-memory safety margin added after estimation.",
+    ),
+    ConfigSetting(
         name="ffn_loader_parallelism",
         path=("ffn", "loader", "parallelism"),
         parser="int",
@@ -435,39 +467,22 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Number of bounded Host readers used by one FfnAgent checkpoint materialization.",
     ),
     ConfigSetting(
-        name="ffn_placement_optimizer_parallelism",
-        path=("ffn", "placement", "optimizer", "parallelism"),
+        name="ffn_placement_parallelism",
+        path=("ffn", "placement", "parallelism"),
         parser="int",
         allowed_sources=(ConfigSource.CLI, ConfigSource.ENV, ConfigSource.CONFIG, ConfigSource.DEFAULT),
         default=4,
-        cli="--ffn-placement-optimizer-parallelism",
-        env_var="XPOOL_FFN_PLACEMENT_OPTIMIZER_PARALLELISM",
+        cli="--ffn-placement-parallelism",
+        env_var="XPOOL_FFN_PLACEMENT_PARALLELISM",
         description="Worker count for FFN Placement objective passes.",
     ),
     ConfigSetting(
-        name="ffn_placement_optimizer_timeout_seconds",
-        path=("ffn", "placement", "optimizer", "timeout_seconds"),
+        name="ffn_placement_timeout_seconds",
+        path=("ffn", "placement", "timeout_seconds"),
         parser="int",
         allowed_sources=(ConfigSource.CONFIG, ConfigSource.DEFAULT),
         default=60,
         description="Shared non-renewable FFN Placement solve deadline in seconds.",
-    ),
-    ConfigSetting(
-        name="ffn_placement_device_memory_extra_margin_bytes",
-        path=("ffn", "placement", "device_memory_extra_margin_bytes"),
-        parser="int",
-        allowed_sources=(ConfigSource.CONFIG, ConfigSource.DEFAULT),
-        default=0,
-        description="Explicit extra device-memory safety margin added after estimation.",
-    ),
-    ConfigSetting(
-        name="memory_calibration_path",
-        path=("memory", "calibration_path"),
-        parser="raw",
-        allowed_sources=(ConfigSource.ENV, ConfigSource.CONFIG, ConfigSource.DEFAULT),
-        default=None,
-        env_var="XPOOL_MEMORY_CALIBRATION_PATH",
-        description="Absolute path to one environment-qualified xpool memory calibration Profile.",
     ),
     ConfigSetting(
         name="daemon_host",
@@ -520,30 +535,6 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="int",
         allowed_sources=(ConfigSource.CONFIG,),
         description="Optional nonzero uint64 seed used only by the random FFN scheduler.",
-    ),
-    ConfigSetting(
-        name="devices",
-        path=("devices",),
-        parser="raw",
-        allowed_sources=CONFIG_REQUIRED,
-        required=True,
-        description=("Role-local CUDA device lists. Agents and communication ranks are derived from this section."),
-    ),
-    ConfigSetting(
-        name="atn_cuda_devices",
-        path=("devices", "atn_cuda_devices"),
-        parser="raw",
-        allowed_sources=CONFIG_REQUIRED,
-        required=True,
-        description="CUDA devices that host attention execution and attention-side xpool agents.",
-    ),
-    ConfigSetting(
-        name="ffn_cuda_devices",
-        path=("devices", "ffn_cuda_devices"),
-        parser="raw",
-        allowed_sources=CONFIG_REQUIRED,
-        required=True,
-        description="CUDA devices that host FFN-side xpool agents.",
     ),
     ConfigSetting(
         name="models",
@@ -660,8 +651,8 @@ class FfnLoaderConfig(BaseModel):
     )
 
 
-class FfnPlacementOptimizerConfig(BaseModel):
-    """Deterministic startup Placement optimizer policy."""
+class FfnPlacementConfig(BaseModel):
+    """FFN Placement resource-admission policy."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -677,98 +668,80 @@ class FfnPlacementOptimizerConfig(BaseModel):
     )
 
 
-class FfnPlacementConfig(BaseModel):
-    """FFN Placement resource-admission policy."""
+def validate_device_sequence(devices: list[int]) -> list[int]:
+    """Validate one role's rank-ordered CUDA device sequence."""
+
+    if any(device < 0 for device in devices):
+        raise ValueError("devices must contain non-negative CUDA device indices")
+    if len(devices) != len(set(devices)):
+        raise ValueError("devices must be unique")
+    if devices != sorted(devices):
+        raise ValueError("devices must be sorted in ascending order")
+    return devices
+
+
+class AtnConfig(BaseModel):
+    """ATN-owned device assignment."""
 
     model_config = ConfigDict(extra="forbid")
 
+    devices: list[int] = Field(
+        min_length=1,
+        description="CUDA device indices that host attention execution and attention-side xpool agents.",
+    )
+
+    @field_validator("devices")
+    @classmethod
+    def validate_devices(cls, devices: list[int]) -> list[int]:
+        """Validate the rank-ordered AtnAgent device sequence."""
+
+        return validate_device_sequence(devices)
+
+
+class FfnConfig(BaseModel):
+    """FFN-owned device assignment and startup policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    devices: list[int] = Field(
+        min_length=1,
+        description="CUDA device indices that host xpool FFN execution agents.",
+    )
+    device_memory_calibration: Path | None = Field(
+        default=None,
+        description="Absolute path to one xpool Memory Calibration Profile.",
+    )
     device_memory_extra_margin_bytes: int = Field(
         default=0,
         ge=0,
         description="Operator-requested bytes reserved beyond the estimated device-memory envelope.",
     )
-    optimizer: FfnPlacementOptimizerConfig = Field(
-        default_factory=FfnPlacementOptimizerConfig,
-        description="Placement optimizer settings.",
-    )
-
-
-class FfnConfig(BaseModel):
-    """FFN-owned startup policy."""
-
-    model_config = ConfigDict(extra="forbid")
-
     loader: FfnLoaderConfig = Field(
         default_factory=FfnLoaderConfig,
         description="Checkpoint-loading settings.",
     )
     placement: FfnPlacementConfig = Field(
         default_factory=FfnPlacementConfig,
-        description="FFN placement and device-memory admission settings.",
+        description="FFN placement optimizer settings.",
     )
 
+    @field_validator("devices")
+    @classmethod
+    def validate_devices(cls, devices: list[int]) -> list[int]:
+        """Validate the rank-ordered FfnAgent device sequence."""
 
-class MemoryConfig(BaseModel):
-    """Optional offline-calibrated device-memory admission input."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    calibration_path: Path | None = Field(
-        default=None,
-        description="Absolute path to one xpool Memory Calibration Profile.",
-    )
+        return validate_device_sequence(devices)
 
     @model_validator(mode="after")
-    def validate_calibration_path(self) -> MemoryConfig:
+    def validate_device_memory_calibration(self) -> FfnConfig:
         """Normalize and validate the optional calibration Profile path."""
 
-        if self.calibration_path is None:
+        if self.device_memory_calibration is None:
             return self
-        path = self.calibration_path.expanduser()
+        path = self.device_memory_calibration.expanduser()
         if not path.is_absolute():
-            raise ValueError(f"memory.calibration_path must be absolute: {self.calibration_path}")
-        self.calibration_path = path
-        return self
-
-
-class DevicesConfig(BaseModel):
-    """Role-local CUDA device lists supplied by TOML config."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    atn_cuda_devices: list[int] = Field(
-        min_length=1,
-        description="CUDA device indices that host attention execution and attention-side xpool agents.",
-    )
-    ffn_cuda_devices: list[int] = Field(
-        min_length=1,
-        description="CUDA device indices that host xpool FFN execution agents.",
-    )
-
-    @model_validator(mode="after")
-    def validate_devices(self) -> DevicesConfig:
-        """Reject duplicate or role-overlapping CUDA device lists.
-
-        Returns:
-            The validated device config.
-
-        Raises:
-            ValueError: If a CUDA device is duplicated or assigned to both roles.
-        """
-
-        for label, values in (
-            ("devices.atn_cuda_devices", self.atn_cuda_devices),
-            ("devices.ffn_cuda_devices", self.ffn_cuda_devices),
-        ):
-            if any(value < 0 for value in values):
-                raise ValueError(f"{label} must contain non-negative CUDA device indices")
-            if len(values) != len(set(values)):
-                raise ValueError(f"{label} must be unique")
-            if values != sorted(values):
-                raise ValueError(f"{label} must be sorted in ascending order")
-        overlap = sorted(set(self.atn_cuda_devices) & set(self.ffn_cuda_devices))
-        if overlap:
-            raise ValueError(f"CUDA devices may host only one xpool role; overlapping devices: {overlap}")
+            raise ValueError(f"ffn.device_memory_calibration must be absolute: {self.device_memory_calibration}")
+        self.device_memory_calibration = path
         return self
 
 
@@ -1085,11 +1058,10 @@ class XpoolConfig(BaseModel):
     daemon: XpoolDaemonConfig = Field(description="Daemon control-plane config.")
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="Runtime logging policy.")
     scheduler: SchedulerConfig = Field(description="Scheduler resource-concurrency config.")
-    ffn: FfnConfig = Field(default_factory=FfnConfig, description="FFN startup policy.")
-    memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Device-memory calibration input.")
+    atn: AtnConfig = Field(description="ATN device assignment.")
+    ffn: FfnConfig = Field(description="FFN device assignment and startup policy.")
     debug: DebugConfig = Field(description="Debug-only runtime switches.")
     vendor: VendorConfig = Field(default_factory=VendorConfig, description="Vendor model-root settings.")
-    devices: DevicesConfig = Field(description="Role-local CUDA device config.")
     models: list[ModelConfig] = Field(min_length=1, description="Configured model list.")
 
     @staticmethod
@@ -1200,7 +1172,7 @@ class XpoolConfig(BaseModel):
                 sources.extend(setting.source_records(source_payload))
                 continue
             value, source = setting.resolve(source_payload, effective_cli, effective_env)
-            if setting.path is not None and setting.name not in {"devices", "models"}:
+            if setting.path is not None and setting.name != "models":
                 sources.append(
                     {
                         "name": format_source_record_name(setting.path),
@@ -1225,7 +1197,7 @@ class XpoolConfig(BaseModel):
     def cuda_devices(self) -> tuple[int, ...]:
         """Return all CUDA devices managed by xpool, ordered by CUDA device index."""
 
-        return tuple(sorted({*self.devices.atn_cuda_devices, *self.devices.ffn_cuda_devices}))
+        return tuple(sorted({*self.atn.devices, *self.ffn.devices}))
 
     @cached_property
     def atnagents(self) -> tuple[AtnAgentConfig, ...]:
@@ -1236,8 +1208,7 @@ class XpoolConfig(BaseModel):
         """
 
         return tuple(
-            AtnAgentConfig(cuda_device=cuda_device, rank=rank)
-            for rank, cuda_device in enumerate(self.devices.atn_cuda_devices)
+            AtnAgentConfig(cuda_device=cuda_device, rank=rank) for rank, cuda_device in enumerate(self.atn.devices)
         )
 
     @cached_property
@@ -1255,8 +1226,7 @@ class XpoolConfig(BaseModel):
         """
 
         return tuple(
-            FfnAgentConfig(cuda_device=cuda_device, rank=rank)
-            for rank, cuda_device in enumerate(self.devices.ffn_cuda_devices)
+            FfnAgentConfig(cuda_device=cuda_device, rank=rank) for rank, cuda_device in enumerate(self.ffn.devices)
         )
 
     @cached_property
@@ -1285,7 +1255,16 @@ class XpoolConfig(BaseModel):
     def atn_world_size(self) -> int:
         """Return the number of attention-side instance ranks per model."""
 
-        return len(self.devices.atn_cuda_devices)
+        return len(self.atn.devices)
+
+    @model_validator(mode="after")
+    def validate_device_assignments(self) -> XpoolConfig:
+        """Reject CUDA devices assigned to both ATN and FFN roles."""
+
+        overlap = sorted(set(self.atn.devices) & set(self.ffn.devices))
+        if overlap:
+            raise ValueError(f"CUDA devices may host only one xpool role; overlapping devices: {overlap}")
+        return self
 
     def model_path_of(self, model_id: str) -> Path:
         """Return the resolved absolute local path for a configured model.

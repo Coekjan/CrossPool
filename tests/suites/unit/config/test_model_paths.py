@@ -13,7 +13,8 @@ def test_duplicate_model_paths_are_rejected() -> None:
     with pytest.raises(ValidationError, match="model paths must be unique"):
         XpoolConfig.from_mapping(
             {
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
                 "models": [
                     {"id": "m0", "path": "/models/m"},
                     {"id": "m1", "path": "/models/m"},
@@ -27,7 +28,8 @@ def test_vendor_model_base_uri_from_config_derives_model_path() -> None:
     config = XpoolConfig.from_mapping(
         {
             "vendor": {"model_base_uri": "/models"},
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "test/model"}],
         }
     )
@@ -41,7 +43,8 @@ def test_vendor_model_base_uri_is_config_only(caplog: pytest.LogCaptureFixture) 
         config = XpoolConfig.from_mapping(
             {
                 "vendor": {"model_base_uri": "/models-from-config"},
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
                 "models": [{"id": "test/model"}],
             },
             env={"XPOOL_VENDOR_MODEL_BASE_URI": "/models-from-env"},
@@ -56,7 +59,8 @@ def test_explicit_model_path_overrides_vendor_model_base_uri() -> None:
     config = XpoolConfig.from_mapping(
         {
             "vendor": {"model_base_uri": "/models"},
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "test/model", "path": "/custom/deepseek"}],
         }
     )
@@ -69,7 +73,8 @@ def test_model_path_lookup_rejects_unknown_model_id() -> None:
     config = XpoolConfig.from_mapping(
         {
             "vendor": {"model_base_uri": "/models"},
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "test/model"}],
         }
     )
@@ -82,7 +87,8 @@ def test_model_path_or_vendor_model_base_uri_is_required() -> None:
     with pytest.raises(ValidationError, match=r"vendor\.model_base_uri"):
         XpoolConfig.from_mapping(
             {
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
                 "models": [{"id": "test/model"}],
             }
         )
@@ -93,7 +99,8 @@ def test_vendor_model_base_uri_must_be_absolute() -> None:
         XpoolConfig.from_mapping(
             {
                 "vendor": {"model_base_uri": "relative/models"},
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
                 "models": [{"id": "test/model"}],
             }
         )
@@ -103,7 +110,8 @@ def test_model_path_must_be_absolute() -> None:
     with pytest.raises(ValidationError, match="path must be absolute"):
         XpoolConfig.from_mapping(
             {
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
                 "models": [{"id": "m", "path": "relative/model"}],
             },
             cli={},

@@ -206,13 +206,14 @@ The main configuration boundaries are:
 | `SGLANG_PLUGINS=xpool` | Loads the xpool SGLang plugin. |
 | `vendor.model_base_uri` | Sets the external model root. |
 | `models[].id` / `models[].path` | Identifies a model and optionally overrides its absolute path. |
-| `devices.atn_cuda_devices` | Places AtnAgent roles. |
-| `devices.ffn_cuda_devices` | Places FfnAgent roles. |
+| `atn.devices` | Places AtnAgent roles. |
+| `ffn.devices` | Places FfnAgent roles. |
 | `scheduler.*` | Configures attention and executor concurrency and Fabric scheduling. |
 | `logging.*` | Configures runtime log level and terminal color on stderr. |
 | `ffn.loader.*` | Configures bounded checkpoint-reading parallelism. |
-| `ffn.placement.*` | Configures placement solving and explicit device-memory margin. |
-| `memory.calibration_path` | Selects an optional environment-qualified memory calibration profile. |
+| `ffn.placement.*` | Configures placement solving. |
+| `ffn.device_memory_extra_margin_bytes` | Adds an explicit device-memory admission margin. |
+| `ffn.device_memory_calibration` | Selects an optional environment-qualified memory calibration profile. |
 
 Model paths are resolved by `XpoolConfig.model_path_of(model_id)`. Start from
 [`configs/xpool.example.toml`](configs/xpool.example.toml) and
@@ -221,7 +222,7 @@ Model paths are resolved by `XpoolConfig.model_path_of(model_id)`. Start from
 
 Memory calibration is optional: analytic admission works without a profile.
 When a device-local correction is useful, set an absolute
-`memory.calibration_path` and run `uv run xpool memory-profile` before starting
+`ffn.device_memory_calibration` and run `uv run xpool memory-profile` before starting
 the serving processes. The profiler uses a fixed model-independent corpus and
 does not load the configured model weights.
 

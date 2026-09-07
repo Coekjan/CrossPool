@@ -127,7 +127,8 @@ def test_daemon_lease_quiesce_terminates_all_live_owners_concurrently(
 ) -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [
                 {"id": "a", "path": "/models/a"},
                 {"id": "b", "path": "/models/b"},

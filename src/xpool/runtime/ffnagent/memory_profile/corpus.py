@@ -244,8 +244,8 @@ def build_fabric_plan(
 
     members = coordinate_members(
         coordinate,
-        atnagent_count=len(config.devices.atn_cuda_devices),
-        ffnagent_count=len(config.devices.ffn_cuda_devices),
+        atnagent_count=len(config.atn.devices),
+        ffnagent_count=len(config.ffn.devices),
     )
     model_plans = tuple(
         build_model_plan(spec, tp_size=member[1]) for spec, member in zip(model_specs, members, strict=True)
@@ -266,13 +266,9 @@ def build_fabric_plan(
         generation=FabricGenerationId.create(),
         uid=FabricUid(uid),
         pe_placements=tuple(
-            FabricPePlacement(role=FabricRole.ATNAGENT, cuda_device=device)
-            for device in config.devices.atn_cuda_devices
+            FabricPePlacement(role=FabricRole.ATNAGENT, cuda_device=device) for device in config.atn.devices
         )
-        + tuple(
-            FabricPePlacement(role=FabricRole.FFNAGENT, cuda_device=device)
-            for device in config.devices.ffn_cuda_devices
-        ),
+        + tuple(FabricPePlacement(role=FabricRole.FFNAGENT, cuda_device=device) for device in config.ffn.devices),
         executor_lane_count=config.scheduler.ffn_concurrency,
         scheduler=FifoSchedulerPolicy(),
         model_plans=model_plans,

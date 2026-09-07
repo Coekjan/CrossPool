@@ -178,7 +178,7 @@ class SglangInstanceRankBinding:
             atnagent_count=config.atn_world_size,
             supports_dp_attention=supports_dp_attention,
         )
-        placement = SglangCudaPlacement.derive(config.devices.atn_cuda_devices)
+        placement = SglangCudaPlacement.derive(config.atn.devices)
         worker_rank = model_runner.ps.tp_rank
         cuda_device = model_runner.gpu_id
         if (

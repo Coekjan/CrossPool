@@ -17,6 +17,14 @@ Every process receives the same effective configuration. The daemon compares
 declared process identity and topology against that configuration during
 registration; processes do not negotiate independent settings.
 
+Role-owned placement is declared through the required `atn.devices` and
+`ffn.devices` lists. Each list is nonempty, nonnegative, unique, and ascending;
+its order determines the corresponding Agent ranks, and one CUDA device cannot
+belong to both roles. FFN also owns its optional device-memory calibration,
+explicit operator margin, checkpoint-loader policy, and placement-solver
+policy. Loader parallelism lives under `ffn.loader`; solver parallelism and its
+whole-solve deadline live directly under `ffn.placement`.
+
 `scheduler.atn_concurrency` is retained as an explicitly reserved attention-side
 concurrency budget for the later KV-pool and attention-admission design. The
 current generation planner, AtnAgent, and serving integration do not consume it,

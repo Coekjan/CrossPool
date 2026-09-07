@@ -93,7 +93,8 @@ def test_plan_materialization_selects_only_local_layers(
     install_test_config(
         XpoolConfig.from_mapping(
             {
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1, 2]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1, 2]},
                 "models": [{"id": "model", "path": str(tmp_path)}],
             }
         )

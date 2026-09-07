@@ -502,7 +502,7 @@ class ControlPlane:
                     registration.instance.instance_id,
                     registration.instance.rank,
                     registration.proc.pid,
-                    get_global_config().devices.atn_cuda_devices[registration.instance.rank],
+                    get_global_config().atn.devices[registration.instance.rank],
                 )
         self.ensure_fabric_plan()
 
@@ -979,7 +979,7 @@ class ControlPlane:
     ) -> list[TransportArenaPublication]:
         """Validate and normalize transport arenas published by one atnagent."""
 
-        atn_cuda_devices = get_global_config().devices.atn_cuda_devices
+        atn_cuda_devices = get_global_config().atn.devices
         seen: set[InstanceRankId] = set()
         seen_handles: set[str] = set()
         publications: list[TransportArenaPublication] = []
@@ -1102,7 +1102,7 @@ class ControlPlane:
         if instance is None:
             raise XpoolDaemonError("not_found", "unknown instance")
 
-        atn_cuda_devices = config.devices.atn_cuda_devices
+        atn_cuda_devices = config.atn.devices
         self.validate_instance_rank(rank)
         instance_uid = InstanceRankId(instance_id=instance_id, rank=rank)
         cuda_device = atn_cuda_devices[rank]

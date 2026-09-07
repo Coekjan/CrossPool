@@ -15,26 +15,24 @@ ffn_policy = "fifo"
 # Optional and used only when ffn_policy = "random"; omitted means generated.
 # ffn_random_seed = 1
 
+[atn]
+devices = [0]
+
+[ffn]
+devices = [1]
+device_memory_extra_margin_bytes = 0
+# Optional environment-qualified profile produced by xpool memory-profile.
+# device_memory_calibration = "/absolute/path/to/memory-calibration.json"
+
 [ffn.loader]
 parallelism = 4
 
 [ffn.placement]
-device_memory_extra_margin_bytes = 0
-
-[ffn.placement.optimizer]
 parallelism = 4
 timeout_seconds = 60
 
-[memory]
-# Optional environment-qualified profile produced by xpool memory-profile.
-# calibration_path = "/absolute/path/to/memory-calibration.json"
-
 [vendor]
 model_base_uri = "/absolute/path/to/models"
-
-[devices]
-atn_cuda_devices = [0]
-ffn_cuda_devices = [1]
 
 [[models]]
 id = "deepseek-ai/DeepSeek-V2-Lite-Chat"

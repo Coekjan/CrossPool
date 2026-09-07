@@ -58,9 +58,9 @@ class FabricMembership:
         ffnagent_by_device = {
             registration.cuda_device: registration for registration in registrations.ffnagents.values()
         }
-        if any(device not in atnagent_by_device for device in config.devices.atn_cuda_devices):
+        if any(device not in atnagent_by_device for device in config.atn.devices):
             return None
-        if any(device not in ffnagent_by_device for device in config.devices.ffn_cuda_devices):
+        if any(device not in ffnagent_by_device for device in config.ffn.devices):
             return None
 
         model_specs = registrations.ffn_model_specs
@@ -107,14 +107,13 @@ class FabricMembership:
             instance_owners.extend((registration.instance, registration.proc) for registration in complete_ranks)
 
         placements = tuple(
-            FabricPePlacement(role=FabricRole.ATNAGENT, cuda_device=cuda_device)
-            for cuda_device in config.devices.atn_cuda_devices
+            FabricPePlacement(role=FabricRole.ATNAGENT, cuda_device=cuda_device) for cuda_device in config.atn.devices
         ) + tuple(
             FabricPePlacement(
                 role=FabricRole.FFNAGENT,
                 cuda_device=cuda_device,
             )
-            for cuda_device in config.devices.ffn_cuda_devices
+            for cuda_device in config.ffn.devices
         )
         agent_owners = tuple(
             (
@@ -130,7 +129,7 @@ class FabricMembership:
             model_specs=model_specs,
             instance_plans=tuple(instance_plans),
             ffnagent_free_memory_bytes=tuple(
-                ffnagent_by_device[device].cuda_free_memory_bytes for device in config.devices.ffn_cuda_devices
+                ffnagent_by_device[device].cuda_free_memory_bytes for device in config.ffn.devices
             ),
             pe_placements=placements,
             agent_owners=agent_owners,

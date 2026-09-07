@@ -144,7 +144,7 @@ def place_ffn_models(
     except ValueError as error:
         raise XpoolDaemonError("conflict", str(error)) from error
     config = estimator.config
-    ffnagent_count = len(config.devices.ffn_cuda_devices)
+    ffnagent_count = len(config.ffn.devices)
     if len(instance_plans) != len(config.models) or len(ffnagent_free_memory_bytes) != ffnagent_count:
         raise XpoolDaemonError(
             "conflict",
@@ -152,7 +152,7 @@ def place_ffn_models(
         )
     try:
         ensure_nonnegative_int64(*ffnagent_free_memory_bytes)
-        ensure_nonnegative_int64(config.ffn.placement.device_memory_extra_margin_bytes)
+        ensure_nonnegative_int64(config.ffn.device_memory_extra_margin_bytes)
     except ValueError as error:
         raise XpoolDaemonError("conflict", str(error)) from error
     if any(value == 0 for value in ffnagent_free_memory_bytes):
@@ -163,7 +163,7 @@ def place_ffn_models(
         instance_plans=instance_plans,
         ffnagent_free_memory_bytes=ffnagent_free_memory_bytes,
         estimator=estimator,
-        deadline=monotonic() + config.ffn.placement.optimizer.timeout_seconds,
+        deadline=monotonic() + config.ffn.placement.timeout_seconds,
     ).solve()
 
 
@@ -201,7 +201,7 @@ class PlacementSolver:
         estimator = self.estimator
         deadline = self.deadline
         config = estimator.config
-        ffnagent_count = len(config.devices.ffn_cuda_devices)
+        ffnagent_count = len(config.ffn.devices)
 
         # Layers with identical per-rank resources and Graph
         # signatures are interchangeable to the solver and share one class.
@@ -364,7 +364,7 @@ class PlacementSolver:
             ensure_nonnegative_int64(
                 maximum_exact_bytes,
                 maximum_stage_overhead,
-                maximum_exact_bytes + maximum_stage_overhead + config.ffn.placement.device_memory_extra_margin_bytes,
+                maximum_exact_bytes + maximum_stage_overhead + config.ffn.device_memory_extra_margin_bytes,
             )
         except ValueError as error:
             raise XpoolDaemonError("conflict", str(error)) from error
@@ -472,7 +472,7 @@ class PlacementSolver:
         headroom: list[cp_model.IntVar] = []
         fabric_join_bytes = estimator.fabric_arena_bytes() + estimator.fabric_observer_bytes()
         lanes = config.scheduler.ffn_concurrency
-        margin = config.ffn.placement.device_memory_extra_margin_bytes
+        margin = config.ffn.device_memory_extra_margin_bytes
 
         # Every FfnAgent must fit the peak of the modeled startup
         # stages, not merely the retained steady-state allocation.
@@ -791,7 +791,7 @@ class PlacementSolver:
             ("total peak bytes", "min", total_peak_bytes),
         )
         solver = cp_model.CpSolver()
-        solver.parameters.num_workers = config.ffn.placement.optimizer.parallelism
+        solver.parameters.num_workers = config.ffn.placement.parallelism
         solver.parameters.random_seed = 1
 
         # Fix each lexicographic objective at its optimum
@@ -810,7 +810,7 @@ class PlacementSolver:
                 diagnostic = (
                     f"FFN Placement {name} returned {status_name}; completed={completed_objectives}; "
                     f"classes={len(class_rank_rows)}; signatures={len(all_signatures)}; "
-                    f"parallelism={config.ffn.placement.optimizer.parallelism}"
+                    f"parallelism={config.ffn.placement.parallelism}"
                 )
                 if objective_index == 0 and status == cp_model.INFEASIBLE:
                     raise XpoolDaemonError("conflict", diagnostic)

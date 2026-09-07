@@ -232,8 +232,8 @@ def validate_memory_calibration_profile(profile: XpoolMemoryCalibrationProfile) 
     environment = profile.environment
     expected = {
         "native ABI": ABI_VERSION,
-        "FfnAgent count": len(config.devices.ffn_cuda_devices),
-        "AtnAgent count": len(config.devices.atn_cuda_devices),
+        "FfnAgent count": len(config.ffn.devices),
+        "AtnAgent count": len(config.atn.devices),
         "Executor Lane count": config.scheduler.ffn_concurrency,
         "CUDA driver": driver_version,
         "CUDA runtime": runtime_version,
@@ -279,7 +279,7 @@ def load_memory_calibration_profile() -> XpoolMemoryCalibrationProfile | None:
             validated against the current Host and configuration.
     """
 
-    path = get_global_config().memory.calibration_path
+    path = get_global_config().ffn.device_memory_calibration
     if path is None:
         return None
     try:
@@ -304,9 +304,9 @@ def write_memory_calibration_profile(profile: XpoolMemoryCalibrationProfile) -> 
         destination after serialization completes.
     """
 
-    path = get_global_config().memory.calibration_path
+    path = get_global_config().ffn.device_memory_calibration
     if path is None:
-        raise RuntimeError("memory.calibration_path is required to write a calibration Profile")
+        raise RuntimeError("ffn.device_memory_calibration is required to write a calibration Profile")
     temporary_path = None
     try:
         with tempfile.NamedTemporaryFile(

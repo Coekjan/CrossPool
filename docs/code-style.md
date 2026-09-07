@@ -71,6 +71,13 @@ Do not add production seams solely so tests can replace dependencies. Tests
 should patch the dependency at the module that owns the call. Production APIs
 must describe runtime concepts rather than test mechanics.
 
+Do not retain migration-only tests whose sole purpose is to name and reject a
+removed, unsupported API, configuration field, CLI option, or environment
+variable. Test the current public contract and generic invalid-input behavior
+at the owning boundary instead. Keep a historical rejection case only when a
+current accepted compatibility, security, or data-migration contract explicitly
+requires that exact legacy input.
+
 Bind intrinsic construction, validation, formatting, serialization, and
 resource lifecycle to the type that owns the invariant. Keep cross-type
 orchestration, discovery, plugin hooks, I/O, and general algorithms at module

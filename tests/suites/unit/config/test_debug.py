@@ -18,7 +18,8 @@ def test_daemon_host_must_be_loopback(host: str) -> None:
         XpoolConfig.from_mapping(
             {
                 "daemon": {"host": host, "port": 9810},
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             }
         )
@@ -38,7 +39,8 @@ def test_env_source_parses_native_observer_settings(
     capacity: int,
 ) -> None:
     payload = {
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
     outdir = tmp_path.resolve()
@@ -71,7 +73,8 @@ def test_native_observer_requires_enable_and_outdir_together(
     outdir_env_var: str,
 ) -> None:
     payload = {
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
 
@@ -100,7 +103,8 @@ def test_native_observer_settings_cannot_be_set_from_toml(
         XpoolConfig.from_mapping(
             {
                 "debug": {observer: {field: value}},
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             }
         )
@@ -116,7 +120,8 @@ def test_native_observer_settings_cannot_be_set_from_toml(
 )
 def test_observer_record_capacity_must_fit_native_range(capacity: int, env_var: str) -> None:
     payload = {
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
 
@@ -126,7 +131,8 @@ def test_observer_record_capacity_must_fit_native_range(capacity: int, env_var: 
 
 def test_env_source_parses_graph_observer_settings(tmp_path: Path) -> None:
     payload = {
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
     outdir = tmp_path.resolve()
@@ -145,7 +151,8 @@ def test_env_source_parses_graph_observer_settings(tmp_path: Path) -> None:
 
 def test_env_source_parses_prefill_logit_observer_settings(tmp_path: Path) -> None:
     payload = {
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
     outdir = tmp_path.resolve()
@@ -168,7 +175,8 @@ def test_graph_observer_outdir_accepts_relative_env_path(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     payload = {
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
 
@@ -196,7 +204,8 @@ def test_env_source_rejects_malformed_debug_boolean(env_var: str) -> None:
     with pytest.raises(ConfigError, match="boolean flag"):
         XpoolConfig.from_mapping(
             {
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
             env={env_var: "true"},
@@ -223,7 +232,8 @@ def test_debug_graph_observer_cannot_be_set_from_toml(
         XpoolConfig.from_mapping(
             {
                 "debug": debug_payload,
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
         )
@@ -243,7 +253,8 @@ def test_graph_observer_requires_enable_and_outdir_together(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     payload = {
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
 
@@ -265,7 +276,8 @@ def test_prefill_logit_observer_requires_enable_and_outdir_together(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     payload = {
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
 
@@ -277,7 +289,8 @@ def test_unknown_xpool_env_warns(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="xpool.config"):
         config = XpoolConfig.from_mapping(
             {
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
             env={

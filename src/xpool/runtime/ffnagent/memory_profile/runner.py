@@ -222,8 +222,8 @@ def write_world_config(path: Path, source: XpoolConfig, coordinate: str) -> None
 
     members = coordinate_members(
         coordinate,
-        atnagent_count=len(source.devices.atn_cuda_devices),
-        ffnagent_count=len(source.devices.ffn_cuda_devices),
+        atnagent_count=len(source.atn.devices),
+        ffnagent_count=len(source.ffn.devices),
     )
     payload = {
         "daemon": {"host": source.daemon.host, "port": source.daemon.port},
@@ -232,19 +232,15 @@ def write_world_config(path: Path, source: XpoolConfig, coordinate: str) -> None
             "ffn_concurrency": source.scheduler.ffn_concurrency,
             "ffn_policy": "fifo",
         },
+        "atn": {"devices": source.atn.devices},
         "ffn": {
+            "devices": source.ffn.devices,
+            "device_memory_extra_margin_bytes": 0,
             "loader": {"parallelism": source.ffn.loader.parallelism},
             "placement": {
-                "device_memory_extra_margin_bytes": 0,
-                "optimizer": {
-                    "parallelism": source.ffn.placement.optimizer.parallelism,
-                    "timeout_seconds": source.ffn.placement.optimizer.timeout_seconds,
-                },
+                "parallelism": source.ffn.placement.parallelism,
+                "timeout_seconds": source.ffn.placement.timeout_seconds,
             },
-        },
-        "devices": {
-            "atn_cuda_devices": source.devices.atn_cuda_devices,
-            "ffn_cuda_devices": source.devices.ffn_cuda_devices,
         },
         "models": [
             {
@@ -502,8 +498,8 @@ def run_world(coordinate: str, source: XpoolConfig) -> MemoryProfileWorld:
         world_config = XpoolConfig.from_file(config_path)
         members = coordinate_members(
             coordinate,
-            atnagent_count=len(world_config.devices.atn_cuda_devices),
-            ffnagent_count=len(world_config.devices.ffn_cuda_devices),
+            atnagent_count=len(world_config.atn.devices),
+            ffnagent_count=len(world_config.ffn.devices),
         )
         model_specs = tuple(calibration_corpus_spec(member[0]) for member in members)
         uid, uid_process, uid_connection = start_fabric_uid(config_path)
@@ -541,7 +537,7 @@ def run_world(coordinate: str, source: XpoolConfig) -> MemoryProfileWorld:
 
             # Phase: Measure - Only FfnAgents materialize execution; AtnAgents
             # remain joined so the measured Fabric topology is production-shaped.
-            atnagent_count = len(world_config.devices.atn_cuda_devices)
+            atnagent_count = len(world_config.atn.devices)
             for connection in connection_tuple[atnagent_count:]:
                 connection.send("execute")
             rows = []
@@ -572,7 +568,7 @@ def run_world(coordinate: str, source: XpoolConfig) -> MemoryProfileWorld:
                 raise RuntimeError(f"memory-profile UID child exited with code {uid_process.exitcode}")
 
             ordered = tuple(sorted(rows, key=lambda row: row.ffnagent_index))
-            if tuple(row.ffnagent_index for row in ordered) != tuple(range(len(world_config.devices.ffn_cuda_devices))):
+            if tuple(row.ffnagent_index for row in ordered) != tuple(range(len(world_config.ffn.devices))):
                 raise RuntimeError("memory-profile evidence does not cover every configured FfnAgent")
             environment = ordered[0].environment
             if any(row.environment != environment for row in ordered[1:]):
@@ -601,8 +597,8 @@ def profile_ffn_memory() -> XpoolMemoryCalibrationProfile:
     """Run the fixed fresh-process matrix and return one qualified Profile."""
 
     config = get_global_config()
-    if config.memory.calibration_path is None:
-        raise RuntimeError("memory.calibration_path is required for xpool memory-profile")
+    if config.ffn.device_memory_calibration is None:
+        raise RuntimeError("ffn.device_memory_calibration is required for xpool memory-profile")
     refuse_live_daemon(config)
     mps = probe_mps_controller()
     if not mps.online:
@@ -610,7 +606,7 @@ def profile_ffn_memory() -> XpoolMemoryCalibrationProfile:
 
     # Repeated fit worlds determine coefficients; the disjoint held-out world
     # determines the minimum headroom required for an unseen placement shape.
-    fit_coordinates = FIT_COORDINATES if len(config.devices.ffn_cuda_devices) >= 2 else FIT_COORDINATES[:-1]
+    fit_coordinates = FIT_COORDINATES if len(config.ffn.devices) >= 2 else FIT_COORDINATES[:-1]
     fit_worlds_evidence = tuple(
         run_world(coordinate, config) for coordinate in fit_coordinates for _ in range(REPETITION_COUNT)
     )
@@ -637,7 +633,7 @@ def profile_ffn_memory() -> XpoolMemoryCalibrationProfile:
             nvshmem_version=environment.nvshmem_version,
         ),
         ffn=FfnMemoryCalibration(
-            atnagent_count=len(config.devices.atn_cuda_devices),
+            atnagent_count=len(config.atn.devices),
             executor_lane_count=config.scheduler.ffn_concurrency,
             minimum_held_out_headroom_bytes=minimum_headroom,
             coefficients=coefficients,

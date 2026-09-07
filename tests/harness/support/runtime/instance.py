@@ -96,7 +96,8 @@ def install_offline_instance_client(
 def runtime_config() -> XpoolConfig:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         },
     )

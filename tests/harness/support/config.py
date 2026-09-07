@@ -49,10 +49,8 @@ def synthetic_config(
             "daemon": {"host": "127.0.0.1", "port": 9810},
             "scheduler": {"atn_concurrency": 1, "ffn_concurrency": 1, "ffn_policy": "fifo"},
             "vendor": {"model_base_uri": "/models"},
-            "devices": {
-                "atn_cuda_devices": list(atn_cuda_devices),
-                "ffn_cuda_devices": list(ffn_cuda_devices),
-            },
+            "atn": {"devices": list(atn_cuda_devices)},
+            "ffn": {"devices": list(ffn_cuda_devices)},
             "models": [{"id": model_id}],
         }
     )
@@ -104,9 +102,11 @@ port = {daemon_port}
 atn_concurrency = {atn_concurrency}
 ffn_concurrency = {ffn_concurrency}
 
-[devices]
-atn_cuda_devices = [{atn_devices}]
-ffn_cuda_devices = [{ffn_devices}]
+[atn]
+devices = [{atn_devices}]
+
+[ffn]
+devices = [{ffn_devices}]
 
 [[models]]
 id = "{TEST_MODEL_ID}"

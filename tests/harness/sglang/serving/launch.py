@@ -87,10 +87,8 @@ def materialize(
         },
         "scheduler": scheduler,
         "vendor": {"model_base_uri": str(model_base_uri)},
-        "devices": {
-            "atn_cuda_devices": list(range(case.atnagent_count)),
-            "ffn_cuda_devices": list(range(case.atnagent_count, case.required_gpu_count)),
-        },
+        "atn": {"devices": list(range(case.atnagent_count))},
+        "ffn": {"devices": list(range(case.atnagent_count, case.required_gpu_count))},
         "models": [{"id": model.model_id} for model in launch_models],
     }
     config_path.write_text(tomli_w.dumps(payload), encoding="utf-8")

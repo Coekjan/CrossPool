@@ -37,7 +37,8 @@ def transport_config(*model_ids: str) -> XpoolConfig:
 
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": model_id, "path": f"/models/{model_id}"} for model_id in model_ids],
         }
     )

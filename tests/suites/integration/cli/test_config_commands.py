@@ -35,6 +35,8 @@ def test_config_dump_reports_config_and_sources(capsys) -> None:
                 "configs/xpool.example.toml",
                 "--daemon-host",
                 "127.0.0.6",
+                "--ffn-placement-parallelism",
+                "7",
             ]
         )
         == 0
@@ -47,6 +49,12 @@ def test_config_dump_reports_config_and_sources(capsys) -> None:
         "value": "127.0.0.6",
     }
     assert config_record(records, "debug.transport_observer.record_capacity")["source"] == "default"
+    assert config_record(records, "atn.devices")["source"] == "config"
+    assert config_record(records, "ffn.placement.parallelism") == {
+        "name": "ffn.placement.parallelism",
+        "source": "cli",
+        "value": 7,
+    }
     assert config_record(records, "models[0].path")["source"] == "unset"
     assert all(set(record) == {"name", "value", "source"} for record in records)
 
@@ -105,9 +113,11 @@ def test_config_dump_reports_configuration_errors_without_traceback(
     elif failure == "schema":
         config_path.write_text(
             """
-[devices]
-atn_cuda_devices = [0]
-ffn_cuda_devices = [0]
+[atn]
+devices = [0]
+
+[ffn]
+devices = [0]
 
 [[models]]
 id = "m"

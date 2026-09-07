@@ -54,7 +54,8 @@ def test_cli_config_default_precedence_without_config_field_env(
 def test_defaults_fill_missing_optional_sections() -> None:
     config = XpoolConfig.from_mapping(
         {
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
         },
         cli={},
@@ -71,14 +72,14 @@ def test_defaults_fill_missing_optional_sections() -> None:
     assert config.ffn.loader.parallelism == 4
     assert config.logging.level == "info"
     assert config.logging.color is True
-    assert config.memory.calibration_path is None
+    assert config.ffn.device_memory_calibration is None
     assert config.vendor.model_base_uri is None
 
 
 def test_ffn_loader_parallelism_uses_cli_env_config_default_precedence() -> None:
     payload = {
-        "ffn": {"loader": {"parallelism": 2}},
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1], "loader": {"parallelism": 2}},
         "models": [{"id": "m", "path": "/models/m"}],
     }
 
@@ -94,10 +95,32 @@ def test_ffn_loader_parallelism_uses_cli_env_config_default_precedence() -> None
     )
 
 
+def test_ffn_placement_parallelism_uses_cli_env_config_default_precedence() -> None:
+    payload = {
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1], "placement": {"parallelism": 2}},
+        "models": [{"id": "m", "path": "/models/m"}],
+    }
+
+    assert XpoolConfig.from_mapping(payload).ffn.placement.parallelism == 2
+    assert (
+        XpoolConfig.from_mapping(payload, env={"XPOOL_FFN_PLACEMENT_PARALLELISM": "3"}).ffn.placement.parallelism == 3
+    )
+    assert (
+        XpoolConfig.from_mapping(
+            payload,
+            cli={"ffn_placement_parallelism": 5},
+            env={"XPOOL_FFN_PLACEMENT_PARALLELISM": "3"},
+        ).ffn.placement.parallelism
+        == 5
+    )
+
+
 def test_logging_level_uses_cli_env_config_default_precedence() -> None:
     payload = {
         "logging": {"level": "warning"},
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
 
@@ -116,7 +139,8 @@ def test_logging_level_uses_cli_env_config_default_precedence() -> None:
 def test_logging_color_uses_toml_and_ignores_environment_override(caplog: pytest.LogCaptureFixture) -> None:
     payload = {
         "logging": {"color": False},
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
     }
 
@@ -127,34 +151,48 @@ def test_logging_color_uses_toml_and_ignores_environment_override(caplog: pytest
     assert "ignoring unknown xpool environment variables" in caplog.text
 
 
-def test_memory_calibration_path_uses_env_before_config() -> None:
+def test_ffn_device_memory_calibration_uses_env_before_config() -> None:
     payload = {
-        "memory": {"calibration_path": "/config/memory.json"},
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1], "device_memory_calibration": "/config/memory.json"},
         "models": [{"id": "m", "path": "/models/m"}],
     }
 
-    assert XpoolConfig.from_mapping(payload).memory.calibration_path == Path("/config/memory.json")
+    assert XpoolConfig.from_mapping(payload).ffn.device_memory_calibration == Path("/config/memory.json")
     assert XpoolConfig.from_mapping(
         payload,
-        env={"XPOOL_MEMORY_CALIBRATION_PATH": "/env/memory.json"},
-    ).memory.calibration_path == Path("/env/memory.json")
+        env={"XPOOL_FFN_DEVICE_MEMORY_CALIBRATION": "/env/memory.json"},
+    ).ffn.device_memory_calibration == Path("/env/memory.json")
 
 
-def test_memory_calibration_path_must_be_absolute() -> None:
-    with pytest.raises(ValidationError, match=r"memory\.calibration_path must be absolute"):
+def test_ffn_device_memory_calibration_must_be_absolute() -> None:
+    with pytest.raises(ValidationError, match=r"ffn\.device_memory_calibration must be absolute"):
         XpoolConfig.from_mapping(
             {
-                "memory": {"calibration_path": "relative.json"},
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1], "device_memory_calibration": "relative.json"},
                 "models": [{"id": "m", "path": "/models/m"}],
             }
         )
 
 
+def test_ffn_device_memory_calibration_expands_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = XpoolConfig.from_mapping(
+        {
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1], "device_memory_calibration": "~/memory.json"},
+            "models": [{"id": "m", "path": "/models/m"}],
+        }
+    )
+
+    assert config.ffn.device_memory_calibration == tmp_path / "memory.json"
+
+
 def test_config_resolution_does_not_mutate_caller_mapping() -> None:
     payload: dict[str, object] = {
-        "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+        "atn": {"devices": [0]},
+        "ffn": {"devices": [1]},
         "vendor": {"model_base_uri": "/models"},
         "models": [{"id": "m"}],
     }
@@ -240,21 +278,22 @@ def test_init_global_config_tracks_effective_sources(monkeypatch: pytest.MonkeyP
         "value": 8192,
     }
     assert source_record(report, "daemon.port")["source"] == ConfigSource.CONFIG
-    assert source_record(report, "devices.atn_cuda_devices")["source"] == ConfigSource.CONFIG
+    assert source_record(report, "atn.devices")["source"] == ConfigSource.CONFIG
     assert source_record(report, "models[0].id")["source"] == ConfigSource.CONFIG
     assert source_record(report, "models[0].path") == {
         "name": "models[0].path",
         "source": ConfigSource.UNSET,
         "value": None,
     }
-    assert not any(record["name"] in {"config_path", "devices", "models"} for record in report)
+    assert not any(record["name"] in {"config_path", "models"} for record in report)
 
 
 def test_config_sources_format_multiple_model_indices() -> None:
     config = XpoolConfig.from_mapping(
         {
             "vendor": {"model_base_uri": "/models"},
-            "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
             "models": [
                 {"id": "model-zero", "path": "/custom/model-zero"},
                 {"id": "org/model-one"},
@@ -277,7 +316,8 @@ def test_config_rejects_non_list_models_for_registered_wildcard_settings() -> No
     with pytest.raises(ConfigError, match="expected list config value"):
         XpoolConfig.from_mapping(
             {
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
                 "models": {"id": "m", "path": "/models/m"},
             }
         )
@@ -298,7 +338,8 @@ def test_int_source_rejects_invalid_integer() -> None:
         XpoolConfig.from_mapping(
             {
                 "daemon": {"port": "not-an-int"},
-                "devices": {"atn_cuda_devices": [0], "ffn_cuda_devices": [1]},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },
         )

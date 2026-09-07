@@ -315,7 +315,7 @@ class AtnAgent(Agent):
             pid=self.proc_id.pid,
         )
         try:
-            self.local_rank = get_global_config().devices.atn_cuda_devices.index(cuda_device)
+            self.local_rank = get_global_config().atn.devices.index(cuda_device)
         except ValueError as error:
             raise AgentError(f"CUDA device {cuda_device} has no local instance-rank arenas") from error
         self.registration_epoch = 0

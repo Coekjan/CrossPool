@@ -88,10 +88,8 @@ def materialize_ffn_cluster_launch(
         "daemon": {"host": base_config.daemon.host, "port": daemon_port},
         "scheduler": scheduler_payload,
         "vendor": {"model_base_uri": str(model_base_uri)},
-        "devices": {
-            "atn_cuda_devices": list(range(atnagent_count)),
-            "ffn_cuda_devices": list(range(atnagent_count, atnagent_count + ffnagent_count)),
-        },
+        "atn": {"devices": list(range(atnagent_count))},
+        "ffn": {"devices": list(range(atnagent_count, atnagent_count + ffnagent_count))},
         "models": [{"id": model_id, "ffn_tp_size": tp_size} for model_id, tp_size in model_tp_sizes],
     }
     config_path.write_text(tomli_w.dumps(payload), encoding="utf-8")
@@ -240,7 +238,7 @@ def observe_live_topology(
             FfnProcessObservation(
                 child.name,
                 process_id,
-                cluster.launch.config.devices.atn_cuda_devices[spec.rank],
+                cluster.launch.config.atn.devices[spec.rank],
             )
         )
     supervised_ids = {process.process_id for process in processes}
@@ -264,7 +262,7 @@ def run_ffn_instance(connection: Connection, spec: FfnInstanceSpec) -> None:
     os.environ.clear()
     os.environ.update(spec.environment)
     config = init_global_config()
-    cuda_device = config.devices.atn_cuda_devices[spec.rank]
+    cuda_device = config.atn.devices[spec.rank]
     bootstrap.init(cuda_device, RuntimeRole.INSTANCE)
     devkit.install()
     runtime = InstanceRankRuntime.start(
