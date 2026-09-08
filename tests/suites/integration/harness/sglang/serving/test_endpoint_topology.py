@@ -37,8 +37,9 @@ def test_pinned_sglang_resolves_explicit_grpc_root(
     monkeypatch.setenv("SGLANG_GRPC_PORT", "19002")
 
     server_args = ServerArgs(model_path=str(model_path), port=65_000, device="cpu")
+    server_args.resolve_once()
 
-    assert server_args.grpc_port == 19_002
+    assert server_args.resolved_dict()["grpc_port"] == 19_002
 
 
 def test_endpoint_family_lock_coordinates_independent_interpreters(tmp_path: Path) -> None:
@@ -121,6 +122,7 @@ def test_endpoint_family_matches_pinned_dp_attention_port_projection(
             dp_size=2,
             tp_size=2,
         )
+        server_args.resolve_once()
         ports = PortArgs.init_new(server_args)
     finally:
         lease.close()
@@ -129,7 +131,7 @@ def test_endpoint_family_matches_pinned_dp_attention_port_projection(
     if zmq_port > 65_535:
         zmq_port = family.http_port - ZMQ_TCP_PORT_DELTA
     expected_addresses = tuple(f"tcp://127.0.0.1:{zmq_port + offset}" for offset in range(1, 7))
-    assert server_args.grpc_port == family.grpc_port
+    assert server_args.resolved_dict()["grpc_port"] == family.grpc_port
     assert family.http_port + DP_ATTENTION_HANDSHAKE_PORT_DELTA in family.ports
     assert ports.nccl_port == family.nccl_port
     assert (

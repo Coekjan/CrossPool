@@ -120,13 +120,14 @@ def test_moe_workspace_formulas_preserve_cache_overlap() -> None:
         routed_scaling_factor=1.8,
         router=execution.MoeRouterExecutionSignature(
             compute_routed_topk=compute_test_routed_topk,
+            router_weight_dtype=torch.float32,
             routed_expert_count=4,
             router_workspace_bytes=32,
             correction_bias_present=False,
             renormalize=True,
         ),
     )
-    assert execution.control_capture_probe_storage_bytes(router_owner) == (2048, 1024, 128)
+    assert execution.control_capture_probe_storage_bytes(router_owner) == (2048, 1024, 256)
     assert execution.graph_capture_capacity_storage_bytes(router_owner) == (
         128,
         128,

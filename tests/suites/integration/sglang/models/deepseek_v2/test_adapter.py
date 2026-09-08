@@ -12,6 +12,7 @@ import xpool.config
 from tests.harness.support.config import reset_global_config
 from tests.harness.support.sglang.deepseek import deepseek_config, install_adapter_config
 from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
+from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.integrations.sglang.adapter import (
     SglangInstanceRankBinding,
     SglangInstanceRankRuntime,
@@ -24,7 +25,9 @@ from xpool.integrations.sglang.models.deepseek_v2 import (
 )
 from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
 
-pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_adapter_config.__name__)
+pytestmark = pytest.mark.usefixtures(
+    reset_global_config.__name__, install_adapter_config.__name__, published_sglang_config.__name__
+)
 
 
 def test_deepseek_adapter_declares_its_sglang_hooks() -> None:
@@ -166,7 +169,6 @@ path = "{model_path}"
 
     binding = SglangInstanceRankBinding.resolve(
         runner.as_model_runner(),
-        runner.server_args,
         supports_dp_attention=True,
     )
     SglangInstanceRankRuntime.attach(runner.as_model_runner(), binding)

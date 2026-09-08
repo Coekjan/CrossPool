@@ -65,6 +65,7 @@ def run_ffn_reference_rank(
 
     import sglang.srt.configs.device_config
     import sglang.srt.configs.load_config
+    import sglang.srt.configs.model_config
     import sglang.srt.distributed
     import sglang.srt.distributed.parallel_state
     import sglang.srt.layers.dp_attention
@@ -72,6 +73,7 @@ def run_ffn_reference_rank(
     import sglang.srt.layers.moe.utils
     import sglang.srt.layers.utils
     import sglang.srt.model_loader
+    import sglang.srt.runtime_context
     import sglang.srt.server_args
     import torch
     import torch.distributed
@@ -98,9 +100,9 @@ def run_ffn_reference_rank(
         cuda_graph_backend_prefill="disabled",
         disable_custom_all_reduce=True,
     )
-    sglang.srt.server_args.set_global_server_args_for_scheduler(server_args)
-    sglang.srt.layers.moe.utils.initialize_moe_config(server_args)
-    model_config = server_args.get_model_config()
+    sglang.srt.runtime_context.publish(server_args, role="scheduler")
+    sglang.srt.layers.moe.utils.initialize_moe_config()
+    model_config = sglang.srt.configs.model_config.ModelConfig.from_server_args(server_args)
     sglang.srt.distributed.set_custom_all_reduce(False)
 
     # The reference uses SGLang's real model loader and TP groups while keeping
@@ -115,7 +117,7 @@ def run_ffn_reference_rank(
             distributed_init_method=rendezvous_uri,
             local_rank=tensor_parallel_rank,
             backend="nccl",
-            timeout=server_args.dist_timeout,
+            timeout=sglang.srt.runtime_context.get_parallel().dist_timeout,
             moe_a2a_backend="none",
         )
         sglang.srt.distributed.initialize_model_parallel(
@@ -142,9 +144,9 @@ def run_ffn_reference_rank(
             model_config=model_config,
         )
         load_config = sglang.srt.configs.load_config.LoadConfig(
-            load_format=server_args.load_format,
-            download_dir=server_args.download_dir,
-            model_loader_extra_config=server_args.model_loader_extra_config,
+            load_format=sglang.srt.runtime_context.get_model().load_format,
+            download_dir=sglang.srt.runtime_context.get_model().download_dir,
+            model_loader_extra_config=sglang.srt.runtime_context.get_model().model_loader_extra_config,
             tp_rank=tensor_parallel_rank,
         )
         sglang.srt.distributed.parallel_state.monkey_patch_vllm_parallel_state()

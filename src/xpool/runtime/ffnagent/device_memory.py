@@ -18,7 +18,7 @@ from xpool.memory import (
     ensure_nonnegative_int64,
     load_memory_calibration_profile,
 )
-from xpool.runtime.ffnagent import execution
+from xpool.runtime.ffnagent import architecture, execution
 from xpool.utils import align_up
 
 
@@ -147,7 +147,13 @@ class DeviceMemoryEstimator:
             payload_bytes * expert_count * spec.hidden_size * local_width,
         ]
         if tp_rank == 0:
-            result.append(payload_bytes * layer.routed_expert_count * spec.hidden_size)
+            model_adapter = architecture.adapter_for(spec)
+            if not issubclass(model_adapter, architecture.MoeFfnModelAdapter):
+                raise ValueError("MoE weight sizing requires a MoE FFN Model Adapter")
+            router_dtype = model_adapter.router_weight_dtype(
+                payload_dtype=self.instance_profiles[model_plan_index].payload_dtype
+            )
+            result.append(router_dtype.itemsize * layer.routed_expert_count * spec.hidden_size)
             if layer.checkpoint.router_correction_bias_key is not None:
                 result.append(4 * layer.routed_expert_count)
         return tuple(result)

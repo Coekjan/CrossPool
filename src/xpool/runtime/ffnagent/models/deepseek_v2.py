@@ -17,10 +17,15 @@ class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
     architecture_name = "DeepseekV2ForCausalLM"
 
     @staticmethod
+    def router_weight_dtype(*, payload_dtype: torch.dtype) -> torch.dtype:
+        return payload_dtype
+
+    @staticmethod
     def router_workspace_bytes(
         *,
         payload_dtype: torch.dtype,
         payload_row_capacity: int,
+        hidden_size: int,
         routed_expert_count: int,
         routed_topk: int,
     ) -> int:
@@ -65,6 +70,7 @@ class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
         expected_bytes = DeepseekV2Adapter.router_workspace_bytes(
             payload_dtype=payload_dtype,
             payload_row_capacity=row_capacity,
+            hidden_size=hidden_size,
             routed_expert_count=routed_expert_count,
             routed_topk=routed_topk,
         )

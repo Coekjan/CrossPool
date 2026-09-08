@@ -14,6 +14,18 @@ from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent import architecture, weights
 
 
+@torch.compile(fullgraph=True)
+def copy_router_input(source: torch.Tensor, target: torch.Tensor) -> None:
+    """Convert into caller-owned FP32 storage before the Router GEMM.
+
+    Pre-capture warmup compiles this operation. Inductor avoids the opaque
+    empty-object parameters in ATen's copy kernel that conflict with the
+    declared-address-only Graph parameterization contract.
+    """
+
+    target.copy_(source)
+
+
 @triton.jit
 def corrected_sigmoid_top4_kernel(
     logits_pointer,
@@ -69,20 +81,25 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
     architecture_name = "Glm4MoeLiteForCausalLM"
 
     @staticmethod
+    def router_weight_dtype(*, payload_dtype: torch.dtype) -> torch.dtype:
+        return torch.float32
+
+    @staticmethod
     def router_workspace_bytes(
         *,
         payload_dtype: torch.dtype,
         payload_row_capacity: int,
+        hidden_size: int,
         routed_expert_count: int,
         routed_topk: int,
     ) -> int:
-        """Return the caller-owned FP32 corrected-score extent."""
+        """Size caller-owned FP32 input conversion and corrected-score storage."""
 
         if payload_dtype not in (torch.bfloat16, torch.float16):
             raise ValueError("GLM Router requires BF16 or FP16 payloads")
         if routed_expert_count != 64 or routed_topk != 4 or payload_row_capacity <= 0:
             raise ValueError("GLM Router requires 64 routed Experts and routed Top-4")
-        return payload_row_capacity * routed_expert_count * torch.float32.itemsize
+        return payload_row_capacity * (hidden_size + routed_expert_count) * torch.float32.itemsize
 
     @staticmethod
     def compute_routed_topk(
@@ -109,7 +126,7 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
         correction_bias = router_weights.correction_bias
         if (
             router_hidden_size != hidden_size
-            or router_weights.weight.dtype is not payload_dtype
+            or router_weights.weight.dtype is not torch.float32
             or routed_ids.shape != routed_weights.shape
             or routed_ids.shape[0] != row_capacity
             or correction_bias is None
@@ -120,6 +137,7 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
         expected_bytes = Glm4MoeLiteAdapter.router_workspace_bytes(
             payload_dtype=payload_dtype,
             payload_row_capacity=row_capacity,
+            hidden_size=hidden_size,
             routed_expert_count=routed_expert_count,
             routed_topk=routed_topk,
         )
@@ -128,8 +146,13 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
         tensors = (router_weights.weight, correction_bias, workspace, routed_ids, routed_weights)
         if any(tensor.device != hidden_states.device for tensor in tensors):
             raise ValueError("GLM Router tensors must share one CUDA device")
-        logits = workspace.view(torch.float32).view(row_capacity, routed_expert_count)
-        torch.mm(hidden_states, router_weights.weight.t(), out_dtype=torch.float32, out=logits)
+        scratch = workspace.view(torch.float32)
+        input_elements = row_capacity * hidden_size
+        router_input = scratch[:input_elements].view(row_capacity, hidden_size)
+        logits = scratch[input_elements:].view(row_capacity, routed_expert_count)
+        # Retain FP32 operands like the pinned gate, without capture-time storage allocation.
+        copy_router_input(hidden_states, router_input)
+        torch.mm(router_input, router_weights.weight.t(), out=logits)
         typing.cast(typing.Callable[..., None], corrected_sigmoid_top4_kernel[(row_capacity,)])(
             logits,
             correction_bias,

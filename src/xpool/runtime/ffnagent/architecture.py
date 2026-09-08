@@ -42,10 +42,16 @@ class MoeFfnModelAdapter(FfnModelAdapter):
 
     @staticmethod
     @abstractmethod
+    def router_weight_dtype(*, payload_dtype: torch.dtype) -> torch.dtype:
+        """Resolve retained Router precision independently of Expert weights."""
+
+    @staticmethod
+    @abstractmethod
     def router_workspace_bytes(
         *,
         payload_dtype: torch.dtype,
         payload_row_capacity: int,
+        hidden_size: int,
         routed_expert_count: int,
         routed_topk: int,
     ) -> int:

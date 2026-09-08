@@ -5,16 +5,20 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from sglang.srt.runtime_context import get_context
 from sglang.srt.server_args import ServerArgs
 
 import xpool.integrations.sglang.topology
 from tests.harness.support.sglang.fakes import server_args
+from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.config import ConfigError, TopologyError
 from xpool.integrations.sglang.topology import (
     SglangAttentionKind,
     SglangAttentionTopology,
     SglangModelMetadata,
 )
+
+pytestmark = pytest.mark.usefixtures(published_sglang_config.__name__)
 
 
 def test_gqa_atn_policy_retains_resolved_sglang_topology(
@@ -41,9 +45,9 @@ def test_gqa_atn_policy_retains_resolved_sglang_topology(
     )
 
     spec = SglangModelMetadata.load(model_dir, model_id="qwen")
-    policy = SglangAttentionTopology.from_server_args(
+    get_context().override("test", tp_size=2)
+    policy = SglangAttentionTopology.from_runtime(
         spec,
-        server_args(tp_size=2),
         atnagent_count=2,
         supports_dp_attention=False,
     )
@@ -90,9 +94,9 @@ def test_mla_atn_policy_accepts_independent_tp_or_dp(
     )
     spec = SglangModelMetadata.load(model_dir, model_id="test-model")
 
-    policy = SglangAttentionTopology.from_server_args(
+    get_context().override("test", tp_size=tp_size, dp_size=dp_size, enable_dp_attention=dp_size > 1)
+    policy = SglangAttentionTopology.from_runtime(
         spec,
-        server_args(tp_size=tp_size, dp_size=dp_size, enable_dp_attention=dp_size > 1),
         atnagent_count=atnagent_count,
         supports_dp_attention=True,
     )
@@ -125,9 +129,9 @@ def test_mla_atn_policy_rejects_combined_tp_by_dp(
     spec = SglangModelMetadata.load(model_dir, model_id="test-model")
 
     with pytest.raises(TopologyError, match="combined attention TP-by-DP"):
-        SglangAttentionTopology.from_server_args(
+        get_context().override("test", tp_size=4, dp_size=2, enable_dp_attention=True)
+        SglangAttentionTopology.from_runtime(
             spec,
-            server_args(tp_size=4, dp_size=2, enable_dp_attention=True),
             atnagent_count=4,
             supports_dp_attention=True,
         )
@@ -158,9 +162,11 @@ def test_regular_mqa_when_sglang_reports_non_mla(
     )
 
     spec = SglangModelMetadata.load(model_dir, model_id="synthetic-mqa")
-    policy = SglangAttentionTopology.from_server_args(
+    get_context().override(
+        "test",
+    )
+    policy = SglangAttentionTopology.from_runtime(
         spec,
-        server_args(),
         atnagent_count=1,
         supports_dp_attention=False,
     )
@@ -221,9 +227,9 @@ def test_attention_head_divisibility_is_checked_against_resolved_tp(
     spec = SglangModelMetadata.load(model_dir, model_id="bad-ffn")
 
     with pytest.raises(TopologyError, match="does not divide query heads"):
-        SglangAttentionTopology.from_server_args(
+        get_context().override("test", tp_size=3)
+        SglangAttentionTopology.from_runtime(
             spec,
-            server_args(tp_size=3),
             atnagent_count=3,
             supports_dp_attention=False,
         )
@@ -254,9 +260,9 @@ def test_policy_rejects_sglang_world_that_does_not_cover_atnagents(
     spec = SglangModelMetadata.load(model_dir, model_id=model_dir.name)
 
     with pytest.raises(TopologyError, match="must equal configured AtnAgent count"):
-        SglangAttentionTopology.from_server_args(
+        get_context().override("test", tp_size=1)
+        SglangAttentionTopology.from_runtime(
             spec,
-            server_args(tp_size=1),
             atnagent_count=2,
             supports_dp_attention=False,
         )
@@ -293,10 +299,12 @@ def test_policy_rejects_inconsistent_dp_attention_flag(
     )
     spec = SglangModelMetadata.load(model_dir, model_id="deepseek")
 
+    get_context().override(
+        "test", tp_size=args.tp_size, dp_size=args.dp_size, enable_dp_attention=args.enable_dp_attention
+    )
     with pytest.raises(TopologyError, match="enable_dp_attention"):
-        SglangAttentionTopology.from_server_args(
+        SglangAttentionTopology.from_runtime(
             spec,
-            args,
             atnagent_count=args.tp_size,
             supports_dp_attention=True,
         )
@@ -320,9 +328,9 @@ def test_policy_rejects_dp_attention_without_adapter_capability(
     spec = SglangModelMetadata.load(model_dir, model_id="unsupported")
 
     with pytest.raises(TopologyError, match="adapter does not support"):
-        SglangAttentionTopology.from_server_args(
+        get_context().override("test", tp_size=2, dp_size=2, enable_dp_attention=True)
+        SglangAttentionTopology.from_runtime(
             spec,
-            server_args(tp_size=2, dp_size=2, enable_dp_attention=True),
             atnagent_count=2,
             supports_dp_attention=False,
         )
@@ -343,9 +351,9 @@ def test_gqa_policy_accepts_dp_attention_with_adapter_capability(
     model_dir = write_model_config(tmp_path / "qwen3-moe", {"model_type": "qwen3_moe"})
     spec = SglangModelMetadata.load(model_dir, model_id="qwen3-moe")
 
-    policy = SglangAttentionTopology.from_server_args(
+    get_context().override("test", tp_size=2, dp_size=2, enable_dp_attention=True)
+    policy = SglangAttentionTopology.from_runtime(
         spec,
-        server_args(tp_size=2, dp_size=2, enable_dp_attention=True),
         atnagent_count=2,
         supports_dp_attention=True,
     )

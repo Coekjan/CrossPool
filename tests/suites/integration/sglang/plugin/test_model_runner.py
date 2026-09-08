@@ -18,13 +18,16 @@ from tests.harness.support.sglang.plugin import (
     ffn_profile,
     reset_plugin_required_hook_targets,
 )
+from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.config import MissingRequiredConfig
 from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
 from xpool.native import RuntimeRole
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.wire import ServingListener
 
-pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, reset_plugin_required_hook_targets.__name__)
+pytestmark = pytest.mark.usefixtures(
+    reset_global_config.__name__, reset_plugin_required_hook_targets.__name__, published_sglang_config.__name__
+)
 
 
 def test_model_runner_hook_delegates_to_matching_adapters(
@@ -195,7 +198,7 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     monkeypatch.setattr(xpool.integrations.sglang.plugin.InstanceRankRuntime, "start", fake_instance_init)
     profile = ffn_profile()
     monkeypatch.setattr(
-        xpool.integrations.sglang.plugin, "derive_instance_ffn_profile", lambda model_runner, binding, args: profile
+        xpool.integrations.sglang.plugin, "derive_instance_ffn_profile", lambda model_runner, binding: profile
     )
 
     def original(model_runner: ModelRunner) -> str:

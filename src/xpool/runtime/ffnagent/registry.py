@@ -101,6 +101,7 @@ def validate_layer_weights_against_plan(
     layer_spec: ffn.FfnLayerSpec,
     hidden_size: int,
     payload_dtype: torch.dtype,
+    router_weight_dtype: torch.dtype | None,
     tp_rank: int,
     cuda_device: int,
 ) -> None:
@@ -135,6 +136,8 @@ def validate_layer_weights_against_plan(
         if layer_weights.expert_gate_up_weight.dtype is not payload_dtype:
             raise ValueError("MoE weights disagree with the Instance payload dtype")
         if router is not None:
+            if router.weight.dtype is not router_weight_dtype:
+                raise ValueError("MoE Router weight dtype disagrees with its Model Adapter")
             if router.weight.shape != (layer_spec.routed_expert_count, hidden_size):
                 raise ValueError("MoE Router weights disagree with the Layer Plan")
             correction_required = layer_spec.checkpoint.router_correction_bias_key is not None
@@ -469,6 +472,12 @@ class FfnExecutionRegistry:
             capacities = execution.derive_payload_row_capacities(
                 max(profile.decode_payload_row_capacity, profile.prefill_payload_row_capacity)
             )
+            model_adapter = architecture.adapter_for(model_spec)
+            router_weight_dtype = (
+                model_adapter.router_weight_dtype(payload_dtype=profile.payload_dtype)
+                if issubclass(model_adapter, architecture.MoeFfnModelAdapter)
+                else None
+            )
             for layer_ordinal, (layer_plan, layer_spec, layer_weights_value) in enumerate(
                 zip(model_plan.layers, model_spec.layers, model_weights, strict=True)
             ):
@@ -484,6 +493,7 @@ class FfnExecutionRegistry:
                     layer_spec=layer_spec,
                     hidden_size=profile.hidden_size,
                     payload_dtype=profile.payload_dtype,
+                    router_weight_dtype=router_weight_dtype,
                     tp_rank=tp_rank,
                     cuda_device=torch.cuda.current_device(),
                 )
@@ -513,10 +523,14 @@ class FfnExecutionRegistry:
                         if tp_rank == 0:
                             router = execution.MoeRouterExecutionSignature(
                                 compute_routed_topk=model_adapter.compute_routed_topk,
+                                router_weight_dtype=model_adapter.router_weight_dtype(
+                                    payload_dtype=profile.payload_dtype
+                                ),
                                 routed_expert_count=layer_spec.routed_expert_count,
                                 router_workspace_bytes=model_adapter.router_workspace_bytes(
                                     payload_dtype=profile.payload_dtype,
                                     payload_row_capacity=capacity,
+                                    hidden_size=profile.hidden_size,
                                     routed_expert_count=layer_spec.routed_expert_count,
                                     routed_topk=layer_spec.routed_topk,
                                 ),

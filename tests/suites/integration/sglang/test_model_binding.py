@@ -5,9 +5,10 @@ from dataclasses import replace
 import pytest
 from sglang.srt.distributed.parallel_state import GroupCoordinator
 from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
+from sglang.srt.runtime_context import get_context
 
-from tests.harness.support.sglang.fakes import server_args
 from tests.harness.support.sglang.plugin import binding
+from tests.harness.support.sglang.runtime import published_sglang_config
 
 
 def test_model_binding_accepts_complete_tp_fastest_result_group() -> None:
@@ -34,6 +35,7 @@ def test_model_binding_rejects_reordered_or_incomplete_result_group(ranks: list[
         model_binding.validate_result_group(result_group(ranks=ranks, rank=0, rank_in_group=0))
 
 
+@pytest.mark.usefixtures(published_sglang_config.__name__)
 def test_model_binding_accepts_breakable_graphs_for_attention_dp() -> None:
     model_binding = replace(
         binding(),
@@ -41,7 +43,8 @@ def test_model_binding_accepts_breakable_graphs_for_attention_dp() -> None:
         atn_tp_size=1,
         atn_dp_size=2,
     )
-    args = server_args(
+    get_context().override(
+        "test",
         tp_size=2,
         dp_size=2,
         enable_dp_attention=True,
@@ -51,7 +54,7 @@ def test_model_binding_accepts_breakable_graphs_for_attention_dp() -> None:
         ),
     )
 
-    model_binding.validate_server_args(args)
+    model_binding.validate_server_args()
 
 
 def result_group(

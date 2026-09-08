@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
 from tests.harness.support.config import install_test_config, reset_global_config
 from tests.harness.support.native.sizing import install_native_allocation_sizing
@@ -22,6 +23,7 @@ from xpool.fabric import (
 from xpool.ffn import FfnModelSpec
 from xpool.memory import MIB, SIGNED_INT64_MAX, FfnMemoryCalibrationCoefficients
 from xpool.runtime.ffnagent import device_memory, execution
+from xpool.runtime.ffnagent.memory_profile import corpus
 from xpool.service.daemon.ffn_placement import place_ffn_models
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
@@ -69,6 +71,31 @@ def estimator_and_plan() -> tuple[device_memory.DeviceMemoryEstimator, FabricPla
         instance_plans=(instance_plan,),
     )
     return device_memory.DeviceMemoryEstimator(model_specs=(spec,), instance_profiles=(profile,)), plan
+
+
+def test_glm_router_memory_keeps_fp32_weights_and_input_workspace() -> None:
+    spec = corpus.calibration_corpus_spec("corrected-shared-moe64")
+    profile = corpus.build_instance_profile(spec, group_sum_complete=False)
+    install_test_config(
+        XpoolConfig.from_mapping(
+            {
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1, 2]},
+                "models": [{"id": spec.model_id, "path": "/models/glm"}],
+            }
+        )
+    )
+    estimator = device_memory.DeviceMemoryEstimator(model_specs=(spec,), instance_profiles=(profile,))
+
+    assert estimator.packed_weight_storage_bytes(0, 1, 0)[-2:] == (4 * 64 * spec.hidden_size, 4 * 64)
+    signatures = execution.required_execution_signatures(
+        model_spec=spec, profile=profile, layer_ordinal=1, tp_rank=0, tp_size=2
+    )
+    for signature in signatures:
+        assert isinstance(signature, execution.MoeFfnExecutionSignature)
+        assert signature.router is not None
+        assert signature.router.router_weight_dtype is torch.float32
+        assert signature.router.router_workspace_bytes == 4 * signature.payload_row_capacity * (spec.hidden_size + 64)
 
 
 def test_exact_dense_allocation_ledger_and_feature_rows() -> None:

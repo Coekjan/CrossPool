@@ -16,7 +16,7 @@ from safetensors import safe_open
 from xpool import ffn
 from xpool.config import get_global_config
 from xpool.fabric import DenseFfnLayerPlan, FabricPlan, FabricRole, MoeFfnLayerPlan
-from xpool.runtime.ffnagent import checkpoint, weights
+from xpool.runtime.ffnagent import architecture, checkpoint, weights
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +27,7 @@ class LocalLayerWeightRequest:
         model_path: Checkpoint directory containing the layer's exact keys.
         hidden_size: Model-wide hidden width.
         payload_dtype: Effective BF16 or FP16 execution dtype.
+        router_weight_dtype: Retained Router precision, absent for Dense layers.
         layer: Intrinsic Dense or MoE layer specification.
         tp_rank: Rank within this layer's ordered Execution Group.
         tp_size: Fixed model-wide FFN tensor-parallel width.
@@ -35,6 +36,7 @@ class LocalLayerWeightRequest:
     model_path: Path
     hidden_size: int
     payload_dtype: torch.dtype
+    router_weight_dtype: torch.dtype | None
     layer: ffn.FfnLayerSpec
     tp_rank: int
     tp_size: int
@@ -46,6 +48,12 @@ class LocalLayerWeightRequest:
             raise ValueError("hidden_size must be positive")
         if self.payload_dtype not in (torch.bfloat16, torch.float16):
             raise ValueError("local FFN weights require BF16 or FP16 payloads")
+        if isinstance(self.layer, ffn.MoeFfnSpec) and self.router_weight_dtype not in (
+            torch.bfloat16,
+            torch.float16,
+            torch.float32,
+        ):
+            raise ValueError("MoE loading requires an explicit supported Router weight dtype")
         if self.tp_size <= 0 or not 0 <= self.tp_rank < self.tp_size:
             raise ValueError("TP rank must belong to a positive TP world")
 
@@ -136,6 +144,12 @@ def materialize_layer_weights(
         model_weights: list[weights.FfnLayerWeights | None] = [None] * len(spec.layers)
         materialized.append(model_weights)
         model_path = config.model_path_of(spec.model_id)
+        model_adapter = architecture.adapter_for(spec)
+        router_weight_dtype = (
+            model_adapter.router_weight_dtype(payload_dtype=instance_plan.ffn_profile.payload_dtype)
+            if issubclass(model_adapter, architecture.MoeFfnModelAdapter)
+            else None
+        )
         for layer_ordinal, (layer, layer_plan) in enumerate(zip(spec.layers, model_plan.layers, strict=True)):
             if layer.kind is not layer_plan.kind:
                 raise ValueError(f"Model Spec {model_index} layer {layer_ordinal} disagrees with its Layer Plan")
@@ -147,6 +161,7 @@ def materialize_layer_weights(
                     model_path=model_path,
                     hidden_size=spec.hidden_size,
                     payload_dtype=instance_plan.ffn_profile.payload_dtype,
+                    router_weight_dtype=router_weight_dtype if isinstance(layer, ffn.MoeFfnSpec) else None,
                     layer=layer,
                     tp_rank=tp_rank,
                     tp_size=model_plan.tp_size,
@@ -343,7 +358,7 @@ def prepare_layer_weight_request(
     if request.tp_rank == 0:
         router_weight = torch.empty(
             (routed_expert_count, request.hidden_size),
-            dtype=request.payload_dtype,
+            dtype=request.router_weight_dtype,
             device=device,
         )
         correction_bias = None

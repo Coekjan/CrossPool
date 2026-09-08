@@ -102,7 +102,7 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
         dense.checkpoint.down_weight_key: tensor_values((hidden_size, 6), 200),
     }
     moe_tensors: dict[str, torch.Tensor] = {
-        moe.checkpoint.router_weight_key: tensor_values((2, hidden_size), 300),
+        moe.checkpoint.router_weight_key: torch.linspace(0.101, 0.909, 2 * hidden_size).reshape(2, hidden_size),
         cast(str, moe.checkpoint.router_correction_bias_key): torch.tensor([0.25, -0.5], dtype=torch.float32),
     }
     for expert_id, expert in enumerate(moe.checkpoint.routed_experts):
@@ -123,6 +123,7 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
                 model_path=model_path,
                 hidden_size=hidden_size,
                 payload_dtype=torch.float16,
+                router_weight_dtype=None,
                 layer=dense,
                 tp_rank=1,
                 tp_size=2,
@@ -131,6 +132,7 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
                 model_path=model_path,
                 hidden_size=hidden_size,
                 payload_dtype=torch.bfloat16,
+                router_weight_dtype=torch.float32,
                 layer=moe,
                 tp_rank=0,
                 tp_size=2,
@@ -188,6 +190,7 @@ def test_materialize_non_router_rank_and_shape_failure(tmp_path: Path) -> None:
         model_path=model_path,
         hidden_size=hidden_size,
         payload_dtype=torch.bfloat16,
+        router_weight_dtype=torch.bfloat16,
         layer=layer,
         tp_rank=1,
         tp_size=2,
@@ -201,6 +204,7 @@ def test_materialize_non_router_rank_and_shape_failure(tmp_path: Path) -> None:
         model_path=model_path,
         hidden_size=hidden_size,
         payload_dtype=torch.bfloat16,
+        router_weight_dtype=torch.bfloat16,
         layer=layer,
         tp_rank=0,
         tp_size=2,

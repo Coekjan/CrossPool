@@ -15,7 +15,7 @@ from sglang.srt.model_executor.cuda_graph_config import Backend, PhaseConfig
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.model_executor.pool_configurator import MemoryPoolConfig
 from sglang.srt.plugins.hook_registry import HookRegistry, HookType
-from sglang.srt.server_args import ServerArgs
+from sglang.srt.runtime_context import get_exec, get_schedule, get_serving
 
 from xpool import bootstrap, devkit
 from xpool.config import init_global_config
@@ -172,8 +172,7 @@ def around_model_runner_load_model[**P, R](
         every FFN shim with identity, and runs adapter postconditions.
     """
 
-    server_args = model_runner.server_args
-    validate_sglang_server_args(server_args)
+    validate_sglang_server_args()
 
     matching_adapters = tuple(adapter for adapter in adapters if adapter.matches(model_runner))
     if not matching_adapters:
@@ -188,10 +187,9 @@ def around_model_runner_load_model[**P, R](
     adapter = matching_adapters[0]
     binding = SglangInstanceRankBinding.resolve(
         model_runner,
-        server_args,
         supports_dp_attention=adapter.supports_dp_attention,
     )
-    binding.validate_server_args(server_args)
+    binding.validate_server_args()
     bootstrap.init(int(binding.cuda_device), RuntimeRole.INSTANCE)
     devkit.install()
     devkit.install(SGLANG_DEVKIT_PACKAGE)
@@ -246,8 +244,7 @@ def after_model_runner_alloc_memory_pool[R](
     runtime = SglangInstanceRankRuntime.require(model_runner)
     binding = runtime.binding
     try:
-        server_args = model_runner.server_args
-        ffn_profile = derive_instance_ffn_profile(model_runner, binding, server_args)
+        ffn_profile = derive_instance_ffn_profile(model_runner, binding)
         transport = derive_instance_rank_transport_profile(binding, ffn_profile)
         runtime.instance_rank = InstanceRankRuntime.start(
             instance_id=binding.instance_id,
@@ -297,8 +294,8 @@ def after_scheduler_get_init_info[R](
         raise RuntimeError("xpool Scheduler.get_init_info hook requires a started Instance-rank runtime")
     runtime.instance_rank.publish_initialized(
         ServingListener(
-            host=scheduler.server_args.host,
-            port=scheduler.server_args.port,
+            host=get_serving().host,
+            port=get_serving().port,
         )
     )
     runtime.instance_rank.wait_for_ready()
@@ -319,7 +316,6 @@ def after_scheduler_get_init_info[R](
 def derive_instance_ffn_profile(
     model_runner: ModelRunner,
     binding: SglangInstanceRankBinding,
-    server_args: ServerArgs,
 ) -> InstanceFfnProfile:
     """Derive the complete FFN executor ffn_profile from resolved SGLang state.
 
@@ -327,7 +323,6 @@ def derive_instance_ffn_profile(
         model_runner: Loaded runner with memory-pool concurrency and installed
             FFN shims.
         binding: Validated CrossPool instance and parallel identity.
-        server_args: Resolved SGLang graph and eager ffn_profile settings.
 
     Returns:
         Strict rank-independent ffn_profile registered with the daemon.
@@ -355,12 +350,15 @@ def derive_instance_ffn_profile(
     layers = tuple(InstanceFfnLayerProfile(layer_id=shim.layer_id, kind=shim.layer_kind) for shim in shims)
 
     max_running_requests = model_runner.max_running_requests
-    max_prefill_tokens = getattr(server_args, "max_prefill_tokens", None)
+    max_prefill_tokens = get_schedule().max_prefill_tokens
     if not isinstance(max_running_requests, int) or isinstance(max_running_requests, bool) or max_running_requests <= 0:
         raise RuntimeError("xpool cannot derive positive eager decode rows from ModelRunner.max_running_requests")
     if not isinstance(max_prefill_tokens, int) or isinstance(max_prefill_tokens, bool) or max_prefill_tokens <= 0:
-        raise RuntimeError("xpool cannot derive positive eager prefill rows from ServerArgs.max_prefill_tokens")
-    cuda_graph_config = server_args.cuda_graph_config
+        raise RuntimeError(
+            "xpool cannot derive positive eager prefill rows from "
+            "resolved SGLang runtime configuration max_prefill_tokens"
+        )
+    cuda_graph_config = get_exec().graph.cuda_graph_config
     if cuda_graph_config is None:
         raise RuntimeError("xpool cannot derive FFN row capacities before SGLang resolves cuda_graph_config")
     max_decode_rows = resolved_graph_capacity(
@@ -403,10 +401,12 @@ def resolved_graph_capacity(
     candidates = [eager_capacity]
     if phase_config.bs is not None:
         if not isinstance(phase_config.bs, (list, tuple)):
-            raise RuntimeError(f"xpool cannot derive positive {label} buckets from resolved ServerArgs")
+            raise RuntimeError(f"xpool cannot derive positive {label} buckets from resolved SGLang graph configuration")
         for row in phase_config.bs:
             if not isinstance(row, int) or isinstance(row, bool) or row <= 0:
-                raise RuntimeError(f"xpool cannot derive positive {label} buckets from resolved ServerArgs")
+                raise RuntimeError(
+                    f"xpool cannot derive positive {label} buckets from resolved SGLang graph configuration"
+                )
             candidates.append(row)
     if phase_config.max_bs is not None:
         if (
@@ -414,7 +414,9 @@ def resolved_graph_capacity(
             or isinstance(phase_config.max_bs, bool)
             or phase_config.max_bs <= 0
         ):
-            raise RuntimeError(f"xpool cannot derive a positive {label} maximum from resolved ServerArgs")
+            raise RuntimeError(
+                f"xpool cannot derive a positive {label} maximum from resolved SGLang graph configuration"
+            )
         candidates.append(phase_config.max_bs)
     return max(candidates)
 

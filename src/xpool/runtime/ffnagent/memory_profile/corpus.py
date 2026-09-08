@@ -24,7 +24,7 @@ from xpool.fabric import (
     MoeFfnLayerPlan,
 )
 from xpool.native.ffn import LayerKind
-from xpool.runtime.ffnagent import weights
+from xpool.runtime.ffnagent import architecture, weights
 
 DECODE_PAYLOAD_ROW_CAPACITY = 2048
 PREFILL_PAYLOAD_ROW_CAPACITY = 4096
@@ -315,11 +315,14 @@ def materialize_calibration_weights(
             expert_count = layer_spec.routed_expert_count + layer_spec.shared_expert_count
             router = None
             if tp_rank == 0:
+                model_adapter = architecture.adapter_for(model_spec)
+                if not issubclass(model_adapter, architecture.MoeFfnModelAdapter):
+                    raise ValueError("calibration MoE weights require a MoE FFN Model Adapter")
                 router = weights.MoeRouterWeights(
                     weight=torch.zeros(
                         layer_spec.routed_expert_count,
                         model_spec.hidden_size,
-                        dtype=torch.bfloat16,
+                        dtype=model_adapter.router_weight_dtype(payload_dtype=torch.bfloat16),
                         device="cuda",
                     ),
                     correction_bias=(

@@ -15,7 +15,7 @@ from sglang.srt.layers.communicator import LayerScatterModes, ScatterMode
 from sglang.srt.layers.dp_attention import compute_dp_attention_world_info
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.plugins.hook_registry import HookType
-from sglang.srt.server_args import ServerArgs
+from sglang.srt.runtime_context import get_device, get_parallel
 from torch import nn
 
 from xpool.config import get_global_config
@@ -138,15 +138,13 @@ class SglangInstanceRankBinding:
     def resolve(
         cls,
         model_runner: ModelRunner,
-        server_args: ServerArgs,
         *,
         supports_dp_attention: bool,
     ) -> SglangInstanceRankBinding:
-        """Resolve an xpool binding for one SGLang model runner.
+        """Resolve a CrossPool binding for one SGLang model runner.
 
         Args:
             model_runner: Runner whose resolved model path must appear in CrossPool config.
-            server_args: Resolved SGLang launch arguments for this runner.
             supports_dp_attention: Whether the selected model adapter supports DPA.
 
         Returns:
@@ -172,9 +170,8 @@ class SglangInstanceRankBinding:
 
         model, instance = matched_model_instance
         spec = SglangModelMetadata.load(config.model_path_of(model.id), model_id=model.id)
-        policy = SglangAttentionTopology.from_server_args(
+        policy = SglangAttentionTopology.from_runtime(
             spec,
-            server_args,
             atnagent_count=config.atn_world_size,
             supports_dp_attention=supports_dp_attention,
         )
@@ -269,22 +266,19 @@ class SglangInstanceRankBinding:
                 f"global={group.rank}, local={group.rank_in_group}"
             )
 
-    def validate_server_args(self, server_args: ServerArgs) -> None:
+    def validate_server_args(self) -> None:
         """Validate resolved SGLang placement against this binding.
-
-        Args:
-            server_args: Resolved SGLang launch arguments.
 
         Raises:
             RuntimeError: If launch dimensions or CUDA placement differ.
         """
 
         for label, actual, expected in (
-            ("tp_size", server_args.tp_size, self.worker_world_size),
-            ("dp_size", server_args.dp_size, self.atn_dp_size),
-            ("base_gpu_id", server_args.base_gpu_id, self.sglang_base_gpu_id),
-            ("gpu_id_step", server_args.gpu_id_step, self.sglang_gpu_id_step),
-            ("enable_dp_attention", server_args.enable_dp_attention, self.atn_dp_size > 1),
+            ("tp_size", get_parallel().tp_size, self.worker_world_size),
+            ("dp_size", get_parallel().dp_size, self.atn_dp_size),
+            ("base_gpu_id", get_device().base_gpu_id, self.sglang_base_gpu_id),
+            ("gpu_id_step", get_device().gpu_id_step, self.sglang_gpu_id_step),
+            ("enable_dp_attention", get_parallel().enable_dp_attention, self.atn_dp_size > 1),
         ):
             if actual != expected:
                 raise RuntimeError(

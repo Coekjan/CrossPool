@@ -146,6 +146,7 @@ def test_deepseek_router_matches_admitted_softmax_formula(payload_dtype: torch.d
         DeepseekV2Adapter.router_workspace_bytes(
             payload_dtype=payload_dtype,
             payload_row_capacity=2,
+            hidden_size=4,
             routed_expert_count=4,
             routed_topk=2,
         ),
@@ -186,6 +187,7 @@ def test_qwen3_moe_router_matches_softmax_formula(payload_dtype: torch.dtype) ->
         Qwen3MoeAdapter.router_workspace_bytes(
             payload_dtype=payload_dtype,
             payload_row_capacity=2,
+            hidden_size=4,
             routed_expert_count=4,
             routed_topk=2,
         ),
@@ -213,16 +215,17 @@ def test_qwen3_moe_router_matches_softmax_formula(payload_dtype: torch.dtype) ->
 
 @pytest.mark.parametrize("payload_dtype", (torch.bfloat16, torch.float16), ids=("bfloat16", "float16"))
 def test_glm_router_matches_corrected_sigmoid_formula(payload_dtype: torch.dtype) -> None:
-    hidden_states = torch.arange(128, device="cuda", dtype=torch.float32).view(2, 64).to(payload_dtype) / 16
+    hidden_states = torch.arange(128, device="cuda", dtype=torch.float32).view(2, 64).to(payload_dtype) / 128
     correction_bias = torch.linspace(-0.25, 0.25, 64, device="cuda", dtype=torch.float32)
     router = weights.MoeRouterWeights(
-        weight=torch.eye(64, device="cuda", dtype=payload_dtype),
+        weight=torch.diag(torch.linspace(0.101, 1.909, 64, device="cuda", dtype=torch.float32)),
         correction_bias=correction_bias,
     )
     workspace = torch.empty(
         Glm4MoeLiteAdapter.router_workspace_bytes(
             payload_dtype=payload_dtype,
             payload_row_capacity=2,
+            hidden_size=64,
             routed_expert_count=64,
             routed_topk=4,
         ),
@@ -241,7 +244,23 @@ def test_glm_router_matches_corrected_sigmoid_formula(payload_dtype: torch.dtype
         renormalize=True,
     )
 
-    scores = torch.sigmoid(hidden_states.float())
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        Glm4MoeLiteAdapter.compute_routed_topk(
+            hidden_states=hidden_states,
+            router_weights=router,
+            workspace=workspace,
+            routed_ids=routed_ids,
+            routed_weights=routed_weights,
+            renormalize=True,
+        )
+    hidden_states.mul_(0.5)
+    graph.replay()
+    torch.cuda.synchronize()
+
+    scores = torch.sigmoid(torch.mm(hidden_states.float(), router.weight.t()))
+    converted_input = workspace.view(torch.float32)[: hidden_states.numel()].view_as(hidden_states)
+    torch.testing.assert_close(converted_input, hidden_states.float(), rtol=0, atol=0)
     _, expected_ids = torch.topk(scores + correction_bias, 4, dim=-1)
     expected_weights = torch.gather(scores, 1, expected_ids)
     expected_weights /= expected_weights.sum(dim=-1, keepdim=True)

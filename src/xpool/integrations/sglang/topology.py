@@ -11,7 +11,7 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 from sglang.srt.configs import model_config
-from sglang.srt.server_args import ServerArgs
+from sglang.srt.runtime_context import get_parallel
 
 from xpool.config import ConfigError, TopologyError
 
@@ -232,14 +232,15 @@ class SglangAttentionTopology(BaseModel):
 
     model_id: str = Field(description="Configured model id this topology record applies to.")
     worker_world_size: int = Field(ge=1, description="Expected SGLang model-worker world size.")
-    atn_tp_size: int = Field(ge=1, description="xpool attention tensor-parallel degree retained for topology audits.")
+    atn_tp_size: int = Field(
+        ge=1, description="CrossPool attention tensor-parallel degree retained for topology audits."
+    )
     atn_dp_size: int = Field(ge=1, description="CrossPool attention data-parallel degree retained for topology audits.")
 
     @classmethod
-    def from_server_args(
+    def from_runtime(
         cls,
         spec: SglangModelMetadata,
-        server_args: ServerArgs,
         *,
         atnagent_count: int,
         supports_dp_attention: bool,
@@ -248,7 +249,6 @@ class SglangAttentionTopology(BaseModel):
 
         Args:
             spec: SGLang-derived model metadata.
-            server_args: Fully resolved pinned-SGLang launch arguments.
             atnagent_count: Number of configured physical AtnAgents.
             supports_dp_attention: Whether the selected adapter supports DPA.
 
@@ -262,9 +262,9 @@ class SglangAttentionTopology(BaseModel):
 
         if not isinstance(atnagent_count, int) or isinstance(atnagent_count, bool) or atnagent_count <= 0:
             raise TopologyError("atnagent_count must be a positive integer")
-        worker_world_size = positive_runtime_int(server_args.tp_size, "ServerArgs.tp_size", spec.model_id)
-        dp_size = positive_runtime_int(server_args.dp_size, "ServerArgs.dp_size", spec.model_id)
-        cp_size = positive_runtime_int(server_args.attn_cp_size, "ServerArgs.attn_cp_size", spec.model_id)
+        worker_world_size = positive_runtime_int(get_parallel().tp_size, "tp_size", spec.model_id)
+        dp_size = positive_runtime_int(get_parallel().dp_size, "dp_size", spec.model_id)
+        cp_size = positive_runtime_int(get_parallel().attn_cp_size, "attn_cp_size", spec.model_id)
         if worker_world_size != atnagent_count:
             raise TopologyError(
                 f"{spec.model_id}: SGLang worker world size {worker_world_size} "
@@ -286,7 +286,7 @@ class SglangAttentionTopology(BaseModel):
         expected_dp_attention = atn_dp_size > 1
         if expected_dp_attention and not supports_dp_attention:
             raise TopologyError(f"{spec.model_id}: selected model adapter does not support SGLang DP attention")
-        if server_args.enable_dp_attention is not expected_dp_attention:
+        if get_parallel().enable_dp_attention is not expected_dp_attention:
             raise TopologyError(
                 f"{spec.model_id}: SGLang enable_dp_attention must be {expected_dp_attention} "
                 f"for attention DP size {atn_dp_size}"

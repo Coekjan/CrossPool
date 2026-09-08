@@ -126,6 +126,7 @@ def test_plan_materialization_selects_only_local_layers(
             model_path=tmp_path,
             hidden_size=4,
             payload_dtype=torch.bfloat16,
+            router_weight_dtype=None,
             layer=spec.layers[0],
             tp_rank=0,
             tp_size=1,

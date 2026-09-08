@@ -18,6 +18,10 @@ to simplify TP execution. The checkpoint Tensor dtype is source evidence,
 whereas the model profile's payload dtype is the effective BF16 or FP16
 execution dtype. Conversion occurs only for the selected local shard.
 
+Router weight precision is an adapter-owned policy, independent of payload
+and Expert precision. GLM-4 MoE Lite retains FP32 Router weights; weight
+loading, Control Probe resources, and memory estimation preserve that dtype.
+
 Dense layers retain gate, up, and down shards. MoE layers additionally retain
 Router weights, expert tensors, top-k and group-routing parameters, and any
 model-defined correction bias. Activation is parameterized. The admitted
@@ -44,6 +48,14 @@ Model adapters select Router functions directly. Qwen3-MoE,
 DeepSeek-V2-Lite, and GLM preserve their upstream routing mathematics.
 CrossPool-owned Triton routing is used only where upstream exposes no reusable
 standalone operation with the required semantics.
+
+GLM converts Router inputs into caller-owned FP32 workspace before its FP32
+matrix multiplication. Only this conversion uses local `torch.compile` during
+pre-capture warmup, producing a kernel compatible with declared-address Graph
+parameterization without maintaining a handwritten conversion kernel. This
+does not enable serving-engine whole-model compilation or relax native
+parameter checks. Input conversion and logits share the accounted Router
+workspace; payload and Expert arithmetic retain their admitted precision.
 
 The Router Owner finalizes Routing Metadata in Lane storage. A successor Kernel
 publishes the fixed-capacity payload and `RoutingMetadataReady` identity to the

@@ -7,16 +7,20 @@ from pathlib import Path
 import pytest
 import torch
 from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
+from sglang.srt.runtime_context import get_context
 from sglang.srt.server_args import ServerArgs
 from torch import nn
 
 from tests.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner, server_args
 from tests.harness.support.sglang.plugin import binding
+from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.fabric import InstanceFfnLayerProfile
 from xpool.integrations.sglang.adapter import SglangInstanceRankBinding
 from xpool.integrations.sglang.plugin import derive_instance_ffn_profile
 from xpool.integrations.sglang.shim import FfnShimModule
 from xpool.native.ffn import LayerKind
+
+pytestmark = pytest.mark.usefixtures(published_sglang_config.__name__)
 
 
 def test_ffn_profile_includes_only_enabled_graph_capacities(tmp_path: Path) -> None:
@@ -34,7 +38,7 @@ def test_ffn_profile_includes_only_enabled_graph_capacities(tmp_path: Path) -> N
     )
     config_bytes = (model_binding.model_path / "config.json").read_bytes()
 
-    profile = derive_instance_ffn_profile(runner.as_model_runner(), model_binding, args)
+    profile = derive_instance_ffn_profile(runner.as_model_runner(), model_binding)
 
     assert profile.model_config_digest == hashlib.sha256(config_bytes).hexdigest()
     assert profile.payload_dtype is torch.float16
@@ -62,7 +66,7 @@ def test_ffn_profile_ignores_retained_buckets_for_disabled_graph_paths(tmp_path:
         max_running_requests=17,
     )
 
-    profile = derive_instance_ffn_profile(runner.as_model_runner(), model_binding, args)
+    profile = derive_instance_ffn_profile(runner.as_model_runner(), model_binding)
 
     assert profile.decode_payload_row_capacity == 17
     assert profile.prefill_payload_row_capacity == 33
@@ -92,7 +96,7 @@ def test_ffn_profile_rejects_invalid_enabled_graph_geometry(
     runner, model_binding = workload_inputs(tmp_path, args)
 
     with pytest.raises(RuntimeError, match="positive"):
-        derive_instance_ffn_profile(runner.as_model_runner(), model_binding, args)
+        derive_instance_ffn_profile(runner.as_model_runner(), model_binding)
 
 
 @pytest.mark.parametrize(
@@ -116,7 +120,7 @@ def test_ffn_profile_rejects_boolean_eager_capacity(
     )
 
     with pytest.raises(RuntimeError, match=message):
-        derive_instance_ffn_profile(runner.as_model_runner(), model_binding, args)
+        derive_instance_ffn_profile(runner.as_model_runner(), model_binding)
 
 
 def workload_inputs(
@@ -125,6 +129,7 @@ def workload_inputs(
     *,
     max_running_requests: int = 8,
 ) -> tuple[FakeModelRunner, SglangInstanceRankBinding]:
+    get_context().override("test", cuda_graph_config=args.cuda_graph_config, max_prefill_tokens=args.max_prefill_tokens)
     model_path = tmp_path / "synthetic-model"
     model_path.mkdir(exist_ok=True)
     config_bytes = b'{"model_type":"synthetic"}'

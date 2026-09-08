@@ -59,6 +59,7 @@ class MoeRouterExecutionSignature:
     """Router-owner Graph implementation and resource identity."""
 
     compute_routed_topk: MoeRoutingOperation
+    router_weight_dtype: torch.dtype
     routed_expert_count: int
     router_workspace_bytes: int
     correction_bias_present: bool
@@ -247,7 +248,9 @@ def control_capture_probe_storage_bytes(signature: ExecutionSignature) -> tuple[
         return gate_up_bytes, down_bytes
     result = [signature.expert_count * gate_up_bytes, signature.expert_count * down_bytes]
     if signature.router is not None:
-        result.append(signature.payload_dtype.itemsize * signature.router.routed_expert_count * signature.hidden_size)
+        result.append(
+            signature.router.router_weight_dtype.itemsize * signature.router.routed_expert_count * signature.hidden_size
+        )
         if signature.router.correction_bias_present:
             result.append(4 * signature.router.routed_expert_count)
     return tuple(result)
@@ -319,10 +322,12 @@ def required_execution_signatures(
             router=(
                 MoeRouterExecutionSignature(
                     compute_routed_topk=model_adapter.compute_routed_topk,
+                    router_weight_dtype=model_adapter.router_weight_dtype(payload_dtype=profile.payload_dtype),
                     routed_expert_count=layer.routed_expert_count,
                     router_workspace_bytes=model_adapter.router_workspace_bytes(
                         payload_dtype=profile.payload_dtype,
                         payload_row_capacity=capacity,
+                        hidden_size=model_spec.hidden_size,
                         routed_expert_count=layer.routed_expert_count,
                         routed_topk=layer.routed_topk,
                     ),

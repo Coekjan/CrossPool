@@ -78,7 +78,7 @@ class MoeRouterWeights:
     """Router-owner-only canonical MoE weights.
 
     Attributes:
-        weight: Routed-Expert Router payload tensor shaped ``[E_r, H]``.
+        weight: Routed-Expert Router tensor shaped ``[E_r, H]`` with model-owned precision.
         correction_bias: Optional corrected-routing FP32 tensor shaped
             ``[E_r]``.
     """
@@ -89,10 +89,10 @@ class MoeRouterWeights:
     def __post_init__(self) -> None:
         """Validate Router weight and optional correction bias."""
 
-        payload_dtype = self.weight.dtype
-        if payload_dtype not in (torch.bfloat16, torch.float16):
-            raise ValueError("Router weights require BF16 or FP16 payloads")
-        validate_weight_tensor(self.weight, name="router weight", dtype=payload_dtype, dimensions=2)
+        router_dtype = self.weight.dtype
+        if router_dtype not in (torch.bfloat16, torch.float16, torch.float32):
+            raise ValueError("Router weights require BF16, FP16, or FP32")
+        validate_weight_tensor(self.weight, name="router weight", dtype=router_dtype, dimensions=2)
         if self.correction_bias is None:
             return
         validate_weight_tensor(
@@ -150,8 +150,6 @@ class MoeFfnWeights:
         if self.expert_down_weight.device != self.expert_gate_up_weight.device:
             raise ValueError("MoE Expert weights must share one CUDA device")
         if self.router is not None:
-            if self.router.weight.dtype is not payload_dtype:
-                raise ValueError("MoE Expert and Router weights must share one payload dtype")
             if self.router.weight.device != self.expert_gate_up_weight.device:
                 raise ValueError("MoE Expert and Router weights must share one CUDA device")
             if self.router.weight.shape[1] != hidden_size or self.router.weight.shape[0] > expert_count:
