@@ -1,4 +1,4 @@
-"""xpool Tensor operators."""
+"""CrossPool Tensor operators."""
 
 from __future__ import annotations
 

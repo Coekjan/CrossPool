@@ -1,4 +1,4 @@
-"""Installed entry point for the source-checkout xpool test command."""
+"""Installed entry point for the source-checkout CrossPool test command."""
 
 from __future__ import annotations
 
@@ -10,10 +10,10 @@ __all__ = ["main"]
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
-    """Run the source-owned test CLI from an xpool repository root.
+    """Run the source-owned test CLI from a CrossPool repository root.
 
     The command returns exit code 2 without importing test code when the
-    current directory is not an xpool source checkout. A valid checkout is
+    current directory is not a CrossPool source checkout. A valid checkout is
     prepended to the process import path before delegation.
     """
 

@@ -17,7 +17,7 @@ from xpool.transport import FfnRequestMetadata
 
 
 class ShimUnavailableError(RuntimeError):
-    """Raised when the xpool shim is enabled but native runtime is not ready."""
+    """Raised when the CrossPool shim is enabled but native runtime is not ready."""
 
 
 class FfnShimModule(nn.Module):
@@ -94,13 +94,13 @@ class FfnShimModule(nn.Module):
         forward_batch: ForwardBatch | None = None,
         gemm_output_zero_allocator: object | None = None,
     ) -> torch.Tensor:
-        """Forward hidden states through the configured xpool FFN shim op.
+        """Forward hidden states through the configured CrossPool FFN shim op.
 
         Args:
             hidden_states: Contiguous CUDA tensor with shape
                 ``[num_tokens, hidden_size]`` and a supported floating dtype.
             forward_batch: SGLang forward-batch metadata used to derive the
-                exact xpool forward mode.
+                exact CrossPool forward mode.
             gemm_output_zero_allocator: Optional SGLang allocator hook. Must be
                 absent because the shim owns native output placement.
 
@@ -140,7 +140,7 @@ class FfnShimModule(nn.Module):
                 "runtime metadata; the xpool plugin must bind the shim after load"
             )
         # Match exact values because SGLang's predicates admit additional modes;
-        # the xpool shim ABI publishes only DECODE, EXTEND, and IDLE requests.
+        # the CrossPool shim ABI publishes only DECODE, EXTEND, and IDLE requests.
         match forward_batch.forward_mode:
             case mode if mode is ForwardMode.DECODE:
                 forward_mode = xpool.native.ffn.ForwardMode.DECODE
@@ -220,7 +220,7 @@ class FfnShimModule(nn.Module):
 
 
 def iter_ffn_shims(module: nn.Module) -> Iterator[FfnShimModule]:
-    """Iterate xpool FFN shims contained in a module tree.
+    """Iterate CrossPool FFN shims contained in a module tree.
 
     Args:
         module: Root PyTorch module to scan.

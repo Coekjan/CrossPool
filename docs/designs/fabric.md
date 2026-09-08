@@ -22,7 +22,7 @@ counts and raw maximum payload and routing-element capacities.
 
 Python bindings accept and return `torch.dtype`; the binding seam converts it
 to and from `c10::ScalarType`. Transport and Fabric layouts retain that native
-type and checked `payload_row_bytes` geometry, so there is no xpool-owned
+type and checked `payload_row_bytes` geometry, so there is no CrossPool-owned
 payload-dtype enum or second Device dtype-to-size mapping.
 
 AtnAgent and FfnAgent code use role-specific views over the same storage. Views
@@ -94,7 +94,7 @@ mode.
 
 The Coordinator Scheduler sees ready Instance submissions and available lanes.
 The default policy is FIFO. A random policy exists for controlled experiments
-and uses the shared xpool random utility. Scheduling returns no decision when no
+and uses the shared CrossPool random utility. Scheduling returns no decision when no
 request and Lane pair is currently admissible.
 
 Expected waiting is Device-side and uses the common wait utility. Timeouts,

@@ -1,4 +1,4 @@
-"""Construct and install isolated xpool configurations for reusable fixtures."""
+"""Construct and install isolated CrossPool configurations for reusable fixtures."""
 
 from __future__ import annotations
 

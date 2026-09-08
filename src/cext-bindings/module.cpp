@@ -15,7 +15,7 @@
 namespace py = pybind11;
 
 PYBIND11_MODULE(native, module) {
-  module.doc() = "Typed native control and trace bindings for xpool.";
+  module.doc() = "Typed native control and trace bindings for CrossPool.";
 
   module.attr("ABI_VERSION") = xpool::abi::kVersion;
 

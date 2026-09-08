@@ -1,6 +1,6 @@
 # Qualification
 
-This document defines the evidence required to claim xpool readiness. Detailed
+This document defines the evidence required to claim CrossPool readiness. Detailed
 suite placement and developer commands live in
 [tests/README.md](../../tests/README.md).
 

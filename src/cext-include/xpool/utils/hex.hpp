@@ -11,7 +11,7 @@
 #include <string_view>
 #include <type_traits>
 
-/// Lowercase hexadecimal codecs used by xpool native host code.
+/// Lowercase hexadecimal codecs used by CrossPool native host code.
 namespace xpool::utils::hex {
 
 /// Strong opaque byte value with canonical lowercase hexadecimal projection.

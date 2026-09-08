@@ -21,7 +21,7 @@ from xpool.integrations.sglang.adapter import SglangInstanceRankRuntime
 
 
 def fake_hf_config() -> PretrainedConfig:
-    """Return a minimal HF config carrying the fields xpool reads in tests."""
+    """Return a minimal HF config carrying the fields CrossPool reads in tests."""
 
     config = PretrainedConfig(architectures=["FakeForCausalLM"])
     setattr(config, "hidden_size", 4)

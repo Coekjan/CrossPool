@@ -1,4 +1,4 @@
-"""SGLang server-argument compatibility policy for the xpool plugin."""
+"""SGLang server-argument compatibility policy for the CrossPool plugin."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ class ServerArgRule:
     Attributes:
         label: Title-case feature name reported when the rule rejects a launch.
         supported: Predicate over resolved SGLang ``ServerArgs``. It returns
-            ``True`` only when the feature is representable by the current xpool
+            ``True`` only when the feature is representable by the current CrossPool
             shim ABI.
     """
 
@@ -25,14 +25,14 @@ class ServerArgRule:
 
 
 def validate_sglang_server_args(server_args: ServerArgs) -> None:
-    """Reject SGLang runtime modes not represented in the xpool shim ABI yet.
+    """Reject SGLang runtime modes not represented in the CrossPool shim ABI yet.
 
     Args:
         server_args: Resolved SGLang server arguments from the active model runner.
 
     Raises:
         RuntimeError: If any configured SGLang feature can surface a forward or
-            memory-management mode not represented by the current xpool shim ABI.
+            memory-management mode not represented by the current CrossPool shim ABI.
     """
 
     unsupported = tuple(rule.label for rule in SGLANG_SERVER_ARG_RULES if not rule.supported(server_args))

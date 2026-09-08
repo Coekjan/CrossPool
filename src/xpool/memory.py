@@ -145,7 +145,7 @@ class MemoryCalibrationEnvironment(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    native_abi_version: int = Field(ge=1, description="xpool native ABI used for calibration.")
+    native_abi_version: int = Field(ge=1, description="CrossPool native ABI used for calibration.")
     ffnagent_gpus: tuple[MemoryCalibrationGpu, ...] = Field(
         min_length=1,
         description="FfnAgent GPUs in configured FfnAgent index order.",
@@ -176,7 +176,7 @@ class FfnMemoryCalibration(BaseModel):
 
 
 class XpoolMemoryCalibrationProfile(BaseModel):
-    """Complete environment-qualified xpool device-memory calibration input."""
+    """Complete environment-qualified CrossPool device-memory calibration input."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 

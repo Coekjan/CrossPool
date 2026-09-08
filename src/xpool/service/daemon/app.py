@@ -1,4 +1,4 @@
-"""FastAPI routes for the xpool daemon control plane."""
+"""FastAPI routes for the CrossPool daemon control plane."""
 
 from __future__ import annotations
 

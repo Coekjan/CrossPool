@@ -1,5 +1,5 @@
-PROJECT_NAME           = xpool
-PROJECT_BRIEF          = "C++/CUDA native header documentation gate for xpool"
+PROJECT_NAME           = CrossPool
+PROJECT_BRIEF          = "C++/CUDA native header documentation gate for CrossPool"
 OUTPUT_DIRECTORY       = build/doxygen
 
 INPUT                  = src/cext-include

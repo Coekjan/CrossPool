@@ -44,7 +44,7 @@ class XpoolGlm4MoeLiteMLP(FfnShimModule, Glm4MoeLiteMLP):
         tp_rank: int | None = None,
         tp_size: int | None = None,
     ) -> None:
-        """Initialize only xpool shim state using SGLang's exact constructor surface."""
+        """Initialize only CrossPool shim state using SGLang's exact constructor surface."""
 
         if hidden_act != "silu":
             raise ValueError(f"Unsupported activation: {hidden_act}. Only silu is supported for now.")
@@ -71,7 +71,7 @@ class XpoolGlm4MoeLiteSparseMoeBlock(FfnShimModule, Glm4MoeLiteSparseMoeBlock):
         alt_stream: torch.cuda.Stream | None = None,
         is_nextn: bool = False,
     ) -> None:
-        """Initialize only xpool shim state and reject unsupported NextN layers."""
+        """Initialize only CrossPool shim state and reject unsupported NextN layers."""
 
         if is_nextn:
             raise ShimUnavailableError("xpool GLM shim does not support next-token draft FFN layers")

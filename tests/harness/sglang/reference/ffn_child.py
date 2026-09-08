@@ -104,7 +104,7 @@ def run_ffn_reference_rank(
     sglang.srt.distributed.set_custom_all_reduce(False)
 
     # The reference uses SGLang's real model loader and TP groups while keeping
-    # xpool's plugin and dispatcher path absent from the process.
+    # CrossPool's plugin and dispatcher path absent from the process.
     model = None
     failure: BaseException | None = None
     vllm_parallel_state_patched = False

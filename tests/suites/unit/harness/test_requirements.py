@@ -13,7 +13,7 @@ from tests.harness.runner.requirements import (
 
 
 def write_config(path: Path, model_base_uri: Path) -> None:
-    """Write the smallest valid xpool config used by requirement tests."""
+    """Write the smallest valid CrossPool config used by requirement tests."""
 
     path.write_text(
         "\n".join(

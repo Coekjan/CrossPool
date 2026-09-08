@@ -1,4 +1,4 @@
-"""SGLang plugin entry point for xpool."""
+"""SGLang plugin entry point for CrossPool."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 def install() -> None:
-    """Install xpool hooks in an SGLang process.
+    """Install CrossPool hooks in an SGLang process.
 
     Side Effects:
         Imports and instantiates all repo-owned SGLang model adapters, registers
@@ -56,7 +56,7 @@ def install() -> None:
     Raises:
         SystemExit: If config initialization, adapter discovery, or hook
             registration fails. SGLang catches ordinary plugin exceptions, so
-            xpool uses ``SystemExit`` for fatal fail-closed startup behavior.
+            CrossPool uses ``SystemExit`` for fatal fail-closed startup behavior.
     """
 
     try:
@@ -99,9 +99,9 @@ def install_apply_hooks_guard() -> None:
     """Install a fatal postcondition check around SGLang hook application.
 
     SGLang catches ordinary exceptions while applying plugin hooks and then
-    continues startup. XPool cannot serve correctly if any required hook is
+    continues startup. CrossPool cannot serve correctly if any required hook is
     missing, so the guard raises ``SystemExit`` after SGLang's best-effort hook
-    application leaves one of xpool's targets unpatched.
+    application leaves one of CrossPool's targets unpatched.
 
     Side Effects:
         Replaces ``HookRegistry.apply_hooks`` with a classmethod wrapper once.
@@ -121,11 +121,11 @@ def install_apply_hooks_guard() -> None:
 
 
 def verify_required_hooks_applied() -> None:
-    """Raise fatally if SGLang skipped any xpool-required hook target.
+    """Raise fatally if SGLang skipped any CrossPool-required hook target.
 
     Raises:
         SystemExit: If SGLang's private patched-target registry is missing or
-            any target registered by the xpool plugin was not patched.
+            any target registered by the CrossPool plugin was not patched.
 
     Side Effects:
         None.
@@ -150,7 +150,7 @@ def around_model_runner_load_model[**P, R](
     """Run adapter lifecycle checks around SGLang model loading.
 
     Args:
-        adapters: Model adapters installed by the xpool SGLang plugin.
+        adapters: Model adapters installed by the CrossPool SGLang plugin.
         original_fn: Original SGLang ``ModelRunner.load_model`` callable.
         model_runner: SGLang model runner being loaded.
         *args: Positional arguments forwarded to the original load function.
@@ -160,15 +160,15 @@ def around_model_runner_load_model[**P, R](
         Return value from the original SGLang load function.
 
     Raises:
-        ConfigError: If the process-global xpool config is unavailable or model
+        ConfigError: If the process-global CrossPool config is unavailable or model
             binding policy derivation fails.
         OSError: If the matched model ``config.json`` cannot be opened.
         RuntimeError: If no adapter matches a configured model, server arguments
-            are unsupported, SGLang TP/DP settings do not match xpool config,
+            are unsupported, SGLang TP/DP settings do not match CrossPool config,
             binding fails, or post-load validation fails.
 
     Side Effects:
-        Binds xpool instance/model identity, invokes model loading, stamps
+        Binds CrossPool instance/model identity, invokes model loading, stamps
         every FFN shim with identity, and runs adapter postconditions.
     """
 
@@ -223,7 +223,7 @@ def after_model_runner_alloc_memory_pool[R](
     model_runner: ModelRunner,
     memory_pool_config: MemoryPoolConfig | None = None,
 ) -> R:
-    """Start xpool transport after SGLang resolves memory-pool concurrency.
+    """Start CrossPool transport after SGLang resolves memory-pool concurrency.
 
     Args:
         result: Return value from SGLang's original ``alloc_memory_pool`` call.
@@ -239,7 +239,7 @@ def after_model_runner_alloc_memory_pool[R](
             geometry cannot be derived, or instance runtime startup fails.
 
     Side Effects:
-        Initializes and attaches the process-global xpool instance transport
+        Initializes and attaches the process-global CrossPool instance transport
         runtime.
     """
 
@@ -275,7 +275,7 @@ def after_scheduler_get_init_info[R](
     result: R,
     scheduler: Scheduler,
 ) -> R:
-    """Publish xpool readiness during SGLang's scheduler startup handshake.
+    """Publish CrossPool readiness during SGLang's scheduler startup handshake.
 
     Args:
         result: Return value from SGLang's original ``get_init_info`` method.
@@ -326,7 +326,7 @@ def derive_instance_ffn_profile(
     Args:
         model_runner: Loaded runner with memory-pool concurrency and installed
             FFN shims.
-        binding: Validated xpool instance and parallel identity.
+        binding: Validated CrossPool instance and parallel identity.
         server_args: Resolved SGLang graph and eager ffn_profile settings.
 
     Returns:
@@ -426,7 +426,7 @@ def derive_instance_rank_transport_profile(
     """Derive daemon registration transport attributes for one SGLang rank.
 
     Args:
-        binding: Validated xpool attention TP/DP rank binding.
+        binding: Validated CrossPool attention TP/DP rank binding.
         ffn_profile: Rank-independent hidden geometry and row coverage.
 
     Returns:

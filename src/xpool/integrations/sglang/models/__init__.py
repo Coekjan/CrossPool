@@ -1,1 +1,1 @@
-"""SGLang model-specific xpool adapters."""
+"""SGLang model-specific CrossPool adapters."""

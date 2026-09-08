@@ -1,1 +1,1 @@
-"""Importable xpool test and harness package."""
+"""Importable CrossPool test and harness package."""

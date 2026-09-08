@@ -1,1 +1,1 @@
-"""Installed-command SGLang serving workflow for xpool E2E tests."""
+"""Installed-command SGLang serving workflow for CrossPool E2E tests."""

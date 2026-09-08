@@ -1,8 +1,8 @@
-# xpool Code Style
+# CrossPool Code Style
 
 ## Scope
 
-This document is the canonical source for code-level conventions in xpool. It
+This document is the canonical source for code-level conventions in CrossPool. It
 applies to production code, tests, native bindings, and build definitions.
 Current architecture belongs under `docs/designs/`, active target changes under
 `docs/plans/`, configuration semantics in `docs/designs/control-plane.md`, test
@@ -10,6 +10,11 @@ organization in `tests/README.md`, and repository workflow routing in `AGENTS.md
 
 Use English for documentation, comments, identifiers, tests, and commit
 messages.
+
+Name the system CrossPool in documentation, comments, docstrings, binding
+documentation, and CLI help. Preserve executable identifiers such as `xpool`,
+`XpoolConfig`, paths, URLs, configuration keys, and command examples. Runtime
+logs and error messages use lowercase `xpool` for the system name.
 
 ## Documentation
 
@@ -56,7 +61,7 @@ module-specific wrappers or context registries.
 Put behavior at the narrowest layer that owns it. Model-specific behavior
 belongs to its model adapter. Serving-integration imports, types, runtime
 objects, hooks, compatibility rules, and devkit helpers belong under
-`xpool.integrations.<engine>`. Translate them to xpool-owned values before they
+`xpool.integrations.<engine>`. Translate them to CrossPool-owned values before they
 cross into core configuration, runtime, protocol, or native interfaces. A
 low-level operator implementation shipped in the same distribution is not
 serving-integration code only when the relevant accepted design or active plan
@@ -119,7 +124,7 @@ types instead of inventing local look-alike protocols.
 Do not use `TYPE_CHECKING` blocks or local imports to conceal ordinary
 dependency cycles. Fix the ownership boundary.
 
-Do not define xpool-owned names with a single leading underscore. Remove
+Do not define CrossPool-owned names with a single leading underscore. Remove
 unneeded bindings and keep framework-mandated parameters under their protocol
 names. Python protocols and unavoidable private third-party names are exempt.
 Do not preserve renamed private details through compatibility aliases.
@@ -147,7 +152,7 @@ native documentation passing `doxygen Doxyfile`.
 
 Order native includes in formatter-owned groups: the translation unit's
 matching main header first, then C++ standard-library headers, third-party
-headers, and xpool or local project headers. Let clang-format regroup and sort
+headers, and CrossPool or local project headers. Let clang-format regroup and sort
 these categories. Use the narrowest possible `clang-format off` region only
 when preprocessing or another semantic dependency requires a different order,
 and explain that dependency beside the exception.
@@ -183,7 +188,7 @@ Choose integers by domain:
 Keep checked integer arithmetic type-preserving. Reject mixed integer types at
 compile time rather than silently choosing a common type.
 
-Represent trusted closed-set values with validated xpool-owned types. Keep
+Represent trusted closed-set values with validated CrossPool-owned types. Keep
 untrusted wire values in their explicit fixed-width representation and
 validate them before constructing a trusted value.
 
@@ -213,7 +218,7 @@ and device state.
 
 Keep synchronization assumptions next to the code that depends on them.
 Prefer Cooperative Groups for CUDA group behavior, then CCCL/libcu++, then an
-existing typed xpool utility. Use raw intrinsics only when these cannot express
+existing typed CrossPool utility. Use raw intrinsics only when these cannot express
 the required semantics and document the reason nearby.
 
 Use the `XPOOL_*` annotations from `xpool/macros.hpp` for CUDA function

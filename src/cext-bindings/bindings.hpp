@@ -1,11 +1,11 @@
 #pragma once
 
 /// \file bindings.hpp
-/// \brief Python binding assembly for the xpool native extension module.
+/// \brief Python binding assembly for the CrossPool native extension module.
 
 #include <pybind11/pybind11.h>
 
-/// Python bindings for xpool native control and value types.
+/// Python bindings for CrossPool native control and value types.
 namespace xpool::bindings {
 
 /// Bind native debug-option value types.

@@ -243,7 +243,7 @@ class ProbeAttempt:
         return "\n".join(section for section in sections if section)
 
     def close_processes(self) -> tuple[str, ...]:
-        """Close SGLang servers together, then the xpool cluster."""
+        """Close SGLang servers together, then the CrossPool cluster."""
 
         failures: list[str] = []
         with ThreadPoolExecutor(max_workers=max(1, len(self.servers))) as executor:

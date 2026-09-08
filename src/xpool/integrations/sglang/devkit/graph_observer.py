@@ -38,7 +38,7 @@ installed = False
 
 
 def install() -> None:
-    """Install the SGLang graph observer when enabled by xpool config.
+    """Install the SGLang graph observer when enabled by CrossPool config.
 
     Raises:
         MissingRequiredConfig: If no process-global config has been installed.

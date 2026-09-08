@@ -1,8 +1,8 @@
-# xpool
+# CrossPool
 
-xpool develops the control and data-plane infrastructure for
-resource-disaggregated multi-model serving. It integrates SGLang with an
-xpool-owned control plane, CUDA IPC transport, and an NVSHMEM Fabric for
+CrossPool develops the control and data-plane infrastructure for
+resource-disaggregated multi-model serving. It integrates SGLang with a
+CrossPool-owned control plane, CUDA IPC transport, and an NVSHMEM Fabric for
 coordinating specialized GPU roles.
 
 ## Introduction
@@ -16,12 +16,12 @@ requests, reducing aggregate resource flexibility.
 CrossPool's central design idea is to manage these resources through separate
 GPU roles: keep attention and its KV-cache together, organize model-side
 resources in a pooled execution tier, and exchange hidden states over a
-low-latency interconnect. xpool provides the control and data-plane
+low-latency interconnect. CrossPool provides the control and data-plane
 infrastructure for this separation.
 
-xpool uses SGLang as its serving engine. SGLang continues to own request
+CrossPool uses SGLang as its serving engine. SGLang continues to own request
 scheduling, attention, KV-cache management, CUDA graph selection, and output
-postprocessing. xpool supplies the model adapters, process lifecycle, rank-local
+postprocessing. CrossPool supplies the model adapters, process lifecycle, rank-local
 transport, Fabric coordination, and graph-compatible tensor boundary used to
 connect the GPU roles.
 
@@ -45,13 +45,13 @@ connect the GPU roles.
 
 ## System Architecture
 
-xpool has four process roles:
+CrossPool has four process roles:
 
 1. **SGLang Instance** is one model-serving deployment containing one or more
-   Instance Ranks. Each rank owns its attention-side runtime; the xpool plugin
+   Instance Ranks. Each rank owns its attention-side runtime; the CrossPool plugin
    binds the model, derives workload geometry, and routes shim calls into that
    rank's Transport arena.
-2. **xpool daemon** is the host-only control plane. It owns registration,
+2. **CrossPool daemon** is the host-only control plane. It owns registration,
    generation planning, Transport leases, readiness, failure selection, and
    shutdown coordination. It does not own a CUDA device.
 3. **AtnAgent** owns CUDA IPC Transport arenas for one configured GPU and bridges
@@ -141,7 +141,7 @@ printf 'get_default_active_thread_percentage\n' | uv run nvidia-cuda-mps-control
 MPS starts its server lazily when the first CUDA client connects. The controller
 must cover every GPU enumerated by those clients; UUIDs avoid ordinal remapping.
 
-Start the xpool processes from separate terminals in the repository root. All
+Start the CrossPool processes from separate terminals in the repository root. All
 terminals must use the same configuration and GPU ordinal space; do not remap
 `CUDA_VISIBLE_DEVICES` independently for each process.
 
@@ -177,7 +177,7 @@ uv run sglang serve \
   --port 30000
 ```
 
-Wait for xpool's System Ready verdict and the SGLang HTTP endpoint, then send
+Wait for CrossPool's System Ready verdict and the SGLang HTTP endpoint, then send
 one request through the real FFN path. `xpool daemon check` checks the former;
 its success does not imply that the public HTTP endpoint is healthy.
 
@@ -213,7 +213,7 @@ Bootstrap environment variables are separate from the TOML schema:
 | Variable | Purpose |
 | --- | --- |
 | `XPOOL_CONFIG` | Selects the runtime TOML file. |
-| `SGLANG_PLUGINS=xpool` | Loads the xpool SGLang plugin. |
+| `SGLANG_PLUGINS=xpool` | Loads the CrossPool SGLang plugin. |
 | `CUDA_MPS_PIPE_DIRECTORY` / `CUDA_MPS_LOG_DIRECTORY` | Selects the externally managed MPS controller's directories. |
 
 For each setting, supported sources take precedence in this order:
@@ -312,7 +312,7 @@ to the development-environment sync command above.
   architecture.
 - [`docs/plans/README.md`](docs/plans/README.md) maps candidate workstreams and
   their technical relationships.
-- [`CONTEXT.md`](CONTEXT.md) defines the xpool domain language.
+- [`CONTEXT.md`](CONTEXT.md) defines the CrossPool domain language.
 - [`src/xpool/`](src/xpool/) contains configuration, runtime roles, the daemon,
   SGLang integration, and Python/native boundaries.
 - [`src/cext-include/xpool/`](src/cext-include/xpool/) and
@@ -324,4 +324,4 @@ to the development-environment sync command above.
 
 ## License
 
-xpool is available under the [MIT License](LICENSE).
+CrossPool is available under the [MIT License](LICENSE).

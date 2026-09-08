@@ -1,1 +1,1 @@
-"""Runtime participants and native shim integration helpers for xpool."""
+"""Runtime participants and native shim integration helpers for CrossPool."""

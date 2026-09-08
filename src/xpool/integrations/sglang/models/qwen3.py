@@ -34,7 +34,7 @@ class XpoolQwen3MLP(FfnShimModule, Qwen3MLP):
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
     ) -> None:
-        """Initialize only the xpool shim state without allocating FFN weights."""
+        """Initialize only the CrossPool shim state without allocating FFN weights."""
 
         if hidden_act != "silu":
             raise ValueError(f"Unsupported activation: {hidden_act}. Only silu is supported for now.")

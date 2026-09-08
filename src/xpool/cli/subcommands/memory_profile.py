@@ -1,4 +1,4 @@
-"""Offline xpool memory-calibration command."""
+"""Offline CrossPool memory-calibration command."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ class MemoryProfileCommand(RunnableCliCommand):
     """Run the fixed FFN Calibration Corpus and publish its Profile."""
 
     name = "memory-profile"
-    help = "profile xpool device-memory overhead"
+    help = "profile CrossPool device-memory overhead"
     order = 50
 
     def run(self, args: argparse.Namespace, config: XpoolConfig) -> int:

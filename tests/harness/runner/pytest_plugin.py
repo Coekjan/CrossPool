@@ -1,4 +1,4 @@
-"""Pytest hooks implementing xpool test resource requirements."""
+"""Pytest hooks implementing CrossPool test resource requirements."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ requirement_resolver_key = pytest.StashKey[RequirementResolver]()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Register xpool test requirement command-line options."""
+    """Register CrossPool test requirement command-line options."""
 
     parser.addoption(
         "--strict-requirements",

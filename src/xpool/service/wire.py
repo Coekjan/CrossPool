@@ -48,7 +48,7 @@ class ProcessRef(WireModel):
     """Common process identity fields for registration views and owner proofs."""
 
     pid: int = Field(ge=1, description="Host process id of the registering process.")
-    abi_version: int = Field(ge=1, description="xpool native ABI version used by the registering process.")
+    abi_version: int = Field(ge=1, description="CrossPool native ABI version used by the registering process.")
 
 
 class AtnAgentTransportArenaUpsertRequest(WireModel):
@@ -190,7 +190,7 @@ class FfnAgentRegistration(ProcessRef):
 class InstanceRankRef(ProcessRef):
     """Reference to one instance-rank host process."""
 
-    instance_id: str = Field(description="Instance id from the resolved xpool config.")
+    instance_id: str = Field(description="Instance id from the resolved CrossPool config.")
     rank: int = Field(ge=0, description="Rank-local process index within the instance.")
 
 
@@ -266,7 +266,7 @@ class ReadinessFfnAgent(ReadinessEntry):
 class ReadinessInstanceRank(ReadinessEntry):
     """One configured instance rank slot reported by the readiness endpoint."""
 
-    instance_id: str = Field(description="Instance id from the resolved xpool config.")
+    instance_id: str = Field(description="Instance id from the resolved CrossPool config.")
     cuda_device: int = Field(ge=0, description="Attention CUDA device assigned to this instance rank.")
     rank: int = Field(ge=0, description="Rank-local process index within the instance.")
 
@@ -274,7 +274,7 @@ class ReadinessInstanceRank(ReadinessEntry):
 class ReadinessSnapshot(WireModel):
     """Daemon readiness response."""
 
-    ready: bool = Field(description="Whether the complete configured xpool system is ready.")
+    ready: bool = Field(description="Whether the complete configured CrossPool system is ready.")
     generation: FabricGenerationId | None = Field(description="Active Fabric generation, or null before creation.")
     fabric_phase: FabricGenerationPhase | None = Field(
         description="Daemon-authoritative Fabric generation phase, or null before creation."
@@ -293,7 +293,7 @@ class ReadinessSnapshot(WireModel):
     mps_status: ReadinessStatus = Field(
         description="CUDA MPS controller status; only online and offline are produced.",
     )
-    cuda_devices: tuple[int, ...] = Field(description="Configured CUDA devices managed by xpool.")
+    cuda_devices: tuple[int, ...] = Field(description="Configured CUDA devices managed by CrossPool.")
     atnagents: list[ReadinessAtnAgent] = Field(description="AtnAgent readiness entries ordered by rank.")
     ffnagents: list[ReadinessFfnAgent] = Field(description="FfnAgent readiness entries ordered by rank.")
     instances: list[ReadinessInstanceRank] = Field(

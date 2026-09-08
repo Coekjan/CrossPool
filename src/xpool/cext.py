@@ -1,4 +1,4 @@
-"""ABI preflight for the importable xpool native extension."""
+"""ABI preflight for the importable CrossPool native extension."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ EXPECTED_NATIVE_ABI_VERSION = 80
 
 
 class NativeLoadError(RuntimeError):
-    """Raised when the xpool native ABI is incompatible with Python."""
+    """Raised when the CrossPool native ABI is incompatible with Python."""
 
 
 native_loaded = False

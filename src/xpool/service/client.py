@@ -1,4 +1,4 @@
-"""Typed daemon HTTP client used by xpool runtime participants."""
+"""Typed daemon HTTP client used by CrossPool runtime participants."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 class XpoolClient:
-    """Synchronous client for the xpool daemon control-plane API."""
+    """Synchronous client for the CrossPool daemon control-plane API."""
 
     def __init__(
         self,
@@ -99,7 +99,7 @@ class XpoolClient:
 
     @staticmethod
     def error_from_response(response: httpx.Response) -> XpoolClientError | XpoolDaemonError:
-        """Translate one failed HTTP response into an xpool client-domain error."""
+        """Translate one failed HTTP response into a CrossPool client-domain error."""
 
         try:
             status_code = HTTPStatus(response.status_code)

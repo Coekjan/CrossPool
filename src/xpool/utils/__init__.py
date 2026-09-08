@@ -1,4 +1,4 @@
-"""Shared utility helpers for xpool."""
+"""Shared utility helpers for CrossPool."""
 
 __all__ = ["align_up"]
 

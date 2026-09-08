@@ -32,7 +32,7 @@ class XpoolQwen3MoeSparseMoeBlock(FfnShimModule, Qwen3MoeSparseMoeBlock):
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
     ) -> None:
-        """Initialize only xpool shim state using SGLang's exact constructor surface."""
+        """Initialize only CrossPool shim state using SGLang's exact constructor surface."""
 
         hidden_act = getattr(config, "hidden_act", None)
         if hidden_act != "silu":

@@ -1,6 +1,6 @@
 # System Overview
 
-xpool separates attention and KV-cache execution from FFN weight residency and
+CrossPool separates attention and KV-cache execution from FFN weight residency and
 computation. The current deployment runs both roles on one host under CUDA
 MPS. Multiple models may share every GPU assigned to a role; no model owns a
 device exclusively.
@@ -20,7 +20,7 @@ The supported production boundary is:
 - CUDA MPS running before GPU participants start;
 - CUDA IPC mappings for rank-local Transport and NVSHMEM communication for
   Fabric, including directly accessible peer memory for FFN partial reduction;
-- one identical resolved xpool configuration in every process;
+- one identical resolved CrossPool configuration in every process;
 - SGLang as the only serving-engine integration;
 - BF16 or FP16 hidden-state payloads, with the current qualification models
   retaining BF16; and

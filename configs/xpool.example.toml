@@ -21,7 +21,7 @@ devices = [0]
 [ffn]
 devices = [1]
 device_memory_extra_margin_bytes = 0
-# Optional environment-qualified profile produced by xpool memory-profile.
+# Optional environment-qualified profile produced by CrossPool memory-profile.
 # device_memory_calibration = "/absolute/path/to/memory-calibration.json"
 
 [ffn.loader]

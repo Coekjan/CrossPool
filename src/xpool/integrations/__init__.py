@@ -1,1 +1,1 @@
-"""External runtime integrations for xpool."""
+"""External runtime integrations for CrossPool."""

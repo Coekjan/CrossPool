@@ -1,9 +1,12 @@
-# xpool
+# CrossPool
 
-xpool separates attention-side serving from FFN weight residency and
+CrossPool separates attention-side serving from FFN weight residency and
 computation while retaining one generation-scoped data plane.
 
 ## Language
+
+**CrossPool**:
+The resource-disaggregated multi-model serving system described by this glossary.
 
 Avoidance notes distinguish domain concepts in discussion and documentation.
 They do not prohibit citing existing implementation symbols by their actual
@@ -26,7 +29,7 @@ an Instance scheduler or public serving endpoint has finished starting.
 _Avoid_: System ready, Serving healthy
 
 **System Ready**:
-The daemon verdict that the configured xpool processes and generation-scoped
+The daemon verdict that the configured CrossPool processes and generation-scoped
 data plane are ready for every Instance scheduler. It is distinct from public
 serving-endpoint health.
 _Avoid_: Fabric executable, HTTP ready
@@ -48,7 +51,7 @@ run it.
 _Avoid_: Graph install, backend install
 
 **FFN Semantics**:
-The closed vocabulary shared across xpool for describing an FFN invocation,
+The closed vocabulary shared across CrossPool for describing an FFN invocation,
 its layout, its required output, and its outcome.
 _Avoid_: ABI values, Transport FFN enums, Fabric FFN types
 
@@ -123,7 +126,7 @@ Python caller.
 _Avoid_: ABI probe, Python ABI source
 
 **Exact Resource Ledger**:
-The stage-live sum of xpool-owned logical Tensor requests and native device
+The stage-live sum of CrossPool-owned logical Tensor requests and native device
 allocations whose sizes follow stable formulas.
 _Avoid_: Exact allocation demand, safe estimate
 

@@ -1,4 +1,4 @@
-"""Process-wide xpool runtime bootstrap state."""
+"""Process-wide CrossPool runtime bootstrap state."""
 
 from __future__ import annotations
 

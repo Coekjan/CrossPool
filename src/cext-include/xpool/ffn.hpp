@@ -1,7 +1,7 @@
 #pragma once
 
 /// \file xpool/ffn.hpp
-/// \brief Closed FFN semantics shared by native xpool domains.
+/// \brief Closed FFN semantics shared by native CrossPool domains.
 
 #include <cstdint>
 

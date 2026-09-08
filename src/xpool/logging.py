@@ -29,7 +29,7 @@ COLOR_RESET = "\x1b[0m"
 
 
 class ConsoleFormatter(logging.Formatter):
-    """Format xpool runtime records as compact role-aware terminal lines."""
+    """Format CrossPool runtime records as compact role-aware terminal lines."""
 
     def __init__(self, role: RuntimeRole, *, color: bool) -> None:
         """Create a formatter for one process role and color policy."""
@@ -49,7 +49,7 @@ class ConsoleFormatter(logging.Formatter):
 
 
 def configure(role: RuntimeRole) -> None:
-    """Configure the xpool logger from the process-global runtime policy.
+    """Configure the CrossPool logger from the process-global runtime policy.
 
     Repeated calls replace only the handler installed by this function. The
     logger writes to stderr and disables propagation without changing root,

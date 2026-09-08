@@ -1,4 +1,4 @@
-"""Top-level xpool command-line parser and dispatcher."""
+"""Top-level CrossPool command-line parser and dispatcher."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from xpool.service.client import XpoolClientError, XpoolDaemonError
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the xpool command-line entry point.
+    """Run the CrossPool command-line entry point.
 
     Args:
         argv: Optional argument vector excluding the executable name. When
@@ -31,7 +31,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         resident process depending on the selected subcommand.
     """
 
-    parser = argparse.ArgumentParser(prog="xpool", description="xpool control tool")
+    parser = argparse.ArgumentParser(prog="xpool", description="CrossPool control tool")
     subparsers = parser.add_subparsers(dest="command")
 
     register_cli_commands(subparsers, discover_cli_commands())

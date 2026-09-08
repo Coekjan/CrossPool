@@ -1,4 +1,4 @@
-"""xpool system."""
+"""CrossPool system."""
 
 from importlib.metadata import PackageNotFoundError, version
 

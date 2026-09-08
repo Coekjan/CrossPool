@@ -1,7 +1,7 @@
 #pragma once
 
 /// \file xpool/abi.hpp
-/// \brief Compile-time identity of the native xpool ABI.
+/// \brief Compile-time identity of the native CrossPool ABI.
 
 #include <cstdint>
 

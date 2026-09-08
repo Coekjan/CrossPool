@@ -1,6 +1,6 @@
-# xpool Design Map
+# CrossPool Design Map
 
-The documents in this directory describe the implemented and accepted xpool
+The documents in this directory describe the implemented and accepted CrossPool
 system. They are current-state references, not task plans or design history.
 
 - [System Overview](overview.md) defines the supported boundary, process roles,

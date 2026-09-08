@@ -1,7 +1,7 @@
 #pragma once
 
 /// \file xpool/arena.hpp
-/// \brief Common allocation-root protocol for native xpool arenas.
+/// \brief Common allocation-root protocol for native CrossPool arenas.
 
 #include <cstddef>
 #include <cstdint>

@@ -1,4 +1,4 @@
-"""Configuration schema, source registry, and static placement for xpool."""
+"""Configuration schema, source registry, and static placement for CrossPool."""
 
 from __future__ import annotations
 
@@ -56,10 +56,10 @@ logger = logging.getLogger(__name__)
 
 
 class ConfigSource(StrEnum):
-    """Configuration value source used by the xpool setting registry.
+    """Configuration value source used by the CrossPool setting registry.
 
     Attributes:
-        CLI: Value came from an explicit xpool CLI override.
+        CLI: Value came from an explicit CrossPool CLI override.
         ENV: Value came from an allowlisted process environment variable.
         CONFIG: Value came from the TOML config file.
         DEFAULT: Value came from a registry default.
@@ -85,7 +85,7 @@ class ConfigSourceRecord(TypedDict):
 
 
 class ConfigError(ValueError):
-    """Base error for xpool config resolution failures."""
+    """Base error for CrossPool config resolution failures."""
 
 
 class MissingRequiredConfig(ConfigError):
@@ -176,7 +176,7 @@ class ConfigSetting:
         cli_overrides: Mapping[str, object],
         env: Mapping[str, str],
     ) -> tuple[object, ConfigSource | None]:
-        """Resolve this setting according to xpool source precedence.
+        """Resolve this setting according to CrossPool source precedence.
 
         Args:
             payload: Config-file payload.
@@ -289,7 +289,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         default="info",
         cli="--log-level",
         env_var="XPOOL_LOG_LEVEL",
-        description="Minimum level emitted by xpool runtime loggers.",
+        description="Minimum level emitted by CrossPool runtime loggers.",
     ),
     ConfigSetting(
         name="logging_color",
@@ -297,7 +297,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="bool",
         allowed_sources=(ConfigSource.CONFIG, ConfigSource.DEFAULT),
         default=True,
-        description="Whether xpool runtime log levels use ANSI color on TTY stderr.",
+        description="Whether CrossPool runtime log levels use ANSI color on TTY stderr.",
     ),
     ConfigSetting(
         name="debug_graph_observer_enable",
@@ -429,7 +429,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="raw",
         allowed_sources=CONFIG_REQUIRED,
         required=True,
-        description="CUDA devices that host attention execution and attention-side xpool agents.",
+        description="CUDA devices that host attention execution and attention-side CrossPool agents.",
     ),
     ConfigSetting(
         name="ffn_devices",
@@ -437,7 +437,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="raw",
         allowed_sources=CONFIG_REQUIRED,
         required=True,
-        description="CUDA devices that host FFN-side xpool agents.",
+        description="CUDA devices that host FFN-side CrossPool agents.",
     ),
     ConfigSetting(
         name="ffn_device_memory_calibration",
@@ -446,7 +446,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         allowed_sources=(ConfigSource.ENV, ConfigSource.CONFIG, ConfigSource.DEFAULT),
         default=None,
         env_var="XPOOL_FFN_DEVICE_MEMORY_CALIBRATION",
-        description="Absolute path to one environment-qualified xpool memory calibration Profile.",
+        description="Absolute path to one environment-qualified CrossPool memory calibration Profile.",
     ),
     ConfigSetting(
         name="ffn_device_memory_extra_margin_bytes",
@@ -593,17 +593,17 @@ class XpoolDaemonConfig(BaseModel):
 
 
 class LoggingConfig(BaseModel):
-    """Process-local xpool runtime logging policy."""
+    """Process-local CrossPool runtime logging policy."""
 
     model_config = ConfigDict(extra="forbid")
 
     level: Literal["debug", "info", "warning", "error", "critical"] = Field(
         default="info",
-        description="Minimum level emitted by xpool runtime loggers.",
+        description="Minimum level emitted by CrossPool runtime loggers.",
     )
     color: bool = Field(
         default=True,
-        description="Whether xpool runtime log levels use ANSI color on TTY stderr.",
+        description="Whether CrossPool runtime log levels use ANSI color on TTY stderr.",
     )
 
 
@@ -687,7 +687,7 @@ class AtnConfig(BaseModel):
 
     devices: list[int] = Field(
         min_length=1,
-        description="CUDA device indices that host attention execution and attention-side xpool agents.",
+        description="CUDA device indices that host attention execution and attention-side CrossPool agents.",
     )
 
     @field_validator("devices")
@@ -705,11 +705,11 @@ class FfnConfig(BaseModel):
 
     devices: list[int] = Field(
         min_length=1,
-        description="CUDA device indices that host xpool FFN execution agents.",
+        description="CUDA device indices that host CrossPool FFN execution agents.",
     )
     device_memory_calibration: Path | None = Field(
         default=None,
-        description="Absolute path to one xpool Memory Calibration Profile.",
+        description="Absolute path to one CrossPool Memory Calibration Profile.",
     )
     device_memory_extra_margin_bytes: int = Field(
         default=0,
@@ -746,7 +746,7 @@ class FfnConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    """User-declared model served by one xpool-managed instance."""
+    """User-declared model served by one CrossPool-managed instance."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1050,7 +1050,7 @@ class VendorConfig(BaseModel):
 
 
 class XpoolConfig(BaseModel):
-    """Validated xpool TOML config plus derived runtime views."""
+    """Validated CrossPool TOML config plus derived runtime views."""
 
     model_config = ConfigDict(extra="forbid")
     _sources: tuple[ConfigSourceRecord, ...] = PrivateAttr(default_factory=tuple)
@@ -1069,7 +1069,7 @@ class XpoolConfig(BaseModel):
         """Add registry-declared config override flags to an argparse parser.
 
         Args:
-            parser: Subcommand parser that should accept xpool config override
+            parser: Subcommand parser that should accept CrossPool config override
                 flags.
 
         Side Effects:
@@ -1095,7 +1095,7 @@ class XpoolConfig(BaseModel):
         cli: Mapping[str, object] | None = None,
         env: Mapping[str, str] | None = None,
     ) -> XpoolConfig:
-        """Load and validate an xpool TOML file.
+        """Load and validate a CrossPool TOML file.
 
         Args:
             path: Path to the TOML config file.
@@ -1195,7 +1195,7 @@ class XpoolConfig(BaseModel):
 
     @cached_property
     def cuda_devices(self) -> tuple[int, ...]:
-        """Return all CUDA devices managed by xpool, ordered by CUDA device index."""
+        """Return all CUDA devices managed by CrossPool, ordered by CUDA device index."""
 
         return tuple(sorted({*self.atn.devices, *self.ffn.devices}))
 
@@ -1334,7 +1334,7 @@ def init_global_config(
     config_path: str | Path | None = None,
     cli: Mapping[str, object] | None = None,
 ) -> XpoolConfig:
-    """Initialize the process-global xpool config.
+    """Initialize the process-global CrossPool config.
 
     Args:
         config_path: Explicit TOML config path. When provided, it takes
@@ -1350,7 +1350,7 @@ def init_global_config(
         MissingRequiredConfig: If no config path is available.
         OSError: If the config file cannot be opened.
         tomllib.TOMLDecodeError: If the config file is not valid TOML.
-        pydantic.ValidationError: If the resolved payload violates the xpool
+        pydantic.ValidationError: If the resolved payload violates the CrossPool
             configuration schema.
 
     Side Effects:
@@ -1383,7 +1383,7 @@ def init_global_config(
 
 
 def get_global_config() -> XpoolConfig:
-    """Return the process-global xpool config.
+    """Return the process-global CrossPool config.
 
     Returns:
         Config previously installed by :func:`init_global_config`.

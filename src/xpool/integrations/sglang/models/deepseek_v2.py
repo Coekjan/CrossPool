@@ -55,7 +55,7 @@ class DeepseekShimExperts:
 
 
 class XpoolDeepseekV2MLP(FfnShimModule, DeepseekV2MLP):
-    """Dense DeepSeek MLP replaced by the xpool FFN shim."""
+    """Dense DeepSeek MLP replaced by the CrossPool FFN shim."""
 
     def __init__(
         self,
@@ -88,7 +88,7 @@ class XpoolDeepseekV2MLP(FfnShimModule, DeepseekV2MLP):
             ShimUnavailableError: If the layer id cannot be derived from ``prefix``.
 
         Side Effects:
-            Initializes only the xpool shim base; the original dense FFN
+            Initializes only the CrossPool shim base; the original dense FFN
             constructor is intentionally not called, so no FFN weights are allocated.
         """
 
@@ -106,7 +106,7 @@ class XpoolDeepseekV2MLP(FfnShimModule, DeepseekV2MLP):
 
 
 class XpoolDeepseekV2MoE(FfnShimModule, DeepseekV2MoE):
-    """Sparse DeepSeek MoE replaced by the xpool FFN shim."""
+    """Sparse DeepSeek MoE replaced by the CrossPool FFN shim."""
 
     def __init__(
         self,
@@ -139,7 +139,7 @@ class XpoolDeepseekV2MoE(FfnShimModule, DeepseekV2MoE):
                 lacks an integer hidden size.
 
         Side Effects:
-            Initializes only the xpool shim base and attaches minimal SGLang MoE
+            Initializes only the CrossPool shim base and attaches minimal SGLang MoE
             compatibility attributes; original expert weights are not allocated.
         """
 
@@ -221,7 +221,7 @@ class DeepseekV2ShimAdapter(SglangShimAdapter):
         return "DeepseekV2ForCausalLM" in model_runner_architectures(model_runner)
 
     def validate_after_load(self, model_runner: ModelRunner) -> None:
-        """Validate that every DeepSeek decoder FFN was replaced by an xpool shim.
+        """Validate that every DeepSeek decoder FFN was replaced by a CrossPool shim.
 
         Args:
             model_runner: SGLang model runner after ``load_model`` completes.
@@ -291,7 +291,7 @@ def around_load_weights(
 
     Side Effects:
         Prevents SGLang's FFN weight loader branches from seeing ``mlp`` weights
-        that the parameter-free xpool shims cannot consume.
+        that the parameter-free CrossPool shims cannot consume.
     """
 
     if is_nextn:

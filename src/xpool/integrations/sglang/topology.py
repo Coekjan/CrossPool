@@ -1,4 +1,4 @@
-"""SGLang-derived model topology and parallel-policy checks for xpool."""
+"""SGLang-derived model topology and parallel-policy checks for CrossPool."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ class SglangModelShape:
             model_id: Configured model id used in diagnostics.
 
         Returns:
-            SGLang-derived model metadata normalized for xpool policy checks.
+            SGLang-derived model metadata normalized for CrossPool policy checks.
 
         Raises:
             ConfigError: If SGLang cannot load the model config or returns invalid metadata.
@@ -189,7 +189,7 @@ class SglangModelMetadata(BaseModel):
             config_path: Resolved path that produced ``raw``.
 
         Returns:
-            xpool model metadata and FFN width hints.
+            CrossPool model metadata and FFN width hints.
 
         Raises:
             ConfigError: If SGLang metadata or raw integer fields are invalid.
@@ -233,7 +233,7 @@ class SglangAttentionTopology(BaseModel):
     model_id: str = Field(description="Configured model id this topology record applies to.")
     worker_world_size: int = Field(ge=1, description="Expected SGLang model-worker world size.")
     atn_tp_size: int = Field(ge=1, description="xpool attention tensor-parallel degree retained for topology audits.")
-    atn_dp_size: int = Field(ge=1, description="xpool attention data-parallel degree retained for topology audits.")
+    atn_dp_size: int = Field(ge=1, description="CrossPool attention data-parallel degree retained for topology audits.")
 
     @classmethod
     def from_server_args(

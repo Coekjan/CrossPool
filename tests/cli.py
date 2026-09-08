@@ -1,4 +1,4 @@
-"""Canonical xpool test command implementation."""
+"""Canonical CrossPool test command implementation."""
 
 from __future__ import annotations
 
@@ -47,10 +47,10 @@ def run_mps_pool_probe() -> int:
 def main(arguments: list[str] | None = None) -> int:
     """Run the source-checkout test command."""
 
-    parser = argparse.ArgumentParser(prog="xtest", description="xpool test command")
+    parser = argparse.ArgumentParser(prog="xtest", description="CrossPool test command")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run_parser = subparsers.add_parser("run", help="run the supervised xpool test suite")
+    run_parser = subparsers.add_parser("run", help="run the supervised CrossPool test suite")
     run_parser.add_argument("--strict-requirements", action="store_true")
     run_parser.add_argument("--suite", action="append", choices=SUITE_ORDER, dest="suites")
     run_parser.add_argument("--mps-pool-probe", action="store_true", help=argparse.SUPPRESS)

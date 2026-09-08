@@ -7,7 +7,7 @@ for admission and distributed invocation lifecycle.
 ## Model materialization
 
 FfnAgent adapters compile integration-provided architecture evidence into
-xpool-owned model specs. Adapter discovery is automatic. Each supported model
+CrossPool-owned model specs. Adapter discovery is automatic. Each supported model
 family lives in its own module and directly selects its activation, Router, and
 checkpoint mapping functions.
 
@@ -36,13 +36,13 @@ Capture executes the Expert kernels.
 Any temporary adaptation of SGLang global arguments is scoped and
 unconditionally restored. No SGLang runtime object, callable, or state is
 retained by an Execution Registry, GraphTemplate, Plan, native Projection, or
-xpool global. Expanding this dependency seam requires an accepted design change;
+CrossPool global. Expanding this dependency seam requires an accepted design change;
 the current implementation has no provider hierarchy, backend registry,
 fallback, copied upstream kernel, or request-time selection.
 
 Model adapters select Router functions directly. Qwen3-MoE,
 DeepSeek-V2-Lite, and GLM preserve their upstream routing mathematics.
-Xpool-owned Triton routing is used only where upstream exposes no reusable
+CrossPool-owned Triton routing is used only where upstream exposes no reusable
 standalone operation with the required semantics.
 
 The Router Owner finalizes Routing Metadata in Lane storage. A successor Kernel

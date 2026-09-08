@@ -1,4 +1,4 @@
-"""Automatic discovery and argparse registration for xpool CLI commands."""
+"""Automatic discovery and argparse registration for CrossPool CLI commands."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ CLI_PACKAGE = "xpool.cli.subcommands"
 
 
 def discover_cli_commands(package_name: str = CLI_PACKAGE) -> tuple[CliCommand, ...]:
-    """Discover and instantiate concrete xpool CLI commands from a subcommands package.
+    """Discover and instantiate concrete CrossPool CLI commands from a subcommands package.
 
     Args:
         package_name: Importable subcommands package containing command modules.

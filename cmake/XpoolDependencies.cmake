@@ -33,7 +33,7 @@ set(CMAKE_REQUIRED_INCLUDES
 check_cxx_source_compiles(
   "#include <cuda/version>
    #if !defined(CCCL_VERSION) || CCCL_VERSION < 3002000
-   #error xpool requires CCCL 3.2 or newer
+   #error CrossPool requires CCCL 3.2 or newer
    #endif
    int main() { return 0; }"
   XPOOL_HAS_REQUIRED_CCCL

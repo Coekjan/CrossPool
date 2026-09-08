@@ -1,4 +1,4 @@
-"""Command-line entry point package for xpool."""
+"""Command-line entry point package for CrossPool."""
 
 from xpool.cli.main import main
 

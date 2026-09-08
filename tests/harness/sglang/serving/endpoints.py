@@ -153,7 +153,7 @@ class SglangEndpointFamilyLease:
 
 
 def reserve_namespace_lock(host: str, port: int) -> socket.socket:
-    """Reserve one Linux abstract-socket lock shared by xpool test runners."""
+    """Reserve one Linux abstract-socket lock shared by CrossPool test runners."""
 
     identity = hashlib.sha256(f"{host}:{port}".encode()).hexdigest()
     lock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)

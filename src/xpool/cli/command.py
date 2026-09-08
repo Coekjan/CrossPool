@@ -1,4 +1,4 @@
-"""Shared command contracts for the xpool CLI."""
+"""Shared command contracts for the CrossPool CLI."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from xpool.config import XpoolConfig
 
 
 class CliCommand(ABC):
-    """Base class for argparse-backed xpool subcommands.
+    """Base class for argparse-backed CrossPool subcommands.
 
     Attributes:
         name: Command token used on the command line.
@@ -54,7 +54,7 @@ class RunnableCliCommand(CliCommand, ABC):
 
         Args:
             args: Parsed command-line arguments.
-            config: Process-global xpool config resolved by the top-level CLI.
+            config: Process-global CrossPool config resolved by the top-level CLI.
 
         Returns:
             Process-style exit code.

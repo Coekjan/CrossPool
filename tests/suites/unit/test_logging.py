@@ -29,7 +29,7 @@ class TtyBuffer(io.StringIO):
 
 @pytest.fixture
 def runtime_logger() -> Iterator[logging.Logger]:
-    """Provide a clean xpool logger and restore its handlers after a test."""
+    """Provide a clean CrossPool logger and restore its handlers after a test."""
 
     logger = logging.getLogger("xpool")
     handlers = tuple(logger.handlers)

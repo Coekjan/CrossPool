@@ -1,1 +1,1 @@
-"""SGLang integration for xpool."""
+"""SGLang integration for CrossPool."""

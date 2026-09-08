@@ -1,6 +1,6 @@
 # Control Plane
 
-This document defines xpool configuration, integration, generation planning,
+This document defines CrossPool configuration, integration, generation planning,
 placement, memory admission, and participant lifecycle. See the
 [system overview](overview.md) for process roles and supported deployment
 boundaries.
@@ -50,7 +50,7 @@ the setting operational.
 The core runtime contains engine-neutral model, topology, transport, execution,
 and failure values. Serving-engine runtime imports, hooks, objects, and
 compatibility behavior remain under `xpool.integrations.sglang`. The integration
-translates SGLang state into xpool-owned values before crossing the core seam.
+translates SGLang state into CrossPool-owned values before crossing the core seam.
 One explicitly bounded implementation exception permits the FfnAgent operator
 module to use the pinned SGLang distribution's low-level Expert kernel and
 configuration-selection modules. No serving-engine type or retained state
@@ -122,7 +122,7 @@ installed Torch build. `InstanceFfnProfile` alone owns this lossless wire
 mapping; it does not decide whether the current FFN implementation can execute
 the dtype. Serving integration preparation and native execution boundaries
 reject unsupported execution dtypes. In-process consumers see only
-`torch.dtype`; no shared dtype-name adapter or xpool dtype value type is
+`torch.dtype`; no shared dtype-name adapter or CrossPool dtype value type is
 introduced.
 
 `FfnModelPlan` is the generation-static FFN realization. It assigns one
@@ -190,7 +190,7 @@ analytic estimation alone. An explicitly configured profile must be readable,
 valid, and compatible with the deployment; otherwise startup fails rather than
 falling back to analytic estimation. The compatibility checks compare recorded
 software, configuration, MPS, and per-FfnAgent GPU evidence. They constrain
-profile reuse, not the set of GPU models on which xpool may run.
+profile reuse, not the set of GPU models on which CrossPool may run.
 
 The `xpool memory-profile` command produces calibration evidence. A profile
 records local GPU and software identity, fitted coefficients, observed and

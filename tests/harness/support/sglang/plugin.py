@@ -151,7 +151,7 @@ def ffn_profile(
 
 
 def minimal_config() -> XpoolConfig:
-    """Return a minimal xpool config for plugin install tests."""
+    """Return a minimal CrossPool config for plugin install tests."""
 
     return XpoolConfig.from_mapping(
         {

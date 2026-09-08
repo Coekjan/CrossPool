@@ -27,7 +27,7 @@ from xpool.runtime.instance import InstanceRankRuntime
 # A hook handler is either an SGLang around/before/after wrapper callable or a class
 # used as a REPLACE target. ``object`` (not ``Any``) is a deliberate, ANN401-safe escape
 # hatch: SGLang hook handlers are variadic and their argument types are enforced by the
-# SGLang HookRegistry contract, not by xpool's type checker.
+# SGLang HookRegistry contract, not by CrossPool's type checker.
 type SglangHookHandler = Callable[..., object] | type
 
 DECODER_FFN_WEIGHT_PATTERN = re.compile(r"^model\.layers\.\d+\.mlp(?:\.|$)")
@@ -43,7 +43,7 @@ def filter_decoder_ffn_weights[W](weights: Iterable[tuple[str, W]]) -> Iterator[
 
 @dataclass(frozen=True, slots=True)
 class SglangCudaPlacement:
-    """SGLang CUDA placement arguments derived from xpool ATN devices.
+    """SGLang CUDA placement arguments derived from CrossPool ATN devices.
 
     Attributes:
         base_gpu_id: SGLang ``base_gpu_id`` corresponding to the first ATN CUDA device.
@@ -83,8 +83,8 @@ class SglangCudaPlacement:
 class SglangHook:
     """One SGLang hook owned by a model adapter.
 
-    ``kind`` reuses SGLang's own ``HookType`` rather than a xpool-defined enum: the
-    four hook kinds (BEFORE/AFTER/AROUND/REPLACE) are an SGLang contract, and xpool
+    ``kind`` reuses SGLang's own ``HookType`` rather than a CrossPool-defined enum: the
+    four hook kinds (BEFORE/AFTER/AROUND/REPLACE) are an SGLang contract, and CrossPool
     only forwards them to ``HookRegistry.register``.
 
     Attributes:
@@ -100,14 +100,14 @@ class SglangHook:
 
 @dataclass(frozen=True, slots=True)
 class SglangInstanceRankBinding:
-    """xpool runtime identity for one SGLang model runner.
+    """CrossPool runtime identity for one SGLang model runner.
 
     ``instance_id`` is the human-readable model id from ``XPOOL_CONFIG``; the
     integer ``instance_index`` becomes the static transport-arena identity used
     to route FFN results back to the right instance.
 
     Attributes:
-        instance_id: Human-readable model/instance id from xpool config.
+        instance_id: Human-readable model/instance id from CrossPool config.
         model_path: Resolved absolute model path matched against SGLang.
         instance_index: Config-order identity published during transport setup.
         worker_rank: SGLang model-worker rank for this model runner.
@@ -145,7 +145,7 @@ class SglangInstanceRankBinding:
         """Resolve an xpool binding for one SGLang model runner.
 
         Args:
-            model_runner: Runner whose resolved model path must appear in xpool config.
+            model_runner: Runner whose resolved model path must appear in CrossPool config.
             server_args: Resolved SGLang launch arguments for this runner.
             supports_dp_attention: Whether the selected model adapter supports DPA.
 
@@ -303,7 +303,7 @@ class SglangInstanceRankRuntime:
     """Runner-owned composition of static binding and live InstanceRankRuntime resources.
 
     Attributes:
-        binding: Immutable xpool identity and topology resolved before load.
+        binding: Immutable CrossPool identity and topology resolved before load.
         instance_rank: Live daemon/native runtime installed after memory-pool setup,
             or ``None`` before transport startup.
     """
@@ -313,7 +313,7 @@ class SglangInstanceRankRuntime:
 
     @classmethod
     def attach(cls, model_runner: ModelRunner, binding: SglangInstanceRankBinding) -> SglangInstanceRankRuntime:
-        """Attach exactly one xpool runtime owner to a model runner."""
+        """Attach exactly one CrossPool runtime owner to a model runner."""
 
         if getattr(model_runner, "xpool_runtime", None) is not None:
             raise RuntimeError("xpool model runner already has an attached runtime")
@@ -323,7 +323,7 @@ class SglangInstanceRankRuntime:
 
     @classmethod
     def require(cls, model_runner: ModelRunner) -> SglangInstanceRankRuntime:
-        """Return the model runner's attached xpool runtime."""
+        """Return the model runner's attached CrossPool runtime."""
 
         runtime = getattr(model_runner, "xpool_runtime", None)
         if not isinstance(runtime, cls):
@@ -355,7 +355,7 @@ class SglangShimAdapter(ABC):
         """Return SGLang hooks requested by this adapter.
 
         Returns:
-            Hook declarations registered when the xpool SGLang plugin installs.
+            Hook declarations registered when the CrossPool SGLang plugin installs.
         """
 
     @abstractmethod
@@ -380,7 +380,7 @@ class SglangShimAdapter(ABC):
         """
 
     def bind_runtime(self, model_runner: ModelRunner) -> None:
-        """Bind xpool runtime metadata to the SGLang model runner before load.
+        """Bind CrossPool runtime metadata to the SGLang model runner before load.
 
         Args:
             model_runner: SGLang model runner before model construction.

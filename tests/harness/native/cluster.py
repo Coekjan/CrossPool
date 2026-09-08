@@ -29,7 +29,7 @@ CONTROL_PLANE_HTTP_TIMEOUT_SECONDS = 1.0
 
 @dataclass(frozen=True, slots=True)
 class XpoolClusterLaunch:
-    """Concrete config and environment for one installed xpool process tree."""
+    """Concrete config and environment for one installed CrossPool process tree."""
 
     config: XpoolConfig
     config_path: Path
@@ -163,7 +163,7 @@ def daemon_url(launch: XpoolClusterLaunch) -> str:
 
 
 def spawn_process(name: str, arguments: list[str], *, launch: XpoolClusterLaunch) -> OwnedProcessGroup:
-    """Start one xpool CLI process with task-local configuration and logging."""
+    """Start one CrossPool CLI process with task-local configuration and logging."""
 
     return OwnedProcessGroup.spawn_logged(
         name,

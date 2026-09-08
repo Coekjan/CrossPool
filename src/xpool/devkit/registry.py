@@ -1,4 +1,4 @@
-"""Role-aware discovery for enabled xpool Devkit observers."""
+"""Role-aware discovery for enabled CrossPool Devkit observers."""
 
 from __future__ import annotations
 

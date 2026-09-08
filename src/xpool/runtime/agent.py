@@ -1,4 +1,4 @@
-"""Shared runtime lifecycle support for xpool agents."""
+"""Shared runtime lifecycle support for CrossPool agents."""
 
 from __future__ import annotations
 
@@ -91,11 +91,11 @@ def project_fabric_arena(plan: FabricPlan) -> xpool.native.fabric.ArenaProjectio
 
 
 class AgentError(RuntimeError):
-    """Raised when an xpool Agent cannot preserve lifecycle invariants."""
+    """Raised when a CrossPool Agent cannot preserve lifecycle invariants."""
 
 
 class Agent(ABC):
-    """Common process-local resources for one configured xpool Agent."""
+    """Common process-local resources for one configured CrossPool Agent."""
 
     def __init__(self, *, cuda_device: int, runtime_role: RuntimeRole) -> None:
         """Initialize native state and daemon client for one Agent role."""

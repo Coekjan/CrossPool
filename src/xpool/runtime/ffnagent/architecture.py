@@ -97,8 +97,8 @@ def load(*, model_id: str, model_path: pathlib.Path) -> ffn.FfnModelSpec:
     """Load and compile one model's intrinsic FFN semantics.
 
     Args:
-        model_id: Nonempty xpool model identity.
-        model_path: Local checkpoint directory resolved through xpool config.
+        model_id: Nonempty CrossPool model identity.
+        model_path: Local checkpoint directory resolved through CrossPool config.
 
     Returns:
         Complete engine-neutral FFN Model Spec.

@@ -1,4 +1,4 @@
-"""Public xpool daemon application factory."""
+"""Public CrossPool daemon application factory."""
 
 from xpool.service.daemon.app import create_daemon
 
