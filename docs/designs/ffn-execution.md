@@ -49,6 +49,16 @@ DeepSeek-V2-Lite, and GLM preserve their upstream routing mathematics.
 CrossPool-owned Triton routing is used only where upstream exposes no reusable
 standalone operation with the required semantics.
 
+GLM owns a local biased-sigmoid TopK kernel with configuration-driven routed K
+and Expert count. Padded Experts are excluded from selection; equal biased
+scores prefer higher Expert IDs. This is an explicit local tie policy, not a
+guarantee of Torch TopK ordering. Numerical acceptance against the independent
+reference, rather than kernel identity with the serving engine, qualifies it.
+The kernel reuses the FP32 logits workspace to preserve stored-score rounding
+and normalizes selected weights without dividing by zero. The preceding gate
+GEMM regenerates logits on every execution. Shared-Expert finalization remains
+separate, and no capture-owned temporary allocation is introduced.
+
 GLM converts Router inputs into caller-owned FP32 workspace before its FP32
 matrix multiplication. Only this conversion uses local `torch.compile` during
 pre-capture warmup, producing a kernel compatible with declared-address Graph

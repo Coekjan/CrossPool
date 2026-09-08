@@ -27,52 +27,53 @@ def copy_router_input(source: torch.Tensor, target: torch.Tensor) -> None:
 
 
 @triton.jit
-def corrected_sigmoid_top4_kernel(
+def biased_sigmoid_topk_kernel(
     logits_pointer,
     correction_bias_pointer,
     routed_ids_pointer,
     routed_weights_pointer,
     EXPERT_COUNT: language.constexpr,
     TOPK: language.constexpr,
+    EXPERT_BLOCK_SIZE: language.constexpr,
+    TOPK_BLOCK_SIZE: language.constexpr,
 ):
-    """Select corrected-sigmoid Top-4 with pinned-SGLang tie semantics."""
+    """Select normalized GLM routes using caller-owned FP32 logits as scratch.
+
+    Equal biased scores prefer higher Expert IDs. The stored-score boundary
+    preserves the qualified scoring arithmetic; removing it can change routes
+    near a tied cutoff. Expert padding never participates in selection.
+    """
 
     row = language.program_id(0)
-    experts = language.arange(0, EXPERT_COUNT)
+    experts = language.arange(0, EXPERT_BLOCK_SIZE)
+    valid = experts < EXPERT_COUNT
     logits_offsets = row * EXPERT_COUNT + experts
-    correction_bias = language.load(correction_bias_pointer + experts)
-    selection = language.sigmoid(language.load(logits_pointer + logits_offsets)) + correction_bias
-    language.store(logits_pointer + logits_offsets, selection)
+    correction_bias = language.load(correction_bias_pointer + experts, mask=valid, other=0.0)
+    selection = language.sigmoid(language.load(logits_pointer + logits_offsets, mask=valid, other=0.0))
+    selection += correction_bias
+    language.store(logits_pointer + logits_offsets, selection, mask=valid)
     language.debug_barrier()
-    selection = language.load(logits_pointer + logits_offsets)
+    selection = language.load(logits_pointer + logits_offsets, mask=valid, other=-float("inf"))
     scores = selection - correction_bias
 
-    first_value = language.max(selection, axis=0)
-    first_id = language.max(language.where(selection == first_value, experts, -1), axis=0)
-    first_weight = language.sum(language.where(experts == first_id, scores, 0.0), axis=0)
-    selection = language.where(experts == first_id, -float("inf"), selection)
-    second_value = language.max(selection, axis=0)
-    second_id = language.max(language.where(selection == second_value, experts, -1), axis=0)
-    second_weight = language.sum(language.where(experts == second_id, scores, 0.0), axis=0)
-    selection = language.where(experts == second_id, -float("inf"), selection)
-    third_value = language.max(selection, axis=0)
-    third_id = language.max(language.where(selection == third_value, experts, -1), axis=0)
-    third_weight = language.sum(language.where(experts == third_id, scores, 0.0), axis=0)
-    selection = language.where(experts == third_id, -float("inf"), selection)
-    fourth_value = language.max(selection, axis=0)
-    fourth_id = language.max(language.where(selection == fourth_value, experts, -1), axis=0)
-    fourth_weight = language.sum(language.where(experts == fourth_id, scores, 0.0), axis=0)
+    normalizer = language.full((), 0.0, language.float32)
+    for slot in range(TOPK):
+        maximum = language.max(selection, axis=0)
+        expert = language.max(language.where(valid & (selection == maximum), experts, -1), axis=0)
+        weight = language.sum(language.where(experts == expert, scores, 0.0), axis=0)
+        language.store(routed_ids_pointer + row * TOPK + slot, expert)
+        language.store(routed_weights_pointer + row * TOPK + slot, weight)
+        normalizer += weight
+        selection = language.where(experts == expert, -float("inf"), selection)
 
-    normalizer = first_weight + second_weight + third_weight + fourth_weight
-    output = row * TOPK
-    language.store(routed_ids_pointer + output, first_id)
-    language.store(routed_ids_pointer + output + 1, second_id)
-    language.store(routed_ids_pointer + output + 2, third_id)
-    language.store(routed_ids_pointer + output + 3, fourth_id)
-    language.store(routed_weights_pointer + output, first_weight / normalizer)
-    language.store(routed_weights_pointer + output + 1, second_weight / normalizer)
-    language.store(routed_weights_pointer + output + 2, third_weight / normalizer)
-    language.store(routed_weights_pointer + output + 3, fourth_weight / normalizer)
+    # The selection loop and this vectorized load may assign slots to different
+    # threads. Complete their stores before normalizing the caller-owned output.
+    language.debug_barrier()
+    slots = language.arange(0, TOPK_BLOCK_SIZE)
+    output_offsets = row * TOPK + slots
+    selected_weights = language.load(routed_weights_pointer + output_offsets, mask=slots < TOPK, other=0.0)
+    denominator = language.where(normalizer > 0.0, normalizer, 1.0)
+    language.store(routed_weights_pointer + output_offsets, selected_weights / denominator, mask=slots < TOPK)
 
 
 class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
@@ -93,12 +94,12 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
         routed_expert_count: int,
         routed_topk: int,
     ) -> int:
-        """Size caller-owned FP32 input conversion and corrected-score storage."""
+        """Size caller-owned FP32 input conversion and Router-logit storage."""
 
         if payload_dtype not in (torch.bfloat16, torch.float16):
             raise ValueError("GLM Router requires BF16 or FP16 payloads")
-        if routed_expert_count != 64 or routed_topk != 4 or payload_row_capacity <= 0:
-            raise ValueError("GLM Router requires 64 routed Experts and routed Top-4")
+        if min(payload_row_capacity, routed_expert_count, routed_topk) <= 0 or routed_topk > routed_expert_count:
+            raise ValueError("GLM Router dimensions are inconsistent")
         return payload_row_capacity * (hidden_size + routed_expert_count) * torch.float32.itemsize
 
     @staticmethod
@@ -111,7 +112,7 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
         routed_weights: torch.Tensor,
         renormalize: bool,
     ) -> None:
-        """Run the qualified caller-owned GLM corrected-sigmoid Router."""
+        """Run GLM projection and caller-owned biased-sigmoid TopK."""
 
         payload_dtype = hidden_states.dtype
         if payload_dtype not in (torch.bfloat16, torch.float16):
@@ -153,13 +154,15 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
         # Retain FP32 operands like the pinned gate, without capture-time storage allocation.
         copy_router_input(hidden_states, router_input)
         torch.mm(router_input, router_weights.weight.t(), out=logits)
-        typing.cast(typing.Callable[..., None], corrected_sigmoid_top4_kernel[(row_capacity,)])(
+        typing.cast(typing.Callable[..., None], biased_sigmoid_topk_kernel[(row_capacity,)])(
             logits,
             correction_bias,
             routed_ids,
             routed_weights,
             EXPERT_COUNT=typing.cast(language.constexpr, routed_expert_count),
             TOPK=typing.cast(language.constexpr, routed_topk),
+            EXPERT_BLOCK_SIZE=typing.cast(language.constexpr, triton.next_power_of_2(routed_expert_count)),
+            TOPK_BLOCK_SIZE=typing.cast(language.constexpr, triton.next_power_of_2(routed_topk)),
             num_warps=2,
         )
 
