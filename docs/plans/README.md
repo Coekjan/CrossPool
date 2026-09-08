@@ -220,4 +220,4 @@ To start work from this Roadmap:
    architecture, interfaces, data structures, ownership, lifecycle, or
    validation contracts.
 4. After implementation and acceptance, use the repository's `write-design`
-   workflow to update the current design and remove the completed active plan.
+   workflow to update the current design and obtain confirmation for plan cleanup.

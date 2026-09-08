@@ -76,10 +76,12 @@ A model-layer request moves through the system as follows:
 6. Completion and output state return through the Fabric and Transport
    protocols to the originating SGLang rank.
 
-External readiness is reported only after the configured processes are live,
+System Ready is reported only after the configured processes are live,
 Transport arenas are eligible, the Fabric generation is executable, every
 Instance has crossed its initialization barrier, and the external CUDA MPS
-controller is responsive.
+controller is responsive. The daemon then checks each Instance's HTTP `/health`
+endpoint and reports Serving Healthy separately; this is a one-time startup
+observation, not continuous availability monitoring.
 
 ## Requirements
 
@@ -87,10 +89,11 @@ controller is responsive.
 - [uv](https://docs.astral.sh/uv/) 0.11.19 or newer
 - An uv-managed Python 3.12 interpreter
 - CUDA Toolkit 13.2 and CCCL 3.2
-- NVIDIA GPUs matching the selected topology; the example configuration uses
-  one attention-side GPU and one pooled-side GPU
+- NVIDIA GPUs able to execute the selected kernels and CUDA graphs, with CUDA
+  IPC and NVSHMEM access required by the selected topology; the example uses
+  one attention-side GPU and one FFN-side GPU
 - An externally managed CUDA MPS controller for runtime and GPU validation
-- Local model weights for model-dependent validation
+- Local model weights for serving and model-dependent validation
 
 The native extension is built through uv and scikit-build-core. CUDA bindings,
 Torch, SGLang, and the NVIDIA NVSHMEM runtime are direct project dependencies.
@@ -110,8 +113,8 @@ cp configs/xpool.example.toml configs/dev.local.toml
 ```
 
 For this minimal two-GPU example, edit `configs/dev.local.toml` to retain only
-the `Qwen/Qwen3-14B` model, place its AtnAgent on GPU 0 and its FfnAgent on GPU
-1, and set `vendor.model_base_uri` to the directory containing the `Qwen/`
+the `Qwen/Qwen3-14B` model, set `atn.devices = [0]` and `ffn.devices = [1]`,
+and set `vendor.model_base_uri` to the directory containing the `Qwen/`
 subdirectory. Edit `.env` so `XPOOL_CONFIG` points to that file and configure
 host-unique `CUDA_MPS_PIPE_DIRECTORY` and `CUDA_MPS_LOG_DIRECTORY` paths. Keep
 `SGLANG_PLUGINS=xpool`. Both files are ignored by Git.
@@ -174,12 +177,14 @@ uv run sglang serve \
   --port 30000
 ```
 
-Once SGLang is healthy, wait for the complete xpool generation to become ready
-and send one request through the real FFN path:
+Wait for xpool's System Ready verdict and the SGLang HTTP endpoint, then send
+one request through the real FFN path. `xpool daemon check` checks the former;
+its success does not imply that the public HTTP endpoint is healthy.
 
 ```bash
 export UV_ENV_FILE="$PWD/.env"
 until uv run xpool daemon check; do sleep 1; done
+until curl --fail --silent --show-error --max-time 5 http://127.0.0.1:30000/health; do sleep 1; done
 
 curl -sS http://127.0.0.1:30000/generate \
   -H 'Content-Type: application/json' \
@@ -198,44 +203,72 @@ printf 'quit\n' | uv run nvidia-cuda-mps-control
 
 ## Configuration
 
-Runtime configuration is resolved in this order:
+Start from [`configs/xpool.example.toml`](configs/xpool.example.toml) for
+editable deployment settings and [`.env.example`](.env.example) for process
+environment settings. Keep machine-local paths in an ignored `*.local.toml`
+file and load `.env` into uv commands with `UV_ENV_FILE`, as in Quick Start.
+
+Bootstrap environment variables are separate from the TOML schema:
+
+| Variable | Purpose |
+| --- | --- |
+| `XPOOL_CONFIG` | Selects the runtime TOML file. |
+| `SGLANG_PLUGINS=xpool` | Loads the xpool SGLang plugin. |
+| `CUDA_MPS_PIPE_DIRECTORY` / `CUDA_MPS_LOG_DIRECTORY` | Selects the externally managed MPS controller's directories. |
+
+For each setting, supported sources take precedence in this order:
 
 1. CLI arguments
 2. Allowlisted environment variables
 3. The TOML file selected by `XPOOL_CONFIG`
-4. Registry defaults
+4. Defaults
 
-The main configuration boundaries are:
+Not every setting accepts every source. Use the command's `--help` for
+available CLI overrides and `.env.example` for common environment overrides.
+Debug controls are environment-only, not TOML entries; for example, use
+`XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE`, not a `[debug.graph_observer]` table.
+
+The following is a selected TOML configuration overview, not a complete
+reference:
 
 | Setting | Purpose |
 | --- | --- |
-| `XPOOL_CONFIG` | Selects the runtime TOML file. |
-| `SGLANG_PLUGINS=xpool` | Loads the xpool SGLang plugin. |
-| `vendor.model_base_uri` | Sets the external model root. |
-| `models[].id` / `models[].path` | Identifies a model and optionally overrides its absolute path. |
-| `atn.devices` | Places AtnAgent roles. |
-| `ffn.devices` | Places FfnAgent roles. |
-| `scheduler.ffn_concurrency` / `scheduler.ffn_policy` | Configures Executor Lane count and Fabric scheduling. |
+| `daemon.host` / `daemon.port` | Selects the local control-plane address, not the SGLang serving address. |
+| `vendor.model_base_uri` | Sets the absolute local model root. |
+| `models[].id` / `models[].path` | Identifies a model and optionally overrides its absolute local weight path. |
+| `models[].ffn_tp_size` | Fixes the model's FFN tensor-parallel width; omission uses the number of FfnAgents. |
+| `atn.devices` / `ffn.devices` | Assigns attention-side and FFN-side CUDA devices. |
+| `scheduler.ffn_concurrency` | Sets the Executor Lane count, not a row or token budget. |
+| `scheduler.ffn_policy` | Selects `fifo` or `random` admission. |
 | `scheduler.atn_concurrency` | Reserved for future attention admission; currently has no runtime effect. |
-| `logging.*` | Configures runtime log level and terminal color on stderr. |
-| `ffn.loader.*` | Configures bounded checkpoint-reading parallelism. |
-| `ffn.placement.*` | Configures placement solving. |
+| `logging.level` / `logging.color` | Sets runtime log level and enables terminal-aware color on stderr. |
+| `ffn.loader.parallelism` | Sets the number of checkpoint readers per FfnAgent. |
+| `ffn.placement.parallelism` / `ffn.placement.timeout_seconds` | Sets solver workers and the whole-solve timeout in seconds. |
 | `ffn.device_memory_extra_margin_bytes` | Adds an explicit device-memory admission margin. |
 | `ffn.device_memory_calibration` | Selects an optional environment-qualified memory calibration profile. |
 
-Model paths are resolved by `XpoolConfig.model_path_of(model_id)`. Start from
-[`configs/xpool.example.toml`](configs/xpool.example.toml) and
-[`.env.example`](.env.example); keep host-specific paths in an ignored
-`*.local.toml` file.
+Each device list must be nonempty, unique, and ascending, and the two roles
+cannot share a device. All processes must use the same CUDA device numbering.
+
+Each `[[models]]` entry selects local weights: an explicit `path` takes
+precedence; otherwise the path is `vendor.model_base_uri / id`. For example,
+`id = "Qwen/Qwen3-14B"` below `/srv/models` resolves to
+`/srv/models/Qwen/Qwen3-14B`. These settings do not download weights. Pass the
+same resolved path to SGLang's `--model-path`.
+
+Run `uv run xpool config dump` to inspect resolved values and their sources as
+JSON. It reads the selected configuration; it does not generate a TOML template.
 
 The [Control Plane design](docs/designs/control-plane.md#configuration-and-integration)
 owns configuration semantics and validation contracts.
 
-Memory calibration is optional: analytic admission works without a profile.
-When a device-local correction is useful, set an absolute
-`ffn.device_memory_calibration` and run `uv run xpool memory-profile` before starting
-the serving processes. The profiler uses a fixed model-independent corpus and
-does not load the configured model weights.
+Memory calibration is optional: leave `ffn.device_memory_calibration` unset to
+use analytic admission. To generate a profile, set it to an absolute output
+path and run `uv run xpool memory-profile` with MPS running and the daemon and
+serving processes stopped. The profiler uses a fixed model-independent corpus
+and does not load the configured model weights. At startup, an explicitly
+configured profile must exist and match the deployment environment; missing,
+malformed, or incompatible profiles fail rather than silently falling back.
 
 ## SGLang Integration
 

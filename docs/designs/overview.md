@@ -1,9 +1,9 @@
 # System Overview
 
 xpool separates attention and KV-cache execution from FFN weight residency and
-computation. The first production target runs both roles on one NVLink-connected
-host under CUDA MPS. Multiple models may share every GPU assigned to a role; no
-model owns a device exclusively.
+computation. The current deployment runs both roles on one host under CUDA
+MPS. Multiple models may share every GPU assigned to a role; no model owns a
+device exclusively.
 
 This document defines the supported deployment boundary, process roles, and
 cross-module interface ownership. See the [design map](README.md) for the
@@ -15,10 +15,11 @@ remaining current-state documents.
 
 The supported production boundary is:
 
-- one Linux host with homogeneous NVIDIA GPUs;
+- one Linux host with NVIDIA GPUs capable of the selected execution;
 - CUDA Toolkit 13.2 and CCCL 3.2;
 - CUDA MPS running before GPU participants start;
-- NVLink for AtnAgent-to-FfnAgent and FfnAgent-to-FfnAgent traffic;
+- CUDA IPC mappings for rank-local Transport and NVSHMEM communication for
+  Fabric, including directly accessible peer memory for FFN partial reduction;
 - one identical resolved xpool configuration in every process;
 - SGLang as the only serving-engine integration;
 - BF16 or FP16 hidden-state payloads, with the current qualification models
@@ -30,13 +31,19 @@ DeepSeek-V2-Lite, and GLM-4.7-Flash. Model adapters may support additional
 compatible architectures, but readiness claims require direct evidence for
 each new family.
 
-The first production boundary excludes PCIe data-plane operation, cross-host
-IB, heterogeneous interconnect domains, expert parallelism, Unary FFN,
+GPU model names and interconnect labels do not define a hardware allowlist.
+An untested topology is not excluded solely for lack of qualification, nor is
+it guaranteed to work: the selected kernels, CUDA Graph features, and memory
+access paths must be available on the deployment. Environment compatibility
+checks for optional memory calibration restrict reuse of that profile, not
+deployment to a fixed GPU model; see [Control Plane](control-plane.md#memory-admission).
+
+The current implementation excludes cross-host IB, expert parallelism, Unary FFN,
 same-Instance concurrent FFN requests, service-time placement changes, model
 migration, rolling updates, mixed-ABI generations, and request-time fallback.
 Except for the explicitly reserved `scheduler.atn_concurrency` setting described
-in [Control Plane](control-plane.md), no dormant types or configuration switches are retained for these
-features.
+in [Control Plane](control-plane.md), no dormant types or configuration switches
+are retained for these features.
 
 ### Process roles
 

@@ -65,9 +65,9 @@ Create that directory only when needed, not as empty scaffolding. Repository
 document ownership takes precedence over a generic suggestion to use a root
 `docs/adr/` directory. Keep resolved domain terms in `CONTEXT.md`.
 
-At completion, `write-design` folds durable decisions, including ADRs, into their
-owning current documents before removing the completed task directory. Git
-retains the history; no separate archive is required.
+After implementation and validation, use `write-design` to fold durable
+decisions, including ADRs, into their owning current documents. Retain the task
+directory until user-confirmed cleanup under that skill's completion rule.
 
 The plan is complete when a new engineer can implement it from the repository,
 all material decisions are settled, and no unresolved question blocks execution.

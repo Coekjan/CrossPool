@@ -29,8 +29,18 @@ target that is still being designed or implemented remains under `docs/plans/`.
 7. Fold durable facts from the completed task, including any task-local `adr/`
    decisions, into their owning design, glossary, or repository guidance. For
    instruction-only tasks, update the owning instructions without inventing a
-   runtime architecture change. Then remove the complete `docs/plans/<task>/`
-   directory. Git retains the task and ADR history.
+   runtime architecture change. Retain the task directory pending the user's
+   cleanup decision, following the completion rule below.
+
+## Completion And Cleanup
+
+Implementation and validation completion do not authorize plan deletion. Fold
+durable decisions into their current owners, report completion, and retain
+`docs/plans/<task>/` until the user confirms removal. Recommend removal once
+the task is complete. Honor an explicit removal or retention decision without
+asking again; retaining a completed plan does not prevent a requested commit.
+After removal is confirmed, remove only the completed task directory. Existing
+Git history remains available; no separate archive is required.
 
 Current design documents contain no task status, changelog, superseded design,
 implementation diary, test run log, or speculative future architecture. Keep
@@ -38,5 +48,5 @@ unsupported boundaries only when they constrain the current system. Git and
 the task review retain completed-plan history.
 
 The design update is complete when the documents match live source and accepted
-evidence, terminology has one owner, cross-references resolve, and no completed
-task document remains as a second source of truth.
+evidence, terminology has one owner, and cross-references resolve. A completed
+plan awaiting cleanup confirmation is not a second current-design authority.

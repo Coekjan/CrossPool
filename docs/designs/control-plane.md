@@ -11,13 +11,19 @@ Runtime configuration flows through `xpool.config`. Entry points install one
 process-global configuration and business logic reads that configuration rather
 than caching selected values elsewhere. CLI values override allowlisted
 environment variables, which override TOML, which overrides registry defaults.
+This ordering applies only to sources allowed by the individual setting;
+it does not make every setting configurable through all three input surfaces.
 Model paths are resolved through `XpoolConfig.model_path_of`.
 
-Required settings without defaults fail fast. Most settings are config-file
-only; `.env` primarily supplies SGLang/bootstrap settings such as `XPOOL_CONFIG`
-and `SGLANG_PLUGINS`. Every accepted `XPOOL_*` variable is declared in the config
-registry, and unknown names produce a warning. Debug settings use nested names
-such as `debug.graph_observer.enable` and `debug.graph_observer.outdir`.
+Required settings without defaults fail fast. Deployment settings live in TOML
+with selected CLI and environment overrides; `.env` supplies process environment
+settings such as `XPOOL_CONFIG` and `SGLANG_PLUGINS` and optional diagnostics.
+Every accepted `XPOOL_*` variable is declared in the config registry, and unknown
+names produce a warning. Debug settings have nested
+in-process names such as `debug.graph_observer.enable`, but accept only their
+registered environment variables and defaults, not TOML input. For example,
+Graph Observer uses `XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE` and
+`XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR`.
 
 `ModelConfig.path` is the schema's explicit override, not a runtime lookup API.
 Machine-local paths belong in ignored `*.local.toml` files.
@@ -179,8 +185,12 @@ it is not part of the estimator and cannot repair estimator underprediction.
 
 The analytic estimator works without prior profiling. An optional calibration
 file supplies a device-local correction learned from a synthetic, model-neutral
-corpus. Calibration is selected by configuration only when a compatible file
-is present; otherwise analytic estimation remains usable.
+corpus. With no `ffn.device_memory_calibration` path configured, admission uses
+analytic estimation alone. An explicitly configured profile must be readable,
+valid, and compatible with the deployment; otherwise startup fails rather than
+falling back to analytic estimation. The compatibility checks compare recorded
+software, configuration, MPS, and per-FfnAgent GPU evidence. They constrain
+profile reuse, not the set of GPU models on which xpool may run.
 
 The `xpool memory-profile` command produces calibration evidence. A profile
 records local GPU and software identity, fitted coefficients, observed and

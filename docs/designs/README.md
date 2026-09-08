@@ -16,9 +16,9 @@ system. They are current-state references, not task plans or design history.
 - [Qualification](qualification.md) defines readiness and acceptance evidence.
 
 The root [CONTEXT.md](../../CONTEXT.md) owns domain terminology. Active target
-changes live under `docs/plans/<task>/README.md` only while their implementation
-and acceptance are incomplete. A relevant active plan is a scoped delta over
-these current documents; source declarations and generated native stubs remain
+changes live under `docs/plans/<task>/README.md`; completed plans remain until
+user-confirmed cleanup through `write-design`. A relevant active plan is a scoped
+delta over these current documents; source declarations and generated native stubs remain
 authoritative for exact interfaces.
 
 The [Roadmap](../plans/README.md) maps long-term candidate workstreams and their

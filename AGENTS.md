@@ -29,7 +29,7 @@ Source declarations and generated native stubs remain authoritative for exact
 implemented interfaces. Read the current design and active plan relevant to the
 task. Use `write-plan` for non-trivial changes needing a tracked target design;
 use `write-design` after implementation and acceptance to fold durable decisions
-into their owners and remove the completed task directory.
+into their owners and handle user-confirmed plan cleanup.
 
 ## Configuration
 

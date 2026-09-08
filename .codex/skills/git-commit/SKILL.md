@@ -11,17 +11,19 @@ review-ready changes for the task are complete.
 ## Workflow
 
 1. Inspect the working tree with `git status --short`.
-2. Stage only the intended files, then verify them with `git status --short`
-   and `git diff --cached --stat`.
-3. Identify the relevant current documents under `docs/designs/` and any
-   applicable active plan under `docs/plans/`. Confirm that the staged change
+2. Identify the relevant current documents under `docs/designs/` and any
+   applicable task plan under `docs/plans/`. Confirm that the intended change
    matches the current baseline plus that plan's scoped target delta.
-4. For an intentionally incomplete phase, keep the active plan and do not
+3. For an intentionally incomplete phase, keep the active plan and do not
    publish unimplemented target behavior as current design. For a completed
    implementation, confirm `write-design` has updated current design, folded
-   durable task decisions into their owners, and removed the completed task
-   directory. A local change that does not alter accepted design needs no design
-   edit.
+   durable task decisions into their owners, and resolved plan cleanup under
+   its completion rule. A commit request is the usual checkpoint to ask whether
+   to remove a completed plan, recommending removal if the user has not already
+   decided; it is not implicit deletion permission. A local change that does
+   not alter accepted design needs no design edit.
+4. Stage only the intended files after the cleanup decision, then verify them
+   with `git status --short` and `git diff --cached --stat`.
 5. Use `self-evolve` to check the current task for new durable lessons. The main
    agent performs this check; delegation and history scanning are not required.
    Persist only accepted lessons through their owning document or an explicitly
