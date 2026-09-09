@@ -1,4 +1,4 @@
-# xpool Roadmap
+# CrossPool Roadmap
 
 This document maps long-term candidate workstreams and their relationships. It
 is neither a description of the current system nor an active implementation
@@ -10,7 +10,7 @@ Accepted changes that need a decision-complete target design receive a separate
 belong in the team's external tracker rather than this repository.
 
 The [design map](../designs/README.md) describes the implemented and accepted
-system. The root [domain glossary](../../CONTEXT.md) owns xpool terminology.
+system. The root [domain glossary](../../CONTEXT.md) owns CrossPool terminology.
 
 ## Relationships
 
@@ -46,7 +46,7 @@ combination requires its own accepted plan and qualification evidence.
   daemon, serving Instances, AtnAgents, FfnAgents, CPUs, accelerators, and future
   hosts.
 - **Current seam:** Typed Transport, Fabric, Graph, and Routing Observer evidence
-  plus the identities already propagated across xpool protocols.
+  plus the identities already propagated across CrossPool protocols.
 - **Requires:** An accepted event and clock-domain model, interface research,
   and evidence that Host, accelerator, process, and cross-host clocks can be
   aligned with adequate fidelity.
@@ -121,7 +121,7 @@ integration demonstrates a shared seam.
   engine's allocator seam.
 
 Research must compare direct reuse of kvcached, a narrow adapter around it,
-reuse of selected mechanisms under xpool ownership, and a minimal xpool-owned
+reuse of selected mechanisms under CrossPool ownership, and a minimal CrossPool-owned
 implementation. Candidate deliverables are a kvcached API and ownership report,
 a model-neutral pooling prototype, an attention-admission and memory-planning
 design, and an accepted active plan for Elastic KV-cache Pooling.
@@ -152,7 +152,7 @@ The workstream does not justify a speculative transport-backend registry.
 ## Accelerator Portability
 
 - **Class:** Product Capability.
-- **Outcome:** Port selected xpool control-plane, data-plane, and execution
+- **Outcome:** Port selected CrossPool control-plane, data-plane, and execution
   capabilities to a non-CUDA accelerator platform, with Ascend as the first
   candidate.
 - **Current seam:** Engine-neutral core values, model semantics, control-plane
@@ -164,8 +164,8 @@ The workstream does not justify a speculative transport-backend registry.
   Timeline Observability.
 
 Research should reuse the existing SGLang NPU stack where it is suitable and
-concentrate xpool work on its own control and data planes. Candidate deliverables
-are an SGLang NPU reuse audit, an xpool platform-gap report, a minimal end-to-end
+concentrate CrossPool work on its own control and data planes. Candidate deliverables
+are an SGLang NPU reuse audit, a CrossPool platform-gap report, a minimal end-to-end
 Ascend prototype, and an accepted active plan for the Ascend port.
 
 The CUDA implementation must not acquire empty backend abstractions solely for
@@ -189,7 +189,7 @@ density rule, or source-text quality gate.
 ## Evaluation and Baselines
 
 - **Class:** Cross-cutting Practice.
-- **Outcome:** Evaluate xpool functionality, resource efficiency, throughput,
+- **Outcome:** Evaluate CrossPool functionality, resource efficiency, throughput,
   latency, and tail latency with fair and reproducible methods.
 - **Current seam:** Numerical, topology, serving, and report-only performance
   evidence already owned by the qualification system.
@@ -200,7 +200,7 @@ density rule, or source-text quality gate.
   being evaluated.
 
 Baseline classes include native SGLang and potentially vLLM, multi-model sharing
-systems such as MuxServe, KV-elastic systems such as kvcached, and xpool
+systems such as MuxServe, KV-elastic systems such as kvcached, and CrossPool
 ablations. Candidate deliverables are an accepted benchmark methodology,
 workload and baseline compatibility reports, reproducible runs, raw results, and
 analysis reports.
