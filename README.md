@@ -116,7 +116,9 @@ For this minimal two-GPU example, edit `configs/dev.local.toml` to retain only
 the `Qwen/Qwen3-14B` model, set `atn.devices = [0]` and `ffn.devices = [1]`,
 and set `vendor.model_base_uri` to the directory containing the `Qwen/`
 subdirectory. Edit `.env` so `XPOOL_CONFIG` points to that file and configure
-host-unique `CUDA_MPS_PIPE_DIRECTORY` and `CUDA_MPS_LOG_DIRECTORY` paths. Keep
+host-unique `CUDA_MPS_PIPE_DIRECTORY` and `CUDA_MPS_LOG_DIRECTORY` paths under
+`/tmp/xpool-mps-$(id -u)`. Expand the command in a shell before writing the
+absolute paths into `.env`; dotenv does not execute shell substitutions. Keep
 `SGLANG_PLUGINS=xpool`. Both files are ignored by Git.
 
 Install the complete development environment and rebuild the native extension:
@@ -128,11 +130,11 @@ uv run xpool config dump
 ```
 
 Create the MPS directories configured in `.env`, then start the controller with
-every GPU visible to PyTorch clients. The following path is an example; keep it
-identical to the values in `.env`.
+every GPU visible to PyTorch clients. Keep these paths identical to the values
+in `.env`.
 
 ```bash
-mkdir -p /tmp/xpool-mps-12345/{pipe,log}
+mkdir -p "/tmp/xpool-mps-$(id -u)"/{pipe,log}
 CUDA_VISIBLE_DEVICES="$(nvidia-smi --query-gpu=uuid --format=csv,noheader | paste -sd, -)" \
   uv run nvidia-cuda-mps-control -d
 printf 'get_default_active_thread_percentage\n' | uv run nvidia-cuda-mps-control
