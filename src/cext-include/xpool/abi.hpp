@@ -8,6 +8,6 @@
 namespace xpool::abi {
 
 /// Native ABI version checked when the extension is loaded and in wire data.
-inline constexpr std::uint32_t kVersion = 80;
+inline constexpr std::uint32_t kVersion = 81;
 
 } // namespace xpool::abi

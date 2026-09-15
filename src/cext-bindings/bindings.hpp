@@ -20,6 +20,10 @@ void bind_devkit(pybind11::module_ &module);
 /// \param module Root `xpool.native` extension module.
 void bind_fabric(pybind11::module_ &module);
 
+/// Bind host-local elastic KV-capacity channel types.
+/// \param module Root `xpool.native` extension module.
+void bind_kv(pybind11::module_ &module);
+
 /// Bind Transport trace values and lifecycle functions.
 /// \param module Root `xpool.native` extension module.
 void bind_transport(pybind11::module_ &module);

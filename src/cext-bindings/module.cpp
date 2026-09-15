@@ -73,6 +73,7 @@ PYBIND11_MODULE(native, module) {
       "runtime_role", []() { return xpool::RuntimeState::singleton().role(); }, "Return the initialized process role.");
 
   xpool::bindings::bind_fabric(module);
+  xpool::bindings::bind_kv(module);
   xpool::bindings::bind_transport(module);
   xpool::bindings::bind_devkit(module);
 }

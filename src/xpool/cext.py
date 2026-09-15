@@ -8,7 +8,7 @@ import xpool.native
 
 __all__ = ["NativeLoadError", "ensure_native_loaded"]
 
-EXPECTED_NATIVE_ABI_VERSION = 80
+EXPECTED_NATIVE_ABI_VERSION = 81
 
 
 class NativeLoadError(RuntimeError):
