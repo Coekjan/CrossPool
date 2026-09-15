@@ -1,20 +1,18 @@
 #include <xpool/devkit/ffn_routing_observer.hpp>
 
-#include <c10/cuda/CUDAException.h>
-#include <c10/util/Exception.h>
-
-#include <ATen/ATen.h>
-
-#include <cooperative_groups.h>
-#include <cuda/std/span>
-#include <cuda_runtime.h>
-
 #include <algorithm>
 #include <array>
 #include <mutex>
 #include <optional>
 #include <type_traits>
 #include <vector>
+
+#include <ATen/ATen.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/util/Exception.h>
+#include <cooperative_groups.h>
+#include <cuda/std/span>
+#include <cuda_runtime.h>
 
 #include <xpool/arena.hpp>
 #include <xpool/debug/options.cuh>
@@ -80,8 +78,7 @@ struct BufferLayout {
 
 class BufferView {
 public:
-  XPOOL_HOST_DEVICE_FN BufferView(std::uint8_t *base, BufferLayout layout)
-      : base_(base), layout_(layout) {}
+  XPOOL_HOST_DEVICE_FN BufferView(std::uint8_t *base, BufferLayout layout) : base_(base), layout_(layout) {}
 
   XPOOL_HOST_DEVICE_FN std::uint8_t *base() const { return base_; }
   XPOOL_HOST_DEVICE_FN const BufferLayout &layout() const { return layout_; }
@@ -135,14 +132,13 @@ XPOOL_HOST_HOOK_FN(xpool::hooks::FfnExecutionInstallPreEvent, HostAdapter::obser
     for (const auto &layer : instance.layers) {
       if (layer.kind == xpool::ffn::LayerKind::Moe && !layer.ffnagent_indices.empty() &&
           layer.ffnagent_indices.front() == context.ffnagent_index) {
-        element_capacity = std::max(
-            element_capacity, xpool::utils::checked::prod(payload_row_capacity, layer.effective_topk));
+        element_capacity =
+            std::max(element_capacity, xpool::utils::checked::prod(payload_row_capacity, layer.effective_topk));
       }
     }
   }
   if (element_capacity != 0) {
-    layout = BufferLayout::create(
-        xpool::debug::options().ffn_routing_observer.record_capacity, element_capacity);
+    layout = BufferLayout::create(xpool::debug::options().ffn_routing_observer.record_capacity, element_capacity);
     C10_CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&buffer), layout.total_bytes));
     C10_CUDA_CHECK(cudaMemset(buffer, 0, layout.total_bytes));
   }
@@ -172,9 +168,8 @@ XPOOL_DEVICE_HOOK_FN(xpool::hooks::FabricFfnAgentProtocolEvent, DeviceAdapter::o
   // One thread reserves and initializes the header before the CTA copies the
   // corresponding routing payload into the same one-based record slot.
   if (group.thread_rank() == 0) {
-    const auto headers =
-        cuda::std::span{reinterpret_cast<RecordHeader *>(view.base() + view.layout().headers_offset),
-                        view.layout().record_capacity};
+    const auto headers = cuda::std::span{reinterpret_cast<RecordHeader *>(view.base() + view.layout().headers_offset),
+                                         view.layout().record_capacity};
     const auto records = xpool::utils::trace::BufferView<RecordHeader>{headers, view.state()};
     const auto entry = records.reserve();
     reserved_sequence = entry ? entry->sequence() : 0;

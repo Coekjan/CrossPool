@@ -1,9 +1,9 @@
-#include <cuda_runtime_api.h>
-#include <gtest/gtest.h>
-
 #include <atomic>
 #include <thread>
 #include <utility>
+
+#include <cuda_runtime_api.h>
+#include <gtest/gtest.h>
 
 #include <xpool/utils/device.hpp>
 

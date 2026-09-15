@@ -3,11 +3,6 @@
 /// \file xpool/fabric/arena.hpp
 /// \brief Fabric symmetric-arena state, typed views, and explicit owner.
 
-#include <cuda/atomic>
-#include <cuda/std/optional>
-#include <cuda/std/span>
-#include <cuda_runtime_api.h>
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +12,10 @@
 #include <vector>
 
 #include <c10/util/Exception.h>
+#include <cuda/atomic>
+#include <cuda/std/optional>
+#include <cuda/std/span>
+#include <cuda_runtime_api.h>
 
 #include <xpool/abort.hpp>
 #include <xpool/fabric/layout.hpp>

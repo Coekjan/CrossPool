@@ -15,7 +15,6 @@ namespace xpool::fabric {
 /// \pre arena, control activation count, control Coordinator Scheduler, and stream are non-null.
 /// \post Coordinator progress is enqueued asynchronously on stream.
 /// \throws c10::Error when the cooperative launch cannot be configured or enqueued.
-void launch_coordinator(ArenaView arena, const ArenaLayout &layout, FfnAgentControlView control,
-                        cudaStream_t stream);
+void launch_coordinator(ArenaView arena, const ArenaLayout &layout, FfnAgentControlView control, cudaStream_t stream);
 
 } // namespace xpool::fabric

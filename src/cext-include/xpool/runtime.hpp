@@ -3,14 +3,14 @@
 /// \file xpool/runtime.hpp
 /// \brief Process-wide native runtime identity and role enforcement.
 
-#include <c10/core/Device.h>
-#include <c10/util/Exception.h>
-
 #include <cstdint>
 #include <initializer_list>
 #include <mutex>
 #include <optional>
 #include <string_view>
+
+#include <c10/core/Device.h>
+#include <c10/util/Exception.h>
 
 namespace xpool {
 

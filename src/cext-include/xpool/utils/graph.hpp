@@ -6,14 +6,14 @@
 /// Borrowed graph and node handles remain owned by CUDA. CUDA query, creation,
 /// and mutation failures surface as c10::Error through the owning implementation.
 
-#include <cuda.h>
-#include <cuda_runtime_api.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <span>
 #include <vector>
+
+#include <cuda.h>
+#include <cuda_runtime_api.h>
 
 namespace xpool::utils::graph {
 

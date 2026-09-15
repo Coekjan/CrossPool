@@ -1,8 +1,8 @@
-#include <cuda_runtime.h>
-#include <gtest/gtest.h>
-
 #include <array>
 #include <cstdint>
+
+#include <cuda_runtime.h>
+#include <gtest/gtest.h>
 
 #include <xpool/macros.hpp>
 #include <xpool/utils/wait.cuh>
@@ -35,22 +35,16 @@ struct WaitObservations {
 
 XPOOL_KERNEL_FN void observe_wait_precedence(WaitObservations *observations) {
   const auto expired = xpool::utils::wait::Deadline::after(0);
-  observations->until[0] = xpool::utils::wait::until(
-      expired, [] { return true; }, [] { return true; });
-  observations->until[1] = xpool::utils::wait::until(
-      expired, [] { return false; }, [] { return true; });
-  observations->until[2] = xpool::utils::wait::until(
-      expired, [] { return false; }, [] { return false; });
-  observations->until[3] = xpool::utils::wait::until(
-      xpool::utils::wait::Deadline::never(), [] { return false; }, [] { return true; });
-  observations->poll[0] = xpool::utils::wait::poll_once(
-      expired, [] { return true; }, [] { return true; });
-  observations->poll[1] = xpool::utils::wait::poll_once(
-      expired, [] { return false; }, [] { return true; });
-  observations->poll[2] = xpool::utils::wait::poll_once(
-      expired, [] { return false; }, [] { return false; });
-  observations->poll[3] = xpool::utils::wait::poll_once(
-      xpool::utils::wait::Deadline::never(), [] { return false; }, [] { return false; });
+  observations->until[0] = xpool::utils::wait::until(expired, [] { return true; }, [] { return true; });
+  observations->until[1] = xpool::utils::wait::until(expired, [] { return false; }, [] { return true; });
+  observations->until[2] = xpool::utils::wait::until(expired, [] { return false; }, [] { return false; });
+  observations->until[3] =
+      xpool::utils::wait::until(xpool::utils::wait::Deadline::never(), [] { return false; }, [] { return true; });
+  observations->poll[0] = xpool::utils::wait::poll_once(expired, [] { return true; }, [] { return true; });
+  observations->poll[1] = xpool::utils::wait::poll_once(expired, [] { return false; }, [] { return true; });
+  observations->poll[2] = xpool::utils::wait::poll_once(expired, [] { return false; }, [] { return false; });
+  observations->poll[3] =
+      xpool::utils::wait::poll_once(xpool::utils::wait::Deadline::never(), [] { return false; }, [] { return false; });
   observations->poll[4] = xpool::utils::wait::poll_once(
       xpool::utils::wait::Deadline::from_start(xpool::utils::time::now(), 0), [] { return false; },
       [] { return false; });

@@ -1,25 +1,24 @@
-#include <ATen/ATen.h>
-#include <c10/cuda/CUDAException.h>
-#include <c10/util/Exception.h>
-
-#include <cuda_runtime_api.h>
+#include <xpool/arena.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <utility>
 
+#include <ATen/ATen.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/util/Exception.h>
+#include <cuda_runtime_api.h>
 #include <nvshmem.h>
 
-#include <xpool/arena.hpp>
 #include <xpool/fabric/arena.hpp>
 #include <xpool/fabric/layout.hpp>
 
 namespace xpool::fabric {
 
 Arena Arena::create(const ArenaLayout &layout, std::span<const InstanceEntry> instances,
-                                std::span<const LayerEntry> layers, std::span<const int> atnagent_pes,
-                                std::span<const int> ffnagent_pes) {
+                    std::span<const LayerEntry> layers, std::span<const int> atnagent_pes,
+                    std::span<const int> ffnagent_pes) {
   const auto total_bytes = layout.header.total_bytes;
   auto *allocation = static_cast<std::uint8_t *>(nvshmem_align(xpool::arena::kAllocationAlignment, total_bytes));
   TORCH_CHECK(allocation != nullptr, "xpool failed to allocate the symmetric Fabric arena");

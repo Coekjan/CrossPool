@@ -3,17 +3,16 @@
 /// \file xpool/fabric/projection.hpp
 /// \brief Semantic input for one generation-scoped NVSHMEM Fabric.
 
-#include <nvshmemx.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <vector>
 
 #include <c10/core/ScalarType.h>
+#include <nvshmemx.h>
 
-#include <xpool/ffn.hpp>
 #include <xpool/fabric/layout.hpp>
 #include <xpool/fabric/scheduler.hpp>
+#include <xpool/ffn.hpp>
 #include <xpool/utils/hex.hpp>
 
 namespace xpool::fabric {

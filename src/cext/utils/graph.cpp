@@ -13,7 +13,6 @@
 #include <c10/cuda/driver_api.h>
 #include <c10/util/Exception.h>
 #include <c10/util/TypeCast.h>
-
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
@@ -138,10 +137,10 @@ KernelNodeParameters KernelNodeParameters::read(cudaGraphNode_t node) {
 }
 
 bool KernelNodeParameters::same_schema(const KernelNodeParameters &other) const {
-  if (function_ != other.function_ || kernel_ != other.kernel_ || context_ != other.context_ || grid_.x != other.grid_.x ||
-      grid_.y != other.grid_.y || grid_.z != other.grid_.z || block_.x != other.block_.x ||
-      block_.y != other.block_.y || block_.z != other.block_.z ||
-      shared_memory_bytes_ != other.shared_memory_bytes_ || arguments_.size() != other.arguments_.size()) {
+  if (function_ != other.function_ || kernel_ != other.kernel_ || context_ != other.context_ ||
+      grid_.x != other.grid_.x || grid_.y != other.grid_.y || grid_.z != other.grid_.z || block_.x != other.block_.x ||
+      block_.y != other.block_.y || block_.z != other.block_.z || shared_memory_bytes_ != other.shared_memory_bytes_ ||
+      arguments_.size() != other.arguments_.size()) {
     return false;
   }
   for (auto index = std::size_t{0}; index < arguments_.size(); ++index) {
@@ -309,8 +308,7 @@ void insert_node_after(cudaGraph_t graph, cudaGraphNode_t predecessor, cudaGraph
   auto successors = std::vector<cudaGraphNode_t>(successor_count);
   auto edge_data = std::vector<cudaGraphEdgeData>(successor_count);
   if (successor_count != 0) {
-    C10_CUDA_CHECK(
-        cudaGraphNodeGetDependentNodes(predecessor, successors.data(), edge_data.data(), &successor_count));
+    C10_CUDA_CHECK(cudaGraphNodeGetDependentNodes(predecessor, successors.data(), edge_data.data(), &successor_count));
   }
   for (auto index = std::size_t{0}; index < successor_count; ++index) {
     TORCH_CHECK(edge_data[index].from_port == 0 && edge_data[index].to_port == 0 &&

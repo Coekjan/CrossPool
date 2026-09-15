@@ -95,8 +95,7 @@ XPOOL_DEVICE_FN Status until(const Deadline &deadline, Ready ready, Cancelled ca
 template <Poll Ready>
 XPOOL_DEVICE_FN Status until(const Deadline &deadline, Ready ready,
                              std::uint32_t relax_nanoseconds = kDefaultRelaxNanoseconds) {
-  return until(
-      deadline, ready, [] { return false; }, relax_nanoseconds);
+  return until(deadline, ready, [] { return false; }, relax_nanoseconds);
 }
 
 } // namespace xpool::utils::wait

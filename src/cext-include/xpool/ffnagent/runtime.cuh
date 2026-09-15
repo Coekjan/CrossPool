@@ -3,11 +3,11 @@
 /// \file xpool/ffnagent/runtime.cuh
 /// \brief Private device tables used by installed FfnAgent Lane Graphs.
 
-#include <cuda_runtime.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+
+#include <cuda_runtime.h>
 
 #include <xpool/fabric/protocol.hpp>
 

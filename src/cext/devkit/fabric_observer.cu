@@ -1,13 +1,4 @@
 #include <xpool/devkit/fabric_observer.hpp>
-#include <xpool/devkit/adapters.cuh>
-#include <xpool/devkit/adapters.hpp>
-
-#include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/util/Exception.h>
-
-#include <cooperative_groups.h>
-#include <cuda/std/span>
 
 #include <algorithm>
 #include <array>
@@ -15,10 +6,18 @@
 #include <optional>
 #include <vector>
 
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/util/Exception.h>
+#include <cooperative_groups.h>
+#include <cuda/std/span>
+
 #include <xpool/arena.hpp>
 #include <xpool/debug/options.cuh>
-#include <xpool/fabric/hooks.hpp>
+#include <xpool/devkit/adapters.cuh>
+#include <xpool/devkit/adapters.hpp>
 #include <xpool/devkit/fabric_observer.cuh>
+#include <xpool/fabric/hooks.hpp>
 #include <xpool/hooks.cuh>
 #include <xpool/macros.hpp>
 #include <xpool/utils/layout.hpp>
@@ -40,9 +39,7 @@ struct Storage {
     return {cuda::std::span{records, record_capacity}, *state};
   }
 
-  XPOOL_DEVICE_FN Record *find(std::uint64_t sequence) const {
-    return buffer().find(sequence);
-  }
+  XPOOL_DEVICE_FN Record *find(std::uint64_t sequence) const { return buffer().find(sequence); }
 };
 
 // The Host installs this process-local pointer table only at Fabric join and
@@ -91,8 +88,8 @@ XPOOL_HOST_HOOK_FN(xpool::hooks::FabricJoinPostEvent, HostAdapter::observe, cont
   const auto lock = std::lock_guard<std::mutex>{state_mutex};
   TORCH_CHECK(!host_state.has_value(), "xpool Fabric Observer is already open");
   const auto device_guard = c10::cuda::CUDAGuard{context.cuda_device};
-  const auto plan = storage_plan(xpool::debug::options().fabric_observer.record_capacity,
-                                 context.layout.instance_count, context.layout.executor_lane_count);
+  const auto plan = storage_plan(xpool::debug::options().fabric_observer.record_capacity, context.layout.instance_count,
+                                 context.layout.executor_lane_count);
   auto index = std::size_t{0};
   const auto &state = plan[index++];
   const auto &records = plan[index++];
@@ -329,8 +326,8 @@ std::optional<Snapshot> read() {
   const auto retained = std::min<std::size_t>(state.sequence, host_state->storage.record_capacity);
   auto records = std::vector<Record>(retained);
   if (!records.empty()) {
-    C10_CUDA_CHECK(cudaMemcpy(records.data(), host_state->storage.records,
-                              records.size() * sizeof(records.front()), cudaMemcpyDeviceToHost));
+    C10_CUDA_CHECK(cudaMemcpy(records.data(), host_state->storage.records, records.size() * sizeof(records.front()),
+                              cudaMemcpyDeviceToHost));
   }
   return Snapshot{
       .pe = host_state->pe,

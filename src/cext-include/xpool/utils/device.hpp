@@ -3,9 +3,9 @@
 /// \file xpool/utils/device.hpp
 /// \brief Host-side CUDA device utility helpers.
 
-#include <cuda_runtime_api.h>
-
 #include <cstdint>
+
+#include <cuda_runtime_api.h>
 
 namespace xpool::utils::device {
 

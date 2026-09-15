@@ -27,7 +27,6 @@ struct RequestMetadata {
     return xpool::ffn::is_valid(forward_mode) && xpool::ffn::is_valid(output_requirement) &&
            xpool::ffn::is_valid(dp_row_layout);
   }
-
 };
 
 /// Observable lifecycle of one reusable single-producer/single-consumer mailbox.

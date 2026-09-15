@@ -1,13 +1,13 @@
-#include <cooperative_groups.h>
+#include <xpool/fabric/atnagent.cuh>
 
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 
+#include <cooperative_groups.h>
 #include <nvshmem.h>
 
 #include <xpool/abort.hpp>
-#include <xpool/fabric/atnagent.cuh>
 #include <xpool/fabric/protocol.cuh>
 #include <xpool/ffn.hpp>
 #include <xpool/hooks.cuh>

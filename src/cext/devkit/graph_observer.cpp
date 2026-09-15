@@ -1,11 +1,11 @@
 #include <xpool/devkit/graph_observer.hpp>
 
-#include <c10/util/Exception.h>
-
 #include <algorithm>
 #include <mutex>
 #include <optional>
 #include <ranges>
+
+#include <c10/util/Exception.h>
 
 #include <xpool/debug/options.hpp>
 #include <xpool/devkit/adapters.hpp>
@@ -39,8 +39,7 @@ XPOOL_HOST_HOOK_FN(xpool::hooks::FfnPrimaryGraphParameterizePostEvent, HostAdapt
   }
   auto &primary_graph = snapshot->primary_graphs[context.execution_signature_index];
   xpool::utils::graph::for_each_reachable_node(
-      context.graph,
-      [&primary_graph](cudaGraphNode_t, cudaGraphNodeType type) { ++primary_graph.node_counts[type]; });
+      context.graph, [&primary_graph](cudaGraphNode_t, cudaGraphNodeType type) { ++primary_graph.node_counts[type]; });
   primary_graph.binding_site_count = context.binding_site_count;
 }
 
@@ -52,19 +51,19 @@ XPOOL_HOST_HOOK_FN(xpool::hooks::FfnLaneGraphBuildPostEvent, HostAdapter::observ
   xpool::utils::graph::for_each_reachable_node(
       context.graph, [&lane_graph](cudaGraphNode_t, cudaGraphNodeType type) { ++lane_graph.node_counts[type]; });
   const auto compute_branches = xpool::utils::graph::conditional_bodies(context.compute_switch);
-  lane_graph.compute_branch_count = static_cast<std::size_t>(std::ranges::distance(
-      compute_branches | std::views::filter([](cudaGraph_t branch) {
-        return std::ranges::any_of(xpool::utils::graph::nodes(branch), [](cudaGraphNode_t node) {
-          return xpool::utils::graph::node_type(node) == cudaGraphNodeTypeGraph;
-        });
-      })));
+  lane_graph.compute_branch_count = static_cast<std::size_t>(
+      std::ranges::distance(compute_branches | std::views::filter([](cudaGraph_t branch) {
+                              return std::ranges::any_of(xpool::utils::graph::nodes(branch), [](cudaGraphNode_t node) {
+                                return xpool::utils::graph::node_type(node) == cudaGraphNodeTypeGraph;
+                              });
+                            })));
   const auto delivery_branches = xpool::utils::graph::conditional_bodies(context.delivery_switch);
-  lane_graph.delivery_branch_count = static_cast<std::size_t>(std::ranges::distance(
-      delivery_branches | std::views::filter([](cudaGraph_t branch) {
-        return std::ranges::any_of(xpool::utils::graph::nodes(branch), [](cudaGraphNode_t node) {
-          return xpool::utils::graph::node_type(node) == cudaGraphNodeTypeKernel;
-        });
-      })));
+  lane_graph.delivery_branch_count = static_cast<std::size_t>(
+      std::ranges::distance(delivery_branches | std::views::filter([](cudaGraph_t branch) {
+                              return std::ranges::any_of(xpool::utils::graph::nodes(branch), [](cudaGraphNode_t node) {
+                                return xpool::utils::graph::node_type(node) == cudaGraphNodeTypeKernel;
+                              });
+                            })));
 
   const auto lock = std::lock_guard<std::mutex>{state_mutex};
   TORCH_CHECK(snapshot.has_value(), "xpool Graph Observer received a Lane Graph before installation");

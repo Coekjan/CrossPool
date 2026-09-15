@@ -3,12 +3,12 @@
 /// \file xpool/debug/options.hpp
 /// \brief Host-side native debug option state.
 
-#include <c10/core/Device.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <type_traits>
+
+#include <c10/core/Device.h>
 
 #include <xpool/macros.hpp>
 
@@ -56,8 +56,8 @@ struct Options {
   /// \post Both observer capacities are zero and Graph observation is disabled.
   XPOOL_HOST_DEVICE_FN
   constexpr Options()
-      : transport_observer{false, 0U}, fabric_observer{false, 0U}, graph_observer{false}, ffn_routing_observer{false,
-                                                                                                               0U} {}
+      : transport_observer{false, 0U}, fabric_observer{false, 0U}, graph_observer{false},
+        ffn_routing_observer{false, 0U} {}
 
   constexpr bool operator==(const Options &) const = default;
 };

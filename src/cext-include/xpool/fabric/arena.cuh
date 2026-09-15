@@ -13,8 +13,7 @@
 
 namespace xpool::fabric {
 
-template <typename T>
-XPOOL_DEVICE_FN inline T *ArenaView::pointer_at(std::size_t offset, std::size_t index) const {
+template <typename T> XPOOL_DEVICE_FN inline T *ArenaView::pointer_at(std::size_t offset, std::size_t index) const {
   return reinterpret_cast<T *>(base_ + offset) + index;
 }
 
@@ -70,7 +69,8 @@ XPOOL_DEVICE_FN inline cuda::std::span<const std::uint8_t> FfnAgentLanePayloadVi
 
 // Once input consumption finishes, complete delivery reuses buffer zero as
 // staging; no second input interpretation remains live at that point.
-XPOOL_DEVICE_FN inline cuda::std::span<std::uint8_t> FfnAgentLanePayloadView::complete_output_staging_destination() const {
+XPOOL_DEVICE_FN inline cuda::std::span<std::uint8_t>
+FfnAgentLanePayloadView::complete_output_staging_destination() const {
   return {buffers_[0], capacity_};
 }
 
@@ -92,7 +92,7 @@ XPOOL_DEVICE_FN inline xpool::ffn::ResultCode ArenaView::cancellation_result() c
 }
 
 XPOOL_DEVICE_FN inline DeliveryVariant delivery_variant(const InstanceEntry &instance,
-                                                         xpool::ffn::OutputRequirement output_requirement) {
+                                                        xpool::ffn::OutputRequirement output_requirement) {
   if (output_requirement == xpool::ffn::OutputRequirement::PerRankComplete) {
     return DeliveryVariant::ReplicatedComplete;
   }
@@ -108,7 +108,7 @@ XPOOL_DEVICE_FN inline const InstanceEntry &ArenaView::instance_entry(std::size_
 }
 
 XPOOL_DEVICE_FN inline const LayerEntry &ArenaView::layer_entry(std::size_t instance_index,
-                                                                            std::size_t layer_ordinal) const {
+                                                                std::size_t layer_ordinal) const {
   const auto &instance = instance_entry(instance_index);
   xpool::abort_if(layer_ordinal >= instance.layer_count);
   return *pointer_at<const LayerEntry>(layout().layer_entries_offset_bytes, instance.layer_begin + layer_ordinal);
@@ -121,15 +121,15 @@ XPOOL_DEVICE_FN inline cuda::std::span<const int> ArenaView::atnagent_pes(std::s
 }
 
 XPOOL_DEVICE_FN inline cuda::std::span<const int> ArenaView::ffnagent_pes(std::size_t instance_index,
-                                                                                std::size_t layer_ordinal) const {
+                                                                          std::size_t layer_ordinal) const {
   const auto &instance = instance_entry(instance_index);
   xpool::abort_if(layer_ordinal >= instance.layer_count);
   const auto begin = instance.ffnagent_pe_begin + layer_ordinal * instance.ffn_tp_size;
   return {pointer_at<const int>(layout().ffnagent_pes_offset_bytes, begin), instance.ffn_tp_size};
 }
 
-XPOOL_DEVICE_FN inline RoutingMetadataBlock
-ArenaView::routing_metadata(std::size_t executor_lane_index, std::size_t payload_row_capacity) const {
+XPOOL_DEVICE_FN inline RoutingMetadataBlock ArenaView::routing_metadata(std::size_t executor_lane_index,
+                                                                        std::size_t payload_row_capacity) const {
   xpool::abort_if(executor_lane_index >= layout().executor_lane_count || payload_row_capacity == 0);
   const auto &execution = lane_execution_publication(executor_lane_index).record;
   xpool::abort_if(execution.validate() != xpool::ffn::ResultCode::Ok ||
@@ -151,15 +151,14 @@ ArenaView::routing_metadata(std::size_t executor_lane_index, std::size_t payload
   };
 }
 
-XPOOL_DEVICE_FN inline Publication<Submission> &
-ArenaView::submission_publication(std::size_t source_atnagent_index, std::size_t instance_index) const {
+XPOOL_DEVICE_FN inline Publication<Submission> &ArenaView::submission_publication(std::size_t source_atnagent_index,
+                                                                                  std::size_t instance_index) const {
   xpool::abort_if(source_atnagent_index >= layout().atnagent_count || instance_index >= layout().instance_count);
-  return *pointer_at<Publication<Submission>>(
-      layout().submission_publications_offset_bytes, source_atnagent_index * layout().instance_count + instance_index);
+  return *pointer_at<Publication<Submission>>(layout().submission_publications_offset_bytes,
+                                              source_atnagent_index * layout().instance_count + instance_index);
 }
 
-XPOOL_DEVICE_FN inline Publication<Admission> &
-ArenaView::admission_publication(std::size_t instance_index) const {
+XPOOL_DEVICE_FN inline Publication<Admission> &ArenaView::admission_publication(std::size_t instance_index) const {
   xpool::abort_if(instance_index >= layout().instance_count);
   return *pointer_at<Publication<Admission>>(layout().admission_publications_offset_bytes, instance_index);
 }
@@ -168,22 +167,21 @@ XPOOL_DEVICE_FN inline Publication<LaneExecution> &
 ArenaView::lane_execution_publication(std::size_t executor_lane_index) const {
   xpool::abort_if(executor_lane_index >= layout().executor_lane_count);
   return *pointer_at<Publication<LaneExecution>>(layout().lane_execution_publications_offset_bytes,
-                                                          executor_lane_index);
+                                                 executor_lane_index);
 }
 
 XPOOL_DEVICE_FN inline Publication<InputReady> &
 ArenaView::input_ready_publication(std::size_t executor_lane_index) const {
   xpool::abort_if(executor_lane_index >= layout().executor_lane_count);
-  return *pointer_at<Publication<InputReady>>(layout().input_ready_publications_offset_bytes,
-                                                       executor_lane_index);
+  return *pointer_at<Publication<InputReady>>(layout().input_ready_publications_offset_bytes, executor_lane_index);
 }
 
 XPOOL_DEVICE_FN inline Publication<RoutingMetadataReady> &
 ArenaView::routing_metadata_ready_publication(std::size_t executor_lane_index) const {
   xpool::abort_if(executor_lane_index >= layout().executor_lane_count ||
                   layout().routing_metadata_ready_publications_offset_bytes == 0);
-  return *pointer_at<Publication<RoutingMetadataReady>>(
-      layout().routing_metadata_ready_publications_offset_bytes, executor_lane_index);
+  return *pointer_at<Publication<RoutingMetadataReady>>(layout().routing_metadata_ready_publications_offset_bytes,
+                                                        executor_lane_index);
 }
 
 XPOOL_DEVICE_FN inline Publication<PartialReady> &
@@ -191,34 +189,31 @@ ArenaView::partial_ready_publication(std::size_t source_ffnagent_index, std::siz
   xpool::abort_if(source_ffnagent_index >= layout().ffnagent_count ||
                   executor_lane_index >= layout().executor_lane_count);
   return *pointer_at<Publication<PartialReady>>(layout().partial_ready_publications_offset_bytes,
-                                                         source_ffnagent_index * layout().executor_lane_count +
-                                                             executor_lane_index);
+                                                source_ffnagent_index * layout().executor_lane_count +
+                                                    executor_lane_index);
 }
 
 XPOOL_DEVICE_FN inline Publication<FfnAgentCompletion> &
-ArenaView::ffnagent_completion_publication(std::size_t source_ffnagent_index,
-                                                 std::size_t executor_lane_index) const {
+ArenaView::ffnagent_completion_publication(std::size_t source_ffnagent_index, std::size_t executor_lane_index) const {
   xpool::abort_if(source_ffnagent_index >= layout().ffnagent_count ||
                   executor_lane_index >= layout().executor_lane_count);
   return *pointer_at<Publication<FfnAgentCompletion>>(layout().ffnagent_completion_publications_offset_bytes,
-                                                            source_ffnagent_index * layout().executor_lane_count +
-                                                                executor_lane_index);
+                                                      source_ffnagent_index * layout().executor_lane_count +
+                                                          executor_lane_index);
 }
 
 XPOOL_DEVICE_FN inline Publication<OutputCommit> &
 ArenaView::output_commit_publication(std::size_t instance_index) const {
   xpool::abort_if(instance_index >= layout().instance_count);
-  return *pointer_at<Publication<OutputCommit>>(layout().output_commit_publications_offset_bytes,
-                                                         instance_index);
+  return *pointer_at<Publication<OutputCommit>>(layout().output_commit_publications_offset_bytes, instance_index);
 }
 
 XPOOL_DEVICE_FN inline Publication<OutputAcknowledgement> &
-ArenaView::output_acknowledgement_publication(std::size_t source_atnagent_index,
-                                                    std::size_t instance_index) const {
+ArenaView::output_acknowledgement_publication(std::size_t source_atnagent_index, std::size_t instance_index) const {
   xpool::abort_if(source_atnagent_index >= layout().atnagent_count || instance_index >= layout().instance_count);
-  return *pointer_at<Publication<OutputAcknowledgement>>(
-      layout().output_acknowledgement_publications_offset_bytes,
-      source_atnagent_index * layout().instance_count + instance_index);
+  return *pointer_at<Publication<OutputAcknowledgement>>(layout().output_acknowledgement_publications_offset_bytes,
+                                                         source_atnagent_index * layout().instance_count +
+                                                             instance_index);
 }
 
 XPOOL_DEVICE_FN inline AtnAgentLanePayloadView ArenaView::atnagent_lane_payload(std::size_t executor_lane_index) const {

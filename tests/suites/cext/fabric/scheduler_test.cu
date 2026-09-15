@@ -1,12 +1,12 @@
-#include <cuda_runtime.h>
-#include <gtest/gtest.h>
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 
-#include <xpool/ffn.hpp>
+#include <cuda_runtime.h>
+#include <gtest/gtest.h>
+
 #include <xpool/fabric/scheduler.cuh>
+#include <xpool/ffn.hpp>
 #include <xpool/macros.hpp>
 
 namespace {

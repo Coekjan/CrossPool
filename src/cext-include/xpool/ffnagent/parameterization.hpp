@@ -3,13 +3,13 @@
 /// \file xpool/ffnagent/parameterization.hpp
 /// \brief Internal CUDA Graph parameterization seam.
 
-#include <cuda/std/span>
-#include <cuda_runtime.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
+
+#include <cuda/std/span>
+#include <cuda_runtime.h>
 
 #include <xpool/ffnagent/runtime.cuh>
 

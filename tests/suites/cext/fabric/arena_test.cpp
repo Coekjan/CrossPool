@@ -63,8 +63,8 @@ TEST(FabricArenaLayoutTest, PlansAlignedContiguousLanePayloadStorageWhenRoutingE
   };
   EXPECT_TRUE(std::ranges::is_sorted(offsets));
   EXPECT_EQ(layout.header.state_offset % alignof(xpool::fabric::ArenaState), 0U);
-  EXPECT_EQ(layout.header.state_offset, xpool::utils::checked::align_up(sizeof(xpool::fabric::ArenaLayout),
-                                                                        alignof(xpool::fabric::ArenaState)));
+  EXPECT_EQ(layout.header.state_offset,
+            xpool::utils::checked::align_up(sizeof(xpool::fabric::ArenaLayout), alignof(xpool::fabric::ArenaState)));
   EXPECT_EQ(layout.instance_entries_offset_bytes % alignof(xpool::fabric::InstanceEntry), 0U);
   EXPECT_EQ(layout.layer_entries_offset_bytes % alignof(xpool::fabric::LayerEntry), 0U);
   EXPECT_EQ(layout.submission_publications_offset_bytes % xpool::fabric::kFabricPublicationAlignment, 0U);
@@ -117,7 +117,6 @@ TEST(FabricArenaLayoutTest, RejectsNonCanonicalGeometry) {
   auto incompatible_magic = layout;
   ++incompatible_magic.header.magic;
   EXPECT_THROW(incompatible_magic.validate(), c10::Error);
-
 }
 
 TEST(FabricArenaLayoutTest, PreservesCountsBeyondUint32) {

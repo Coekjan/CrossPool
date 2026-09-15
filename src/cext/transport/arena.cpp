@@ -1,18 +1,17 @@
+#include <xpool/transport/arena.hpp>
+
+#include <cstddef>
+#include <cstdint>
+
 #include <ATen/Functions.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/util/TypeCast.h>
 #include <cuda_runtime_api.h>
 
-#include <cstddef>
-#include <cstdint>
-
-#include <xpool/transport/arena.hpp>
-
 namespace xpool::transport {
 
-Arena Arena::create(c10::DeviceIndex cuda_device,
-                                      const ArenaLayout &layout) {
+Arena Arena::create(c10::DeviceIndex cuda_device, const ArenaLayout &layout) {
   layout.validate();
   c10::cuda::CUDAGuard device_guard(cuda_device);
   auto allocation = static_cast<void *>(nullptr);
@@ -27,8 +26,7 @@ Arena Arena::create(c10::DeviceIndex cuda_device,
         .payload_rows = 0,
         .request = {},
     };
-    C10_CUDA_CHECK(cudaMemcpy(arena + layout.mailbox_offset, &mailbox, sizeof(mailbox),
-                              cudaMemcpyHostToDevice));
+    C10_CUDA_CHECK(cudaMemcpy(arena + layout.mailbox_offset, &mailbox, sizeof(mailbox), cudaMemcpyHostToDevice));
   } catch (...) {
     (void)cudaFree(arena);
     throw;
@@ -85,17 +83,15 @@ ArenaHandle Arena::handle() const {
 ArenaState Arena::state() const {
   TORCH_CHECK(base_ != nullptr, "xpool cannot read state from an empty transport arena");
   ArenaState result{};
-  C10_CUDA_CHECK(cudaMemcpy(&result, base_ + layout_.header.state_offset, sizeof(result),
-                            cudaMemcpyDeviceToHost));
+  C10_CUDA_CHECK(cudaMemcpy(&result, base_ + layout_.header.state_offset, sizeof(result), cudaMemcpyDeviceToHost));
   return result;
 }
 
 MailboxStatus Arena::mailbox_status() const {
   TORCH_CHECK(base_ != nullptr, "xpool cannot read mailbox state from an empty transport arena");
   auto status = std::uint32_t{0};
-  C10_CUDA_CHECK(cudaMemcpy(&status, base_ + layout_.mailbox_offset +
-                                        offsetof(Mailbox, status),
-                            sizeof(status), cudaMemcpyDeviceToHost));
+  C10_CUDA_CHECK(cudaMemcpy(&status, base_ + layout_.mailbox_offset + offsetof(Mailbox, status), sizeof(status),
+                            cudaMemcpyDeviceToHost));
   TORCH_CHECK(status <= static_cast<std::uint32_t>(MailboxStatus::Closed),
               "xpool transport mailbox contains an invalid status value");
   return static_cast<MailboxStatus>(status);

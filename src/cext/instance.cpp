@@ -1,8 +1,10 @@
-#include <ATen/ATen.h>
-#include <c10/util/Exception.h>
+#include <xpool/instance.hpp>
+
 #include <optional>
 
-#include <xpool/instance.hpp>
+#include <ATen/ATen.h>
+#include <c10/util/Exception.h>
+
 #include <xpool/transport/instance.hpp>
 
 namespace xpool::instance {
@@ -44,7 +46,7 @@ void ffn_shim(const at::Tensor &hidden_states, const std::optional<at::Tensor> &
               "xpool FFN shim output dtype must match hidden states");
   TORCH_CHECK(output.device() == hidden_states.device(), "xpool FFN shim output device must match hidden states");
   xpool::transport::InstanceRankRuntime::singleton().submit(hidden_states, dp_rank_payload_rows, output,
-                                                                 request_metadata);
+                                                            request_metadata);
 }
 
 } // namespace xpool::instance

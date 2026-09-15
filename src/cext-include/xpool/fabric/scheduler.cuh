@@ -3,12 +3,12 @@
 /// \file xpool/fabric/scheduler.cuh
 /// \brief Device implementation of Coordinator-private scheduling.
 
-#include <cuda/std/optional>
-#include <cuda/std/variant>
-
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+
+#include <cuda/std/optional>
+#include <cuda/std/variant>
 
 #include <xpool/abort.hpp>
 #include <xpool/fabric/scheduler.hpp>
@@ -61,7 +61,7 @@ XPOOL_DEVICE_FN inline std::size_t Scheduler::find_idle_lane() const {
 }
 
 XPOOL_DEVICE_FN inline Scheduler::Decision Scheduler::admit(std::size_t instance_index,
-                                                                  std::size_t executor_lane_index) {
+                                                            std::size_t executor_lane_index) {
   auto &entry = entries_[instance_index];
   xpool::abort_if(entry.state != SchedulerEntry::State::Ready || executor_lane_index >= executor_lane_count_);
   entry.executor_lane_index = executor_lane_index;
@@ -127,8 +127,7 @@ Scheduler::active_decision(std::size_t instance_index) const {
   return Decision{entry.invocation, entry.executor_lane_index};
 }
 
-XPOOL_DEVICE_FN inline void Scheduler::release(const InvocationKey &key,
-                                                  std::size_t executor_lane_index) {
+XPOOL_DEVICE_FN inline void Scheduler::release(const InvocationKey &key, std::size_t executor_lane_index) {
   xpool::abort_if(entries_ == nullptr || !key.valid() || key.instance_index >= instance_count_ ||
                   executor_lane_index >= executor_lane_count_);
   auto &entry = entries_[key.instance_index];

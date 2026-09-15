@@ -1,11 +1,5 @@
 #include <xpool/ffnagent/runtime.hpp>
 
-#include <xpool/ffnagent/parameterization.hpp>
-
-#include <cuda/atomic>
-#include <cuda/std/algorithm>
-#include <cuda_runtime.h>
-
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -23,11 +17,13 @@
 #include <variant>
 #include <vector>
 
-#include <cooperative_groups.h>
-#include <nvshmem.h>
-
 #include <c10/cuda/CUDAException.h>
 #include <c10/util/Exception.h>
+#include <cooperative_groups.h>
+#include <cuda/atomic>
+#include <cuda/std/algorithm>
+#include <cuda_runtime.h>
+#include <nvshmem.h>
 
 #include <xpool/abort.hpp>
 #include <xpool/fabric/arena.cuh>
@@ -36,6 +32,7 @@
 #include <xpool/ffn.hpp>
 #include <xpool/ffnagent/delivery.cuh>
 #include <xpool/ffnagent/hooks.hpp>
+#include <xpool/ffnagent/parameterization.hpp>
 #include <xpool/ffnagent/runtime.cuh>
 #include <xpool/hooks.cuh>
 #include <xpool/hooks.hpp>
@@ -99,10 +96,10 @@ std::vector<ResourceReplacement> make_resource_replacements(const ExecutionSigna
                                   value.control_capture_resources.gate_up_weight_address,
                                   value.primary_capture_resources.gate_up_weight_address,
                                   offsetof(LayerBindingValues, gate_up_weight_address)},
-              ResourceReplacement{
-                  value.primary_capture_resources.down_weight_address,
-                  value.control_capture_resources.down_weight_address, value.primary_capture_resources.down_weight_address,
-                  offsetof(LayerBindingValues, down_weight_address)},
+              ResourceReplacement{value.primary_capture_resources.down_weight_address,
+                                  value.control_capture_resources.down_weight_address,
+                                  value.primary_capture_resources.down_weight_address,
+                                  offsetof(LayerBindingValues, down_weight_address)},
           };
         } else {
           result = {
@@ -323,9 +320,8 @@ XPOOL_KERNEL_FN void wait_pre_compute(xpool::fabric::ArenaView arena, std::size_
   }
   if (result != xpool::utils::wait::Status::Ready) {
     terminate_lane(arena, *state, while_handle, compute_handle, compute_empty_branch_index,
-                   result == xpool::utils::wait::Status::TimedOut
-                       ? xpool::ffn::ResultCode::Timeout
-                       : arena.cancellation_result());
+                   result == xpool::utils::wait::Status::TimedOut ? xpool::ffn::ResultCode::Timeout
+                                                                  : arena.cancellation_result());
     return;
   }
   xpool::hooks::FabricFfnAgentProtocolEvent::hooks(
@@ -503,8 +499,7 @@ XPOOL_KERNEL_FN void probe_peer_partials(xpool::fabric::ArenaView arena, std::si
     const auto observed = peer.test_at_least(state->execution.executor_lease_sequence);
     if (observed && peer.validate_expected(state->execution.executor_lease_sequence, state->execution.key) !=
                         xpool::ffn::ResultCode::Ok) {
-      terminate_delivery(arena, *state, while_handle, observation_handle,
-                         xpool::ffn::ResultCode::ProtocolMismatch);
+      terminate_delivery(arena, *state, while_handle, observation_handle, xpool::ffn::ResultCode::ProtocolMismatch);
       return;
     }
     ready = ready && observed;
@@ -520,9 +515,8 @@ XPOOL_KERNEL_FN void probe_peer_partials(xpool::fabric::ArenaView arena, std::si
   }
   if (result != xpool::utils::wait::Status::Ready) {
     terminate_delivery(arena, *state, while_handle, observation_handle,
-                       result == xpool::utils::wait::Status::TimedOut
-                           ? xpool::ffn::ResultCode::Timeout
-                           : arena.cancellation_result());
+                       result == xpool::utils::wait::Status::TimedOut ? xpool::ffn::ResultCode::Timeout
+                                                                      : arena.cancellation_result());
     return;
   }
   xpool::hooks::FabricFfnAgentProtocolEvent::hooks(
@@ -601,8 +595,8 @@ ExecutionRuntime::LaneOwner::LaneOwner(LaneOwner &&other) noexcept
 
 ExecutionRuntime::LaneOwner &ExecutionRuntime::LaneOwner::operator=(LaneOwner &&other) noexcept {
   if (this != &other) {
-    xpool::abort_if(graph != nullptr || executable != nullptr || stream || state != nullptr ||
-                    schemas != nullptr || sites != nullptr || updates != nullptr || workspace != nullptr);
+    xpool::abort_if(graph != nullptr || executable != nullptr || stream || state != nullptr || schemas != nullptr ||
+                    sites != nullptr || updates != nullptr || workspace != nullptr);
     graph = std::exchange(other.graph, nullptr);
     executable = std::exchange(other.executable, nullptr);
     stream = std::move(other.stream);
@@ -652,8 +646,7 @@ void ExecutionRuntime::materialize_shared_tables(const ExecutionProjection &proj
   auto local_layer_index = std::size_t{0};
   for (auto instance_index = std::size_t{0}; instance_index < fabric_projection.instances.size(); ++instance_index) {
     const auto &instance = fabric_projection.instances[instance_index];
-    const auto maximum_capacity =
-        std::max(instance.decode_payload_row_capacity, instance.prefill_payload_row_capacity);
+    const auto maximum_capacity = std::max(instance.decode_payload_row_capacity, instance.prefill_payload_row_capacity);
     for (auto layer_ordinal = std::size_t{0}; layer_ordinal < instance.layers.size(); ++layer_ordinal) {
       const auto &fabric_layer = instance.layers[layer_ordinal];
       const auto member =
@@ -688,8 +681,7 @@ void ExecutionRuntime::materialize_shared_tables(const ExecutionProjection &proj
             },
             signature);
         host_capacities.push_back(CapacityExecutionEntry{
-            .payload_row_capacity =
-                std::visit([](const auto &value) { return value.payload_row_capacity; }, signature),
+            .payload_row_capacity = std::visit([](const auto &value) { return value.payload_row_capacity; }, signature),
             .execution_signature_index = signature_index,
         });
       }

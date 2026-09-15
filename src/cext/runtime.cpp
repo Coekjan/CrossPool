@@ -1,8 +1,8 @@
 #include <xpool/runtime.hpp>
 
-#include <c10/util/Exception.h>
-
 #include <algorithm>
+
+#include <c10/util/Exception.h>
 
 namespace xpool {
 

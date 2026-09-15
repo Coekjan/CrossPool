@@ -3,12 +3,12 @@
 /// \file xpool/devkit/graph_observer.hpp
 /// \brief Development-only CUDA Graph structure snapshots.
 
-#include <cuda_runtime.h>
-
 #include <cstddef>
 #include <map>
 #include <optional>
 #include <vector>
+
+#include <cuda_runtime.h>
 
 namespace xpool::devkit::graph_observer {
 

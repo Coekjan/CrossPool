@@ -3,13 +3,13 @@
 /// \file xpool/devkit/fabric_observer.hpp
 /// \brief Process-local Fabric observation records and Host readout.
 
-#include <cuda/std/variant>
-
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <type_traits>
 #include <vector>
+
+#include <cuda/std/variant>
 
 #include <xpool/abort.hpp>
 #include <xpool/fabric/hooks.hpp>
@@ -133,11 +133,17 @@ public:
   }
 
   /// Test whether an AtnAgent event was recorded.
-  bool recorded(xpool::hooks::FabricAtnAgentProtocolEvent::Kind event) const { return require_atnagent().timeline.recorded(event); }
+  bool recorded(xpool::hooks::FabricAtnAgentProtocolEvent::Kind event) const {
+    return require_atnagent().timeline.recorded(event);
+  }
   /// Test whether a Coordinator event was recorded.
-  bool recorded(xpool::hooks::FabricCoordinatorProtocolEvent::Kind event) const { return require_coordinator().timeline.recorded(event); }
+  bool recorded(xpool::hooks::FabricCoordinatorProtocolEvent::Kind event) const {
+    return require_coordinator().timeline.recorded(event);
+  }
   /// Test whether an FfnAgent event was recorded.
-  bool recorded(xpool::hooks::FabricFfnAgentProtocolEvent::Kind event) const { return require_ffnagent().timeline.recorded(event); }
+  bool recorded(xpool::hooks::FabricFfnAgentProtocolEvent::Kind event) const {
+    return require_ffnagent().timeline.recorded(event);
+  }
 
   /// Return an AtnAgent event timestamp in GPU global-timer nanoseconds.
   /// Timestamps are comparable only inside the same GPU clock domain.
@@ -238,8 +244,9 @@ private:
   using State = cuda::std::variant<cuda::std::monostate, AtnAgentTraceState, CoordinatorTraceState, FfnAgentTraceState>;
 
 #if defined(__CUDACC__)
-  XPOOL_DEVICE_FN void begin(std::uint64_t local_trace_id, const xpool::fabric::InvocationKey &key, std::size_t layer_ordinal,
-                             std::size_t payload_rows, xpool::ffn::OutputRequirement output_requirement);
+  XPOOL_DEVICE_FN void begin(std::uint64_t local_trace_id, const xpool::fabric::InvocationKey &key,
+                             std::size_t layer_ordinal, std::size_t payload_rows,
+                             xpool::ffn::OutputRequirement output_requirement);
 #endif
 
   XPOOL_HOST_DEVICE_FN AtnAgentTraceState &require_atnagent() {

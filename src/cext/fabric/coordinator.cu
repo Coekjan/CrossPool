@@ -1,27 +1,26 @@
+#include <xpool/fabric/coordinator.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+
+#include <ATen/ATen.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/util/Exception.h>
+#include <cooperative_groups.h>
 #include <cuda/atomic>
+#include <cuda/launch>
 #include <cuda/std/algorithm>
 #include <cuda/std/optional>
 #include <cuda/std/span>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-
-#include <cooperative_groups.h>
-#include <cuda/launch>
 #include <nvshmem.h>
 #include <nvshmemx.h>
 
-#include <ATen/ATen.h>
-#include <c10/cuda/CUDAException.h>
-#include <c10/util/Exception.h>
-
 #include <xpool/abort.hpp>
 #include <xpool/fabric/arena.cuh>
-#include <xpool/fabric/coordinator.hpp>
 #include <xpool/fabric/protocol.cuh>
 #include <xpool/fabric/scheduler.cuh>
 #include <xpool/ffn.hpp>
@@ -57,8 +56,8 @@ XPOOL_DEVICE_FN void publish_canonical_failure(const ArenaView &arena, const coo
 }
 
 XPOOL_DEVICE_FN cuda::std::optional<xpool::ffn::ForwardMode>
-inspect_submission_rows(const ArenaView &arena, const InstanceEntry &instance,
-                        cuda::std::span<const int> atnagent_pes, const Submission &canonical) {
+inspect_submission_rows(const ArenaView &arena, const InstanceEntry &instance, cuda::std::span<const int> atnagent_pes,
+                        const Submission &canonical) {
   const auto row_layout = canonical.dp_row_layout;
   if ((instance.atn_dp_size == 1 && row_layout != xpool::ffn::DpRowLayout::None) ||
       (instance.atn_dp_size > 1 && row_layout == xpool::ffn::DpRowLayout::None)) {
@@ -71,10 +70,10 @@ inspect_submission_rows(const ArenaView &arena, const InstanceEntry &instance,
   auto uniform_payload_rows = std::size_t{0};
   for (auto dp_rank = std::size_t{0}; dp_rank < instance.atn_dp_size; ++dp_rank) {
     const auto canonical_index = dp_rank * instance.atn_tp_size;
-    const auto &dp_submission =
-        arena.submission_publication(static_cast<std::size_t>(atnagent_pes[canonical_index]),
-                                     canonical.key.instance_index)
-            .record;
+    const auto &dp_submission = arena
+                                    .submission_publication(static_cast<std::size_t>(atnagent_pes[canonical_index]),
+                                                            canonical.key.instance_index)
+                                    .record;
     const auto mode = dp_submission.forward_mode;
     const auto rank_payload_rows = dp_submission.dp_rank_payload_rows;
     if ((row_layout == xpool::ffn::DpRowLayout::None &&
@@ -99,10 +98,10 @@ inspect_submission_rows(const ArenaView &arena, const InstanceEntry &instance,
 
     for (auto tp_rank = std::size_t{1}; tp_rank < instance.atn_tp_size; ++tp_rank) {
       const auto replica_index = canonical_index + tp_rank;
-      const auto &replica =
-          arena.submission_publication(static_cast<std::size_t>(atnagent_pes[replica_index]),
-                                       canonical.key.instance_index)
-              .record;
+      const auto &replica = arena
+                                .submission_publication(static_cast<std::size_t>(atnagent_pes[replica_index]),
+                                                        canonical.key.instance_index)
+                                .record;
       if (replica.dp_rank_payload_rows != dp_submission.dp_rank_payload_rows ||
           replica.forward_mode != dp_submission.forward_mode) {
         return cuda::std::nullopt;

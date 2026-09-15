@@ -3,9 +3,9 @@
 /// \file xpool/fabric/hooks.hpp
 /// \brief Host and host-visible Device extension points owned by Fabric.
 
-#include <c10/core/Device.h>
-
 #include <cstdint>
+
+#include <c10/core/Device.h>
 
 #include <xpool/fabric/layout.hpp>
 #include <xpool/fabric/projection.hpp>

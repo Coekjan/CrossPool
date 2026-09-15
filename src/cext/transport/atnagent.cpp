@@ -1,8 +1,4 @@
-#include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/util/Exception.h>
-
-#include <cuda_runtime_api.h>
+#include <xpool/transport/atnagent.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -17,11 +13,15 @@
 #include <utility>
 #include <vector>
 
-#include <xpool/ffn.hpp>
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/util/Exception.h>
+#include <cuda_runtime_api.h>
+
 #include <xpool/abort.hpp>
 #include <xpool/fabric/runtime.hpp>
+#include <xpool/ffn.hpp>
 #include <xpool/hooks.hpp>
-#include <xpool/transport/atnagent.hpp>
 #include <xpool/transport/hooks.hpp>
 #include <xpool/utils/wait.hpp>
 
@@ -35,7 +35,7 @@ constexpr auto kResidentStartupPollInterval = std::chrono::milliseconds{1};
 } // namespace
 
 AtnAgentRuntime::Resident::Resident(c10::DeviceIndex cuda_device, std::span<const ArenaView> arenas,
-                                             xpool::fabric::ArenaView fabric_arena)
+                                    xpool::fabric::ArenaView fabric_arena)
     : cuda_device_(cuda_device) {
   const auto device_guard = c10::cuda::CUDAGuard{cuda_device_};
   try {
@@ -150,10 +150,10 @@ bool AtnAgentRuntime::generation_failed() const {
 }
 
 ArenaHandle AtnAgentRuntime::create_arena(c10::DeviceIndex cuda_device, std::size_t instance_index,
-                                                            std::size_t instance_rank, std::size_t payload_row_capacity,
-                                                            std::size_t hidden_size, c10::ScalarType payload_dtype,
-                                                            std::size_t atn_tp_rank, std::size_t atn_tp_size,
-                                                            std::size_t atn_dp_rank, std::size_t atn_dp_size) {
+                                          std::size_t instance_rank, std::size_t payload_row_capacity,
+                                          std::size_t hidden_size, c10::ScalarType payload_dtype,
+                                          std::size_t atn_tp_rank, std::size_t atn_tp_size, std::size_t atn_dp_rank,
+                                          std::size_t atn_dp_size) {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(!resident_.has_value(), "xpool cannot create a Transport arena after Resident activation");
   TORCH_CHECK(!cuda_device_.has_value() || *cuda_device_ == cuda_device,
@@ -164,7 +164,7 @@ ArenaHandle AtnAgentRuntime::create_arena(c10::DeviceIndex cuda_device, std::siz
   }
 
   const auto layout = ArenaLayout::create(instance_index, instance_rank, atn_tp_rank, atn_tp_size, atn_dp_rank,
-                                                   atn_dp_size, payload_row_capacity, hidden_size, payload_dtype);
+                                          atn_dp_size, payload_row_capacity, hidden_size, payload_dtype);
   auto arena = Arena::create(cuda_device, layout);
   xpool::hooks::TransportEndpointOpenPostEvent::hooks({.cuda_device = cuda_device,
                                                        .arena = arena.view(),

@@ -1,11 +1,11 @@
-#include <cuda_runtime.h>
-#include <gtest/gtest.h>
-
 #include <cstddef>
 #include <cstdint>
 
-#include <xpool/ffn.hpp>
+#include <cuda_runtime.h>
+#include <gtest/gtest.h>
+
 #include <xpool/devkit/fabric_observer.cuh>
+#include <xpool/ffn.hpp>
 #include <xpool/macros.hpp>
 
 namespace {

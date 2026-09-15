@@ -1,9 +1,9 @@
-#include <gtest/gtest.h>
-
 #include <cstdint>
 
-#include <xpool/ffn.hpp>
+#include <gtest/gtest.h>
+
 #include <xpool/fabric/protocol.hpp>
+#include <xpool/ffn.hpp>
 
 namespace {
 
@@ -36,14 +36,14 @@ TEST(FabricProtocolTest, ValidatesBusinessInvocationAndAllNineRecordFamilies) {
   };
   EXPECT_EQ(invocation.validate(), xpool::ffn::ResultCode::Ok);
   EXPECT_EQ(submission().validate(), xpool::ffn::ResultCode::Ok);
-  EXPECT_EQ((xpool::fabric::Admission{.key = kKey, .executor_lane_index = 1, .executor_lease_sequence = kLease})
-                .validate(),
-            xpool::ffn::ResultCode::Ok);
+  EXPECT_EQ(
+      (xpool::fabric::Admission{.key = kKey, .executor_lane_index = 1, .executor_lease_sequence = kLease}).validate(),
+      xpool::ffn::ResultCode::Ok);
   EXPECT_EQ((xpool::fabric::LaneExecution{.key = kKey,
-                                             .executor_lease_sequence = kLease,
-                                             .layer_ordinal = 2,
-                                             .payload_rows = 8,
-                                             .output_requirement = xpool::ffn::OutputRequirement::PerRankComplete})
+                                          .executor_lease_sequence = kLease,
+                                          .layer_ordinal = 2,
+                                          .payload_rows = 8,
+                                          .output_requirement = xpool::ffn::OutputRequirement::PerRankComplete})
                 .validate(),
             xpool::ffn::ResultCode::Ok);
   EXPECT_EQ((xpool::fabric::InputReady{.key = kKey, .executor_lease_sequence = kLease}).validate(),
@@ -67,10 +67,10 @@ TEST(FabricProtocolTest, UsesInvocationSequenceOnlyForInstanceScopedRecords) {
   EXPECT_EQ((xpool::fabric::OutputAcknowledgement{.key = kKey}).publication_sequence(), kKey.invocation_sequence);
 
   EXPECT_EQ((xpool::fabric::LaneExecution{.key = kKey,
-                                             .executor_lease_sequence = kLease,
-                                             .layer_ordinal = 2,
-                                             .payload_rows = 8,
-                                             .output_requirement = xpool::ffn::OutputRequirement::PerRankComplete})
+                                          .executor_lease_sequence = kLease,
+                                          .layer_ordinal = 2,
+                                          .payload_rows = 8,
+                                          .output_requirement = xpool::ffn::OutputRequirement::PerRankComplete})
                 .publication_sequence(),
             kLease);
   EXPECT_EQ((xpool::fabric::PartialReady{.key = kKey, .executor_lease_sequence = kLease}).publication_sequence(),

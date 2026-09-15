@@ -157,10 +157,9 @@ struct ArenaLayout {
   /// \throws c10::Error when topology/table counts or Lane payload capacity are
   /// zero, the PE count exceeds NVSHMEM's domain, or layout arithmetic overflows.
   static ArenaLayout create(std::size_t atnagent_count, std::size_t ffnagent_count, std::size_t instance_count,
-                                  std::size_t executor_lane_count, std::size_t layer_entry_count,
-                                  std::size_t atnagent_pe_entry_count, std::size_t ffnagent_pe_entry_count,
-                                  std::size_t maximum_lane_payload_bytes,
-                                  std::size_t maximum_routing_metadata_elements);
+                            std::size_t executor_lane_count, std::size_t layer_entry_count,
+                            std::size_t atnagent_pe_entry_count, std::size_t ffnagent_pe_entry_count,
+                            std::size_t maximum_lane_payload_bytes, std::size_t maximum_routing_metadata_elements);
 
   /// Validate header, counts, offsets, alignment, and total allocation size.
   /// \throws c10::Error when the layout is internally inconsistent.

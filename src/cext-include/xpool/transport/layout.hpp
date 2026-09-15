@@ -50,9 +50,8 @@ struct ArenaLayout {
   /// Plan one complete aligned Transport arena.
   /// \throws c10::Error when geometry is invalid or size arithmetic overflows.
   static ArenaLayout create(std::size_t instance_index, std::size_t instance_rank, std::size_t atn_tp_rank,
-                                     std::size_t atn_tp_size, std::size_t atn_dp_rank, std::size_t atn_dp_size,
-                                     std::size_t payload_row_capacity, std::size_t hidden_size,
-                                     c10::ScalarType payload_dtype);
+                            std::size_t atn_tp_size, std::size_t atn_dp_rank, std::size_t atn_dp_size,
+                            std::size_t payload_row_capacity, std::size_t hidden_size, c10::ScalarType payload_dtype);
   /// Validate every identity, topology, geometry, offset, and total-size fact.
   /// \throws c10::Error when any stored layout fact is inconsistent.
   void validate() const;

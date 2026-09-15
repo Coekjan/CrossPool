@@ -45,9 +45,7 @@ private:
 
 /// Enumeration with a terminal Count value suitable for a Timeline.
 template <typename Event>
-concept EventType = std::is_enum_v<Event> && requires {
-  Event::Count;
-};
+concept EventType = std::is_enum_v<Event> && requires { Event::Count; };
 
 /// Fixed-size event bitmap and timestamp array for one semantic trace.
 template <EventType Event> class Timeline {

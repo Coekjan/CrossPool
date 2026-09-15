@@ -1,9 +1,9 @@
-#include <cuda_runtime.h>
-#include <gtest/gtest.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+
+#include <cuda_runtime.h>
+#include <gtest/gtest.h>
 
 #include <xpool/macros.hpp>
 #include <xpool/utils/trace.cuh>

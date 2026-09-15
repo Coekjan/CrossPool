@@ -1,12 +1,13 @@
-#include <c10/util/Exception.h>
+#include <xpool/fabric/layout.hpp>
 
 #include <array>
 #include <climits>
 #include <cstddef>
 
+#include <c10/util/Exception.h>
+
 #include <xpool/abi.hpp>
 #include <xpool/fabric/arena.hpp>
-#include <xpool/fabric/layout.hpp>
 #include <xpool/fabric/protocol.hpp>
 #include <xpool/utils/checked.hpp>
 #include <xpool/utils/layout.hpp>
@@ -57,17 +58,16 @@ struct FabricArenaRegions {
         LayoutRegionSpec::array<int>("FfnAgent PE entries", ffnagent_pe_entry_count),
         LayoutRegionSpec::array<Publication<Submission>>("Submission publications", submission_count),
         LayoutRegionSpec::array<Publication<Admission>>("Admission publications", instance_count),
-        LayoutRegionSpec::array<Publication<LaneExecution>>("Lane Execution publications",
-                                                                     executor_lane_count),
+        LayoutRegionSpec::array<Publication<LaneExecution>>("Lane Execution publications", executor_lane_count),
         LayoutRegionSpec::array<Publication<InputReady>>("Input Ready publications", executor_lane_count),
         LayoutRegionSpec::bytes("Routing Metadata Ready publications", routing_publication_bytes,
                                 routing_lane_count == 0 ? 1 : alignof(Publication<RoutingMetadataReady>)),
         LayoutRegionSpec::array<Publication<PartialReady>>("Partial Ready publications", ffnagent_lane_count),
         LayoutRegionSpec::array<Publication<FfnAgentCompletion>>("FfnAgent Completion publications",
-                                                                       ffnagent_lane_count),
+                                                                 ffnagent_lane_count),
         LayoutRegionSpec::array<Publication<OutputCommit>>("Output Commit publications", instance_count),
         LayoutRegionSpec::array<Publication<OutputAcknowledgement>>("Output Acknowledgement publications",
-                                                                             submission_count),
+                                                                    submission_count),
         LayoutRegionSpec::bytes("Lane payload storage", lane_payload_bytes, xpool::arena::kPayloadAlignment),
         LayoutRegionSpec::bytes("Routing Metadata", routing_metadata_bytes,
                                 routing_lane_count == 0 ? 1 : xpool::arena::kPayloadAlignment),
@@ -98,11 +98,10 @@ struct FabricArenaRegions {
 
 } // namespace
 
-ArenaLayout ArenaLayout::create(std::size_t atnagent_count, std::size_t ffnagent_count,
-                                            std::size_t instance_count, std::size_t executor_lane_count,
-                                            std::size_t layer_entry_count, std::size_t atnagent_pe_entry_count,
-                                            std::size_t ffnagent_pe_entry_count, std::size_t maximum_lane_payload_bytes,
-                                            std::size_t maximum_routing_metadata_elements) {
+ArenaLayout ArenaLayout::create(std::size_t atnagent_count, std::size_t ffnagent_count, std::size_t instance_count,
+                                std::size_t executor_lane_count, std::size_t layer_entry_count,
+                                std::size_t atnagent_pe_entry_count, std::size_t ffnagent_pe_entry_count,
+                                std::size_t maximum_lane_payload_bytes, std::size_t maximum_routing_metadata_elements) {
   TORCH_CHECK(atnagent_count != 0 && ffnagent_count != 0 && instance_count != 0 && executor_lane_count != 0 &&
                   layer_entry_count != 0 && atnagent_pe_entry_count != 0 && ffnagent_pe_entry_count != 0,
               "xpool Fabric arena requires positive topology and table counts");
@@ -212,9 +211,9 @@ std::size_t arena_allocation_bytes(std::size_t atnagent_count, std::size_t ffnag
                                    std::size_t atnagent_pe_entry_count, std::size_t ffnagent_pe_entry_count,
                                    std::size_t maximum_lane_payload_bytes,
                                    std::size_t maximum_routing_metadata_elements) {
-  return ArenaLayout::create(atnagent_count, ffnagent_count, instance_count, executor_lane_count,
-                                   layer_entry_count, atnagent_pe_entry_count, ffnagent_pe_entry_count,
-                                   maximum_lane_payload_bytes, maximum_routing_metadata_elements)
+  return ArenaLayout::create(atnagent_count, ffnagent_count, instance_count, executor_lane_count, layer_entry_count,
+                             atnagent_pe_entry_count, ffnagent_pe_entry_count, maximum_lane_payload_bytes,
+                             maximum_routing_metadata_elements)
       .header.total_bytes;
 }
 

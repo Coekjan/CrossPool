@@ -1,12 +1,11 @@
-#include "bindings.hpp"
+#include <cstdint>
+#include <optional>
 
 #include <c10/util/TypeCast.h>
 #include <pybind11/native_enum.h>
 #include <pybind11/stl.h>
 
-#include <cstdint>
-#include <optional>
-
+#include "bindings.hpp"
 #include <xpool/abi.hpp>
 #include <xpool/debug/options.hpp>
 #include <xpool/ffn.hpp>
@@ -70,8 +69,8 @@ PYBIND11_MODULE(native, module) {
       py::arg("role"), py::arg("cuda_device") = py::none(), py::arg("debug_options") = py::none(),
       "Initialize the process role, optional CUDA device, and debug options.");
 
-  module.def("runtime_role", []() { return xpool::RuntimeState::singleton().role(); },
-             "Return the initialized process role.");
+  module.def(
+      "runtime_role", []() { return xpool::RuntimeState::singleton().role(); }, "Return the initialized process role.");
 
   xpool::bindings::bind_fabric(module);
   xpool::bindings::bind_transport(module);

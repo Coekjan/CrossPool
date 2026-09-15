@@ -3,16 +3,16 @@
 /// \file xpool/transport/arena.hpp
 /// \brief Transport arena state, address view, and host ownership.
 
+#include <cstddef>
+#include <cstdint>
+#include <utility>
+
 #include <c10/core/Device.h>
 #include <c10/util/Exception.h>
 #include <cuda/atomic>
 #include <cuda/std/optional>
 #include <cuda/std/span>
 #include <cuda_runtime_api.h>
-
-#include <cstddef>
-#include <cstdint>
-#include <utility>
 
 #include <xpool/ffn.hpp>
 #include <xpool/macros.hpp>

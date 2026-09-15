@@ -3,14 +3,14 @@
 /// \file xpool/utils/cooperative.cuh
 /// \brief Cooperative-group work partitioning primitives.
 
-#include <cooperative_groups/memcpy_async.h>
-#include <cuda/memory>
-#include <cuda/std/span>
-
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+
+#include <cooperative_groups/memcpy_async.h>
+#include <cuda/memory>
+#include <cuda/std/span>
 
 #include <xpool/abort.hpp>
 #include <xpool/macros.hpp>

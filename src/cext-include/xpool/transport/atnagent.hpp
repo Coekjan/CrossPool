@@ -3,16 +3,16 @@
 /// \file xpool/transport/atnagent.hpp
 /// \brief Process-wide AtnAgent Transport Resident and arena lifecycle.
 
-#include <c10/core/Device.h>
-#include <cuda/std/span>
-#include <cuda_runtime_api.h>
-
 #include <cstddef>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <vector>
+
+#include <c10/core/Device.h>
+#include <cuda/std/span>
+#include <cuda_runtime_api.h>
 
 #include <xpool/fabric/arena.hpp>
 #include <xpool/transport/arena.hpp>
@@ -25,9 +25,8 @@ namespace xpool::transport {
 /// \pre Cooperative launch is supported and the complete grid is concurrently
 /// resident; capability and occupancy failures occur before launch.
 /// \throws c10::Error when capability, occupancy, or launch checks fail.
-void launch_resident_kernel(cuda::std::span<const ArenaView> arenas,
-                                      xpool::fabric::ArenaView fabric_arena, ResidentState *state,
-                                      cudaStream_t stream);
+void launch_resident_kernel(cuda::std::span<const ArenaView> arenas, xpool::fabric::ArenaView fabric_arena,
+                            ResidentState *state, cudaStream_t stream);
 
 /// Process-lifetime owner of all Transport arenas and one AtnAgent Resident.
 ///
@@ -52,9 +51,9 @@ public:
   /// Allocate and register one AtnAgent-owned Transport arena.
   /// The returned CUDA IPC handle remains valid until destroy_arenas().
   ArenaHandle create_arena(c10::DeviceIndex cuda_device, std::size_t instance_index, std::size_t instance_rank,
-                                    std::size_t payload_row_capacity, std::size_t hidden_size,
-                                    c10::ScalarType payload_dtype, std::size_t atn_tp_rank, std::size_t atn_tp_size,
-                                    std::size_t atn_dp_rank, std::size_t atn_dp_size);
+                           std::size_t payload_row_capacity, std::size_t hidden_size, c10::ScalarType payload_dtype,
+                           std::size_t atn_tp_rank, std::size_t atn_tp_size, std::size_t atn_dp_rank,
+                           std::size_t atn_dp_size);
 
   /// Freeze the arena set and launch its sole cooperative Resident.
   ///
@@ -83,8 +82,7 @@ public:
 private:
   class Resident {
   public:
-    Resident(c10::DeviceIndex cuda_device, std::span<const ArenaView> arenas,
-             xpool::fabric::ArenaView fabric_arena);
+    Resident(c10::DeviceIndex cuda_device, std::span<const ArenaView> arenas, xpool::fabric::ArenaView fabric_arena);
     ~Resident();
 
     Resident(const Resident &) = delete;

@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include <cuda/ptx>
+
 #include <xpool/macros.hpp>
 
 namespace xpool::utils::time {

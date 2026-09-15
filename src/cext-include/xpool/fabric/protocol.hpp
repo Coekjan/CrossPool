@@ -3,12 +3,12 @@
 /// \file xpool/fabric/protocol.hpp
 /// \brief Typed NVSHMEM records for one distributed FFN invocation.
 
-#include <cuda/std/span>
-
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+
+#include <cuda/std/span>
 
 #include <xpool/fabric/layout.hpp>
 #include <xpool/ffn.hpp>
@@ -271,12 +271,12 @@ struct Failure {
 /// Trivially copyable record accepted by `Publication`.
 /// \tparam Record Candidate record type with publication and validation operations.
 template <class Record>
-concept PublicationRecord = std::is_standard_layout_v<Record> && std::is_trivially_copyable_v<Record> &&
-    requires(const Record &record) {
-  { record.publication_sequence() } -> std::same_as<std::uint64_t>;
-  { record.validate() } -> std::same_as<xpool::ffn::ResultCode>;
-  { record.key } -> std::same_as<const InvocationKey &>;
-};
+concept PublicationRecord =
+    std::is_standard_layout_v<Record> && std::is_trivially_copyable_v<Record> && requires(const Record &record) {
+      { record.publication_sequence() } -> std::same_as<std::uint64_t>;
+      { record.validate() } -> std::same_as<xpool::ffn::ResultCode>;
+      { record.key } -> std::same_as<const InvocationKey &>;
+    };
 
 /// One aligned record and its release-published monotonic sequence.
 /// \tparam Record Trivially copyable Fabric protocol record.

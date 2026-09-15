@@ -1,3 +1,11 @@
+#include <xpool/ffnagent/delivery.cuh>
+
+#include <cstddef>
+#include <cstdint>
+
+#include <c10/util/BFloat16.h>
+#include <c10/util/Half.h>
+#include <cooperative_groups.h>
 #include <cuda/hierarchy>
 #include <cuda/std/algorithm>
 #include <cuda/std/array>
@@ -5,21 +13,12 @@
 #include <cuda/std/span>
 #include <cuda/std/utility>
 #include <cuda_runtime.h>
-
-#include <c10/util/BFloat16.h>
-#include <c10/util/Half.h>
-
-#include <cstddef>
-#include <cstdint>
-
-#include <cooperative_groups.h>
 #include <nvshmem.h>
 #include <nvshmemx.h>
 
 #include <xpool/abort.hpp>
 #include <xpool/fabric/arena.cuh>
 #include <xpool/fabric/protocol.cuh>
-#include <xpool/ffnagent/delivery.cuh>
 #include <xpool/macros.hpp>
 
 namespace xpool::ffnagent {
@@ -71,8 +70,8 @@ template <typename Scalar> XPOOL_DEVICE_FN const Scalar *partial_pointer(const S
 }
 
 template <typename Scalar>
-XPOOL_DEVICE_FN Scalar ordered_sum(cuda::std::span<const Scalar> local_partial,
-                                   cuda::std::span<const int> ffnagent_pes, std::size_t index) {
+XPOOL_DEVICE_FN Scalar ordered_sum(cuda::std::span<const Scalar> local_partial, cuda::std::span<const int> ffnagent_pes,
+                                   std::size_t index) {
   // PE order is part of the numerical contract: arrival order must not change
   // FP32 accumulation or the single final payload-dtype cast.
   auto sum = 0.0F;
@@ -83,8 +82,7 @@ XPOOL_DEVICE_FN Scalar ordered_sum(cuda::std::span<const Scalar> local_partial,
 }
 
 template <typename Scalar>
-XPOOL_DEVICE_FN void reduce_tp_partials(const cooperative_groups::thread_block &group,
-                                        cuda::std::span<Scalar> staging,
+XPOOL_DEVICE_FN void reduce_tp_partials(const cooperative_groups::thread_block &group, cuda::std::span<Scalar> staging,
                                         cuda::std::span<const Scalar> local_partial,
                                         cuda::std::span<const int> ffnagent_pes) {
   constexpr auto lanes = std::size_t{sizeof(uint4) / sizeof(Scalar)};
@@ -129,17 +127,17 @@ XPOOL_DEVICE_FN void reduce_tp_partials(const cooperative_groups::thread_block &
 
 template <typename Scalar>
 XPOOL_DEVICE_FN void deliver_complete_range(const DeliveryContext &context,
-                                            const cooperative_groups::thread_block &group,
-                                            std::size_t begin_element, std::size_t element_count,
-                                            cuda::std::span<const int> destination_pes) {
+                                            const cooperative_groups::thread_block &group, std::size_t begin_element,
+                                            std::size_t element_count, cuda::std::span<const int> destination_pes) {
   const auto partial_bytes = context.payload.partial();
   auto staging_bytes = context.payload.complete_output_staging_destination();
   xpool::abort_if(partial_bytes.size() % sizeof(Scalar) != 0 || staging_bytes.size() != partial_bytes.size() ||
                   begin_element > partial_bytes.size() / sizeof(Scalar) ||
                   element_count > partial_bytes.size() / sizeof(Scalar) - begin_element);
-  const auto partial = cuda::std::span{reinterpret_cast<const Scalar *>(partial_bytes.data()),
-                                      partial_bytes.size() / sizeof(Scalar)};
-  auto staging = cuda::std::span{reinterpret_cast<Scalar *>(staging_bytes.data()), staging_bytes.size() / sizeof(Scalar)};
+  const auto partial =
+      cuda::std::span{reinterpret_cast<const Scalar *>(partial_bytes.data()), partial_bytes.size() / sizeof(Scalar)};
+  auto staging =
+      cuda::std::span{reinterpret_cast<Scalar *>(staging_bytes.data()), staging_bytes.size() / sizeof(Scalar)};
 
   const auto block_rank = cuda::block.rank(cuda::grid);
   const auto block_count = cuda::block.count(cuda::grid);
@@ -161,15 +159,14 @@ XPOOL_DEVICE_FN void deliver_complete_range(const DeliveryContext &context,
 
   const auto destination_offset_bytes = block_begin * sizeof(Scalar);
   for (const auto destination_pe : destination_pes) {
-    nvshmemx_putmem_nbi_block(context.payload.partial_destination().data() + destination_offset_bytes,
-                              delivery.data(), delivery.size_bytes(), destination_pe);
+    nvshmemx_putmem_nbi_block(context.payload.partial_destination().data() + destination_offset_bytes, delivery.data(),
+                              delivery.size_bytes(), destination_pe);
   }
 }
 
 } // namespace
 
-XPOOL_KERNEL_FN void deliver_direct_partial_output(xpool::fabric::ArenaView arena,
-                                                   std::size_t executor_lane_index) {
+XPOOL_KERNEL_FN void deliver_direct_partial_output(xpool::fabric::ArenaView arena, std::size_t executor_lane_index) {
   const auto context = resolve_context(arena, executor_lane_index);
   xpool::abort_if(context.execution.output_requirement != xpool::ffn::OutputRequirement::GroupSumComplete ||
                   !context.instance.group_sum_complete_admitted ||
@@ -187,14 +184,12 @@ XPOOL_KERNEL_FN void deliver_direct_partial_output(xpool::fabric::ArenaView aren
                             context.atnagent_pes[context.tp_rank]);
 }
 
-XPOOL_KERNEL_FN void deliver_complete_output_range(xpool::fabric::ArenaView arena,
-                                                   std::size_t executor_lane_index) {
+XPOOL_KERNEL_FN void deliver_complete_output_range(xpool::fabric::ArenaView arena, std::size_t executor_lane_index) {
   if (arena.shutdown_requested() || arena.state().failure.published()) {
     return;
   }
   const auto context = resolve_context(arena, executor_lane_index);
-  const auto per_rank_complete =
-      context.execution.output_requirement == xpool::ffn::OutputRequirement::PerRankComplete;
+  const auto per_rank_complete = context.execution.output_requirement == xpool::ffn::OutputRequirement::PerRankComplete;
   const auto group_sum_complete =
       context.execution.output_requirement == xpool::ffn::OutputRequirement::GroupSumComplete;
   xpool::abort_if(!per_rank_complete && (!group_sum_complete || !context.instance.group_sum_complete_admitted ||

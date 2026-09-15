@@ -55,7 +55,6 @@ private:
       Adapter::observe(context);
     }
   }
-
 };
 
 } // namespace xpool::hooks

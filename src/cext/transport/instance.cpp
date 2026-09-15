@@ -1,11 +1,4 @@
-#include <ATen/ATen.h>
-#include <ATen/cuda/CUDAContext.h>
-#include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/util/Exception.h>
-#include <c10/util/TypeCast.h>
-
-#include <cuda_runtime_api.h>
+#include <xpool/transport/instance.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -14,9 +7,16 @@
 #include <optional>
 #include <utility>
 
+#include <ATen/ATen.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/util/Exception.h>
+#include <c10/util/TypeCast.h>
+#include <cuda_runtime_api.h>
+
 #include <xpool/hooks.hpp>
 #include <xpool/transport/hooks.hpp>
-#include <xpool/transport/instance.hpp>
 #include <xpool/utils/wait.hpp>
 
 namespace xpool::transport {
@@ -28,8 +28,7 @@ constexpr auto kEndpointStartupPollInterval = std::chrono::milliseconds{1};
 
 } // namespace
 
-void InstanceRankRuntime::Attachment::attach(std::size_t instance_index, std::size_t rank,
-                                                  const ArenaHandle &handle) {
+void InstanceRankRuntime::Attachment::attach(std::size_t instance_index, std::size_t rank, const ArenaHandle &handle) {
   if (*this) {
     TORCH_CHECK(matches(instance_index, rank, handle),
                 "xpool instance transport arena is already attached with a different identity or handle");
@@ -54,11 +53,10 @@ void InstanceRankRuntime::Attachment::attach(std::size_t instance_index, std::si
       kEndpointStartupPollInterval);
   TORCH_CHECK(result == xpool::utils::wait::Status::Ready,
               "xpool Transport endpoint startup exceeded the bounded deadline");
-  xpool::hooks::TransportEndpointOpenPostEvent::hooks(
-      {.cuda_device = arena.cuda_device(),
-       .arena = arena.view(),
-       .layout = arena.layout(),
-       .site = xpool::hooks::TransportEndpointSite::Instance});
+  xpool::hooks::TransportEndpointOpenPostEvent::hooks({.cuda_device = arena.cuda_device(),
+                                                       .arena = arena.view(),
+                                                       .layout = arena.layout(),
+                                                       .site = xpool::hooks::TransportEndpointSite::Instance});
   handle_ = handle;
   arena_ = std::move(arena);
 }
@@ -69,11 +67,10 @@ void InstanceRankRuntime::Attachment::detach() {
   }
   c10::cuda::CUDAGuard device_guard(arena_.cuda_device());
   C10_CUDA_CHECK(cudaDeviceSynchronize());
-  xpool::hooks::TransportEndpointClosePreEvent::hooks(
-      {.cuda_device = arena_.cuda_device(),
-       .arena = arena_.view(),
-       .layout = arena_.layout(),
-       .site = xpool::hooks::TransportEndpointSite::Instance});
+  xpool::hooks::TransportEndpointClosePreEvent::hooks({.cuda_device = arena_.cuda_device(),
+                                                       .arena = arena_.view(),
+                                                       .layout = arena_.layout(),
+                                                       .site = xpool::hooks::TransportEndpointSite::Instance});
   arena_.destroy();
   handle_ = {};
 }
@@ -101,8 +98,7 @@ void InstanceRankRuntime::Attachment::submit(const at::Tensor &hidden_states,
     TORCH_CHECK(request_metadata.dp_row_layout == xpool::ffn::DpRowLayout::UniformByRank ||
                     request_metadata.dp_row_layout == xpool::ffn::DpRowLayout::PackedByRank,
                 "xpool DP request requires UNIFORM_BY_RANK or PACKED_BY_RANK");
-    TORCH_CHECK(dp_rank_payload_rows_present,
-                "xpool DP request requires one physical row value per attention DP rank");
+    TORCH_CHECK(dp_rank_payload_rows_present, "xpool DP request requires one physical row value per attention DP rank");
   }
   TORCH_CHECK(c10::checked_convert<std::size_t>(hidden_states.size(1), "hidden-state width") == layout.hidden_size,
               "xpool FFN shim hidden size does not match the attached Transport arena");
@@ -127,8 +123,7 @@ void InstanceRankRuntime::Attachment::submit(const at::Tensor &hidden_states,
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-void InstanceRankRuntime::attach_arena(std::size_t instance_index, std::size_t rank,
-                                       const ArenaHandle &handle) {
+void InstanceRankRuntime::attach_arena(std::size_t instance_index, std::size_t rank, const ArenaHandle &handle) {
   std::lock_guard<std::mutex> lock(mutex_);
   attachment_.attach(instance_index, rank, handle);
 }
@@ -144,9 +139,8 @@ xpool::ffn::ResultCode InstanceRankRuntime::read_generation_failure() const {
   return attachment_.read_generation_failure();
 }
 
-void InstanceRankRuntime::submit(const at::Tensor &hidden_states,
-                                 const std::optional<at::Tensor> &dp_rank_payload_rows, const at::Tensor &output,
-                                 const xpool::transport::RequestMetadata &request_metadata) {
+void InstanceRankRuntime::submit(const at::Tensor &hidden_states, const std::optional<at::Tensor> &dp_rank_payload_rows,
+                                 const at::Tensor &output, const xpool::transport::RequestMetadata &request_metadata) {
   std::lock_guard<std::mutex> lock(mutex_);
   TORCH_CHECK(attachment_, "xpool ffn_shim has no attached instance transport arena");
   attachment_.submit(hidden_states, dp_rank_payload_rows, output, request_metadata);

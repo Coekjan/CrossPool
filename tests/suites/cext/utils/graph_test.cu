@@ -1,10 +1,9 @@
-#include <cuda_runtime_api.h>
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
 
+#include <cuda_runtime_api.h>
 #include <gtest/gtest.h>
 
 #include <xpool/macros.hpp>
@@ -104,9 +103,9 @@ TEST(GraphTest, UpdatesKernelParametersAndSplicesDependencies) {
   ASSERT_EQ(cudaGraphAddEmptyNode(&predecessor, graph, nullptr, 0), cudaSuccess);
   auto value = std::int32_t{17};
   auto arguments = std::array<void *, 2>{&first_output, &value};
-  const auto kernel = xpool::utils::graph::add_kernel_node(
-      graph, reinterpret_cast<const void *>(write_value_kernel), dim3{1}, dim3{1}, 0, arguments.data(),
-      std::span<const cudaGraphNode_t>{&predecessor, 1});
+  const auto kernel =
+      xpool::utils::graph::add_kernel_node(graph, reinterpret_cast<const void *>(write_value_kernel), dim3{1}, dim3{1},
+                                           0, arguments.data(), std::span<const cudaGraphNode_t>{&predecessor, 1});
   auto inserted = cudaGraphNode_t{};
   ASSERT_EQ(cudaGraphAddEmptyNode(&inserted, graph, nullptr, 0), cudaSuccess);
 

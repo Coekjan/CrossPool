@@ -1,12 +1,11 @@
 #include <xpool/utils/device.hpp>
 
+#include <utility>
+
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/driver_api.h>
 #include <c10/util/Exception.h>
-
 #include <cuda.h>
-
-#include <utility>
 
 namespace xpool::utils::device {
 
@@ -22,8 +21,7 @@ OwnedCudaStream::~OwnedCudaStream() {
   }
 }
 
-OwnedCudaStream::OwnedCudaStream(OwnedCudaStream &&other) noexcept
-    : stream_(std::exchange(other.stream_, nullptr)) {}
+OwnedCudaStream::OwnedCudaStream(OwnedCudaStream &&other) noexcept : stream_(std::exchange(other.stream_, nullptr)) {}
 
 OwnedCudaStream &OwnedCudaStream::operator=(OwnedCudaStream &&other) {
   if (this != &other) {

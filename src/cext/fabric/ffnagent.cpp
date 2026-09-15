@@ -1,14 +1,14 @@
-#include <c10/cuda/CUDAException.h>
-#include <c10/util/Exception.h>
-
-#include <cuda_runtime_api.h>
+#include <xpool/fabric/ffnagent.hpp>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <utility>
 
-#include <xpool/fabric/ffnagent.hpp>
+#include <c10/cuda/CUDAException.h>
+#include <c10/util/Exception.h>
+#include <cuda_runtime_api.h>
+
 #include <xpool/utils/layout.hpp>
 
 namespace xpool::fabric {
@@ -82,12 +82,11 @@ FfnAgentControl FfnAgentControl::create(bool is_coordinator, const SchedulerPoli
       reinterpret_cast<std::uint32_t *>(control.allocation_ + regions.activation_count.offset);
   control.view_.coordinator_scheduler =
       reinterpret_cast<Scheduler *>(control.allocation_ + regions.coordinator_scheduler.offset);
-  auto *entries = reinterpret_cast<SchedulerEntry *>(control.allocation_ +
-                                                        regions.coordinator_scheduler_entries.offset);
-  const auto coordinator_scheduler =
-      Scheduler::from(scheduler_policy, entries, instance_count, executor_lane_count);
-  C10_CUDA_CHECK(cudaMemcpy(control.view_.coordinator_scheduler, &coordinator_scheduler,
-                            sizeof(coordinator_scheduler), cudaMemcpyHostToDevice));
+  auto *entries =
+      reinterpret_cast<SchedulerEntry *>(control.allocation_ + regions.coordinator_scheduler_entries.offset);
+  const auto coordinator_scheduler = Scheduler::from(scheduler_policy, entries, instance_count, executor_lane_count);
+  C10_CUDA_CHECK(cudaMemcpy(control.view_.coordinator_scheduler, &coordinator_scheduler, sizeof(coordinator_scheduler),
+                            cudaMemcpyHostToDevice));
   return control;
 }
 

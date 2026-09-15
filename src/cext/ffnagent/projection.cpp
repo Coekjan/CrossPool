@@ -27,8 +27,8 @@ void validate_common(c10::ScalarType payload_dtype, std::size_t payload_row_capa
 
 void validate_signature(const DenseExecutionSignatureProjection &signature) {
   validate_common(signature.payload_dtype, signature.payload_row_capacity, signature.hidden_size,
-                  signature.local_intermediate_size, signature.primary_graph_address,
-                  signature.control_graph_address, signature.compute_workspace_bytes);
+                  signature.local_intermediate_size, signature.primary_graph_address, signature.control_graph_address,
+                  signature.compute_workspace_bytes);
   const auto &primary = signature.primary_capture_resources;
   const auto &control = signature.control_capture_resources;
   TORCH_CHECK(primary.gate_up_weight_address != control.gate_up_weight_address &&
@@ -39,8 +39,8 @@ void validate_signature(const DenseExecutionSignatureProjection &signature) {
 
 void validate_signature(const MoeExecutionSignatureProjection &signature) {
   validate_common(signature.payload_dtype, signature.payload_row_capacity, signature.hidden_size,
-                  signature.local_intermediate_size, signature.primary_graph_address,
-                  signature.control_graph_address, signature.compute_workspace_bytes);
+                  signature.local_intermediate_size, signature.primary_graph_address, signature.control_graph_address,
+                  signature.compute_workspace_bytes);
   TORCH_CHECK(signature.expert_count != 0 && signature.effective_topk != 0 &&
                   signature.effective_topk <= signature.expert_count,
               "xpool FFN Execution Projection contains invalid MoE Expert geometry");
@@ -61,8 +61,7 @@ void validate_signature(const MoeExecutionSignatureProjection &signature) {
               "xpool FFN Execution Projection contains invalid routed Expert geometry");
   const auto &primary_router = *primary.router;
   const auto &control_router = *control.router;
-  TORCH_CHECK(primary_router.correction_bias_address.has_value() ==
-                  control_router.correction_bias_address.has_value(),
+  TORCH_CHECK(primary_router.correction_bias_address.has_value() == control_router.correction_bias_address.has_value(),
               "xpool FFN Execution Projection Primary and Control Router schemas disagree");
   TORCH_CHECK(primary_router.weight_address != control_router.weight_address &&
                   (!primary_router.correction_bias_address.has_value() ||
@@ -71,8 +70,7 @@ void validate_signature(const MoeExecutionSignatureProjection &signature) {
               "addresses");
 }
 
-bool binding_schema_matches(const ExecutionSignatureProjection &signature,
-                            const BindingResourceProjection &target) {
+bool binding_schema_matches(const ExecutionSignatureProjection &signature, const BindingResourceProjection &target) {
   if (std::holds_alternative<DenseExecutionSignatureProjection>(signature)) {
     return std::holds_alternative<DenseBindingResourceProjection>(target);
   }
@@ -82,13 +80,11 @@ bool binding_schema_matches(const ExecutionSignatureProjection &signature,
   }
   const auto &captured = std::get<MoeExecutionSignatureProjection>(signature).primary_capture_resources;
   return captured.router.has_value() == resources->router.has_value() &&
-         (!captured.router.has_value() ||
-          captured.router->correction_bias_address.has_value() ==
-              resources->router->correction_bias_address.has_value());
+         (!captured.router.has_value() || captured.router->correction_bias_address.has_value() ==
+                                              resources->router->correction_bias_address.has_value());
 }
 
-bool weight_geometry_matches(const ExecutionSignatureProjection &left,
-                             const ExecutionSignatureProjection &right) {
+bool weight_geometry_matches(const ExecutionSignatureProjection &left, const ExecutionSignatureProjection &right) {
   if (const auto *left_dense = std::get_if<DenseExecutionSignatureProjection>(&left)) {
     const auto *right_dense = std::get_if<DenseExecutionSignatureProjection>(&right);
     return right_dense != nullptr && left_dense->hidden_size == right_dense->hidden_size &&

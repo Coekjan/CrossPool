@@ -1,15 +1,14 @@
-#include "bindings.hpp"
-
-#include <pybind11/stl.h>
-#include <torch/python.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include <xpool/runtime.hpp>
+#include <pybind11/stl.h>
+#include <torch/python.h>
+
+#include "bindings.hpp"
 #include <xpool/ffn.hpp>
+#include <xpool/runtime.hpp>
 #include <xpool/transport/atnagent.hpp>
 #include <xpool/transport/instance.hpp>
 
@@ -32,8 +31,8 @@ void bind_transport(py::module_ &module) {
                     "xpool Transport payload dtype must be torch.float16 or torch.bfloat16");
         return xpool::transport::AtnAgentRuntime::singleton()
             .create_arena(xpool::RuntimeState::singleton().cuda_device("xpool.native.transport.create_arena"),
-                          instance_index, instance_rank, payload_row_capacity, hidden_size,
-                          payload_dtype, atn_tp_rank, atn_tp_size, atn_dp_rank, atn_dp_size)
+                          instance_index, instance_rank, payload_row_capacity, hidden_size, payload_dtype, atn_tp_rank,
+                          atn_tp_size, atn_dp_rank, atn_dp_size)
             .encode();
       },
       py::arg("instance_index"), py::arg("instance_rank"), py::arg("payload_row_capacity"), py::arg("hidden_size"),
@@ -89,12 +88,11 @@ void bind_transport(py::module_ &module) {
       [](std::size_t instance_index, std::size_t rank, const std::string &handle) {
         xpool::RuntimeState::singleton().require_role(xpool::RuntimeRole::Instance,
                                                       "xpool.native.transport.attach_arena");
-        xpool::transport::InstanceRankRuntime::singleton().attach_arena(
-            instance_index, rank, xpool::transport::ArenaHandle::decode(handle));
+        xpool::transport::InstanceRankRuntime::singleton().attach_arena(instance_index, rank,
+                                                                        xpool::transport::ArenaHandle::decode(handle));
       },
       py::arg("instance_index"), py::arg("rank"), py::arg("handle"),
-      "Attach one Instance-rank process to its rank-local CUDA IPC arena.",
-      py::call_guard<py::gil_scoped_release>());
+      "Attach one Instance-rank process to its rank-local CUDA IPC arena.", py::call_guard<py::gil_scoped_release>());
   transport.def(
       "detach_arena",
       []() {
@@ -102,8 +100,7 @@ void bind_transport(py::module_ &module) {
                                                       "xpool.native.transport.detach_arena");
         xpool::transport::InstanceRankRuntime::singleton().detach_arena();
       },
-      "Detach the Instance-rank process from its current CUDA IPC arena.",
-      py::call_guard<py::gil_scoped_release>());
+      "Detach the Instance-rank process from its current CUDA IPC arena.", py::call_guard<py::gil_scoped_release>());
   transport.def(
       "read_generation_failure",
       []() {

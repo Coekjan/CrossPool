@@ -46,8 +46,7 @@ struct MoeBindingResourceProjection {
 };
 
 /// Canonical Dense or MoE weight-address representation.
-using BindingResourceProjection =
-    std::variant<DenseBindingResourceProjection, MoeBindingResourceProjection>;
+using BindingResourceProjection = std::variant<DenseBindingResourceProjection, MoeBindingResourceProjection>;
 
 /// One captured gated-Dense computation body and its Primary/Control captures.
 struct DenseExecutionSignatureProjection {

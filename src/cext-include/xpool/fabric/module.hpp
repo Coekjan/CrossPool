@@ -3,11 +3,10 @@
 /// \file xpool/fabric/module.hpp
 /// \brief Explicit NVSHMEM CUDA module registration ownership.
 
-#include <cuda.h>
+#include <utility>
 
 #include <c10/util/Exception.h>
-
-#include <utility>
+#include <cuda.h>
 
 namespace xpool::fabric {
 
@@ -26,8 +25,7 @@ public:
   ModuleRegistration &operator=(const ModuleRegistration &) = delete;
 
   /// Move one module registration and leave its source empty.
-  ModuleRegistration(ModuleRegistration &&other) noexcept
-      : module_(std::exchange(other.module_, nullptr)) {}
+  ModuleRegistration(ModuleRegistration &&other) noexcept : module_(std::exchange(other.module_, nullptr)) {}
 
   /// Replace this empty registration by moving another registration.
   ModuleRegistration &operator=(ModuleRegistration &&other) {

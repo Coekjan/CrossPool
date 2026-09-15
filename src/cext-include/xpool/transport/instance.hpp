@@ -3,12 +3,12 @@
 /// \file xpool/transport/instance.hpp
 /// \brief Single CUDA IPC transport attachment owned by one Instance-rank process.
 
-#include <ATen/core/TensorBody.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <optional>
+
+#include <ATen/core/TensorBody.h>
 
 #include <xpool/transport/arena.hpp>
 

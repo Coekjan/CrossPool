@@ -35,8 +35,7 @@ struct LayoutRegionSpec {
   std::size_t alignment;
 
   /// Describe storage for a raw byte region.
-  static LayoutRegionSpec bytes(std::string_view name, std::size_t byte_count,
-                                std::size_t alignment = 1) {
+  static LayoutRegionSpec bytes(std::string_view name, std::size_t byte_count, std::size_t alignment = 1) {
     return LayoutRegionSpec{name, byte_count, alignment};
   }
 
@@ -63,28 +62,24 @@ template <std::size_t N> struct LayoutPlan {
   /// Build a concrete aligned layout plan from ordered region specifications.
   /// \throws c10::Error if a name is empty, alignment is zero, or offset
   /// arithmetic overflows.
-  explicit LayoutPlan(const std::array<LayoutRegionSpec, N> &specs,
-                      std::size_t allocation_alignment);
+  explicit LayoutPlan(const std::array<LayoutRegionSpec, N> &specs, std::size_t allocation_alignment);
 
   /// Return a concrete region by index.
   const LayoutRegion &operator[](std::size_t index) const { return regions[index]; }
 };
 
 template <std::size_t N>
-LayoutPlan<N>::LayoutPlan(const std::array<LayoutRegionSpec, N> &specs,
-                          std::size_t allocation_alignment)
+LayoutPlan<N>::LayoutPlan(const std::array<LayoutRegionSpec, N> &specs, std::size_t allocation_alignment)
     : regions{}, total_bytes(0) {
   auto offset = std::size_t{0};
   for (std::size_t index = 0; index < N; ++index) {
     const auto &spec = specs[index];
     TORCH_CHECK(!spec.name.empty(), "xpool layout region name must not be empty");
     offset = xpool::utils::checked::align_up(offset, spec.alignment);
-    regions[index] = LayoutRegion{spec.name, offset, spec.byte_count,
-                                  spec.alignment};
+    regions[index] = LayoutRegion{spec.name, offset, spec.byte_count, spec.alignment};
     offset = xpool::utils::checked::sum(offset, spec.byte_count);
   }
-  total_bytes =
-      xpool::utils::checked::align_up(offset, allocation_alignment);
+  total_bytes = xpool::utils::checked::align_up(offset, allocation_alignment);
 }
 
 } // namespace xpool::utils::layout

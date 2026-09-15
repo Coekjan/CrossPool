@@ -1,10 +1,9 @@
-#include <torch/library.h>
-
-#include <c10/util/TypeCast.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+
+#include <c10/util/TypeCast.h>
+#include <torch/library.h>
 
 #include <xpool/instance.hpp>
 #include <xpool/runtime.hpp>
@@ -23,8 +22,7 @@ void ffn_shim(const at::Tensor &hidden_states, const std::optional<at::Tensor> &
   const auto parsed_dp_row_layout =
       static_cast<xpool::ffn::DpRowLayout>(c10::checked_convert<std::uint32_t>(dp_row_layout, "dp_row_layout"));
   TORCH_CHECK(xpool::ffn::is_valid(parsed_forward_mode), "xpool ffn_shim received an invalid forward mode");
-  TORCH_CHECK(xpool::ffn::is_valid(parsed_output_requirement),
-              "xpool ffn_shim received an invalid output requirement");
+  TORCH_CHECK(xpool::ffn::is_valid(parsed_output_requirement), "xpool ffn_shim received an invalid output requirement");
   TORCH_CHECK(xpool::ffn::is_valid(parsed_dp_row_layout), "xpool ffn_shim received an invalid DP row layout");
   const xpool::transport::RequestMetadata request_metadata{
       c10::checked_convert<std::size_t>(layer_ordinal, "layer_ordinal"),

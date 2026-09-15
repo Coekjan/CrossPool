@@ -34,8 +34,7 @@ TEST(TransportArenaTest, DefaultOwnerIsEmpty) {
 }
 
 TEST(TransportArenaLayoutTest, PlansSingularMailboxRegions) {
-  const auto layout = xpool::transport::ArenaLayout::create(
-      3, 2, 1, 4, 0, 1, 8, 4, c10::ScalarType::BFloat16);
+  const auto layout = xpool::transport::ArenaLayout::create(3, 2, 1, 4, 0, 1, 8, 4, c10::ScalarType::BFloat16);
 
   EXPECT_EQ(layout.header.magic, xpool::transport::kTransportArenaMagic);
   EXPECT_EQ(layout.header.abi_version, xpool::abi::kVersion);
@@ -48,18 +47,12 @@ TEST(TransportArenaLayoutTest, PlansSingularMailboxRegions) {
   EXPECT_EQ(layout.atn_dp_size, 1U);
   EXPECT_EQ(layout.payload_dtype, c10::ScalarType::BFloat16);
   EXPECT_EQ(layout.payload_row_bytes, 8U);
-  EXPECT_EQ(layout.header.state_offset %
-                alignof(xpool::transport::ArenaState),
-            0U);
+  EXPECT_EQ(layout.header.state_offset % alignof(xpool::transport::ArenaState), 0U);
   EXPECT_EQ(layout.header.state_offset,
-            xpool::utils::checked::align_up(
-                std::size_t{sizeof(xpool::transport::ArenaLayout)},
-                std::size_t{alignof(xpool::transport::ArenaState)}));
-  EXPECT_EQ(layout.mailbox_offset %
-                alignof(xpool::transport::Mailbox),
-            0U);
-  EXPECT_EQ(layout.input_payload_offset % xpool::arena::kPayloadAlignment,
-            0U);
+            xpool::utils::checked::align_up(std::size_t{sizeof(xpool::transport::ArenaLayout)},
+                                            std::size_t{alignof(xpool::transport::ArenaState)}));
+  EXPECT_EQ(layout.mailbox_offset % alignof(xpool::transport::Mailbox), 0U);
+  EXPECT_EQ(layout.input_payload_offset % xpool::arena::kPayloadAlignment, 0U);
   EXPECT_GT(layout.mailbox_offset, layout.header.state_offset);
   EXPECT_GT(layout.input_payload_offset, layout.mailbox_offset);
   EXPECT_GT(layout.output_payload_offset, layout.input_payload_offset);
@@ -68,16 +61,14 @@ TEST(TransportArenaLayoutTest, PlansSingularMailboxRegions) {
 }
 
 TEST(TransportArenaLayoutTest, AllocatesDpRankPayloadRowsOnlyForDpWorld) {
-  const auto layout = xpool::transport::ArenaLayout::create(
-      0, 0, 0, 1, 1, 2, 8, 4, c10::ScalarType::Half);
+  const auto layout = xpool::transport::ArenaLayout::create(0, 0, 0, 1, 1, 2, 8, 4, c10::ScalarType::Half);
 
   EXPECT_GT(layout.dp_rank_payload_rows_offset, layout.output_payload_offset);
   EXPECT_NO_THROW(layout.validate());
 }
 
 TEST(TransportArenaLayoutTest, RejectsNonCanonicalGeometry) {
-  const auto layout = xpool::transport::ArenaLayout::create(
-      0, 0, 0, 1, 0, 1, 8, 4, c10::ScalarType::BFloat16);
+  const auto layout = xpool::transport::ArenaLayout::create(0, 0, 0, 1, 0, 1, 8, 4, c10::ScalarType::BFloat16);
 
   auto shifted_state = layout;
   ++shifted_state.header.state_offset;
@@ -94,14 +85,12 @@ TEST(TransportArenaLayoutTest, RejectsNonCanonicalGeometry) {
   auto incompatible_magic = layout;
   ++incompatible_magic.header.magic;
   EXPECT_THROW(incompatible_magic.validate(), c10::Error);
-
 }
 
 TEST(TransportArenaLayoutTest, PreservesGeometryBeyondUint32) {
   const auto beyond_uint32 = std::size_t{std::numeric_limits<std::uint32_t>::max()} + 1U;
-  const auto layout = xpool::transport::ArenaLayout::create(
-      beyond_uint32, beyond_uint32, 0, 1, 0, 1, beyond_uint32, 2,
-      c10::ScalarType::Half);
+  const auto layout = xpool::transport::ArenaLayout::create(beyond_uint32, beyond_uint32, 0, 1, 0, 1, beyond_uint32, 2,
+                                                            c10::ScalarType::Half);
 
   EXPECT_EQ(layout.instance_index, beyond_uint32);
   EXPECT_EQ(layout.instance_rank, beyond_uint32);
@@ -110,8 +99,7 @@ TEST(TransportArenaLayoutTest, PreservesGeometryBeyondUint32) {
 }
 
 TEST(TransportArenaLayoutTest, AcceptsOddHiddenGeometry) {
-  const auto layout = xpool::transport::ArenaLayout::create(
-      0, 0, 0, 1, 0, 1, 8, 3, c10::ScalarType::Half);
+  const auto layout = xpool::transport::ArenaLayout::create(0, 0, 0, 1, 0, 1, 8, 3, c10::ScalarType::Half);
 
   EXPECT_NO_THROW(layout.validate());
 }

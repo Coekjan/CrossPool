@@ -3,11 +3,11 @@
 /// \file xpool/ffnagent/runtime.hpp
 /// \brief One-time native FFN execution installation contract.
 
-#include <cuda_runtime_api.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+
+#include <cuda_runtime_api.h>
 
 #include <xpool/fabric/arena.hpp>
 #include <xpool/fabric/layout.hpp>

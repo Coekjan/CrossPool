@@ -1,9 +1,9 @@
+#include <cstddef>
+#include <cstdint>
+
 #include <cooperative_groups.h>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
-
-#include <cstddef>
-#include <cstdint>
 
 #include <xpool/macros.hpp>
 #include <xpool/utils/cooperative.cuh>

@@ -1,12 +1,4 @@
-#include <xpool/devkit/adapters.cuh>
-#include <xpool/devkit/adapters.hpp>
 #include <xpool/devkit/transport_observer.hpp>
-
-#include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/util/Exception.h>
-
-#include <cuda/std/span>
 
 #include <algorithm>
 #include <array>
@@ -15,13 +7,20 @@
 #include <utility>
 #include <vector>
 
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/util/Exception.h>
+#include <cuda/std/span>
+
 #include <xpool/arena.hpp>
 #include <xpool/debug/options.cuh>
+#include <xpool/devkit/adapters.cuh>
+#include <xpool/devkit/adapters.hpp>
+#include <xpool/devkit/transport_observer.cuh>
 #include <xpool/hooks.cuh>
 #include <xpool/macros.hpp>
 #include <xpool/transport/arena.cuh>
 #include <xpool/transport/hooks.hpp>
-#include <xpool/devkit/transport_observer.cuh>
 #include <xpool/utils/layout.hpp>
 #include <xpool/utils/trace.cuh>
 
@@ -159,11 +158,10 @@ EndpointSnapshot snapshot(const Endpoint &endpoint) {
   const auto device_guard = c10::cuda::CUDAGuard{endpoint.cuda_device};
   auto state = xpool::utils::trace::BufferState{};
   C10_CUDA_CHECK(cudaMemcpy(&state, endpoint.storage.state, sizeof(state), cudaMemcpyDeviceToHost));
-  auto records = std::vector<Record>(
-      std::min<std::size_t>(state.sequence, endpoint.storage.record_capacity));
+  auto records = std::vector<Record>(std::min<std::size_t>(state.sequence, endpoint.storage.record_capacity));
   if (!records.empty()) {
-    C10_CUDA_CHECK(
-        cudaMemcpy(records.data(), endpoint.storage.records, records.size() * sizeof(records[0]), cudaMemcpyDeviceToHost));
+    C10_CUDA_CHECK(cudaMemcpy(records.data(), endpoint.storage.records, records.size() * sizeof(records[0]),
+                              cudaMemcpyDeviceToHost));
   }
   return {
       .instance_index = endpoint.storage.instance_index,
@@ -276,9 +274,8 @@ std::optional<Snapshot> read() {
   for (const auto &endpoint : endpoints) {
     snapshots.push_back(snapshot(endpoint));
   }
-  std::ranges::sort(snapshots, {}, [](const auto &value) {
-    return std::pair{value.instance_index, value.instance_rank};
-  });
+  std::ranges::sort(snapshots, {},
+                    [](const auto &value) { return std::pair{value.instance_index, value.instance_rank}; });
   return Snapshot{.endpoints = std::move(snapshots)};
 }
 

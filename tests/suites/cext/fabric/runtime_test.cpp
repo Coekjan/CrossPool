@@ -7,9 +7,9 @@
 
 #include <gtest/gtest.h>
 
-#include <xpool/ffn.hpp>
 #include <xpool/fabric/protocol.hpp>
 #include <xpool/fabric/runtime.hpp>
+#include <xpool/ffn.hpp>
 #include <xpool/ffnagent/runtime.cuh>
 
 namespace {
@@ -63,10 +63,10 @@ moe_execution_projection(bool router_owner, std::optional<std::uintptr_t> captur
                                              }}
                                            : std::nullopt;
   const auto control_router = router_owner ? std::optional{xpool::ffnagent::MoeRouterBindingResourceProjection{
-                                                    .weight_address = 13,
-                                                    .correction_bias_address = std::nullopt,
-                                                }}
-                                              : std::nullopt;
+                                                 .weight_address = 13,
+                                                 .correction_bias_address = std::nullopt,
+                                             }}
+                                           : std::nullopt;
   const auto target_router = router_owner ? std::optional{xpool::ffnagent::MoeRouterBindingResourceProjection{
                                                 .weight_address = 16,
                                                 .correction_bias_address = std::nullopt,
@@ -146,8 +146,7 @@ TEST(FfnAgentMemoryGeometryTest, ReportsOwnerAllocationBytes) {
   EXPECT_EQ(xpool::fabric::ffnagent_control_allocation_bytes(false, 2), sizeof(std::uint32_t));
   EXPECT_GT(xpool::fabric::ffnagent_control_allocation_bytes(true, 2), sizeof(std::uint32_t));
   EXPECT_EQ(xpool::ffnagent::execution_state_allocation_bytes(1, 1, 1, 1),
-            sizeof(xpool::ffnagent::LayerExecutionEntry) +
-                sizeof(xpool::ffnagent::CapacityExecutionEntry) +
+            sizeof(xpool::ffnagent::LayerExecutionEntry) + sizeof(xpool::ffnagent::CapacityExecutionEntry) +
                 sizeof(xpool::ffnagent::DiscoveredBindingSchema) + sizeof(xpool::ffnagent::LaneRuntimeState));
 }
 

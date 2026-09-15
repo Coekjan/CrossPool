@@ -1,12 +1,11 @@
-#include "bindings.hpp"
-
-#include <pybind11/stl.h>
-#include <torch/csrc/utils/pybind.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <map>
 
+#include <pybind11/stl.h>
+#include <torch/csrc/utils/pybind.h>
+
+#include "bindings.hpp"
 #include <xpool/devkit/fabric_observer.hpp>
 #include <xpool/devkit/ffn_routing_observer.hpp>
 #include <xpool/devkit/graph_observer.hpp>
@@ -142,12 +141,10 @@ void bind_fabric_observer_types(py::module_ &module) {
                     "Number of FfnAgent participants.")
       .def_readonly("model_topologies", &xpool::devkit::fabric_observer::Snapshot::model_topologies,
                     "Config-order model topology projections.")
-      .def_readonly("sequence", &xpool::devkit::fabric_observer::Snapshot::sequence,
-                    "Next PE-local trace sequence.")
+      .def_readonly("sequence", &xpool::devkit::fabric_observer::Snapshot::sequence, "Next PE-local trace sequence.")
       .def_readonly("dropped", &xpool::devkit::fabric_observer::Snapshot::dropped,
                     "Number of traces dropped after capacity exhaustion.")
-      .def_readonly("records", &xpool::devkit::fabric_observer::Snapshot::records,
-                    "Retained PE-local trace records.");
+      .def_readonly("records", &xpool::devkit::fabric_observer::Snapshot::records, "Retained PE-local trace records.");
 }
 
 void bind_transport_observer_types(py::module_ &module) {
@@ -217,8 +214,7 @@ void bind_transport_observer_types(py::module_ &module) {
       .def_readonly("records", &xpool::devkit::transport_observer::EndpointSnapshot::records,
                     "Retained Transport trace records.");
 
-  py::class_<xpool::devkit::transport_observer::Snapshot>(module, "Snapshot",
-                                                          "Process-local Transport observation.")
+  py::class_<xpool::devkit::transport_observer::Snapshot>(module, "Snapshot", "Process-local Transport observation.")
       .def_readonly("endpoints", &xpool::devkit::transport_observer::Snapshot::endpoints,
                     "Every open Transport endpoint in this process.");
 }
@@ -334,9 +330,8 @@ void bind_devkit(py::module_ &module) {
   transport.def(
       "read",
       []() {
-        xpool::RuntimeState::singleton().require_role(
-            {xpool::RuntimeRole::Instance, xpool::RuntimeRole::AtnAgent},
-            "xpool.native.devkit.transport_observer.read");
+        xpool::RuntimeState::singleton().require_role({xpool::RuntimeRole::Instance, xpool::RuntimeRole::AtnAgent},
+                                                      "xpool.native.devkit.transport_observer.read");
         return xpool::devkit::transport_observer::read();
       },
       "Return the process-local Transport snapshot, if enabled.", py::call_guard<py::gil_scoped_release>());

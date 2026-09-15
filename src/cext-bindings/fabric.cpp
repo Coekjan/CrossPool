@@ -1,17 +1,16 @@
-#include "bindings.hpp"
-
-#include <pybind11/native_enum.h>
-#include <pybind11/stl.h>
-#include <torch/python.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <xpool/ffn.hpp>
+#include <pybind11/native_enum.h>
+#include <pybind11/stl.h>
+#include <torch/python.h>
+
+#include "bindings.hpp"
 #include <xpool/fabric/runtime.hpp>
+#include <xpool/ffn.hpp>
 #include <xpool/ffnagent/runtime.hpp>
 #include <xpool/runtime.hpp>
 
@@ -43,11 +42,10 @@ void bind_fabric(py::module_ &module) {
   fabric.attr("UID_HEX_LENGTH") = xpool::fabric::Uid::encoded_size;
 
   py::class_<xpool::fabric::InstanceLayerProjection>(fabric, "InstanceLayerProjection",
-                                                           "One ordered FFN layer supplied to native Fabric join.")
+                                                     "One ordered FFN layer supplied to native Fabric join.")
       .def(py::init([](std::size_t layer_id, xpool::ffn::LayerKind kind, std::size_t effective_topk,
                        std::vector<std::size_t> ffnagent_indices) {
-             TORCH_CHECK(xpool::ffn::is_valid(kind),
-                         "xpool InstanceLayerProjection received an invalid kind");
+             TORCH_CHECK(xpool::ffn::is_valid(kind), "xpool InstanceLayerProjection received an invalid kind");
              return xpool::fabric::InstanceLayerProjection{
                  .layer_id = layer_id,
                  .kind = kind,
@@ -58,35 +56,35 @@ void bind_fabric(py::module_ &module) {
            py::arg("layer_id"), py::arg("kind"), py::arg("effective_topk"), py::arg("ffnagent_indices"));
 
   py::class_<xpool::fabric::InstanceProjection>(fabric, "InstanceProjection",
-                                                      "One Instance supplied to native Fabric join.")
-      .def(py::init([](const py::object &payload_dtype, std::size_t hidden_size, std::size_t decode_payload_row_capacity,
-                       std::size_t prefill_payload_row_capacity, bool group_sum_complete_admitted,
-                       std::size_t atn_tp_size, std::size_t atn_dp_size, std::vector<std::size_t> atnagent_indices,
-                       std::vector<xpool::fabric::InstanceLayerProjection> layers) {
-             return xpool::fabric::InstanceProjection{
-                 .decode_payload_row_capacity = decode_payload_row_capacity,
-                 .prefill_payload_row_capacity = prefill_payload_row_capacity,
-                 .payload_dtype = require_payload_dtype(payload_dtype),
-                 .hidden_size = hidden_size,
-                 .group_sum_complete_admitted = group_sum_complete_admitted,
-                 .atn_tp_size = atn_tp_size,
-                 .atn_dp_size = atn_dp_size,
-                 .atnagent_indices = std::move(atnagent_indices),
-                 .layers = std::move(layers),
-             };
-           }),
-           py::arg("payload_dtype"), py::arg("hidden_size"), py::arg("decode_payload_row_capacity"),
-           py::arg("prefill_payload_row_capacity"), py::arg("group_sum_complete_admitted"), py::arg("atn_tp_size"),
-           py::arg("atn_dp_size"), py::arg("atnagent_indices"), py::arg("layers"));
+                                                "One Instance supplied to native Fabric join.")
+      .def(
+          py::init([](const py::object &payload_dtype, std::size_t hidden_size, std::size_t decode_payload_row_capacity,
+                      std::size_t prefill_payload_row_capacity, bool group_sum_complete_admitted,
+                      std::size_t atn_tp_size, std::size_t atn_dp_size, std::vector<std::size_t> atnagent_indices,
+                      std::vector<xpool::fabric::InstanceLayerProjection> layers) {
+            return xpool::fabric::InstanceProjection{
+                .decode_payload_row_capacity = decode_payload_row_capacity,
+                .prefill_payload_row_capacity = prefill_payload_row_capacity,
+                .payload_dtype = require_payload_dtype(payload_dtype),
+                .hidden_size = hidden_size,
+                .group_sum_complete_admitted = group_sum_complete_admitted,
+                .atn_tp_size = atn_tp_size,
+                .atn_dp_size = atn_dp_size,
+                .atnagent_indices = std::move(atnagent_indices),
+                .layers = std::move(layers),
+            };
+          }),
+          py::arg("payload_dtype"), py::arg("hidden_size"), py::arg("decode_payload_row_capacity"),
+          py::arg("prefill_payload_row_capacity"), py::arg("group_sum_complete_admitted"), py::arg("atn_tp_size"),
+          py::arg("atn_dp_size"), py::arg("atnagent_indices"), py::arg("layers"));
 
-  py::class_<xpool::fabric::SchedulerPolicy>(fabric, "SchedulerPolicy",
-                                                "Immutable native Fabric scheduling policy.")
+  py::class_<xpool::fabric::SchedulerPolicy>(fabric, "SchedulerPolicy", "Immutable native Fabric scheduling policy.")
       .def_static("fifo", &xpool::fabric::SchedulerPolicy::fifo, "Create the deterministic FIFO scheduling policy.")
       .def_static("random", &xpool::fabric::SchedulerPolicy::random, py::arg("seed"),
                   "Create the random scheduling policy from a nonzero seed.");
 
   py::class_<xpool::fabric::ArenaProjection>(fabric, "ArenaProjection",
-                                                   "Complete common semantic input for native Fabric join.")
+                                             "Complete common semantic input for native Fabric join.")
       .def(py::init([](std::uint64_t generation_high, std::uint64_t generation_low, const std::string &uid,
                        std::size_t atnagent_count, std::size_t ffnagent_count, std::size_t executor_lane_count,
                        xpool::fabric::SchedulerPolicy scheduler,
@@ -108,7 +106,7 @@ void bind_fabric(py::module_ &module) {
            py::arg("ffnagent_count"), py::arg("executor_lane_count"), py::arg("scheduler"), py::arg("instances"));
 
   py::class_<xpool::ffnagent::DenseBindingResourceProjection>(ffnagent, "DenseBindingResourceProjection",
-                                                                 "Non-owning Dense weight addresses.")
+                                                              "Non-owning Dense weight addresses.")
       .def(py::init([](const at::Tensor &gate_up_weight, const at::Tensor &down_weight) {
              return xpool::ffnagent::DenseBindingResourceProjection{
                  .gate_up_weight_address = require_cuda_address(gate_up_weight, "Dense gate/up weight"),
@@ -122,16 +120,16 @@ void bind_fabric(py::module_ &module) {
       .def(py::init([](const at::Tensor &weight, const std::optional<at::Tensor> &correction_bias) {
              return xpool::ffnagent::MoeRouterBindingResourceProjection{
                  .weight_address = require_cuda_address(weight, "MoE Router weight"),
-                 .correction_bias_address = correction_bias.has_value()
-                                                ? std::optional{require_cuda_address(*correction_bias,
-                                                                                   "MoE Router correction bias")}
-                                                : std::nullopt,
+                 .correction_bias_address =
+                     correction_bias.has_value()
+                         ? std::optional{require_cuda_address(*correction_bias, "MoE Router correction bias")}
+                         : std::nullopt,
              };
            }),
            py::arg("weight"), py::arg("correction_bias"));
 
   py::class_<xpool::ffnagent::MoeBindingResourceProjection>(ffnagent, "MoeBindingResourceProjection",
-                                                               "Non-owning MoE weight addresses.")
+                                                            "Non-owning MoE weight addresses.")
       .def(py::init([](const at::Tensor &expert_gate_up_weight, const at::Tensor &expert_down_weight,
                        std::optional<xpool::ffnagent::MoeRouterBindingResourceProjection> router) {
              return xpool::ffnagent::MoeBindingResourceProjection{
@@ -144,7 +142,7 @@ void bind_fabric(py::module_ &module) {
            py::arg("expert_gate_up_weight"), py::arg("expert_down_weight"), py::arg("router"));
 
   py::class_<xpool::ffnagent::DenseExecutionSignatureProjection>(ffnagent, "DenseExecutionSignatureProjection",
-                                                                    "Captured Dense execution signature.")
+                                                                 "Captured Dense execution signature.")
       .def(py::init([](const py::object &payload_dtype, std::size_t payload_row_capacity, std::size_t hidden_size,
                        std::size_t local_intermediate_size, std::uintptr_t primary_graph_address,
                        std::uintptr_t control_graph_address, const at::Tensor &capture_input,
@@ -174,7 +172,7 @@ void bind_fabric(py::module_ &module) {
            py::arg("control_capture_resources"));
 
   py::class_<xpool::ffnagent::MoeExecutionSignatureProjection>(ffnagent, "MoeExecutionSignatureProjection",
-                                                                  "Captured MoE execution signature.")
+                                                               "Captured MoE execution signature.")
       .def(py::init([](const py::object &payload_dtype, std::size_t payload_row_capacity, std::size_t hidden_size,
                        std::size_t local_intermediate_size, std::size_t expert_count, std::size_t effective_topk,
                        std::optional<std::size_t> routed_expert_count, std::uintptr_t primary_graph_address,
@@ -212,12 +210,11 @@ void bind_fabric(py::module_ &module) {
            py::arg("local_intermediate_size"), py::arg("expert_count"), py::arg("effective_topk"),
            py::arg("routed_expert_count"), py::arg("primary_graph_address"), py::arg("control_graph_address"),
            py::arg("capture_input"), py::arg("capture_partial"), py::arg("capture_workspace"),
-           py::arg("compute_workspace_bytes"), py::arg("capture_routing_metadata"),
-           py::arg("capture_payload_rows"), py::arg("primary_capture_resources"),
-           py::arg("control_capture_resources"));
+           py::arg("compute_workspace_bytes"), py::arg("capture_routing_metadata"), py::arg("capture_payload_rows"),
+           py::arg("primary_capture_resources"), py::arg("control_capture_resources"));
 
   py::class_<xpool::ffnagent::LayerExecutionProjection>(ffnagent, "LayerExecutionProjection",
-                                                           "One Plan-addressed local FFN layer.")
+                                                        "One Plan-addressed local FFN layer.")
       .def(py::init([](std::size_t instance_index, std::size_t layer_ordinal,
                        std::vector<std::size_t> execution_signature_indices,
                        xpool::ffnagent::BindingResourceProjection layer_resource_targets) {
@@ -232,7 +229,7 @@ void bind_fabric(py::module_ &module) {
            py::arg("layer_resource_targets"));
 
   py::class_<xpool::ffnagent::ExecutionProjection>(ffnagent, "ExecutionProjection",
-                                                      "Complete one-time native FFN installation input.")
+                                                   "Complete one-time native FFN installation input.")
       .def(py::init([](std::vector<xpool::ffnagent::ExecutionSignatureProjection> signatures,
                        std::vector<xpool::ffnagent::LayerExecutionProjection> layers) {
              auto projection = xpool::ffnagent::ExecutionProjection{
@@ -249,8 +246,7 @@ void bind_fabric(py::module_ &module) {
       .def_readonly("invocation_sequence", &xpool::fabric::InvocationKey::invocation_sequence,
                     "Model-local invocation sequence.");
 
-  py::class_<xpool::fabric::FailurePayload>(fabric, "FailurePayload",
-                                                  "Immutable canonical Fabric failure payload.")
+  py::class_<xpool::fabric::FailurePayload>(fabric, "FailurePayload", "Immutable canonical Fabric failure payload.")
       .def_readonly("result_code", &xpool::fabric::FailurePayload::result_code, "Stable FFN result code.")
       .def_readonly("origin_pe", &xpool::fabric::FailurePayload::origin_pe, "PE that first claimed the failure.")
       .def_readonly("key", &xpool::fabric::FailurePayload::key, "Failed invocation identity.")
@@ -258,12 +254,11 @@ void bind_fabric(py::module_ &module) {
                     "Failed config-order FFN layer ordinal.");
 
   py::native_enum<xpool::fabric::DeliveryVariant>(fabric, "DeliveryVariant", "enum.IntEnum",
-                                                   "Observed Fabric output-delivery branch.")
+                                                  "Observed Fabric output-delivery branch.")
       .value("DIRECT_PARTIAL", xpool::fabric::DeliveryVariant::DirectPartial)
       .value("SINGLE_COMPLETE", xpool::fabric::DeliveryVariant::SingleComplete)
       .value("REPLICATED_COMPLETE", xpool::fabric::DeliveryVariant::ReplicatedComplete)
       .finalize();
-
 
   fabric.def("arena_allocation_bytes", &xpool::fabric::arena_allocation_bytes, py::arg("atnagent_count"),
              py::arg("ffnagent_count"), py::arg("instance_count"), py::arg("executor_lane_count"),

@@ -15,8 +15,7 @@ namespace xpool::utils::wait {
 
 /// Side-effecting polling operation that reports whether progress completed.
 template <typename F>
-concept Poll = std::invocable<F &> && std::same_as < std::invoke_result_t<F &>,
-bool > ;
+concept Poll = std::invocable<F &> && std::same_as<std::invoke_result_t<F &>, bool>;
 
 /// Outcome of one bounded polling observation.
 enum class Status : std::uint32_t {
@@ -53,8 +52,7 @@ Status until(std::chrono::steady_clock::time_point deadline, Ready ready, Cancel
 template <Poll Ready>
 Status until(std::chrono::steady_clock::time_point deadline, Ready ready,
              std::chrono::steady_clock::duration interval) {
-  return until(
-      deadline, std::move(ready), [] { return false; }, interval);
+  return until(deadline, std::move(ready), [] { return false; }, interval);
 }
 
 } // namespace xpool::utils::wait

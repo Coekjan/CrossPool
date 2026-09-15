@@ -1,9 +1,8 @@
-#include "bindings.hpp"
+#include <cstddef>
 
 #include <pybind11/pybind11.h>
 
-#include <cstddef>
-
+#include "bindings.hpp"
 #include <xpool/debug/options.hpp>
 
 namespace py = pybind11;

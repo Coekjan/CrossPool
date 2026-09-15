@@ -1,19 +1,19 @@
-#include <ATen/ATen.h>
-#include <c10/util/TypeCast.h>
-
-#include <cooperative_groups.h>
-#include <cuda_runtime_api.h>
+#include <xpool/transport/instance.hpp>
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 
+#include <ATen/ATen.h>
+#include <c10/util/TypeCast.h>
+#include <cooperative_groups.h>
+#include <cuda_runtime_api.h>
+
 #include <xpool/abort.hpp>
 #include <xpool/hooks.cuh>
 #include <xpool/macros.hpp>
 #include <xpool/transport/arena.cuh>
-#include <xpool/transport/instance.hpp>
 #include <xpool/transport/protocol.cuh>
 #include <xpool/utils/cooperative.cuh>
 #include <xpool/utils/wait.cuh>
@@ -64,10 +64,10 @@ XPOOL_KERNEL_FN void instance_transport_kernel(ArenaView arena, const Scalar *hi
             terminal_failure != xpool::ffn::ResultCode::Ok ? terminal_failure : xpool::ffn::ResultCode::Shutdown;
       } else {
         xpool::hooks::TransportInstanceProtocolEvent::hooks(
-                              {.arena = arena,
-                               .kind = xpool::hooks::TransportProtocolEventKind::RequestStagingStarted,
-                               .payload_rows = payload_rows,
-                               .request = &request_metadata});
+            {.arena = arena,
+             .kind = xpool::hooks::TransportProtocolEventKind::RequestStagingStarted,
+             .payload_rows = payload_rows,
+             .request = &request_metadata});
       }
     }
   }
@@ -118,9 +118,7 @@ XPOOL_KERNEL_FN void instance_transport_kernel(ArenaView arena, const Scalar *hi
       mailbox.result_code = result_code;
       mailbox.close_staging();
       xpool::hooks::TransportInstanceProtocolEvent::hooks(
-          {.arena = arena,
-           .kind = xpool::hooks::TransportProtocolEventKind::Closed,
-           .result_code = result_code});
+          {.arena = arena, .kind = xpool::hooks::TransportProtocolEventKind::Closed, .result_code = result_code});
       terminal_before_staging = true;
     } else {
       mailbox.publish_request();
@@ -164,14 +162,11 @@ XPOOL_KERNEL_FN void instance_transport_kernel(ArenaView arena, const Scalar *hi
   if (group.thread_rank() == 0) {
     const auto failure = arena.generation_failure();
     const auto mailbox_result = mailbox.result_code;
-    result_code = mailbox_result == xpool::ffn::ResultCode::Ok || failure == xpool::ffn::ResultCode::Ok
-                      ? mailbox_result
-                      : failure;
+    result_code = mailbox_result == xpool::ffn::ResultCode::Ok || failure == xpool::ffn::ResultCode::Ok ? mailbox_result
+                                                                                                        : failure;
     xpool::abort_if(!xpool::ffn::is_valid(result_code));
     xpool::hooks::TransportInstanceProtocolEvent::hooks(
-                          {.arena = arena,
-                           .kind = xpool::hooks::TransportProtocolEventKind::ResultObserved,
-                           .result_code = result_code});
+        {.arena = arena, .kind = xpool::hooks::TransportProtocolEventKind::ResultObserved, .result_code = result_code});
   }
   group.sync();
   if (result_code != xpool::ffn::ResultCode::Ok) {
@@ -179,9 +174,7 @@ XPOOL_KERNEL_FN void instance_transport_kernel(ArenaView arena, const Scalar *hi
     if (group.thread_rank() == 0) {
       mailbox.close_evaluated();
       xpool::hooks::TransportInstanceProtocolEvent::hooks(
-          {.arena = arena,
-           .kind = xpool::hooks::TransportProtocolEventKind::Closed,
-           .result_code = result_code});
+          {.arena = arena, .kind = xpool::hooks::TransportProtocolEventKind::Closed, .result_code = result_code});
     }
     return;
   }
@@ -193,13 +186,12 @@ XPOOL_KERNEL_FN void instance_transport_kernel(ArenaView arena, const Scalar *hi
                                   arena.output_payload().first(payload_bytes));
   if (group.thread_rank() == 0) {
     xpool::hooks::TransportInstanceProtocolEvent::hooks(
-                          {.arena = arena, .kind = xpool::hooks::TransportProtocolEventKind::OutputCopied});
+        {.arena = arena, .kind = xpool::hooks::TransportProtocolEventKind::OutputCopied});
     if (arena.shutdown_requested()) {
       mailbox.close_evaluated();
-      xpool::hooks::TransportInstanceProtocolEvent::hooks(
-          {.arena = arena,
-           .kind = xpool::hooks::TransportProtocolEventKind::Closed,
-           .result_code = xpool::ffn::ResultCode::Shutdown});
+      xpool::hooks::TransportInstanceProtocolEvent::hooks({.arena = arena,
+                                                           .kind = xpool::hooks::TransportProtocolEventKind::Closed,
+                                                           .result_code = xpool::ffn::ResultCode::Shutdown});
     } else {
       mailbox.acknowledge();
       xpool::hooks::TransportInstanceProtocolEvent::hooks(

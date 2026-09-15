@@ -1,8 +1,4 @@
-#include <c10/cuda/CUDAException.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/util/Exception.h>
-
-#include <cuda_runtime_api.h>
+#include <xpool/fabric/runtime.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -12,6 +8,10 @@
 #include <utility>
 #include <vector>
 
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/util/Exception.h>
+#include <cuda_runtime_api.h>
 #include <nvshmem.h>
 #include <nvshmemx.h>
 
@@ -20,7 +20,6 @@
 #include <xpool/fabric/ffnagent.hpp>
 #include <xpool/fabric/hooks.hpp>
 #include <xpool/fabric/module.hpp>
-#include <xpool/fabric/runtime.hpp>
 #include <xpool/ffnagent/hooks.hpp>
 #include <xpool/hooks.hpp>
 #include <xpool/utils/checked.hpp>
@@ -112,8 +111,8 @@ void Runtime::join(c10::DeviceIndex cuda_device, const ArenaProjection &projecti
 
     const auto layout =
         ArenaLayout::create(projection.atnagent_count, projection.ffnagent_count, instance_entries.size(),
-                                  projection.executor_lane_count, layer_entries.size(), atnagent_pes.size(),
-                                  ffnagent_pes.size(), maximum_lane_payload_bytes, maximum_routing_metadata_elements);
+                            projection.executor_lane_count, layer_entries.size(), atnagent_pes.size(),
+                            ffnagent_pes.size(), maximum_lane_payload_bytes, maximum_routing_metadata_elements);
 
     // Phase: Initialize NVSHMEM - Join the exact projected PE set and validate
     // the Device-visible runtime identity before allocating shared resources.
@@ -133,8 +132,8 @@ void Runtime::join(c10::DeviceIndex cuda_device, const ArenaProjection &projecti
     // symmetric Arena creation and remains live through resident drain.
     auto module_registration = ModuleRegistration::create();
     auto arena = Arena::create(layout, std::span<const InstanceEntry>{instance_entries},
-                                     std::span<const LayerEntry>{layer_entries},
-                                     std::span<const int>{atnagent_pes}, std::span<const int>{ffnagent_pes});
+                               std::span<const LayerEntry>{layer_entries}, std::span<const int>{atnagent_pes},
+                               std::span<const int>{ffnagent_pes});
     // No participant publishes Joined until every PE initialized the same
     // symmetric layout and reached this collective boundary.
     nvshmem_barrier_all();
@@ -284,8 +283,7 @@ std::optional<FailurePayload> Runtime::failure() const {
   }
   TORCH_CHECK(state.failure.publication == 1, "xpool Fabric failure has an invalid publication value");
   const auto result_code = state.failure.payload.result_code;
-  TORCH_CHECK(result_code == xpool::ffn::ResultCode::ProtocolMismatch ||
-                  result_code == xpool::ffn::ResultCode::Timeout,
+  TORCH_CHECK(result_code == xpool::ffn::ResultCode::ProtocolMismatch || result_code == xpool::ffn::ResultCode::Timeout,
               "xpool Fabric failure has an invalid result code");
   TORCH_CHECK(state.failure.payload.origin_pe >= 0 &&
                   static_cast<std::size_t>(state.failure.payload.origin_pe) < projection_->pe_count(),

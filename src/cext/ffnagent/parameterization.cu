@@ -1,7 +1,4 @@
 #include <xpool/ffnagent/parameterization.hpp>
-#include <xpool/utils/graph.hpp>
-
-#include <cuda_runtime.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -9,6 +6,9 @@
 #include <vector>
 
 #include <c10/util/Exception.h>
+#include <cuda_runtime.h>
+
+#include <xpool/utils/graph.hpp>
 
 namespace xpool::ffnagent {
 
@@ -95,8 +95,8 @@ void parameterize_graph_recursive(
         // a resource that the runtime intends to rebind.
         TORCH_CHECK(primary_value.bytes[byte_offset] == control_value.bytes[byte_offset] || covered[byte_offset],
                     "xpool Primary Graph contains an undeclared parameter-byte delta at node ", node_index,
-                    ", argument ", parameter_index, ", byte ", byte_offset, ": primary=",
-                    std::to_integer<unsigned int>(primary_value.bytes[byte_offset]),
+                    ", argument ", parameter_index, ", byte ", byte_offset,
+                    ": primary=", std::to_integer<unsigned int>(primary_value.bytes[byte_offset]),
                     ", control=", std::to_integer<unsigned int>(control_value.bytes[byte_offset]));
       }
 

@@ -1,11 +1,11 @@
+#include <xpool/fabric/module.hpp>
+
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/driver_api.h>
 #include <c10/util/Exception.h>
-
 #include <cuda_runtime_api.h>
 #include <nvshmemx.h>
 
-#include <xpool/fabric/module.hpp>
 #include <xpool/macros.hpp>
 
 namespace {

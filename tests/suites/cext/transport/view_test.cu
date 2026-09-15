@@ -1,7 +1,7 @@
+#include <cstddef>
+
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
-
-#include <cstddef>
 
 #include <xpool/macros.hpp>
 #include <xpool/transport/arena.cuh>

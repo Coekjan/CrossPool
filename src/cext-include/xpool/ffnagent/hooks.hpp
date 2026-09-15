@@ -3,9 +3,10 @@
 /// \file xpool/ffnagent/hooks.hpp
 /// \brief Host and CUDA Graph extension points owned by FfnAgent execution.
 
+#include <cstddef>
+
 #include <cuda_runtime_api.h>
 
-#include <cstddef>
 #include <xpool/fabric/projection.hpp>
 #include <xpool/hooks/registry.hpp>
 

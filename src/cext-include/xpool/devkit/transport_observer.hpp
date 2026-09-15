@@ -36,10 +36,14 @@ public:
   /// Return the effective request result retained by this trace.
   XPOOL_HOST_DEVICE_FN xpool::ffn::ResultCode result_code() const { return result_code_; }
   /// Test whether one event timestamp has been recorded.
-  XPOOL_HOST_DEVICE_FN bool recorded(xpool::hooks::TransportProtocolEventKind event) const { return timeline_.recorded(event); }
+  XPOOL_HOST_DEVICE_FN bool recorded(xpool::hooks::TransportProtocolEventKind event) const {
+    return timeline_.recorded(event);
+  }
   /// Return one GPU global-timer timestamp in nanoseconds.
   /// Values are comparable only inside the same GPU clock domain.
-  XPOOL_HOST_DEVICE_FN std::uint64_t timestamp(xpool::hooks::TransportProtocolEventKind event) const { return timeline_.timestamp(event); }
+  XPOOL_HOST_DEVICE_FN std::uint64_t timestamp(xpool::hooks::TransportProtocolEventKind event) const {
+    return timeline_.timestamp(event);
+  }
 
 #if defined(__CUDACC__)
   /// Initialize a reserved record and mark staging start.

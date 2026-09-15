@@ -3,12 +3,12 @@
 /// \file xpool/utils/trace.cuh
 /// \brief Device reservation over one process-local observer buffer.
 
+#include <cstddef>
+#include <cstdint>
+
 #include <cuda/atomic>
 #include <cuda/std/optional>
 #include <cuda/std/span>
-
-#include <cstddef>
-#include <cstdint>
 
 #include <xpool/macros.hpp>
 #include <xpool/utils/trace.hpp>

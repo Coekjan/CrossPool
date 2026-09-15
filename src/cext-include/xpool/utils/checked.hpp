@@ -3,12 +3,12 @@
 /// \file xpool/utils/checked.hpp
 /// \brief Host-side checked integer arithmetic utilities.
 
-#include <c10/util/Exception.h>
-#include <c10/util/safe_numerics.h>
-
 #include <concepts>
 #include <cstddef>
 #include <type_traits>
+
+#include <c10/util/Exception.h>
+#include <c10/util/safe_numerics.h>
 
 /// Checked host-side integer arithmetic.
 namespace xpool::utils::checked {

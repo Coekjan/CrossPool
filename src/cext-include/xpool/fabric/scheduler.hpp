@@ -3,9 +3,6 @@
 /// \file xpool/fabric/scheduler.hpp
 /// \brief Host policy and Coordinator-private device Scheduler.
 
-#include <cuda/std/optional>
-#include <cuda/std/variant>
-
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -13,6 +10,8 @@
 #include <variant>
 
 #include <c10/util/Exception.h>
+#include <cuda/std/optional>
+#include <cuda/std/variant>
 
 #include <xpool/abort.hpp>
 #include <xpool/fabric/protocol.hpp>
@@ -56,9 +55,7 @@ private:
   State state_;
 };
 
-inline SchedulerPolicy SchedulerPolicy::fifo() {
-  return SchedulerPolicy{FifoPolicy{}};
-}
+inline SchedulerPolicy SchedulerPolicy::fifo() { return SchedulerPolicy{FifoPolicy{}}; }
 
 inline SchedulerPolicy SchedulerPolicy::random(std::uint64_t seed) {
   TORCH_CHECK(seed != 0, "xpool random FFN scheduling requires a nonzero seed");
@@ -123,8 +120,8 @@ public:
   /// Construct a scheduler over caller-owned device storage.
   /// \throws c10::Error when storage is null or either count is zero.
   /// \pre entries remains alive and Device-accessible while the Scheduler is used.
-  static Scheduler from(const SchedulerPolicy &policy, SchedulerEntry *entries,
-                           std::size_t instance_count, std::size_t executor_lane_count);
+  static Scheduler from(const SchedulerPolicy &policy, SchedulerEntry *entries, std::size_t instance_count,
+                        std::size_t executor_lane_count);
 
 #if defined(__CUDACC__)
   /// Test whether an instance has a queued or active invocation.
@@ -152,8 +149,7 @@ private:
 
   using State = cuda::std::variant<FifoState, RandomState>;
 
-  Scheduler(State state, SchedulerEntry *entries, std::size_t instance_count,
-               std::size_t executor_lane_count)
+  Scheduler(State state, SchedulerEntry *entries, std::size_t instance_count, std::size_t executor_lane_count)
       : state_(std::move(state)), entries_(entries), instance_count_(instance_count),
         executor_lane_count_(executor_lane_count) {}
 

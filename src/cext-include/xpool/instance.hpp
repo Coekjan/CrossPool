@@ -3,10 +3,10 @@
 /// \file xpool/instance.hpp
 /// \brief Native entrypoints owned by instance processes.
 
-#include <ATen/core/TensorBody.h>
-
 #include <cstdint>
 #include <optional>
+
+#include <ATen/core/TensorBody.h>
 
 #include <xpool/transport/protocol.hpp>
 namespace xpool::instance {

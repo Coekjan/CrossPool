@@ -3,13 +3,13 @@
 /// \file xpool/utils/hex.hpp
 /// \brief Host-side lowercase hexadecimal encoding utilities.
 
-#include <c10/util/Exception.h>
-
 #include <cstddef>
 #include <cstring>
 #include <string>
 #include <string_view>
 #include <type_traits>
+
+#include <c10/util/Exception.h>
 
 /// Lowercase hexadecimal codecs used by CrossPool native host code.
 namespace xpool::utils::hex {
@@ -44,8 +44,8 @@ public:
       TORCH_CHECK(false, "xpool lowercase hex text contains an invalid byte");
     };
     for (auto index = std::size_t{0}; index < sizeof(T); ++index) {
-      bytes[index] = static_cast<unsigned char>((decode_nibble(text[index * 2]) << 4U) |
-                                                decode_nibble(text[index * 2 + 1]));
+      bytes[index] =
+          static_cast<unsigned char>((decode_nibble(text[index * 2]) << 4U) | decode_nibble(text[index * 2 + 1]));
     }
     return result;
   }
@@ -68,13 +68,9 @@ public:
   const T &value() const noexcept { return value_; }
 
   /// Compare complete opaque object bytes for identity.
-  bool operator==(const HexValue &other) const noexcept {
-    return std::memcmp(&value_, &other.value_, sizeof(T)) == 0;
-  }
+  bool operator==(const HexValue &other) const noexcept { return std::memcmp(&value_, &other.value_, sizeof(T)) == 0; }
   /// Compare complete opaque object bytes for ordered-container placement.
-  bool operator<(const HexValue &other) const noexcept {
-    return std::memcmp(&value_, &other.value_, sizeof(T)) < 0;
-  }
+  bool operator<(const HexValue &other) const noexcept { return std::memcmp(&value_, &other.value_, sizeof(T)) < 0; }
 
 private:
   T value_{};

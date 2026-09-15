@@ -3,9 +3,10 @@
 /// \file xpool/transport/hooks.hpp
 /// \brief Host and host-visible Device extension points owned by Transport.
 
+#include <cstdint>
+
 #include <c10/core/Device.h>
 
-#include <cstdint>
 #include <xpool/hooks/registry.hpp>
 #include <xpool/transport/arena.hpp>
 

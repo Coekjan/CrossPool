@@ -1,12 +1,12 @@
-#include <ATen/ATen.h>
-#include <cuda/atomic>
-#include <cuda_runtime.h>
-#include <gtest/gtest.h>
-
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+
+#include <ATen/ATen.h>
+#include <cuda/atomic>
+#include <cuda_runtime.h>
+#include <gtest/gtest.h>
 
 #include <xpool/debug/options.hpp>
 #include <xpool/ffn.hpp>

@@ -3,12 +3,12 @@
 /// \file xpool/devkit/ffn_routing_observer.hpp
 /// \brief Host readout for process-local semantic MoE routing records.
 
-#include <ATen/core/Tensor.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
+
+#include <ATen/core/Tensor.h>
 
 #include <xpool/fabric/protocol.hpp>
 
