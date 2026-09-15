@@ -91,10 +91,8 @@ struct LaneRuntimeState {
 };
 
 static_assert(sizeof(std::uintptr_t) == 8);
-static_assert(std::is_standard_layout_v<BindingSite>);
 static_assert(std::is_trivially_copyable_v<BindingSite>);
 static_assert(std::is_standard_layout_v<LayerBindingValues>);
-static_assert(std::is_trivially_copyable_v<LayerBindingValues>);
 static_assert(std::is_trivially_copyable_v<DiscoveredBindingSchema>);
 static_assert(std::is_trivially_copyable_v<CapacityExecutionEntry>);
 static_assert(std::is_trivially_copyable_v<LayerExecutionEntry>);

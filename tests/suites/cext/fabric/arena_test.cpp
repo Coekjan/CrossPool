@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <array>
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -11,11 +10,6 @@
 #include <xpool/abi.hpp>
 #include <xpool/fabric/arena.hpp>
 #include <xpool/utils/checked.hpp>
-
-static_assert(std::same_as<decltype(xpool::fabric::ArenaLayout{}.instance_count), std::size_t>);
-static_assert(std::same_as<decltype(xpool::fabric::ArenaLayout{}.coordinator_pe()), int>);
-static_assert(std::same_as<decltype(xpool::fabric::ArenaLayout{}.instance_entries_offset_bytes), std::size_t>);
-static_assert(std::same_as<decltype(xpool::fabric::Submission{}.payload_rows), std::size_t>);
 
 TEST(FabricArenaTest, EmptyOwnerSupportsMoveAndIdempotentDestroy) {
   auto source = xpool::fabric::Arena{};

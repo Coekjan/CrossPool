@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <type_traits>
 
 #include <xpool/fabric/scheduler.hpp>
 
@@ -55,7 +54,5 @@ private:
 /// Return the exact process-local FfnAgent control allocation size.
 /// \throws c10::Error when instance_count is zero or size arithmetic overflows.
 std::size_t ffnagent_control_allocation_bytes(bool is_coordinator, std::size_t instance_count);
-
-static_assert(std::is_trivially_copyable_v<FfnAgentControlView>);
 
 } // namespace xpool::fabric

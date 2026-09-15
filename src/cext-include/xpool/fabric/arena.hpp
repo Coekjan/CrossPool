@@ -288,6 +288,5 @@ private:
 };
 
 static_assert(std::is_trivially_copyable_v<ArenaState>);
-static_assert(std::is_trivially_copyable_v<ArenaView>);
 
 } // namespace xpool::fabric

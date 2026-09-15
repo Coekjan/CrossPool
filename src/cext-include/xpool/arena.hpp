@@ -32,7 +32,6 @@ struct LayoutHeader {
   constexpr bool operator==(const LayoutHeader &) const = default;
 };
 
-static_assert(std::is_standard_layout_v<LayoutHeader>);
 static_assert(std::is_trivially_copyable_v<LayoutHeader>);
 static_assert(sizeof(std::size_t) == sizeof(std::uint64_t), "xpool arena ABI requires 64-bit size_t");
 

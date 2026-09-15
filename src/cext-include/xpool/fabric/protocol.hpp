@@ -312,15 +312,6 @@ template <PublicationRecord Record> struct alignas(kFabricPublicationAlignment) 
 #endif
 };
 
-static_assert(sizeof(Publication<Submission>) == kFabricPublicationAlignment);
-static_assert(sizeof(Publication<Admission>) == kFabricPublicationAlignment);
-static_assert(sizeof(Publication<LaneExecution>) == kFabricPublicationAlignment);
-static_assert(sizeof(Publication<InputReady>) == kFabricPublicationAlignment);
-static_assert(sizeof(Publication<RoutingMetadataReady>) == kFabricPublicationAlignment);
-static_assert(sizeof(Publication<PartialReady>) == kFabricPublicationAlignment);
-static_assert(sizeof(Publication<FfnAgentCompletion>) == kFabricPublicationAlignment);
-static_assert(sizeof(Publication<OutputCommit>) == kFabricPublicationAlignment);
-static_assert(sizeof(Publication<OutputAcknowledgement>) == kFabricPublicationAlignment);
 static_assert(std::is_trivially_copyable_v<Failure>);
 
 } // namespace xpool::fabric

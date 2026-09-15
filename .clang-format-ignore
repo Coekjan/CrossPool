@@ -1,10 +1,4 @@
-# Ignore every file unless it uses a native source or header extension.
-*
-!**/*.c
-!**/*.cc
-!**/*.cpp
-!**/*.cu
-!**/*.h
-!**/*.hh
-!**/*.hpp
-!**/*.cuh
+# clang-format 22 treats a negated pattern as an allowlist. Native sources and
+# headers live below the cext source trees; keep their CMake build files out.
+!**/cext*/**
+**/CMakeLists.txt

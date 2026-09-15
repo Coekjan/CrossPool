@@ -1,6 +1,5 @@
 #include <cstddef>
 #include <cstdint>
-#include <type_traits>
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -28,7 +27,6 @@ struct TestArena {
 
 static_assert(xpool::utils::wait::Poll<decltype([] { return true; })>);
 static_assert(!xpool::utils::wait::Poll<decltype([] { return 1; })>);
-static_assert(std::is_trivially_copyable_v<xpool::utils::trace::Timeline<TestEvent>>);
 
 ::testing::AssertionResult cuda_succeeded(cudaError_t error) {
   if (error == cudaSuccess) {

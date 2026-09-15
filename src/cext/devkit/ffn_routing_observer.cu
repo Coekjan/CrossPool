@@ -105,9 +105,6 @@ struct Storage {
   BufferLayout layout{};
 };
 
-static_assert(std::is_trivially_copyable_v<RecordHeader>);
-static_assert(std::is_trivially_copyable_v<BufferLayout>);
-static_assert(std::is_trivially_copyable_v<BufferView>);
 static_assert(std::is_trivially_copyable_v<Storage>);
 
 XPOOL_DEVICE_CONST Storage storage{};

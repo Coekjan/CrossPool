@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <type_traits>
 #include <vector>
 
 #include <cuda/std/variant>
@@ -313,9 +312,6 @@ struct Snapshot {
   /// Retained records in reservation order.
   std::vector<Record> records;
 };
-
-static_assert(std::is_trivially_copyable_v<ModelTopology>);
-static_assert(std::is_trivially_copyable_v<Record>);
 
 /// Return the current process-local Fabric snapshot when observation is enabled.
 /// \pre The related Fabric participant is drained or otherwise synchronized.

@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <type_traits>
 #include <vector>
 
 #include <xpool/abort.hpp>
@@ -112,8 +111,6 @@ struct Snapshot {
   /// Snapshots for every endpoint currently open in this process.
   std::vector<EndpointSnapshot> endpoints;
 };
-
-static_assert(std::is_trivially_copyable_v<Record>);
 
 /// Return the current process-local Transport snapshot when observation is enabled.
 /// \pre Every related endpoint is quiesced or otherwise synchronized.

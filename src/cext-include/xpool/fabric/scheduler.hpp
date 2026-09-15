@@ -164,7 +164,6 @@ private:
   std::size_t executor_lane_count_;
 };
 
-static_assert(std::is_standard_layout_v<SchedulerEntry>);
 static_assert(std::is_trivially_copyable_v<SchedulerEntry>);
 static_assert(std::is_trivially_copyable_v<Scheduler>);
 

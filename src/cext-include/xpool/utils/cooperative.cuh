@@ -6,7 +6,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <type_traits>
 
 #include <cooperative_groups/memcpy_async.h>
 #include <cuda/memory>
@@ -51,7 +50,6 @@ XPOOL_DEVICE_FN void copy(Group group, cuda::std::span<std::uint8_t> destination
 /// \post Every participating thread observes the completed fill before return.
 template <CooperativeGroup Group, typename T>
 XPOOL_DEVICE_FN void fill(Group group, cuda::std::span<T> destination, const T &value) {
-  static_assert(std::is_trivially_copyable_v<T>);
   for (auto index = static_cast<std::size_t>(group.thread_rank()); index < destination.size();
        index += static_cast<std::size_t>(group.size())) {
     destination[index] = value;

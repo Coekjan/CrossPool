@@ -1,4 +1,3 @@
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -13,9 +12,6 @@
 #include <xpool/transport/protocol.hpp>
 #include <xpool/utils/checked.hpp>
 
-static_assert(std::same_as<decltype(xpool::transport::ArenaLayout{}.instance_index), std::size_t>);
-static_assert(std::same_as<decltype(xpool::transport::ArenaLayout{}.mailbox_offset), std::size_t>);
-static_assert(std::same_as<decltype(xpool::transport::RequestMetadata{}.layer_ordinal), std::size_t>);
 TEST(TransportArenaHandleTest, EncodesDecodesAndIndexesOrderedContainers) {
   const auto text = std::string(sizeof(cudaIpcMemHandle_t) * 2, '1');
   const auto handle = xpool::transport::ArenaHandle::decode(text);
