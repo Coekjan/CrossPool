@@ -4,8 +4,9 @@ from collections.abc import Iterable
 
 import pytest
 import torch
-from sglang.srt.models.glm4_moe_lite import Glm4MoeLiteForCausalLM, PretrainedConfig
+from sglang.srt.models.glm4_moe_lite import Glm4MoeLiteForCausalLM
 from sglang.srt.plugins.hook_registry import HookType
+from transformers import Glm4MoeLiteConfig
 
 from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 from xpool.integrations.sglang.models.glm4_moe_lite import (
@@ -18,14 +19,16 @@ from xpool.integrations.sglang.shim import ShimUnavailableError
 from xpool.native.ffn import LayerKind
 
 
-def glm_config() -> PretrainedConfig:
-    config = PretrainedConfig(architectures=["Glm4MoeLiteForCausalLM"])
-    config.num_hidden_layers = 2
-    config.hidden_size = 2048
-    config.hidden_act = "silu"
-    config.n_routed_experts = 8
-    config.first_k_dense_replace = 1
-    config.moe_layer_freq = 1
+def glm_config() -> Glm4MoeLiteConfig:
+    config = Glm4MoeLiteConfig(
+        architectures=["Glm4MoeLiteForCausalLM"],
+        num_hidden_layers=2,
+        hidden_size=2048,
+        hidden_act="silu",
+        n_routed_experts=8,
+    )
+    setattr(config, "first_k_dense_replace", 1)
+    setattr(config, "moe_layer_freq", 1)
     return config
 
 
@@ -101,5 +104,3 @@ def test_glm_loaded_model_uses_effective_config_policy() -> None:
     runner.model = model
 
     Glm4MoeLiteShimAdapter().validate_after_load(runner.as_model_runner())
-
-    assert runner.xpool_ffn_shim_count == 2

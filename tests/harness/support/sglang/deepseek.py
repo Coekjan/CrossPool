@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from transformers import PretrainedConfig
+from transformers import DeepseekV2Config
 
 from tests.harness.support.config import install_test_config
 from xpool.config import XpoolConfig
@@ -29,14 +29,16 @@ def install_adapter_config(
     yield
 
 
-def deepseek_config() -> PretrainedConfig:
-    config = PretrainedConfig(architectures=["DeepseekV2ForCausalLM"])
-    setattr(config, "num_hidden_layers", 2)
-    setattr(config, "hidden_size", 2048)
-    setattr(config, "hidden_act", "silu")
-    setattr(config, "n_shared_experts", 1)
-    setattr(config, "n_routed_experts", 8)
-    setattr(config, "first_k_dense_replace", 1)
+def deepseek_config() -> DeepseekV2Config:
+    config = DeepseekV2Config(
+        architectures=["DeepseekV2ForCausalLM"],
+        num_hidden_layers=2,
+        hidden_size=2048,
+        hidden_act="silu",
+        n_shared_experts=1,
+        n_routed_experts=8,
+        first_k_dense_replace=1,
+    )
     setattr(config, "moe_layer_freq", 1)
     return config
 

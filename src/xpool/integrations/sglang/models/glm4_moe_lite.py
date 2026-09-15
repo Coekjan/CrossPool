@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterable
-from typing import cast
 
 import torch
 from sglang.srt.model_executor.model_runner import ModelRunner
@@ -12,11 +11,11 @@ from sglang.srt.models.glm4_moe_lite import (
     Glm4MoeLiteForCausalLM,
     Glm4MoeLiteMLP,
     Glm4MoeLiteSparseMoeBlock,
-    PretrainedConfig,
     QuantizationConfig,
 )
 from sglang.srt.plugins.hook_registry import HookType
 from torch import nn
+from transformers import Glm4MoeLiteConfig
 
 from xpool.integrations.sglang.adapter import (
     SglangShimAdapter,
@@ -64,7 +63,7 @@ class XpoolGlm4MoeLiteSparseMoeBlock(FfnShimModule, Glm4MoeLiteSparseMoeBlock):
 
     def __init__(
         self,
-        config: PretrainedConfig,
+        config: Glm4MoeLiteConfig,
         layer_id: int,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
@@ -75,14 +74,16 @@ class XpoolGlm4MoeLiteSparseMoeBlock(FfnShimModule, Glm4MoeLiteSparseMoeBlock):
 
         if is_nextn:
             raise ShimUnavailableError("xpool GLM shim does not support next-token draft FFN layers")
-        hidden_act = getattr(config, "hidden_act", None)
+        hidden_act = config.hidden_act
         if hidden_act != "silu":
             raise ValueError(f"Unsupported activation: {hidden_act}. Only silu is supported for now.")
-        hidden_size = getattr(config, "hidden_size", None)
+        hidden_size = config.hidden_size
+        if not isinstance(hidden_size, int) or isinstance(hidden_size, bool) or hidden_size <= 0:
+            raise ShimUnavailableError("xpool GLM shim requires positive integer config field hidden_size")
         FfnShimModule.__init__(
             self,
             layer_id=layer_id,
-            hidden_size=cast(int, hidden_size),
+            hidden_size=hidden_size,
             layer_kind=LayerKind.MOE,
         )
 
@@ -127,36 +128,38 @@ class Glm4MoeLiteShimAdapter(SglangShimAdapter):
     def validate_after_load(self, model_runner: ModelRunner) -> None:
         """Require exact GLM model type, layer policy, shims, and FULL boundaries."""
 
-        model = getattr(model_runner, "model", None)
+        model = model_runner.model
         if not isinstance(model, Glm4MoeLiteForCausalLM):
             raise RuntimeError("xpool GLM model runner did not load a Glm4MoeLiteForCausalLM model")
-        expected_layer_kinds = expected_mixed_layer_kinds(model.config, family="GLM")
+        config = model.config
+        if not isinstance(config, Glm4MoeLiteConfig):
+            raise RuntimeError("xpool GLM model runner did not load a Glm4MoeLiteConfig")
+        expected_layer_kinds = expected_mixed_layer_kinds(config)
         shims = self.require_ffn_shims(
             model,
             expected_layer_kinds=expected_layer_kinds,
             allowed_shim_types=(XpoolGlm4MoeLiteMLP, XpoolGlm4MoeLiteSparseMoeBlock),
         )
         self.require_full_mlp_boundaries(model, shims, allow_reduce_scatter=True)
-        setattr(model_runner, "xpool_ffn_shim_count", len(shims))
 
 
-def expected_mixed_layer_kinds(config: object, *, family: str) -> tuple[LayerKind, ...]:
+def expected_mixed_layer_kinds(config: Glm4MoeLiteConfig) -> tuple[LayerKind, ...]:
     """Derive the pinned dense/sparse decoder policy from the loaded config."""
 
-    layer_count = getattr(config, "num_hidden_layers", None)
-    first_sparse_layer = getattr(config, "first_k_dense_replace", None)
-    sparse_frequency = getattr(config, "moe_layer_freq", None)
-    routed_experts = getattr(config, "n_routed_experts", None)
+    layer_count = config.num_hidden_layers
+    first_sparse_layer = config.first_k_dense_replace
+    sparse_frequency = config.moe_layer_freq
+    routed_experts = config.n_routed_experts
     if not isinstance(layer_count, int) or isinstance(layer_count, bool) or layer_count <= 0:
-        raise RuntimeError(f"xpool {family} model config has no positive integer num_hidden_layers")
+        raise RuntimeError("xpool GLM model config has no positive integer num_hidden_layers")
     if routed_experts is None:
         return (LayerKind.DENSE,) * layer_count
     if not isinstance(routed_experts, int) or isinstance(routed_experts, bool) or routed_experts <= 0:
-        raise RuntimeError(f"xpool {family} model config has invalid n_routed_experts")
+        raise RuntimeError("xpool GLM model config has invalid n_routed_experts")
     if not isinstance(first_sparse_layer, int) or isinstance(first_sparse_layer, bool) or first_sparse_layer < 0:
-        raise RuntimeError(f"xpool {family} model config has invalid first_k_dense_replace")
+        raise RuntimeError("xpool GLM model config has invalid first_k_dense_replace")
     if not isinstance(sparse_frequency, int) or isinstance(sparse_frequency, bool) or sparse_frequency <= 0:
-        raise RuntimeError(f"xpool {family} model config has invalid moe_layer_freq")
+        raise RuntimeError("xpool GLM model config has invalid moe_layer_freq")
     return tuple(
         LayerKind.MOE if layer_id >= first_sparse_layer and layer_id % sparse_frequency == 0 else LayerKind.DENSE
         for layer_id in range(layer_count)

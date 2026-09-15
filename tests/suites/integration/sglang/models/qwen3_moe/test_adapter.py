@@ -90,5 +90,3 @@ def test_qwen3_moe_loaded_model_requires_all_sparse_full_boundaries() -> None:
     runner.model = model
 
     Qwen3MoeShimAdapter().validate_after_load(runner.as_model_runner())
-
-    assert runner.xpool_ffn_shim_count == 2

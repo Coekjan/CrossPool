@@ -354,7 +354,6 @@ def test_deepseek_loaded_model_validation_counts_xpool_shims() -> None:
 
     DeepseekV2ShimAdapter().validate_after_load(runner.as_model_runner())
 
-    assert runner.xpool_ffn_shim_count == 2
     assert [shim.layer_id for shim in iter_ffn_shims(model)] == [0, 1]
 
 

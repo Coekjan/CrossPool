@@ -5,6 +5,7 @@ import torch
 from sglang.srt.layers.communicator import ScatterMode
 from sglang.srt.models.qwen3 import Qwen3ForCausalLM
 from sglang.srt.plugins.hook_registry import HookType
+from transformers import Qwen3Config
 
 from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 from xpool.integrations.sglang.adapter import filter_decoder_ffn_weights
@@ -24,8 +25,7 @@ def qwen_shim(layer_id: int) -> XpoolQwen3MLP:
 
 
 def loaded_qwen_model(*, mlp_mode: ScatterMode = ScatterMode.FULL) -> Qwen3ForCausalLM:
-    config = runner_with_architecture("Qwen3ForCausalLM").model_config.hf_config
-    assert config is not None
+    config = Qwen3Config(architectures=["Qwen3ForCausalLM"], num_hidden_layers=2)
     return loaded_model(
         Qwen3ForCausalLM,
         config,
@@ -70,8 +70,6 @@ def test_qwen3_loaded_model_requires_full_non_reduce_scatter_boundary() -> None:
     runner.model = loaded_qwen_model()
 
     Qwen3ShimAdapter().validate_after_load(runner.as_model_runner())
-
-    assert runner.xpool_ffn_shim_count == 2
 
 
 def test_qwen3_loaded_model_rejects_non_full_mlp_boundary() -> None:

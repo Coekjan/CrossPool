@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import cast
 
 import torch
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
@@ -34,14 +33,16 @@ class XpoolQwen3MoeSparseMoeBlock(FfnShimModule, Qwen3MoeSparseMoeBlock):
     ) -> None:
         """Initialize only CrossPool shim state using SGLang's exact constructor surface."""
 
-        hidden_act = getattr(config, "hidden_act", None)
+        hidden_act = config.hidden_act
         if hidden_act != "silu":
             raise ValueError(f"Unsupported activation: {hidden_act}. Only silu is supported for now.")
-        hidden_size = getattr(config, "hidden_size", None)
+        hidden_size = config.hidden_size
+        if not isinstance(hidden_size, int) or isinstance(hidden_size, bool) or hidden_size <= 0:
+            raise ShimUnavailableError("xpool Qwen3-MoE shim requires positive integer config field hidden_size")
         FfnShimModule.__init__(
             self,
             layer_id=layer_id,
-            hidden_size=cast(int, hidden_size),
+            hidden_size=hidden_size,
             layer_kind=LayerKind.MOE,
         )
 
@@ -81,10 +82,13 @@ class Qwen3MoeShimAdapter(SglangShimAdapter):
     def validate_after_load(self, model_runner: ModelRunner) -> None:
         """Require exact Qwen3-MoE type, all-sparse shims, and FULL boundaries."""
 
-        model = getattr(model_runner, "model", None)
+        model = model_runner.model
         if not isinstance(model, Qwen3MoeForCausalLM):
             raise RuntimeError("xpool Qwen3-MoE model runner did not load a Qwen3MoeForCausalLM model")
-        layer_count = getattr(model.config, "num_hidden_layers", None)
+        config = model.config
+        if not isinstance(config, Qwen3MoeConfig):
+            raise RuntimeError("xpool Qwen3-MoE model runner did not load a Qwen3MoeConfig")
+        layer_count = config.num_hidden_layers
         if not isinstance(layer_count, int) or isinstance(layer_count, bool) or layer_count <= 0:
             raise RuntimeError("xpool Qwen3-MoE model config has no positive integer num_hidden_layers")
         shims = self.require_ffn_shims(
@@ -93,7 +97,6 @@ class Qwen3MoeShimAdapter(SglangShimAdapter):
             allowed_shim_types=(XpoolQwen3MoeSparseMoeBlock,),
         )
         self.require_full_mlp_boundaries(model, shims, allow_reduce_scatter=True)
-        setattr(model_runner, "xpool_ffn_shim_count", len(shims))
 
 
 def around_load_weights(

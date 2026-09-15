@@ -10,6 +10,7 @@ from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.models.qwen3 import Qwen3ForCausalLM, Qwen3MLP
 from sglang.srt.plugins.hook_registry import HookType
+from transformers import Qwen3Config
 
 from xpool.integrations.sglang.adapter import (
     SglangShimAdapter,
@@ -78,10 +79,13 @@ class Qwen3ShimAdapter(SglangShimAdapter):
     def validate_after_load(self, model_runner: ModelRunner) -> None:
         """Require complete dense shim coverage and FULL MLP boundaries."""
 
-        model = getattr(model_runner, "model", None)
+        model = model_runner.model
         if not isinstance(model, Qwen3ForCausalLM):
             raise RuntimeError("xpool Qwen3 model runner did not load a Qwen3ForCausalLM model")
-        layer_count = getattr(model.config, "num_hidden_layers", None)
+        config = model.config
+        if not isinstance(config, Qwen3Config):
+            raise RuntimeError("xpool Qwen3 model runner did not load a Qwen3Config")
+        layer_count = config.num_hidden_layers
         if not isinstance(layer_count, int) or isinstance(layer_count, bool) or layer_count <= 0:
             raise RuntimeError("xpool Qwen3 model config has no positive integer num_hidden_layers")
         shims = self.require_ffn_shims(
@@ -90,7 +94,6 @@ class Qwen3ShimAdapter(SglangShimAdapter):
             allowed_shim_types=(XpoolQwen3MLP,),
         )
         self.require_full_mlp_boundaries(model, shims, allow_reduce_scatter=False)
-        setattr(model_runner, "xpool_ffn_shim_count", len(shims))
 
 
 def around_load_weights(

@@ -83,7 +83,6 @@ class FakeModelRunner:
     ps: ParallelState = field(default_factory=ParallelState.trivial)
     max_running_requests: int = 1
     model: nn.Module | None = None
-    xpool_ffn_shim_count: int = 0
     token_to_kv_pool: object | None = None
     token_to_kv_pool_allocator: object | None = None
     req_to_token_pool: object | None = None

@@ -205,10 +205,10 @@ class SglangInstanceRankBinding:
             Mutates each discovered shim's request-time runtime fields.
         """
 
-        model = getattr(model_runner, "model", None)
+        model = model_runner.model
         if model is None:
             return
-        architectures = getattr(model_runner.model_config.hf_config, "architectures", None)
+        architectures = model_runner.model_config.hf_config.architectures
         model_architecture = (
             ",".join(str(architecture) for architecture in architectures) if architectures else "unknown"
         )
@@ -495,7 +495,7 @@ def model_runner_architectures(model_runner: ModelRunner) -> frozenset[str]:
     """
 
     config = model_runner.model_config.hf_config
-    architectures = getattr(config, "architectures", None)
+    architectures = config.architectures
     if not architectures:
         return frozenset()
     return frozenset(str(architecture) for architecture in architectures)

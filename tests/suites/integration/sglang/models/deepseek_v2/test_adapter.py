@@ -63,13 +63,13 @@ def test_deepseek_ffn_weight_filter_skips_mlp_subtree() -> None:
     ]
 
 
-def test_deepseek_loaded_model_validation_requires_integer_layer_count() -> None:
+def test_deepseek_loaded_model_validation_requires_positive_layer_count() -> None:
     runner = runner_with_architecture("DeepseekV2ForCausalLM")
     config = deepseek_config()
-    setattr(config, "num_hidden_layers", None)
+    config.num_hidden_layers = 0
     runner.model = loaded_model(DeepseekV2ForCausalLM, config, [])
 
-    with pytest.raises(RuntimeError, match="integer num_hidden_layers"):
+    with pytest.raises(RuntimeError, match="positive integer num_hidden_layers"):
         DeepseekV2ShimAdapter().validate_after_load(runner.as_model_runner())
 
 

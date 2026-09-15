@@ -12,10 +12,10 @@ from sglang.srt.models.deepseek_v2 import (
     DeepseekV2ForCausalLM,
     DeepseekV2MLP,
     DeepseekV2MoE,
-    PretrainedConfig,
     QuantizationConfig,
 )
 from sglang.srt.plugins.hook_registry import HookType
+from transformers import DeepseekV2Config
 
 from xpool.integrations.sglang.adapter import (
     SglangShimAdapter,
@@ -110,7 +110,7 @@ class XpoolDeepseekV2MoE(FfnShimModule, DeepseekV2MoE):
 
     def __init__(
         self,
-        config: PretrainedConfig,
+        config: DeepseekV2Config,
         layer_id: int,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
@@ -145,12 +145,12 @@ class XpoolDeepseekV2MoE(FfnShimModule, DeepseekV2MoE):
 
         if is_nextn:
             raise ShimUnavailableError("xpool DeepSeek shim does not support next-token draft FFN layers")
-        hidden_act = getattr(config, "hidden_act", None)
+        hidden_act = config.hidden_act
         if hidden_act != "silu":
             raise ValueError(f"Unsupported activation: {hidden_act}. Only silu is supported for now.")
-        hidden_size = getattr(config, "hidden_size", None)
-        if not isinstance(hidden_size, int):
-            raise ShimUnavailableError("xpool DeepSeek shim requires integer config field hidden_size")
+        hidden_size = config.hidden_size
+        if not isinstance(hidden_size, int) or isinstance(hidden_size, bool) or hidden_size <= 0:
+            raise ShimUnavailableError("xpool DeepSeek shim requires positive integer config field hidden_size")
         FfnShimModule.__init__(
             self,
             layer_id=layer_id,
@@ -231,17 +231,17 @@ class DeepseekV2ShimAdapter(SglangShimAdapter):
                 valid layer count, or has incomplete FFN shim coverage.
 
         Side Effects:
-            Stamps ``xpool_ffn_shim_count`` on the model runner for diagnostics.
+            None.
         """
 
-        model = getattr(model_runner, "model", None)
+        model = model_runner.model
         if not isinstance(model, DeepseekV2ForCausalLM):
             raise RuntimeError("xpool DeepSeek model runner did not load a DeepseekV2ForCausalLM model")
         config = model.config
-        layer_count = getattr(config, "num_hidden_layers", None)
-        first_sparse_layer = getattr(config, "first_k_dense_replace", None)
-        sparse_frequency = getattr(config, "moe_layer_freq", None)
-        routed_experts = getattr(config, "n_routed_experts", None)
+        layer_count = config.num_hidden_layers
+        first_sparse_layer = config.first_k_dense_replace
+        sparse_frequency = config.moe_layer_freq
+        routed_experts = config.n_routed_experts
         if not isinstance(layer_count, int) or isinstance(layer_count, bool) or layer_count <= 0:
             raise RuntimeError("xpool DeepSeek model config has no positive integer num_hidden_layers")
         if routed_experts is None:
@@ -269,7 +269,6 @@ class DeepseekV2ShimAdapter(SglangShimAdapter):
             allowed_shim_types=(XpoolDeepseekV2MLP, XpoolDeepseekV2MoE),
         )
         self.require_full_mlp_boundaries(model, shims, allow_reduce_scatter=True)
-        setattr(model_runner, "xpool_ffn_shim_count", len(shims))
 
 
 def around_load_weights(
