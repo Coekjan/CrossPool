@@ -7,6 +7,8 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+import torch
+
 import xpool.native
 from xpool.config import get_global_config
 from xpool.fabric import FabricGenerationPhase, FabricParticipantPhase
@@ -325,6 +327,8 @@ class AtnAgent(Agent):
             local_rank=self.local_rank,
             publisher=self.process_ref,
         )
+        self.capacity_channel: xpool.native.kv.AtnAgentCapacityChannel | None = None
+        self.capacity_memory_published = False
         self.heartbeat_worker = AgentHeartbeat(agent=self)
 
     def register(self) -> None:
@@ -369,7 +373,25 @@ class AtnAgent(Agent):
         return prepared
 
     def prepare_fabric_execution(self) -> None:
-        """Require no AtnAgent resource binding between join and activation."""
+        """Attach this rank to the Generation-scoped KV capacity channel."""
+
+        if self.capacity_channel is not None:
+            return
+        plan = self.fabric_plan
+        if plan is None:
+            raise AgentError("atnagent cannot attach kv capacity before receiving a fabric plan")
+        config = get_global_config()
+        channel_ref = self.client.kv_capacity_channel(plan.generation)
+        if channel_ref.generation != plan.generation:
+            raise AgentError("daemon returned a kv capacity channel for a different fabric generation")
+        self.capacity_channel = xpool.native.kv.AtnAgentCapacityChannel.attach(
+            channel_ref.name,
+            pool_index=self.local_rank,
+            partition_indices=[
+                instance.instance_index * config.atn_world_size + self.local_rank for instance in config.instances
+            ],
+        )
+        self.capacity_memory_published = False
 
     def activate_fabric(self) -> None:
         """Launch transport kernels after collective Fabric join."""
@@ -381,6 +403,25 @@ class AtnAgent(Agent):
         """Drain local leases and transport kernels before Fabric drain."""
 
         self.transport.quiesce()
+
+    def publish_kv_memory_if_ready(self) -> None:
+        """Publish the one-shot post-capture device-memory observation."""
+
+        if (
+            self.capacity_channel is None
+            or self.capacity_memory_published
+            or not self.capacity_channel.captures_complete()
+        ):
+            return
+        free_bytes, total_bytes = torch.cuda.mem_get_info(self.cuda_device)
+        self.capacity_channel.publish_device_memory(total_bytes, free_bytes)
+        self.capacity_memory_published = True
+        logger.info(
+            "kv capacity memory published device=%s total_bytes=%s free_bytes=%s",
+            self.cuda_device,
+            total_bytes,
+            free_bytes,
+        )
 
     def poll_fabric_health(self) -> None:
         """Check both Fabric and the process-wide Transport Resident."""
@@ -398,6 +439,7 @@ class AtnAgent(Agent):
             except AgentError as error:
                 self.report_local_control_failure(str(error))
                 raise
+        self.publish_kv_memory_if_ready()
 
     def close_role(self) -> None:
         """Release every local transport arena."""
@@ -405,3 +447,7 @@ class AtnAgent(Agent):
         if self.registered and self.transport.published:
             self.transport.quiesce_leases()
         self.transport.close()
+        if self.capacity_channel is not None:
+            self.capacity_channel.close()
+            self.capacity_channel = None
+        self.capacity_memory_published = False

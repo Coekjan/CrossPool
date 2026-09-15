@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
@@ -12,15 +11,16 @@ from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.plugins.hook_registry import HookRegistry
 
 import xpool.config
+import xpool.integrations.sglang.hooks.lifecycle
 import xpool.integrations.sglang.plugin
 from tests.harness.support.config import TEST_MODEL_ID
 from xpool.config import XpoolConfig
 from xpool.fabric import InstanceFfnLayerProfile, InstanceFfnProfile
 from xpool.integrations.sglang.adapter import (
-    SglangHook,
     SglangInstanceRankBinding,
     SglangShimAdapter,
 )
+from xpool.integrations.sglang.hooks.registry import SglangHook
 from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
 from xpool.native.ffn import LayerKind
 
@@ -31,19 +31,14 @@ def reset_plugin_required_hook_targets(
     reset_global_config: None,
 ) -> Iterator[None]:
     apply_hooks = HookRegistry.__dict__["apply_hooks"]
-    guarded = HookRegistry.__dict__.get("xpool_apply_hooks_guarded")
     HookRegistry.reset()
-    monkeypatch.setattr(xpool.integrations.sglang.plugin.bootstrap, "init", lambda cuda_device, role: None)
-    monkeypatch.setattr(xpool.integrations.sglang.plugin.devkit, "install", lambda package=None: None)
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.bootstrap, "init", lambda cuda_device, role: None)
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.devkit, "install", lambda package=None: None)
+    monkeypatch.setattr(xpool.integrations.sglang.plugin, "discover_sglang_hooks", lambda: ())
     xpool.integrations.sglang.plugin.XPOOL_REQUIRED_HOOK_TARGETS.clear()
     yield
     HookRegistry.reset()
     setattr(HookRegistry, "apply_hooks", apply_hooks)
-    if guarded is None:
-        with contextlib.suppress(AttributeError):
-            delattr(HookRegistry, "xpool_apply_hooks_guarded")
-    else:
-        setattr(HookRegistry, "xpool_apply_hooks_guarded", guarded)
     xpool.integrations.sglang.plugin.XPOOL_REQUIRED_HOOK_TARGETS.clear()
 
 
@@ -178,6 +173,12 @@ def hook_target_get_init_info() -> str:
     """Synthetic valid target for the plugin's scheduler-handshake hook."""
 
     return "initialize"
+
+
+def hook_target_release_host_resources() -> str:
+    """Synthetic valid target for the plugin's scheduler teardown hook."""
+
+    return "release"
 
 
 class FakeAdapter(SglangShimAdapter):

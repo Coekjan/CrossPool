@@ -33,7 +33,6 @@ combination requires its own accepted plan and qualification evidence.
 | Unified Timeline Observability | Platform Capability |
 | Model Coverage | Product Capability |
 | Serving-engine Coverage | Product Capability |
-| Elastic KV-cache Pooling | Product Capability |
 | Cross-host Fabric | Product Capability |
 | Accelerator Portability | Product Capability |
 | Code Quality and Taste | Cross-cutting Practice |
@@ -105,26 +104,6 @@ prototype, and an accepted active plan for vLLM integration.
 
 No multi-engine provider abstraction should be introduced before a second
 integration demonstrates a shared seam.
-
-## Elastic KV-cache Pooling
-
-- **Class:** Product Capability.
-- **Outcome:** Plan, lend, reclaim, and isolate attention-side KV memory as an
-  elastic resource.
-- **Current seam:** Serving Instances currently own attention and KV cache;
-  `scheduler.atn_concurrency` is reserved for a future attention-admission
-  design, and attention-side memory planning is not implemented.
-- **Requires:** Decisions for KV page or block ownership, allocator integration,
-  admission units, reclamation, migration, failure lifecycle, graph safety,
-  memory estimation, and placement.
-- **Benefits from:** Unified Timeline Observability and the selected serving
-  engine's allocator seam.
-
-Research must compare direct reuse of kvcached, a narrow adapter around it,
-reuse of selected mechanisms under CrossPool ownership, and a minimal CrossPool-owned
-implementation. Candidate deliverables are a kvcached API and ownership report,
-a model-neutral pooling prototype, an attention-admission and memory-planning
-design, and an accepted active plan for Elastic KV-cache Pooling.
 
 ## Cross-host Fabric
 

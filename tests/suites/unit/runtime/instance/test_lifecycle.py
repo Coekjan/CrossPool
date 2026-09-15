@@ -7,6 +7,7 @@ import pytest
 
 import xpool.runtime.instance
 from tests.harness.support.config import install_test_config, reset_global_config
+from tests.harness.support.kv import kv_capacity_profile
 from tests.harness.support.runtime.instance import (
     ffn_profile,
     install_offline_instance_client,
@@ -42,6 +43,7 @@ def test_instance_register_rejects_unknown_instance() -> None:
             rank=0,
             transport=transport_attributes(),
             ffn_profile=ffn_profile(),
+            kv_capacity=kv_capacity_profile(),
         )
 
 
@@ -61,7 +63,7 @@ def test_instance_register_publishes_proc_uniq_id(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(xpool.runtime.instance, "XpoolClient", FakeXpoolClient)
     instance = runtime_instance(config, monkeypatch)
-    instance.register_runtime(transport_attributes(), ffn_profile())
+    instance.register_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile())
 
     assert registrations
     payload = registrations[0].model_dump(mode="json")
@@ -101,6 +103,7 @@ def test_instance_deregister_detaches_before_publishing_departure(
         pid=instance.process_ref.pid,
         transport=transport_attributes(),
         ffn_profile=ffn_profile(),
+        kv_capacity=kv_capacity_profile(),
     )
     events: list[str] = []
     monkeypatch.setattr(instance, "stop_failure_monitor", lambda: events.append("stop_monitor"))
@@ -121,7 +124,12 @@ def test_instance_start_does_not_cleanup_when_registration_fails(monkeypatch: py
     runtime_config()
     events: list[str] = []
 
-    def fail_register(self: InstanceRankRuntime, transport: InstanceRankTransportProfile, resolved: object) -> None:
+    def fail_register(
+        self: InstanceRankRuntime,
+        transport: InstanceRankTransportProfile,
+        resolved: object,
+        kv_capacity: object,
+    ) -> None:
         events.append("register")
         raise RuntimeError("register failed")
 
@@ -134,6 +142,7 @@ def test_instance_start_does_not_cleanup_when_registration_fails(monkeypatch: py
             rank=0,
             transport=transport_attributes(),
             ffn_profile=ffn_profile(),
+            kv_capacity=kv_capacity_profile(),
         )
 
     assert events == ["register", "deregister"]

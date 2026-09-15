@@ -16,6 +16,7 @@ from xpool.service.wire import (
     AtnAgentRegistration,
     FfnAgentRegistration,
     InstanceRankRegistration,
+    KvCapacityPartitionProfile,
     ProcessRef,
     ReadinessStatus,
 )
@@ -97,12 +98,13 @@ class InstanceRankId:
 class InstanceRankRegistrationState(CommonRegistration):
     """One live Instance-rank registration."""
 
-    __slots__ = ("abi_version", "ffn_profile", "instance", "transport")
+    __slots__ = ("abi_version", "ffn_profile", "instance", "kv_capacity", "transport")
 
     abi_version: int
     instance: InstanceRankId
     transport: InstanceRankTransportProfile
     ffn_profile: InstanceFfnProfile
+    kv_capacity: KvCapacityPartitionProfile
 
     def __init__(
         self,
@@ -112,6 +114,7 @@ class InstanceRankRegistrationState(CommonRegistration):
         pid: int,
         transport: InstanceRankTransportProfile,
         ffn_profile: InstanceFfnProfile,
+        kv_capacity: KvCapacityPartitionProfile,
         now: float,
     ) -> None:
         """Create one registration from the Instance rank's declared contract."""
@@ -121,6 +124,7 @@ class InstanceRankRegistrationState(CommonRegistration):
         self.instance = instance
         self.transport = transport
         self.ffn_profile = ffn_profile
+        self.kv_capacity = kv_capacity
 
     def key(self) -> InstanceRankId:
         """Return the configured Instance-rank key."""
@@ -138,6 +142,7 @@ class InstanceRankRegistrationState(CommonRegistration):
             or self.abi_version != candidate.abi_version
             or self.transport != candidate.transport
             or self.ffn_profile != candidate.ffn_profile
+            or self.kv_capacity != candidate.kv_capacity
         )
 
 
@@ -307,6 +312,7 @@ class RegistrationBook:
                 abi_version=registration.abi_version,
                 transport=registration.transport,
                 ffn_profile=registration.ffn_profile,
+                kv_capacity=registration.kv_capacity,
             )
             for registration in self.instances.values()
         ]

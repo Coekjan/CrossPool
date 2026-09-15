@@ -40,12 +40,16 @@ explicit operator margin, checkpoint-loader policy, and placement-solver
 policy. Loader parallelism lives under `ffn.loader`; solver parallelism and its
 whole-solve deadline live directly under `ffn.placement`.
 
+`atn.device_memory_utilization` defines the maximum share of each attention
+GPU that the post-capture Elastic KV Capacity Pool may retain. The daemon
+applies it to the AtnAgent's observed total memory after accounting for
+non-KV allocations and already mapped bootstrap backing.
+
 `scheduler.atn_concurrency` is retained as an explicitly reserved attention-side
-concurrency budget for the later KV-pool and attention-admission design. The
-current generation planner, AtnAgent, and serving integration do not consume it,
-and no current placement, readiness, or performance claim depends on its value.
-That later design must settle the budget's owner and resource unit before making
-the setting operational.
+compute-admission budget. Elastic KV-cache capacity does not consume it: the
+setting still has no runtime effect, and no current placement, readiness, or
+performance claim depends on its value. A future attention scheduler must
+settle the budget's owner and resource unit before making it operational.
 
 The core runtime contains engine-neutral model, topology, transport, execution,
 and failure values. Serving-engine runtime imports, hooks, objects, and
@@ -133,6 +137,13 @@ FfnAgent members.
 `FabricInstancePlan` pairs one Instance profile with its attention topology and
 result-delivery requirements. Model and Instance plans are co-indexed by
 `instance_index`; request lookup uses `(instance_index, layer_ordinal)`.
+
+Elastic KV memory has a separate control seam. Instance registrations carry
+immutable, model-derived partition geometry; they do not carry live capacity.
+One Generation-scoped daemon policy freezes each attention GPU's physical pool
+after Graph capture and coordinates target and active bundle prefixes through a
+host-local native channel. SGLang retains logical allocation and prefix-cache
+ownership. See [Elastic KV-cache Pooling](elastic-kv-cache.md).
 
 `xpool::fabric::ArenaProjection` is the minimal native join projection derived
 from the plan. Native layout code derives byte geometry, offsets, and local

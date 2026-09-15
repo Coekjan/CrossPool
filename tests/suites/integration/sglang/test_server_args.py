@@ -9,7 +9,7 @@ from sglang.srt.runtime_context import get_context, get_exec, publish
 from sglang.srt.server_args import ServerArgs
 from transformers import Qwen3Config
 
-import xpool.integrations.sglang.plugin
+import xpool.integrations.sglang.hooks.lifecycle
 from tests.harness.support.config import reset_global_config
 from tests.harness.support.sglang.fakes import FakeModelRunner, server_args
 from tests.harness.support.sglang.plugin import FakeAdapter, reset_plugin_required_hook_targets
@@ -31,7 +31,9 @@ def test_model_runner_hook_rejects_server_args_before_xpool_config(monkeypatch: 
         return "loaded"
 
     with pytest.raises(RuntimeError, match="Two-Batch Overlap"):
-        xpool.integrations.sglang.plugin.around_model_runner_load_model((adapter,), original, runner.as_model_runner())
+        xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
+            (adapter,), original, runner.as_model_runner()
+        )
 
 
 def test_global_server_arg_gate_allows_default_sglang_features() -> None:
@@ -74,6 +76,12 @@ def test_global_server_arg_gate_allows_grpc_beside_http() -> None:
         ({"enable_two_batch_overlap": True}, "Two-Batch Overlap"),
         ({"enable_layernorm_sp": True}, "LayerNorm Sequence Parallelism"),
         ({"cpu_offload_gb": 1}, "SGLang CPU Offload"),
+        ({"enable_unified_memory": True}, "Unified Memory KV Allocator"),
+        ({"enable_page_major_kv_layout": True}, "Page-Major KV Layout"),
+        ({"disable_radix_cache": True}, "Disabled Radix Cache"),
+        ({"enable_lmcache": True}, "LMCache"),
+        ({"enable_flexkv": True}, "FlexKV"),
+        ({"radix_cache_backend": "custom"}, "Custom Radix Cache Backend"),
         ({"enable_lora": True}, "LoRA"),
         ({"enable_torch_compile": True}, "Torch Compile"),
         (
@@ -96,6 +104,9 @@ def test_global_server_arg_gate_allows_grpc_beside_http() -> None:
             "Prefill CUDA Graph Backend",
         ),
         ({"enable_waterfill": True}, "DeepEP Waterfill"),
+        ({"speculative_algorithm": "EAGLE"}, "Speculative Decoding"),
+        ({"speculative_moe_a2a_backend": "deepep"}, "Speculative MoE A2A Backend"),
+        ({"startup_weight_load_mode": "overlap"}, "Startup Weight Loading"),
         ({"enable_mixed_chunk": True}, "Mixed Chunked Prefill"),
         ({"disaggregation_mode": "prefill"}, "PD Disaggregation"),
         ({"dllm_algorithm": "next_block"}, "Diffusion LLM"),
@@ -114,6 +125,26 @@ def test_global_server_arg_gate_rejects_unsupported_features(
     label: str,
 ) -> None:
     get_context().override("test", **override)
+
+    with pytest.raises(RuntimeError, match=label):
+        validate_sglang_server_args()
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "label"),
+    [
+        ("SGLANG_USE_HND_KVCACHE", "1", "HND KV Layout"),
+        ("SGLANG_EXPERIMENTAL_CPP_RADIX_TREE", "1", "C\\+\\+ Radix Tree"),
+        ("SGLANG_UNIFIED_RADIX_TREE_CORE_BACKEND", "rust", "Unified Radix TreeCore Backend"),
+    ],
+)
+def test_global_server_arg_gate_rejects_incompatible_kv_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    value: str,
+    label: str,
+) -> None:
+    monkeypatch.setenv(name, value)
 
     with pytest.raises(RuntimeError, match=label):
         validate_sglang_server_args()

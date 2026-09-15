@@ -4,6 +4,7 @@ import pytest
 
 import xpool.runtime.instance
 from tests.harness.support.config import reset_global_config
+from tests.harness.support.kv import kv_capacity_profile
 from tests.harness.support.runtime.instance import (
     ffn_profile,
     install_offline_instance_client,
@@ -119,6 +120,7 @@ def test_started_instance_rejects_different_transport(monkeypatch: pytest.Monkey
         pid=instance.process_ref.pid,
         transport=transport_attributes(),
         ffn_profile=ffn_profile(),
+        kv_capacity=kv_capacity_profile(),
     )
     with pytest.raises(InstanceRankError, match="different transport"):
-        instance.start_runtime(changed_transport, ffn_profile())
+        instance.start_runtime(changed_transport, ffn_profile(), kv_capacity_profile())

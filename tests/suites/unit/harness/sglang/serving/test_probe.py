@@ -39,7 +39,8 @@ def test_probe_retries_only_complete_endpoint_conflicts(tmp_path: Path, monkeypa
         def __init__(self, *args: object) -> None:
             workdirs.append(cast(Path, args[4]))
 
-        def run(self) -> ProbeRun:
+        def run(self, workload: object = None) -> ProbeRun:
+            assert workload is None
             if len(workdirs) < 3:
                 raise TcpEndpointConflict((("127.0.0.1", 20_000 + len(workdirs)),)) from RuntimeError("startup")
             return expected
@@ -65,7 +66,8 @@ def test_probe_does_not_retry_non_conflict_failure(tmp_path: Path, monkeypatch: 
         def __init__(self, *args: object) -> None:
             pass
 
-        def run(self) -> ProbeRun:
+        def run(self, workload: object = None) -> ProbeRun:
+            assert workload is None
             nonlocal attempts
             attempts += 1
             raise AssertionError("startup failure")
@@ -258,7 +260,7 @@ def probe_launch(tmp_path: Path) -> E2eLaunch:
     )
     return E2eLaunch(
         case_id="probe",
-        models=(E2eLaunchModel("model", "model-a", "SyntheticForCausalLM", 16_384, 1, 1),),
+        models=(E2eLaunchModel("model", "model-a", "SyntheticForCausalLM", 1, 1),),
         config=config,
         config_path=config_path,
         environment=MappingProxyType({"XPOOL_CONFIG": str(config_path)}),
@@ -271,7 +273,6 @@ def probe_manifest() -> E2eManifest:
         alias="model",
         model_id="model-a",
         architecture="SyntheticForCausalLM",
-        max_total_tokens=16_384,
     )
     case = probe_case()
     numerical = E2eFfnNumericalCase(

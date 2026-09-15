@@ -5,7 +5,8 @@ import torch
 from sglang.srt.model_executor.model_runner import ModelRunner
 from torch import nn
 
-from xpool.integrations.sglang.adapter import SglangHook, SglangShimAdapter, filter_decoder_ffn_weights
+from xpool.integrations.sglang.adapter import SglangShimAdapter, filter_decoder_ffn_weights
+from xpool.integrations.sglang.hooks.registry import SglangHook
 from xpool.integrations.sglang.shim import FfnShimModule
 from xpool.native.ffn import LayerKind
 

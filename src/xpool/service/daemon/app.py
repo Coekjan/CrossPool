@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 
 from xpool import bootstrap
 from xpool.config import XpoolConfig, get_global_config
-from xpool.fabric import FabricPlan
+from xpool.fabric import FabricGenerationId, FabricPlan
 from xpool.native import RuntimeRole
 from xpool.service.daemon.control import ControlPlane
 from xpool.service.daemon.registration import (
@@ -38,6 +38,7 @@ from xpool.service.wire import (
     HeartbeatResponse,
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
+    KvCapacityChannelRef,
     ProcessRef,
     ReadinessSnapshot,
     ServingListener,
@@ -46,6 +47,7 @@ from xpool.service.wire import (
 from xpool.transport import TransportArenaHandle
 
 logger = logging.getLogger(__name__)
+KV_CAPACITY_POLICY_INTERVAL_S = 0.01
 
 
 @dataclass(slots=True)
@@ -158,11 +160,23 @@ def create_daemon() -> FastAPI:
                 logger.exception("serving health monitor failed")
                 daemon_failure.record(exception)
 
+        async def run_kv_capacity_policy() -> None:
+            try:
+                while True:
+                    await asyncio.to_thread(control_plane.step_kv_capacity)
+                    await asyncio.sleep(KV_CAPACITY_POLICY_INTERVAL_S)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exception:
+                logger.exception("kv capacity policy failed")
+                daemon_failure.record(exception)
+
         config = get_global_config()
         logger.info("process started host=%s port=%s pid=%s", config.daemon.host, config.daemon.port, os.getpid())
         tasks = (
             asyncio.create_task(run_watchdog(), name="xpool-daemon-watchdog"),
             asyncio.create_task(monitor_serving_health(), name="xpool-serving-health"),
+            asyncio.create_task(run_kv_capacity_policy(), name="xpool-kv-capacity-policy"),
         )
         try:
             yield
@@ -170,6 +184,7 @@ def create_daemon() -> FastAPI:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.to_thread(control_plane.close)
 
     app = FastAPI(title="xpool daemon", version=version("xpool"), lifespan=lifespan)
     app.state.control_plane = control_plane
@@ -216,6 +231,20 @@ def create_daemon() -> FastAPI:
         """
 
         return await asyncio.to_thread(control_plane.require_fabric_plan)
+
+    @app.get("/kv/capacity-channel/{generation}")
+    async def get_kv_capacity_channel(generation: str) -> KvCapacityChannelRef:
+        """Return the native capacity channel for the retained Fabric generation.
+
+        Raises:
+            404: The generation identity is invalid or is not retained.
+        """
+
+        try:
+            generation_id = FabricGenerationId.parse(generation)
+        except ValueError as error:
+            raise XpoolDaemonError("not_found", "kv capacity channel generation is invalid") from error
+        return await asyncio.to_thread(control_plane.kv_capacity_channel, generation_id)
 
     @app.post("/fabric/quiesce")
     async def request_fabric_quiesce(request: FabricQuiesceRequest) -> Response:
@@ -412,6 +441,7 @@ def create_daemon() -> FastAPI:
                 pid=request.pid,
                 transport=request.transport,
                 ffn_profile=request.ffn_profile,
+                kv_capacity=request.kv_capacity,
                 now=monotonic(),
             ),
         )

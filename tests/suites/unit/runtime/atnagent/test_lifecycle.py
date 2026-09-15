@@ -40,7 +40,7 @@ from xpool.runtime.agent import AgentError
 from xpool.runtime.atnagent import AtnAgent
 from xpool.runtime.ffnagent import FfnAgent
 from xpool.service.client import XpoolClient, XpoolClientError
-from xpool.service.wire import FabricParticipantReport
+from xpool.service.wire import FabricParticipantReport, KvCapacityChannelRef
 
 pytestmark = pytest.mark.usefixtures(
     reset_global_config.__name__,
@@ -279,9 +279,20 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
         def report_fabric_participant(self, report: FabricParticipantReport) -> None:
             events.append(report.phase)
 
+        def kv_capacity_channel(self, generation: FabricGenerationId) -> KvCapacityChannelRef:
+            events.append("capacity_channel")
+            return KvCapacityChannelRef(generation=generation, name="/xpool-kv-test")
+
     agent.client = cast(XpoolClient, FabricClient())
     monkeypatch.setattr(agent, "prepare_fabric_join", lambda: events.append("prepare") or True)
     monkeypatch.setattr(xpool.native.fabric, "join", lambda projection, pe: events.append("join"))
+    monkeypatch.setattr(
+        xpool.native.kv.AtnAgentCapacityChannel,
+        "attach",
+        lambda name, pool_index, partition_indices: (
+            events.append(("capacity_attach", name, pool_index, partition_indices)) or object()
+        ),
+    )
     monkeypatch.setattr(agent.transport, "activate", lambda: events.append("transport"))
     monkeypatch.setattr(agent.transport, "check_health", lambda: events.append("health"))
 
@@ -300,8 +311,35 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
         FabricParticipantPhase.JOINING,
         "join",
         FabricParticipantPhase.JOINED,
+        "capacity_channel",
+        ("capacity_attach", "/xpool-kv-test", 0, [0]),
         FabricParticipantPhase.EXECUTION_READY,
         "transport",
         "health",
         FabricParticipantPhase.ACTIVE,
     ]
+
+
+def test_atnagent_publishes_device_memory_once_after_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    publications: list[tuple[int, int]] = []
+
+    class CapacityChannel:
+        def captures_complete(self) -> bool:
+            return True
+
+        def publish_device_memory(self, total_bytes: int, free_bytes: int) -> None:
+            publications.append((total_bytes, free_bytes))
+
+    agent = object.__new__(AtnAgent)
+    agent.capacity_channel = CapacityChannel()
+    agent.capacity_memory_published = False
+    agent.participant_report = None
+    agent.fabric_phase = None
+    agent.cuda_device = 3
+    monkeypatch.setattr(xpool.runtime.agent.Agent, "poll_fabric_health", lambda self: None)
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (40, 100))
+
+    agent.poll_fabric_health()
+    agent.poll_fabric_health()
+
+    assert publications == [(100, 40)]

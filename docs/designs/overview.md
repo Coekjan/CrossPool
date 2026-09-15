@@ -55,9 +55,12 @@ not initialize CUDA or join NVSHMEM. Fabric UID creation is its only
 business-level native operation.
 
 Each serving Instance rank runs inside SGLang. It owns request scheduling,
-attention, KV cache, outer CUDA Graph selection, output processing, and one
-rank-local Transport attachment. The Instance invokes the sole tensor API,
-`xpool.ops.ffn_shim`.
+attention, logical KV-cache and prefix-cache semantics, outer CUDA Graph
+selection, output processing, and one rank-local Transport attachment.
+CrossPool supplies stable elastic physical backing and coordinates capacity
+across co-located Instances as described in
+[Elastic KV-cache Pooling](elastic-kv-cache.md). The Instance invokes the sole
+tensor API, `xpool.ops.ffn_shim`.
 
 Each AtnAgent owns one configured CUDA device, rank-local CUDA IPC Transport
 arenas, and one Fabric PE. It stages Instance input into Fabric, submits layer
@@ -82,15 +85,16 @@ functions rather than Torch operators.
 
 The native binding tree follows ownership. The module root contains only ABI
 identity, runtime role, and initialization. Shared FFN semantics live under
-`xpool.native.ffn`; Debug options, Transport, Fabric, FfnAgent, and each
-Devkit Observer own their values and lifecycle in their corresponding
-submodules. Values are not re-exported at the root, and generic `types`,
-`common`, or `protocol` buckets are not part of the interface.
+`xpool.native.ffn`; KV capacity channels live under `xpool.native.kv`; Debug
+options, Transport, Fabric, FfnAgent, and each Devkit Observer own their values
+and lifecycle in their corresponding submodules. Values are not re-exported at
+the root, and generic `types`, `common`, or `protocol` buckets are not part of
+the interface.
 
 The C++ namespace tree mirrors domain ownership without introducing an
 `xpool::native` namespace. ABI identity belongs to `xpool::abi`, shared FFN
 semantics to `xpool::ffn`, concrete lifecycle to `xpool::transport`,
-`xpool::fabric`, and `xpool::ffnagent`, Observer evidence to
+`xpool::fabric`, `xpool::ffnagent`, and `xpool::kv`, Observer evidence to
 `xpool::devkit::<observer>`, and typed Hook Points to `xpool::hooks`.
 Generic Host-side CUDA Graph mechanisms belong to `xpool::utils::graph`.
 
@@ -144,6 +148,7 @@ include grouping and comment layout.
 
 The current implementation contains real Dense and MoE FFN execution,
 true-TP weight ownership, Device-resident Transport and Fabric progress,
-per-Lane GraphExec ownership, static placement, memory admission, and SGLang
-serving integration. It contains no alternate debug execution, request-time
-fallback, compatibility alias, or mixed-ABI path.
+per-Lane GraphExec ownership, static placement, memory admission, elastic
+attention-side KV backing, and SGLang serving integration. It contains no
+alternate debug execution, request-time fallback, compatibility alias, or
+mixed-ABI path.

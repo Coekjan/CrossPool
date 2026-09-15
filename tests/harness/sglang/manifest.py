@@ -21,7 +21,6 @@ class E2eModel(BaseModel):
     alias: str = Field(min_length=1)
     model_id: str = Field(min_length=1)
     architecture: str = Field(min_length=1)
-    max_total_tokens: int = Field(gt=0)
 
 
 class E2eModelPlacement(BaseModel):
@@ -48,6 +47,18 @@ class E2eModelPlacement(BaseModel):
         return self.atn_tp_size * self.atn_dp_size
 
 
+class E2eElasticKvWorkload(BaseModel):
+    """One cross-Instance prefix-cache reclamation workload."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prefix_model: str = Field(min_length=1)
+    prefix_tokens: int = Field(gt=0)
+    pressure_model: str = Field(min_length=1)
+    pressure_tokens: int = Field(gt=0)
+    atn_device_memory_utilization: float = Field(gt=0.0, lt=1.0)
+
+
 class E2eServingCase(BaseModel):
     """One independently supervised model-serving workload."""
 
@@ -57,11 +68,12 @@ class E2eServingCase(BaseModel):
     models: tuple[E2eModelPlacement, ...]
     ffnagent_count: int = Field(gt=0)
     executor_lane_count: int = Field(gt=0)
-    graph_modes: tuple[SglangGraphMode, ...]
+    graph_modes: tuple[SglangGraphMode, ...] = ()
     estimated_duration_seconds: float = Field(gt=0)
     timeout_seconds: float = Field(gt=0)
     transport_record_capacity: int = Field(gt=0)
     fabric_record_capacity: int = Field(gt=0)
+    elastic_kv: E2eElasticKvWorkload | None = None
 
     @model_validator(mode="after")
     def validate_case(self) -> Self:
@@ -75,8 +87,14 @@ class E2eServingCase(BaseModel):
         topologies = {(placement.atn_tp_size, placement.atn_dp_size) for placement in self.models}
         if len(topologies) != 1:
             raise ValueError("every E2E model must use the same attention topology")
-        if not self.graph_modes or len(self.graph_modes) != len(set(self.graph_modes)):
-            raise ValueError("E2E serving case graph_modes must be nonempty and unique")
+        if self.elastic_kv is not None:
+            if self.graph_modes:
+                raise ValueError("E2E elastic KV workload owns its graph mode")
+            workload_models = {self.elastic_kv.prefix_model, self.elastic_kv.pressure_model}
+            if len(workload_models) != 2 or not workload_models <= set(aliases):
+                raise ValueError("E2E elastic KV workload requires two distinct models from its serving case")
+        elif not self.graph_modes or len(self.graph_modes) != len(set(self.graph_modes)):
+            raise ValueError("ordinary E2E serving case graph_modes must be nonempty and unique")
         return self
 
     @property

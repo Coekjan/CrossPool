@@ -2,32 +2,60 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
+import torch
 from sglang.srt.managers.scheduler import Scheduler
+from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 from sglang.srt.model_executor.model_runner import ModelRunner
 
 import xpool.config
-import xpool.integrations.sglang.plugin
+import xpool.integrations.sglang.hooks.lifecycle
 from tests.harness.support.config import TEST_MODEL_ID, reset_global_config
+from tests.harness.support.kv import kv_capacity_profile
 from tests.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner
 from tests.harness.support.sglang.plugin import (
     FailingAfterLoadAdapter,
     FakeAdapter,
+    binding,
     configure_xpool_model,
     ffn_profile,
     reset_plugin_required_hook_targets,
 )
 from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.config import MissingRequiredConfig
+from xpool.fabric import FabricGenerationId
+from xpool.integrations.sglang.adapter import SglangInstanceRankRuntime
+from xpool.integrations.sglang.kv.allocator import ElasticTokenToKVPoolAllocator
+from xpool.integrations.sglang.kv.pool import ElasticMHATokenToKVPool
+from xpool.integrations.sglang.kv.vmm import KvVmmBacking
 from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
 from xpool.native import RuntimeRole
 from xpool.runtime.transport import InstanceRankTransportProfile
-from xpool.service.wire import ServingListener
+from xpool.service.wire import KvCapacityChannelRef, ServingListener
 
 pytestmark = pytest.mark.usefixtures(
     reset_global_config.__name__, reset_plugin_required_hook_targets.__name__, published_sglang_config.__name__
 )
+
+
+class FakeElasticPool(ElasticMHATokenToKVPool):
+    """Concrete elastic-pool witness for lifecycle tests."""
+
+    def __init__(self) -> None:
+        self.backing = cast(KvVmmBacking, SimpleNamespace(partition_profile=kv_capacity_profile))
+
+    def close(self) -> None:
+        """Release no resources because this witness allocates none."""
+
+
+def install_fake_elastic_kv(runner: FakeModelRunner) -> None:
+    """Install concrete replacement witnesses without allocating KV storage."""
+
+    runner.token_to_kv_pool = FakeElasticPool()
+    runner.token_to_kv_pool_allocator = ElasticTokenToKVPoolAllocator.__new__(ElasticTokenToKVPoolAllocator)
+    runner.req_to_token_pool = ReqToTokenPool.__new__(ReqToTokenPool)
 
 
 def test_model_runner_hook_delegates_to_matching_adapters(
@@ -44,7 +72,7 @@ def test_model_runner_hook_delegates_to_matching_adapters(
         events.append("original")
         return "loaded"
 
-    result = xpool.integrations.sglang.plugin.around_model_runner_load_model(
+    result = xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
         (adapter,), original, runner.as_model_runner()
     )
 
@@ -129,7 +157,7 @@ path = "{unrelated_model_path}"
         events.append("original")
         return "loaded"
 
-    result = xpool.integrations.sglang.plugin.around_model_runner_load_model(
+    result = xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
         (adapter,), original, runner.as_model_runner()
     )
 
@@ -150,24 +178,33 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     listeners: list[ServingListener] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
+    install_fake_elastic_kv(runner)
     configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
     monkeypatch.setattr(
-        xpool.integrations.sglang.plugin.bootstrap,
+        xpool.integrations.sglang.hooks.lifecycle.bootstrap,
         "init",
         lambda cuda_device, role: events.append(f"init:{cuda_device}:{int(role)}"),
     )
     monkeypatch.setattr(
-        xpool.integrations.sglang.plugin.devkit,
+        xpool.integrations.sglang.hooks.lifecycle.devkit,
         "install",
         lambda package=None: events.append("devkit"),
     )
+    generation = FabricGenerationId(high=1, low=2)
+
+    class FakeClient:
+        def kv_capacity_channel(self, candidate: FabricGenerationId) -> KvCapacityChannelRef:
+            assert candidate == generation
+            events.append("discover_capacity")
+            return KvCapacityChannelRef(generation=generation, name="/xpool-kv-test")
 
     class FakeInstanceRuntime:
         fabric_plan = None
+        client = FakeClient()
 
         def wait_for_fabric_executable(self) -> object:
             events.append("wait_for_fabric_executable")
-            return object()
+            return SimpleNamespace(generation=generation)
 
         def attach_arena_from_daemon(self) -> None:
             events.append("attach_transport")
@@ -182,30 +219,40 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         def wait_for_ready(self) -> None:
             events.append("wait_for_ready")
 
+        def close(self) -> None:
+            events.append("close_instance")
+
     def fake_instance_init(
         *,
         instance_id: str,
         rank: int,
         transport: InstanceRankTransportProfile,
         ffn_profile: object,
+        kv_capacity: object,
     ) -> FakeInstanceRuntime:
         registrations.append((instance_id, rank, transport.payload_row_capacity))
         profiles.append(ffn_profile)
+        assert kv_capacity == kv_capacity_profile()
         installs.append((instance_id, rank))
         events.append("start_instance")
         return FakeInstanceRuntime()
 
-    monkeypatch.setattr(xpool.integrations.sglang.plugin.InstanceRankRuntime, "start", fake_instance_init)
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.InstanceRankRuntime, "start", fake_instance_init)
+    monkeypatch.setattr(
+        xpool.integrations.sglang.hooks.lifecycle.CapacityReconciler,
+        "attach",
+        lambda **kwargs: events.append("attach_capacity") or SimpleNamespace(close=lambda: None),
+    )
     profile = ffn_profile()
     monkeypatch.setattr(
-        xpool.integrations.sglang.plugin, "derive_instance_ffn_profile", lambda model_runner, binding: profile
+        xpool.integrations.sglang.hooks.lifecycle, "derive_instance_ffn_profile", lambda model_runner, binding: profile
     )
 
     def original(model_runner: ModelRunner) -> str:
         events.append("original")
         return "loaded"
 
-    result = xpool.integrations.sglang.plugin.around_model_runner_load_model(
+    result = xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
         (adapter,), original, runner.as_model_runner()
     )
     assert events == [
@@ -218,12 +265,14 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         "validate_after_load",
     ]
 
-    pool_result = xpool.integrations.sglang.plugin.after_model_runner_alloc_memory_pool(None, runner.as_model_runner())
+    pool_result = xpool.integrations.sglang.hooks.lifecycle.after_model_runner_alloc_memory_pool(
+        None, runner.as_model_runner()
+    )
     scheduler = Scheduler.__new__(Scheduler)
     scheduler.tp_worker = SimpleNamespace(model_runner=runner.as_model_runner())
     scheduler.server_args = runner.server_args
     init_info = {"status": "ready"}
-    initialize_result = xpool.integrations.sglang.plugin.after_scheduler_get_init_info(init_info, scheduler)
+    initialize_result = xpool.integrations.sglang.hooks.lifecycle.after_scheduler_get_init_info(init_info, scheduler)
 
     assert result == "loaded"
     assert pool_result is None
@@ -238,6 +287,8 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         "validate_after_load",
         "start_instance",
         "wait_for_fabric_executable",
+        "discover_capacity",
+        "attach_capacity",
         "attach_transport",
         "start_failure_monitor",
         "publish_initialized",
@@ -247,6 +298,34 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     assert installs == [(TEST_MODEL_ID, 0)]
     assert profiles == [profile]
     assert listeners == [ServingListener(host=runner.server_args.host, port=runner.server_args.port)]
+
+
+def test_scheduler_teardown_releases_xpool_resources_even_when_upstream_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    model_runner = SimpleNamespace(device=torch.device("cuda", 0), xpool_runtime=None)
+    runtime = SglangInstanceRankRuntime(binding=binding())
+    model_runner.xpool_runtime = runtime
+    scheduler = SimpleNamespace(tp_worker=SimpleNamespace(model_runner=model_runner))
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: events.append("synchronize"))
+    monkeypatch.setattr(
+        SglangInstanceRankRuntime,
+        "detach",
+        lambda self, runner: events.append("detach"),
+    )
+
+    def fail_release(candidate: object) -> None:
+        events.append("release")
+        raise RuntimeError("release failed")
+
+    with pytest.raises(RuntimeError, match="release failed"):
+        xpool.integrations.sglang.hooks.lifecycle.around_scheduler_release_host_resources(
+            fail_release,
+            cast(Scheduler, scheduler),
+        )
+
+    assert events == ["release", "synchronize", "detach"]
 
 
 def test_model_runner_hook_validates_before_daemon_registration(
@@ -263,7 +342,9 @@ def test_model_runner_hook_validates_before_daemon_registration(
         return "loaded"
 
     with pytest.raises(RuntimeError, match="validation failed"):
-        xpool.integrations.sglang.plugin.around_model_runner_load_model((adapter,), original, runner.as_model_runner())
+        xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
+            (adapter,), original, runner.as_model_runner()
+        )
 
     assert events == ["validate_before_load", "bind_runtime", "original", "validate_after_load"]
     assert runner.xpool_runtime is None
@@ -276,25 +357,30 @@ def test_model_runner_hook_clears_binding_when_instance_start_fails(
     events: list[str] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
+    install_fake_elastic_kv(runner)
     configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
 
     def fail_instance_init(*args: object, **kwargs: object) -> None:
         events.append("start_instance")
         raise RuntimeError("install failed")
 
-    monkeypatch.setattr(xpool.integrations.sglang.plugin.InstanceRankRuntime, "start", fail_instance_init)
-    monkeypatch.setattr(xpool.integrations.sglang.plugin, "derive_instance_ffn_profile", lambda *args: ffn_profile())
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.InstanceRankRuntime, "start", fail_instance_init)
+    monkeypatch.setattr(
+        xpool.integrations.sglang.hooks.lifecycle, "derive_instance_ffn_profile", lambda *args: ffn_profile()
+    )
 
     def original(model_runner: ModelRunner) -> str:
         events.append("original")
         return "loaded"
 
     assert (
-        xpool.integrations.sglang.plugin.around_model_runner_load_model((adapter,), original, runner.as_model_runner())
+        xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
+            (adapter,), original, runner.as_model_runner()
+        )
         == "loaded"
     )
     with pytest.raises(RuntimeError, match="install failed"):
-        xpool.integrations.sglang.plugin.after_model_runner_alloc_memory_pool(None, runner.as_model_runner())
+        xpool.integrations.sglang.hooks.lifecycle.after_model_runner_alloc_memory_pool(None, runner.as_model_runner())
 
     assert events == [
         "validate_before_load",
@@ -313,12 +399,21 @@ def test_model_runner_hook_cleans_up_when_post_executable_transport_attach_fails
     events: list[str] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
+    install_fake_elastic_kv(runner)
     configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
+    generation = FabricGenerationId(high=1, low=2)
+
+    class FakeClient:
+        def kv_capacity_channel(self, candidate: FabricGenerationId) -> KvCapacityChannelRef:
+            assert candidate == generation
+            return KvCapacityChannelRef(generation=generation, name="/xpool-kv-test")
 
     class FakeInstanceRuntime:
+        client = FakeClient()
+
         def wait_for_fabric_executable(self) -> object:
             events.append("wait_for_fabric_executable")
-            return object()
+            return SimpleNamespace(generation=generation)
 
         def attach_arena_from_daemon(self) -> None:
             events.append("attach_transport")
@@ -334,19 +429,30 @@ def test_model_runner_hook_cleans_up_when_post_executable_transport_attach_fails
         events.append("start_instance")
         return FakeInstanceRuntime()
 
-    monkeypatch.setattr(xpool.integrations.sglang.plugin.InstanceRankRuntime, "start", start_instance)
-    monkeypatch.setattr(xpool.integrations.sglang.plugin, "derive_instance_ffn_profile", lambda *args: ffn_profile())
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.InstanceRankRuntime, "start", start_instance)
+    monkeypatch.setattr(
+        xpool.integrations.sglang.hooks.lifecycle.CapacityReconciler,
+        "attach",
+        lambda **kwargs: (
+            events.append("attach_capacity") or SimpleNamespace(close=lambda: events.append("close_capacity"))
+        ),
+    )
+    monkeypatch.setattr(
+        xpool.integrations.sglang.hooks.lifecycle, "derive_instance_ffn_profile", lambda *args: ffn_profile()
+    )
 
-    xpool.integrations.sglang.plugin.around_model_runner_load_model(
+    xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
         (adapter,), lambda model_runner: None, runner.as_model_runner()
     )
     with pytest.raises(RuntimeError, match="attach failed"):
-        xpool.integrations.sglang.plugin.after_model_runner_alloc_memory_pool(None, runner.as_model_runner())
+        xpool.integrations.sglang.hooks.lifecycle.after_model_runner_alloc_memory_pool(None, runner.as_model_runner())
 
-    assert events[-4:] == [
+    assert events[-6:] == [
         "start_instance",
         "wait_for_fabric_executable",
+        "attach_capacity",
         "attach_transport",
+        "close_capacity",
         "close_instance",
     ]
     assert runner.xpool_runtime is None
@@ -361,12 +467,22 @@ def test_model_runner_hook_waits_for_executable_fabric(
     events: list[str] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
+    install_fake_elastic_kv(runner)
     configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
+    generation = FabricGenerationId(high=1, low=2)
+
+    class FakeClient:
+        def kv_capacity_channel(self, candidate: FabricGenerationId) -> KvCapacityChannelRef:
+            assert candidate == generation
+            events.append("discover_capacity")
+            return KvCapacityChannelRef(generation=generation, name="/xpool-kv-test")
 
     class FakeInstanceRuntime:
+        client = FakeClient()
+
         def wait_for_fabric_executable(self) -> object:
             events.append("wait_for_fabric_executable")
-            return object()
+            return SimpleNamespace(generation=generation)
 
         def attach_arena_from_daemon(self) -> None:
             events.append("attach_transport")
@@ -374,24 +490,38 @@ def test_model_runner_hook_waits_for_executable_fabric(
         def start_failure_monitor(self) -> None:
             events.append("start_failure_monitor")
 
+        def close(self) -> None:
+            events.append("close_instance")
+
     def fake_instance_init(*args: object, **kwargs: object) -> FakeInstanceRuntime:
         events.append("register_instance_profile")
         return FakeInstanceRuntime()
 
-    monkeypatch.setattr(xpool.integrations.sglang.plugin.InstanceRankRuntime, "start", fake_instance_init)
-    monkeypatch.setattr(xpool.integrations.sglang.plugin, "derive_instance_ffn_profile", lambda *args: ffn_profile())
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.InstanceRankRuntime, "start", fake_instance_init)
+    monkeypatch.setattr(
+        xpool.integrations.sglang.hooks.lifecycle.CapacityReconciler,
+        "attach",
+        lambda **kwargs: events.append("attach_capacity") or SimpleNamespace(close=lambda: None),
+    )
+    monkeypatch.setattr(
+        xpool.integrations.sglang.hooks.lifecycle, "derive_instance_ffn_profile", lambda *args: ffn_profile()
+    )
 
-    xpool.integrations.sglang.plugin.around_model_runner_load_model(
+    xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
         (adapter,), lambda model_runner: None, runner.as_model_runner()
     )
 
-    result = xpool.integrations.sglang.plugin.after_model_runner_alloc_memory_pool(None, runner.as_model_runner())
+    result = xpool.integrations.sglang.hooks.lifecycle.after_model_runner_alloc_memory_pool(
+        None, runner.as_model_runner()
+    )
 
     assert result is None
     assert runner.xpool_runtime is not None
-    assert events[-4:] == [
+    assert events[-6:] == [
         "register_instance_profile",
         "wait_for_fabric_executable",
+        "discover_capacity",
+        "attach_capacity",
         "attach_transport",
         "start_failure_monitor",
     ]
@@ -411,7 +541,9 @@ def test_model_runner_hook_rejects_configured_model_without_matching_adapter(
         return "loaded"
 
     with pytest.raises(RuntimeError, match="no xpool adapter"):
-        xpool.integrations.sglang.plugin.around_model_runner_load_model((adapter,), original, runner.as_model_runner())
+        xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
+            (adapter,), original, runner.as_model_runner()
+        )
 
     assert events == []
     assert runner.xpool_runtime is None
@@ -429,7 +561,9 @@ def test_model_runner_hook_rejects_model_path_missing_from_config(
         return "loaded"
 
     with pytest.raises(RuntimeError, match="no model entry"):
-        xpool.integrations.sglang.plugin.around_model_runner_load_model((adapter,), original, runner.as_model_runner())
+        xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
+            (adapter,), original, runner.as_model_runner()
+        )
 
 
 def test_model_runner_hook_requires_global_xpool_config(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -441,4 +575,6 @@ def test_model_runner_hook_requires_global_xpool_config(monkeypatch: pytest.Monk
         return "loaded"
 
     with pytest.raises(MissingRequiredConfig, match="global config"):
-        xpool.integrations.sglang.plugin.around_model_runner_load_model((adapter,), original, runner.as_model_runner())
+        xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
+            (adapter,), original, runner.as_model_runner()
+        )

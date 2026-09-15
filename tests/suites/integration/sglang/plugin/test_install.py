@@ -8,8 +8,9 @@ from sglang.srt.plugins.hook_registry import HookRegistry, HookType
 import tests.harness.support.sglang.plugin
 import xpool.integrations.sglang.plugin
 from tests.harness.support.config import reset_global_config
-from tests.harness.support.sglang.plugin import FakeAdapter, reset_plugin_required_hook_targets
-from xpool.integrations.sglang.adapter import SglangCudaPlacement, SglangHook
+from tests.harness.support.sglang.plugin import reset_plugin_required_hook_targets
+from xpool.integrations.sglang.adapter import SglangCudaPlacement
+from xpool.integrations.sglang.hooks.registry import SglangHook, discover_sglang_hooks
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, reset_plugin_required_hook_targets.__name__)
 
@@ -39,7 +40,15 @@ def test_sglang_cuda_placement_is_derived_inside_sglang_integration() -> None:
         SglangCudaPlacement.derive([0, 2, 3])
 
 
-def test_plugin_applies_adapter_owned_hooks_with_pinned_sglang_registry(
+def test_hook_discovery_collects_kv_lifecycle_and_model_hooks() -> None:
+    targets = {hook.target for hook in discover_sglang_hooks()}
+
+    assert "sglang.srt.mem_cache.memory_pool.MHATokenToKVPool" in targets
+    assert "sglang.srt.model_executor.model_runner.ModelRunner.load_model" in targets
+    assert "sglang.srt.models.qwen3.Qwen3MLP" in targets
+
+
+def test_plugin_applies_discovered_hooks_with_pinned_sglang_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     install_fake_hook(monkeypatch, "tests.harness.support.sglang.plugin.minimal_config")
@@ -63,23 +72,26 @@ def test_plugin_apply_hooks_guard_fails_closed_with_pinned_sglang_registry(
         HookRegistry.apply_hooks()
 
 
+def test_plugin_fails_closed_when_hook_discovery_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_discovery() -> tuple[SglangHook, ...]:
+        raise RuntimeError("discovery failed")
+
+    monkeypatch.setattr(
+        xpool.integrations.sglang.plugin,
+        "init_global_config",
+        tests.harness.support.sglang.plugin.minimal_config,
+    )
+    monkeypatch.setattr(
+        xpool.integrations.sglang.plugin,
+        "discover_sglang_hooks",
+        fail_discovery,
+    )
+
+    with pytest.raises(SystemExit, match="discovery failed"):
+        xpool.integrations.sglang.plugin.install()
+
+
 def install_fake_hook(monkeypatch: pytest.MonkeyPatch, target: str) -> None:
-    target_names = {
-        "MODEL_RUNNER_LOAD_MODEL": "hook_target_load",
-        "MODEL_RUNNER_ALLOC_MEMORY_POOL": "hook_target_alloc_memory_pool",
-        "SCHEDULER_GET_INIT_INFO": "hook_target_get_init_info",
-    }
-    for constant, name in target_names.items():
-        monkeypatch.setattr(
-            xpool.integrations.sglang.plugin,
-            constant,
-            f"tests.harness.support.sglang.plugin.{name}",
-        )
-        monkeypatch.setattr(
-            tests.harness.support.sglang.plugin,
-            name,
-            getattr(tests.harness.support.sglang.plugin, name),
-        )
     monkeypatch.setattr(
         tests.harness.support.sglang.plugin,
         "minimal_config",
@@ -90,16 +102,12 @@ def install_fake_hook(monkeypatch: pytest.MonkeyPatch, target: str) -> None:
     )
     monkeypatch.setattr(
         xpool.integrations.sglang.plugin,
-        "discover_sglang_model_adapters",
-        lambda package_name: (
-            FakeAdapter(
-                hooks=(
-                    SglangHook(
-                        target,
-                        lambda: "patched",
-                        HookType.REPLACE,
-                    ),
-                )
+        "discover_sglang_hooks",
+        lambda: (
+            SglangHook(
+                target,
+                lambda: "patched",
+                HookType.REPLACE,
             ),
         ),
     )

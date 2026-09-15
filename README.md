@@ -20,10 +20,11 @@ low-latency interconnect. CrossPool provides the control and data-plane
 infrastructure for this separation.
 
 CrossPool uses SGLang as its serving engine. SGLang continues to own request
-scheduling, attention, KV-cache management, CUDA graph selection, and output
-postprocessing. CrossPool supplies the model adapters, process lifecycle, rank-local
-transport, Fabric coordination, and graph-compatible tensor boundary used to
-connect the GPU roles.
+scheduling, attention, logical KV allocation and prefix-cache semantics, CUDA
+graph selection, and output postprocessing. CrossPool supplies elastic physical
+KV backing, capacity coordination, model adapters, process lifecycle,
+rank-local transport, Fabric coordination, and the graph-compatible tensor
+boundary used to connect the GPU roles.
 
 ## Highlights
 
@@ -36,6 +37,9 @@ connect the GPU roles.
 - **Graph-backed FFN execution:** FfnAgents retain only their planned
   tensor-parallel weight shards and execute model-defined FFN layers through
   independently replayable Executor Lane graphs.
+- **Elastic KV backing:** stable attention-side virtual addresses allow
+  physical KV capacity to move between co-located Instances while SGLang keeps
+  logical allocation and prefix-cache ownership.
 - **CUDA graph integration:** the adapter and shim test matrix exercises eager
   execution, Decode Full CUDA Graph replay, and Prefill Breakable CUDA Graph
   replay when attention data parallelism is one.
@@ -242,7 +246,8 @@ reference:
 | `atn.devices` / `ffn.devices` | Assigns attention-side and FFN-side CUDA devices. |
 | `scheduler.ffn_concurrency` | Sets the Executor Lane count, not a row or token budget. |
 | `scheduler.ffn_policy` | Selects `fifo` or `random` admission. |
-| `scheduler.atn_concurrency` | Reserved for future attention admission; currently has no runtime effect. |
+| `atn.device_memory_utilization` | Sets the maximum attention-device memory fraction used to freeze the Elastic KV Capacity Pool. |
+| `scheduler.atn_concurrency` | Reserved for future attention compute admission; currently has no runtime effect. |
 | `logging.level` / `logging.color` | Sets runtime log level and enables terminal-aware color on stderr. |
 | `ffn.loader.parallelism` | Sets the number of checkpoint readers per FfnAgent. |
 | `ffn.placement.parallelism` / `ffn.placement.timeout_seconds` | Sets solver workers and the whole-solve timeout in seconds. |

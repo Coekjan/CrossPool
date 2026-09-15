@@ -7,6 +7,7 @@ import pytest
 
 import xpool.service.daemon.control
 from tests.harness.support.config import reset_global_config
+from tests.harness.support.kv import kv_capacity_profile
 from tests.harness.support.service.daemon import (
     FakeMonotonicClock,
     activate_fabric_world,
@@ -319,6 +320,59 @@ def test_rank_independent_ffn_profile_mismatch_is_rejected_during_registration()
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert "ffn_profile disagrees" in response.json()["detail"]["message"]
+
+
+def test_kv_capacity_geometry_mismatch_is_rejected_during_registration() -> None:
+    config = XpoolConfig.from_mapping(
+        {
+            "atn": {"devices": [0, 1]},
+            "ffn": {"devices": [2]},
+            "models": [{"id": "m", "path": "/models/m"}],
+        }
+    )
+    app = create_app(config)
+    first = instance_registration(instance_id="m", rank=0, atn_tp_size=2)
+    second = instance_registration(instance_id="m", rank=1, atn_tp_size=2)
+    second["kv_capacity"] = kv_capacity_profile().model_copy(update={"row_bytes": 2048}).model_dump(mode="json")
+
+    assert request(app, "POST", "/instance/register", json=first).status_code == HTTPStatus.NO_CONTENT
+    response = request(app, "POST", "/instance/register", json=second)
+
+    assert response.status_code == HTTPStatus.CONFLICT
+    assert "kv capacity geometry disagrees" in response.json()["detail"]["message"]
+
+
+def test_kv_capacity_geometry_may_differ_between_dp_groups() -> None:
+    config = XpoolConfig.from_mapping(
+        {
+            "atn": {"devices": [0, 1]},
+            "ffn": {"devices": [2]},
+            "models": [{"id": "m", "path": "/models/m"}],
+        }
+    )
+    app = create_app(config)
+    first = instance_registration(instance_id="m", rank=0, atn_tp_size=1, atn_dp_size=2)
+    second = instance_registration(
+        instance_id="m",
+        rank=1,
+        atn_tp_rank=0,
+        atn_tp_size=1,
+        atn_dp_rank=1,
+        atn_dp_size=2,
+    )
+    second["kv_capacity"] = kv_capacity_profile().model_copy(update={"row_bytes": 2048}).model_dump(mode="json")
+
+    assert request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=0)).status_code == 204
+    assert request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=1)).status_code == 204
+    assert (
+        request(
+            app, "POST", "/ffnagent/register", json=ffnagent_registration(cuda_device=2, model_ids=("m",))
+        ).status_code
+        == 204
+    )
+    assert request(app, "POST", "/instance/register", json=first).status_code == 204
+    assert request(app, "POST", "/instance/register", json=second).status_code == 204
+    assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.OK
 
 
 def test_owner_invocation_and_control_failures_are_retained_independently() -> None:

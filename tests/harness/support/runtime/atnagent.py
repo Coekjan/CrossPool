@@ -9,6 +9,7 @@ import pytest
 import xpool.runtime.agent
 import xpool.runtime.atnagent
 from tests.harness.support.config import install_test_config
+from tests.harness.support.kv import kv_capacity_profile
 from xpool.config import XpoolConfig
 from xpool.native import ABI_VERSION
 from xpool.runtime.agent import (
@@ -127,6 +128,7 @@ def instance_registration_view(*, instance_id: str, rank: int) -> dict[str, obje
             "prefill_payload_row_capacity": 1,
             "group_sum_complete_admitted": False,
         },
+        "kv_capacity": kv_capacity_profile().model_dump(mode="json"),
     }
 
 

@@ -50,7 +50,12 @@ def case_parameter(case: E2eServingCase, graph_mode: SglangGraphMode) -> Paramet
 
 @pytest.mark.parametrize(
     ("case", "graph_mode"),
-    tuple(case_parameter(case, graph_mode) for case in MANIFEST.model_serving_cases for graph_mode in case.graph_modes),
+    tuple(
+        case_parameter(case, graph_mode)
+        for case in MANIFEST.model_serving_cases
+        if case.elastic_kv is None
+        for graph_mode in case.graph_modes
+    ),
 )
 def test_e2e_model_serving(
     case: E2eServingCase,

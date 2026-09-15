@@ -17,11 +17,13 @@ import xpool.native
 import xpool.service.daemon.app
 import xpool.service.daemon.control
 from tests.harness.support.config import TEST_MODEL_ID, install_test_config
+from tests.harness.support.kv import kv_capacity_profile
 from xpool.config import XpoolConfig
-from xpool.fabric import FabricParticipantPhase, FabricPlan
+from xpool.fabric import FabricGenerationId, FabricParticipantPhase, FabricPlan
 from xpool.mps import MpsProbeResult
 from xpool.native import ABI_VERSION
 from xpool.service.daemon.app import create_daemon
+from xpool.service.wire import KvCapacityChannelRef
 from xpool.utils.procs import ProcUniqId
 
 
@@ -84,6 +86,27 @@ def deterministic_daemon_dependencies(
         lambda: MpsProbeResult(True, 100, "test MPS controller is online"),
     )
     monkeypatch.setattr(xpool.native.fabric, "create_uid", lambda: "ab" * 128)
+
+    class FakeKvCapacityPolicy:
+        def __init__(self, generation: FabricGenerationId) -> None:
+            self.generation = generation
+            self.closed = False
+
+        @property
+        def channel_ref(self) -> KvCapacityChannelRef:
+            return KvCapacityChannelRef(generation=self.generation, name="/xpool-kv-test")
+
+        def step(self, registrations: object, fabric: object) -> None:
+            return
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(
+        xpool.service.daemon.control.KvCapacityPolicy,
+        "create",
+        staticmethod(lambda config, generation: FakeKvCapacityPolicy(generation)),
+    )
     return clock
 
 
@@ -128,6 +151,7 @@ def instance_registration(
             atn_dp_size=atn_dp_size,
         ),
         "ffn_profile": ffn_profile(),
+        "kv_capacity": kv_capacity_profile().model_dump(mode="json"),
     }
 
 

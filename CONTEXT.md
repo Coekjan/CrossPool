@@ -45,6 +45,69 @@ public HTTP health check has succeeded for the current listener snapshot. It
 is not continuous availability monitoring or a Fabric lifecycle phase.
 _Avoid_: System ready, Fabric executable, serving monitor
 
+**Elastic KV-cache Pooling**:
+Attention-side capacity management that lends and reclaims physical KV memory
+among co-located Instance Ranks while preserving Instance isolation and
+SGLang's logical cache semantics. Reclamation may evict reclaimable cached
+suffixes before releasing their physical backing.
+_Avoid_: Shared KV cache, KV content sharing
+
+**KV Capacity Pool**:
+The physical-memory capacity available for KV mappings across the Instance
+Ranks colocated on one attention GPU.
+_Avoid_: Global KV cache, KV tensor pool
+
+**KV Capacity Channel**:
+The daemon-owned, Fabric-Generation-scoped host-local control surface that
+connects per-GPU KV Capacity Pools, logical KV Capacity Groups, and their
+rank-local partitions.
+_Avoid_: AtnAgent channel, TP-group channel, KV data channel
+
+**KV Capacity Group**:
+The Instance ranks for one `(instance_id, atn_dp_rank)` that share a logical KV
+capacity target across their tensor-parallel shards.
+_Avoid_: TP pool, KV allocation group
+
+**KV Capacity Target**:
+The group-wide number of physical KV page bundles that each local partition is
+currently authorized to back and must converge toward, distinct from the
+physical page bundles still backed.
+_Avoid_: Desired capacity, KV limit, KV budget bytes
+
+**KV Active Capacity**:
+The group-wide KV page-bundle prefix currently exposed to every logical
+allocator in a KV Capacity Group, after all of its local partitions have the
+required physical backing.
+_Avoid_: Applied target, mapped capacity, active requests
+
+**KV Capacity Command**:
+A distinct group capacity adjustment coupling its physical target with its
+currently authorized logical capacity.
+
+**KV Capacity Preparation**:
+A local partition's guarantee that a command's required physical prefix is
+backed and cannot be removed by an earlier adjustment. It is distinct from
+completing reclamation of all backing beyond that prefix.
+
+**KV Page Bundle**:
+One rank-local compound VMM mapping unit covering the same KV page index across
+every local attention layer and K/V buffer. Its byte size is derived from
+immutable local geometry, and the whole bundle is mapped or unmapped as one
+contiguous range.
+_Avoid_: CUDA page, KV block
+
+**KV VMM Backing**:
+The Instance-Rank-local stable virtual storage, strided per-layer Tensor views,
+and physical backing for one KV pool, distinct from the device-wide KV Capacity
+Pool and SGLang's logical KV allocator.
+_Avoid_: VMM manager, elastic KV pool
+
+**KV Capacity Reconciliation**:
+The Instance-Rank-local convergence of a KV Capacity Target and KV Active
+Capacity to actual KV VMM Backing while preserving logical allocation and
+in-flight GPU access.
+_Avoid_: KV resize, capacity application, VMM policy
+
 **FFN Execution Installation**:
 The generation-scoped assembly of FFN computation and the resources needed to
 run it.

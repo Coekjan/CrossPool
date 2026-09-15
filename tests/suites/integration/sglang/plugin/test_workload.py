@@ -16,7 +16,7 @@ from tests.harness.support.sglang.plugin import binding
 from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.fabric import InstanceFfnLayerProfile
 from xpool.integrations.sglang.adapter import SglangInstanceRankBinding
-from xpool.integrations.sglang.plugin import derive_instance_ffn_profile
+from xpool.integrations.sglang.hooks.lifecycle import derive_instance_ffn_profile
 from xpool.integrations.sglang.shim import FfnShimModule
 from xpool.native.ffn import LayerKind
 

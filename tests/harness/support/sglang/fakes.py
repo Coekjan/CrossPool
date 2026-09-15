@@ -84,6 +84,9 @@ class FakeModelRunner:
     max_running_requests: int = 1
     model: nn.Module | None = None
     xpool_ffn_shim_count: int = 0
+    token_to_kv_pool: object | None = None
+    token_to_kv_pool_allocator: object | None = None
+    req_to_token_pool: object | None = None
     xpool_runtime: SglangInstanceRankRuntime | None = None
 
     def as_model_runner(self) -> ModelRunner:

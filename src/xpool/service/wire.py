@@ -164,6 +164,34 @@ class AtnAgentRegistration(ProcessRef):
     cuda_device: int = Field(ge=0, description="CUDA device index owned by the AtnAgent.")
 
 
+class KvCapacityPartitionProfile(WireModel):
+    """Immutable elastic KV geometry for one Instance rank partition."""
+
+    bundle_bytes: int = Field(ge=1, description="Physical bytes mapped or unmapped by one compound bundle.")
+    bundle_capacity: int = Field(ge=1, le=2**32 - 1, description="Reserved compound-bundle capacity.")
+    floor_bundles: int = Field(ge=1, le=2**32 - 1, description="Minimum always-backed bundle prefix.")
+    token_capacity: int = Field(ge=1, description="Reserved engine-visible token capacity.")
+    mapping_granularity_bytes: int = Field(ge=1, description="CUDA VMM allocation granularity in bytes.")
+    row_bytes: int = Field(ge=1, description="Bytes occupied by one row of one KV component.")
+    tokens_per_row: int = Field(ge=1, description="Logical tokens represented by one KV row.")
+    token_page_size: int = Field(ge=1, description="Allocator token-page alignment.")
+
+    @model_validator(mode="after")
+    def validate_bundle_floor(self) -> KvCapacityPartitionProfile:
+        """Require the immutable floor to fit inside the reservation."""
+
+        if self.floor_bundles > self.bundle_capacity:
+            raise ValueError("KV floor bundles exceed bundle capacity")
+        return self
+
+
+class KvCapacityChannelRef(WireModel):
+    """Generation-scoped discovery reference for one native KV channel."""
+
+    generation: FabricGenerationId = Field(description="Fabric generation owning the channel.")
+    name: str = Field(min_length=1, description="Opaque POSIX shared-memory channel name.")
+
+
 class FfnAgentRegistration(ProcessRef):
     """FfnAgent registration payload and list-entry view."""
 
@@ -210,6 +238,9 @@ class InstanceRankRegistration(InstanceRankRef):
     )
     ffn_profile: InstanceFfnProfile = Field(
         description="Resolved rank-independent FFN profile agreed by every instance rank.",
+    )
+    kv_capacity: KvCapacityPartitionProfile = Field(
+        description="Immutable elastic KV geometry agreed by every rank in one capacity group.",
     )
 
 

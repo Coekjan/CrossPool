@@ -12,6 +12,9 @@ system. They are current-state references, not task plans or design history.
   scheduling, and failure.
 - [FFN Execution](ffn-execution.md) defines model materialization, operators,
   GraphTemplates, and Executor Lanes.
+- [Elastic KV-cache Pooling](elastic-kv-cache.md) defines stable attention-side
+  KV storage, logical admission, physical capacity coordination, and
+  reclamation.
 - [Devkit](devkit.md) defines Hook Points and observer evidence.
 - [Qualification](qualification.md) defines readiness and acceptance evidence.
 

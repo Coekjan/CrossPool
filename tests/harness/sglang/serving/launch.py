@@ -24,7 +24,6 @@ class E2eLaunchModel:
     alias: str
     model_id: str
     architecture: str
-    max_total_tokens: int
     atn_tp_size: int
     atn_dp_size: int
 
@@ -59,7 +58,6 @@ def materialize(
             alias=model.alias,
             model_id=model.model_id,
             architecture=model.architecture,
-            max_total_tokens=model.max_total_tokens,
             atn_tp_size=placement.atn_tp_size,
             atn_dp_size=placement.atn_dp_size,
         )
@@ -87,7 +85,14 @@ def materialize(
         },
         "scheduler": scheduler,
         "vendor": {"model_base_uri": str(model_base_uri)},
-        "atn": {"devices": list(range(case.atnagent_count))},
+        "atn": {
+            "devices": list(range(case.atnagent_count)),
+            "device_memory_utilization": (
+                base_config.atn.device_memory_utilization
+                if case.elastic_kv is None
+                else case.elastic_kv.atn_device_memory_utilization
+            ),
+        },
         "ffn": {"devices": list(range(case.atnagent_count, case.required_gpu_count))},
         "models": [{"id": model.model_id} for model in launch_models],
     }

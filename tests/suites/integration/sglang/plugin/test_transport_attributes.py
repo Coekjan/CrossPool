@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-import xpool.integrations.sglang.plugin
+import xpool.integrations.sglang.hooks.lifecycle
 from tests.harness.support.sglang.plugin import binding, ffn_profile
 
 
@@ -47,7 +47,9 @@ def test_transport_attributes_project_ffn_profile_and_attention_topology(
         prefill_payload_row_capacity=prefill_payload_row_capacity,
     )
 
-    attributes = xpool.integrations.sglang.plugin.derive_instance_rank_transport_profile(model_binding, profile)
+    attributes = xpool.integrations.sglang.hooks.lifecycle.derive_instance_rank_transport_profile(
+        model_binding, profile
+    )
 
     assert attributes.model_dump() == {
         "hidden_size": 7168,

@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 from sglang.srt.model_executor.model_runner import ModelRunner
 
-from xpool.integrations.sglang.adapter import SglangHook, SglangShimAdapter
+from xpool.integrations.sglang.adapter import SglangShimAdapter
+from xpool.integrations.sglang.hooks.registry import SglangHook
 from xpool.integrations.sglang.models.deepseek_v2 import DeepseekV2ShimAdapter
 from xpool.integrations.sglang.models.qwen3 import Qwen3ShimAdapter
 from xpool.integrations.sglang.registry import (
@@ -40,7 +41,8 @@ from collections.abc import Sequence
 
 from sglang.srt.model_executor.model_runner import ModelRunner
 
-from xpool.integrations.sglang.adapter import SglangHook, SglangShimAdapter
+from xpool.integrations.sglang.adapter import SglangShimAdapter
+from xpool.integrations.sglang.hooks.registry import SglangHook
 from xpool.integrations.sglang.models.deepseek_v2 import DeepseekV2ShimAdapter
 
 

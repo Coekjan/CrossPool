@@ -5,6 +5,7 @@ from http import HTTPStatus
 import pytest
 
 from tests.harness.support.config import reset_global_config
+from tests.harness.support.kv import kv_capacity_profile
 from tests.harness.support.service.client import (
     arena_record,
     config,
@@ -15,6 +16,7 @@ from tests.harness.support.service.client import (
     transport_attributes,
 )
 from tests.harness.support.service.daemon import ffnagent_registration
+from xpool.fabric import FabricGenerationId
 from xpool.native import ABI_VERSION
 from xpool.service.client import ATNAGENT_TRANSPORT_LEASE_QUIESCE_TIMEOUT_S, XpoolClient
 from xpool.service.wire import (
@@ -61,6 +63,7 @@ def test_participant_registration_follows_config_check(
                 rank=0,
                 transport=transport_attributes(),
                 ffn_profile=ffn_profile(),
+                kv_capacity=kv_capacity_profile(),
             )
             client.register_instance(registration)
             expected_path = "/instance/register"
@@ -144,4 +147,28 @@ def test_instance_deregistration_preserves_rank_and_owner(monkeypatch: pytest.Mo
                 "json": {"pid": 12, "abi_version": ABI_VERSION},
             },
         ),
+    ]
+
+
+def test_kv_capacity_channel_uses_generation_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    generation = FabricGenerationId(high=1, low=2)
+    probe = install_scripted_http_client(
+        monkeypatch,
+        [
+            response(HTTPStatus.OK, None),
+            response(HTTPStatus.OK, {"generation": {"high": 1, "low": 2}, "name": "/xpool-kv-test"}),
+        ],
+    )
+
+    client = XpoolClient()
+    try:
+        channel = client.kv_capacity_channel(generation)
+    finally:
+        client.close()
+
+    assert channel.generation == generation
+    assert channel.name == "/xpool-kv-test"
+    assert probe.calls == [
+        ("GET", "/health", None),
+        ("GET", "/kv/capacity-channel/00000000000000010000000000000002", None),
     ]

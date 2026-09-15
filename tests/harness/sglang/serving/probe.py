@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from tests.harness.runner.network import TcpEndpointConflict
 from tests.harness.sglang.manifest import E2eManifest, E2eServingCase
 from tests.harness.sglang.serving.attempt import ProbeAttempt, ProbeRun
 from tests.harness.sglang.serving.graph import SglangGraphSettings
+from tests.harness.sglang.serving.server import SglangServerProcess, SglangServerResult
 from xpool.config import XpoolConfig
 
 PROBE_ATTEMPTS = 3
@@ -20,6 +22,7 @@ def run_probe(
     base_config: XpoolConfig,
     graph_settings: SglangGraphSettings,
     workdir: Path,
+    workload: Callable[[list[SglangServerProcess]], tuple[SglangServerResult, ...]] | None = None,
 ) -> ProbeRun:
     """Run one rematerialized attempt, retrying confirmed bind conflicts only."""
 
@@ -33,7 +36,7 @@ def run_probe(
             workdir / f"attempt-{attempt_number}",
         )
         try:
-            return attempt.run()
+            return attempt.run(workload)
         except TcpEndpointConflict as error:
             conflicts.append(error)
     summaries = []

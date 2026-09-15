@@ -7,7 +7,7 @@ level = "info"
 color = true
 
 [scheduler]
-# Reserved for future attention-side KV-pool admission.
+# Reserved for future attention compute admission.
 atn_concurrency = 1
 # Executor Lane count materialized for each Fabric generation.
 ffn_concurrency = 1
@@ -17,6 +17,7 @@ ffn_policy = "fifo"
 
 [atn]
 devices = [0]
+device_memory_utilization = 0.95
 
 [ffn]
 devices = [1]

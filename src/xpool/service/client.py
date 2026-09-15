@@ -12,7 +12,7 @@ import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from xpool.config import get_global_config
-from xpool.fabric import FabricPlan
+from xpool.fabric import FabricGenerationId, FabricPlan
 from xpool.service.errors import XpoolClientError, XpoolDaemonError
 from xpool.service.wire import (
     AtnAgentRegistration,
@@ -25,6 +25,7 @@ from xpool.service.wire import (
     HeartbeatResponse,
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
+    KvCapacityChannelRef,
     ProcessRef,
     ReadinessSnapshot,
     XpoolDaemonErrorDetail,
@@ -204,6 +205,12 @@ class XpoolClient:
 
         response = self.request("GET", "/fabric/plan")
         return self.decode_model(response, FabricPlan, "fabric plan")
+
+    def kv_capacity_channel(self, generation: FabricGenerationId) -> KvCapacityChannelRef:
+        """Return the native KV-capacity channel for one current generation."""
+
+        response = self.request("GET", f"/kv/capacity-channel/{quote(generation.format(), safe='')}")
+        return self.decode_model(response, KvCapacityChannelRef, "kv capacity channel")
 
     def request_fabric_quiesce(self, request: FabricQuiesceRequest) -> None:
         """Ask the daemon to stop admission for one retained generation."""

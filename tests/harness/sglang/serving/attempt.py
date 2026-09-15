@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from itertools import repeat
@@ -157,7 +158,10 @@ class ProbeAttempt:
         wait_for_system_readiness(launch, self.servers)
         return launch
 
-    def run(self) -> ProbeRun:
+    def run(
+        self,
+        workload: Callable[[list[SglangServerProcess]], tuple[SglangServerResult, ...]] | None = None,
+    ) -> ProbeRun:
         """Execute one attempt through process cleanup and endpoint release.
 
         Startup endpoint occupation is the only retryable outcome. Process
@@ -196,9 +200,12 @@ class ProbeAttempt:
 
             assert self.cluster is not None
             try:
-                request_barrier = Barrier(len(self.servers))
-                with ThreadPoolExecutor(max_workers=len(self.servers)) as executor:
-                    results = tuple(executor.map(SglangServerProcess.result, self.servers, repeat(request_barrier)))
+                if workload is None:
+                    request_barrier = Barrier(len(self.servers))
+                    with ThreadPoolExecutor(max_workers=len(self.servers)) as executor:
+                        results = tuple(executor.map(SglangServerProcess.result, self.servers, repeat(request_barrier)))
+                else:
+                    results = workload(self.servers)
             except BaseException as inference_error:
                 diagnostics = self.diagnostics()
                 try:

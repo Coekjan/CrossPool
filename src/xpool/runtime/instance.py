@@ -16,6 +16,7 @@ from xpool.service.client import XpoolClient, XpoolClientError, XpoolDaemonError
 from xpool.service.wire import (
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
+    KvCapacityPartitionProfile,
     ProcessRef,
     ServingListener,
 )
@@ -257,6 +258,7 @@ class InstanceRankRuntime:
         rank: int,
         transport: InstanceRankTransportProfile,
         ffn_profile: InstanceFfnProfile,
+        kv_capacity: KvCapacityPartitionProfile,
     ) -> InstanceRankRuntime:
         """Construct and transactionally start one runner-owned runtime.
 
@@ -265,6 +267,7 @@ class InstanceRankRuntime:
             rank: Rank-local SGLang process index within the instance.
             transport: Transport geometry declared by this rank.
             ffn_profile: Rank-independent FFN execution contract.
+            kv_capacity: Immutable elastic KV reservation geometry.
 
         Returns:
             Registered runtime with a running heartbeat worker. Transport
@@ -279,21 +282,28 @@ class InstanceRankRuntime:
 
         runtime = cls(instance_id=instance_id, rank=rank)
         try:
-            runtime.start_runtime(transport, ffn_profile)
+            runtime.start_runtime(transport, ffn_profile, kv_capacity)
         except Exception:
             runtime.close()
             raise
         return runtime
 
-    def start_runtime(self, transport: InstanceRankTransportProfile, ffn_profile: InstanceFfnProfile) -> None:
+    def start_runtime(
+        self,
+        transport: InstanceRankTransportProfile,
+        ffn_profile: InstanceFfnProfile,
+        kv_capacity: KvCapacityPartitionProfile,
+    ) -> None:
         """Register this instance rank and start its heartbeat transactionally."""
 
         if self.registration is not None:
             self.expect_transport(transport)
             if self.registration.ffn_profile != ffn_profile:
                 raise InstanceRankError("instance runtime is already registered with a different ffn_profile")
+            if self.registration.kv_capacity != kv_capacity:
+                raise InstanceRankError("instance runtime is already registered with different kv capacity geometry")
             return
-        self.register_runtime(transport, ffn_profile)
+        self.register_runtime(transport, ffn_profile, kv_capacity)
         try:
             self.start_heartbeat_worker()
         except Exception:
@@ -303,13 +313,20 @@ class InstanceRankRuntime:
                 logger.warning("failed to clean up instance registration: %s", cleanup_exc)
             raise
 
-    def register_runtime(self, transport: InstanceRankTransportProfile, ffn_profile: InstanceFfnProfile) -> None:
+    def register_runtime(
+        self,
+        transport: InstanceRankTransportProfile,
+        ffn_profile: InstanceFfnProfile,
+        kv_capacity: KvCapacityPartitionProfile,
+    ) -> None:
         """Register this instance rank with the daemon."""
 
         if self.registration is not None:
             self.expect_transport(transport)
             if self.registration.ffn_profile != ffn_profile:
                 raise InstanceRankError("instance runtime is already registered with a different ffn_profile")
+            if self.registration.kv_capacity != kv_capacity:
+                raise InstanceRankError("instance runtime is already registered with different kv capacity geometry")
             return
         registration = InstanceRankRegistration(
             instance_id=self.instance_id,
@@ -318,6 +335,7 @@ class InstanceRankRuntime:
             pid=self.process_ref.pid,
             transport=transport,
             ffn_profile=ffn_profile,
+            kv_capacity=kv_capacity,
         )
         self.client.register_instance(registration)
         self.registration = registration

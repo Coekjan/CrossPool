@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
@@ -14,21 +14,17 @@ from sglang.srt.distributed.parallel_state import GroupCoordinator
 from sglang.srt.layers.communicator import LayerScatterModes, ScatterMode
 from sglang.srt.layers.dp_attention import compute_dp_attention_world_info
 from sglang.srt.model_executor.model_runner import ModelRunner
-from sglang.srt.plugins.hook_registry import HookType
 from sglang.srt.runtime_context import get_device, get_parallel
 from torch import nn
 
 from xpool.config import get_global_config
+from xpool.integrations.sglang.hooks.registry import SglangHook
+from xpool.integrations.sglang.kv.capacity import CapacityReconciler
+from xpool.integrations.sglang.kv.pool import ElasticMHATokenToKVPool, ElasticMLATokenToKVPool
 from xpool.integrations.sglang.shim import FfnShimModule, iter_ffn_shims
 from xpool.integrations.sglang.topology import SglangAttentionTopology, SglangModelMetadata
 from xpool.native.ffn import LayerKind
 from xpool.runtime.instance import InstanceRankRuntime
-
-# A hook handler is either an SGLang around/before/after wrapper callable or a class
-# used as a REPLACE target. ``object`` (not ``Any``) is a deliberate, ANN401-safe escape
-# hatch: SGLang hook handlers are variadic and their argument types are enforced by the
-# SGLang HookRegistry contract, not by CrossPool's type checker.
-type SglangHookHandler = Callable[..., object] | type
 
 DECODER_FFN_WEIGHT_PATTERN = re.compile(r"^model\.layers\.\d+\.mlp(?:\.|$)")
 
@@ -77,25 +73,6 @@ class SglangCudaPlacement:
                 "xpool SGLang integration requires attention CUDA devices to match base_gpu_id + rank * gpu_id_step"
             )
         return cls(base_gpu_id=atn_cuda_devices[0], gpu_id_step=gpu_id_step)
-
-
-@dataclass(frozen=True, slots=True)
-class SglangHook:
-    """One SGLang hook owned by a model adapter.
-
-    ``kind`` reuses SGLang's own ``HookType`` rather than a CrossPool-defined enum: the
-    four hook kinds (BEFORE/AFTER/AROUND/REPLACE) are an SGLang contract, and CrossPool
-    only forwards them to ``HookRegistry.register``.
-
-    Attributes:
-        target: Fully qualified SGLang hook target path.
-        handler: Hook callable or replacement class registered with SGLang.
-        kind: SGLang hook kind controlling how ``handler`` is applied.
-    """
-
-    target: str
-    handler: SglangHookHandler
-    kind: HookType
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +281,7 @@ class SglangInstanceRankRuntime:
 
     binding: SglangInstanceRankBinding
     instance_rank: InstanceRankRuntime | None = None
+    kv_capacity: CapacityReconciler | None = None
 
     @classmethod
     def attach(cls, model_runner: ModelRunner, binding: SglangInstanceRankBinding) -> SglangInstanceRankRuntime:
@@ -327,6 +305,12 @@ class SglangInstanceRankRuntime:
     def detach(self, model_runner: ModelRunner) -> None:
         """Release live resources and clear this exact runner attachment."""
 
+        if self.kv_capacity is not None:
+            self.kv_capacity.close()
+            self.kv_capacity = None
+        pool = getattr(model_runner, "token_to_kv_pool", None)
+        if isinstance(pool, ElasticMHATokenToKVPool | ElasticMLATokenToKVPool):
+            pool.close()
         if self.instance_rank is not None:
             self.instance_rank.close()
             self.instance_rank = None

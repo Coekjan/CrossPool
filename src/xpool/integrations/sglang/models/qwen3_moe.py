@@ -13,11 +13,11 @@ from sglang.srt.plugins.hook_registry import HookType
 from transformers import Qwen3MoeConfig
 
 from xpool.integrations.sglang.adapter import (
-    SglangHook,
     SglangShimAdapter,
     filter_decoder_ffn_weights,
     model_runner_architectures,
 )
+from xpool.integrations.sglang.hooks.registry import SglangHook
 from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError
 from xpool.native.ffn import LayerKind
 

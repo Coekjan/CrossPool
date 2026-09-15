@@ -12,8 +12,10 @@ options.
 Each Observer records evidence from the real execution path and owns
 process-local storage. Observer state is never stored in a Transport or Fabric
 arena. Fabric and FFN Routing Observer allocations are included in FFN memory
-admission through their native sizing queries; Transport Observer storage
-remains outside FFN admission until attention-side memory planning exists.
+admission through their native sizing queries. Transport Observer storage is a
+normal attention-side allocation. The AtnAgent post-capture device-memory
+observation therefore already reflects its bytes; it needs no duplicate
+planning field.
 
 Every Observer owns its record and snapshot values and exposes reads through
 its own `xpool.native.devkit.<observer>` submodule. An enabled Observer that

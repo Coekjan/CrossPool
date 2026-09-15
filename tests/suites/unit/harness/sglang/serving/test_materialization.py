@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.harness.sglang.manifest import E2E_MANIFEST_PATH, E2eManifest
-from tests.harness.sglang.serving.graph import SglangGraphMode
+from tests.harness.sglang.serving.graph import SglangGraphMode, SglangGraphSettings
 from tests.harness.sglang.serving.launch import materialize
 from xpool.config import XpoolConfig
 
@@ -52,7 +52,7 @@ def test_materialize_writes_config_policy_and_sanitizes_environment(
         base_config=base_config,
         workdir=tmp_path / "attempt",
         daemon_port=19810,
-        graph_settings=case.graph_modes[0].settings(),
+        graph_settings=SglangGraphSettings(decode_backend="full", prefill_backend="breakable"),
     )
 
     with launch.config_path.open("rb") as config_file:
@@ -62,7 +62,11 @@ def test_materialize_writes_config_policy_and_sanitizes_environment(
         "ffn_concurrency": case.executor_lane_count,
         "ffn_policy": "fifo",
     }
-    assert raw["atn"] == {"devices": [0]}
+    assert case.elastic_kv is not None
+    assert raw["atn"] == {
+        "device_memory_utilization": case.elastic_kv.atn_device_memory_utilization,
+        "devices": [0],
+    }
     assert raw["ffn"] == {"devices": [1, 2]}
     assert raw["models"] == [{"id": model.model_id} for model in launch.models]
     assert raw["vendor"] == {"model_base_uri": str(base_config.vendor.model_base_uri)}

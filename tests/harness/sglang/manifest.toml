@@ -1,22 +1,18 @@
 [models.qwen3_14b]
 model_id = "Qwen/Qwen3-14B"
 architecture = "Qwen3ForCausalLM"
-max_total_tokens = 16384
 
 [models.deepseek_v2_lite]
 model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
 architecture = "DeepseekV2ForCausalLM"
-max_total_tokens = 16384
 
 [models.glm4_7_flash]
 model_id = "zai-org/GLM-4.7-Flash"
 architecture = "Glm4MoeLiteForCausalLM"
-max_total_tokens = 16384
 
 [models.qwen3_30b_a3b]
 model_id = "Qwen/Qwen3-30B-A3B"
 architecture = "Qwen3MoeForCausalLM"
-max_total_tokens = 16384
 
 [[model_serving_cases]]
 id = "deepseek-v2-lite-tp1-dp1-f1-e1"
@@ -70,11 +66,17 @@ models = [
 ]
 ffnagent_count = 2
 executor_lane_count = 2
-graph_modes = ["eager"]
 estimated_duration_seconds = 1200
 timeout_seconds = 3600
 transport_record_capacity = 32768
 fabric_record_capacity = 32768
+
+[model_serving_cases.elastic_kv]
+prefix_model = "qwen3_14b"
+prefix_tokens = 4500
+pressure_model = "deepseek_v2_lite"
+pressure_tokens = 15000
+atn_device_memory_utilization = 0.485
 
 [[model_serving_cases]]
 id = "glm4-7-flash-tp1-dp1-f2-e1"

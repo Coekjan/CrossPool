@@ -7,6 +7,7 @@ import pytest
 
 import xpool.service.client
 from tests.harness.support.config import reset_global_config
+from tests.harness.support.kv import kv_capacity_profile
 from tests.harness.support.service.client import (
     config,
     ffn_profile,
@@ -79,6 +80,7 @@ def test_client_rejects_registration_after_config_conflict(
                         rank=0,
                         transport=transport_attributes(),
                         ffn_profile=ffn_profile(),
+                        kv_capacity=kv_capacity_profile(),
                     )
                 )
     finally:

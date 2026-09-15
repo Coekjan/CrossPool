@@ -303,8 +303,6 @@ def server_command(
         "1",
         "--random-seed",
         "0",
-        "--max-total-tokens",
-        str(model.max_total_tokens),
         "--log-level",
         "error",
         "--log-level-http",

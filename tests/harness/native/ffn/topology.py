@@ -25,6 +25,7 @@ from tests.harness.native.ffn.protocol import (
 from tests.harness.native.mps import MpsServerObservation, query_mps_servers
 from tests.harness.runner.child import PythonChildProcess
 from tests.harness.runner.network import TcpEndpointReservation
+from tests.harness.support.kv import kv_capacity_profile
 from tests.harness.support.wait import remaining_seconds
 from xpool import bootstrap, devkit
 from xpool.config import XpoolConfig, init_global_config
@@ -270,6 +271,7 @@ def run_ffn_instance(connection: Connection, spec: FfnInstanceSpec) -> None:
         rank=spec.rank,
         transport=spec.transport,
         ffn_profile=spec.ffn_profile,
+        kv_capacity=kv_capacity_profile(),
     )
     try:
         plan = runtime.wait_for_fabric_executable()

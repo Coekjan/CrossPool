@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from tests.harness.sglang.manifest import (
     E2E_MANIFEST_PATH,
+    E2eElasticKvWorkload,
     E2eFfnInputMatrix,
     E2eManifest,
     E2eModelPlacement,
@@ -22,7 +23,8 @@ def test_manifest_loads_complete_serving_catalog() -> None:
 
     assert manifest.models
     assert len(manifest.model_serving_cases) == 7
-    assert sum(len(case.graph_modes) for case in manifest.model_serving_cases) == 18
+    assert sum(len(case.graph_modes) for case in manifest.model_serving_cases) == 17
+    assert all(not case.graph_modes for case in manifest.model_serving_cases if case.elastic_kv is not None)
     assert len(manifest.ffn_numerical_cases) == len(manifest.models) == 4
     assert tuple(case.id for case in manifest.ffn_topology_cases) == (
         "single-rank-delivery",
@@ -102,10 +104,29 @@ def test_serving_case_rejects_heterogeneous_attention_topology() -> None:
         )
 
 
+def test_serving_case_graph_modes_belong_to_the_matching_test_path() -> None:
+    models = (
+        E2eModelPlacement(model="first", atn_tp_size=1, atn_dp_size=1),
+        E2eModelPlacement(model="second", atn_tp_size=1, atn_dp_size=1),
+    )
+    workload = E2eElasticKvWorkload(
+        prefix_model="first",
+        prefix_tokens=1,
+        pressure_model="second",
+        pressure_tokens=1,
+        atn_device_memory_utilization=0.5,
+    )
+    with pytest.raises(ValidationError, match="ordinary E2E serving case graph_modes"):
+        serving_case(models=models, graph_modes=())
+    with pytest.raises(ValidationError, match="elastic KV workload owns its graph mode"):
+        serving_case(models=models, elastic_kv=workload)
+
+
 def serving_case(
     *,
     models: tuple[E2eModelPlacement, ...],
     graph_modes: tuple[SglangGraphMode, ...] = (SglangGraphMode.EAGER,),
+    elastic_kv: E2eElasticKvWorkload | None = None,
 ) -> E2eServingCase:
     return E2eServingCase(
         id="synthetic-case",
@@ -113,6 +134,7 @@ def serving_case(
         ffnagent_count=1,
         executor_lane_count=1,
         graph_modes=graph_modes,
+        elastic_kv=elastic_kv,
         estimated_duration_seconds=1,
         timeout_seconds=1,
         transport_record_capacity=1,

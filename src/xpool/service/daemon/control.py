@@ -28,6 +28,7 @@ from xpool.mps import MpsProbeResult, probe_mps_controller
 from xpool.native import ABI_VERSION
 from xpool.service.daemon.fabric import FabricController, FabricGenerationState, FabricMembership
 from xpool.service.daemon.ffn_placement import place_ffn_models
+from xpool.service.daemon.kv import KvCapacityPolicy
 from xpool.service.daemon.readiness import ControlPlaneProjection
 from xpool.service.daemon.registration import (
     HEARTBEAT_WARNING_WATERMARK_S,
@@ -59,6 +60,7 @@ from xpool.service.wire import (
     InstanceRankInitializedPublication,
     InstanceRankRef,
     InstanceRankRegistration,
+    KvCapacityChannelRef,
     ProcessRef,
     ReadinessSnapshot,
     ReadinessStatus,
@@ -127,6 +129,7 @@ class ControlPlane:
         self.registrations = RegistrationBook()
         self.transport_broker = TransportBroker()
         self.fabric_controller = FabricController()
+        self.kv_capacity_policy: KvCapacityPolicy | None = None
         self.serving_startup = ServingStartupState()
         self.membership_revision = 0
         self.warning_cache_at = float("-inf")
@@ -273,6 +276,10 @@ class ControlPlane:
         any_alive = any(owner.is_alive() for owner in owners)
         with self.lock:
             if self.fabric_controller.generation is fabric and not any_alive:
+                policy = self.kv_capacity_policy
+                if policy is not None:
+                    policy.close()
+                    self.kv_capacity_policy = None
                 self.fabric_controller.generation = None
                 self.serving_startup = ServingStartupState()
 
@@ -489,6 +496,8 @@ class ControlPlane:
                     raise XpoolDaemonError("conflict", "instance transport attributes disagree across ranks")
                 if peer.ffn_profile != registration.ffn_profile:
                     raise XpoolDaemonError("conflict", "FFN ffn_profile disagrees across instance ranks")
+                if peer.transport.atn_dp_rank == transport.atn_dp_rank and peer.kv_capacity != registration.kv_capacity:
+                    raise XpoolDaemonError("conflict", "kv capacity geometry disagrees across instance ranks")
             changed = self.registrations.instances.install_snapshot(
                 registration,
                 existing,
@@ -586,12 +595,15 @@ class ControlPlane:
                 model_plans=model_plans,
                 instance_plans=membership.instance_plans,
             )
+            policy = KvCapacityPolicy.create(config, plan.generation)
             # Commit: install only if no generation appeared and the captured
             # membership revision still describes the authoritative registration set.
             with self.lock:
                 if self.fabric_controller.generation is not None:
+                    policy.close()
                     return self.fabric_controller.generation.plan
                 if self.membership_revision != membership.revision:
+                    policy.close()
                     return None
                 installed_plan = self.fabric_controller.install(
                     FabricGenerationState(
@@ -605,6 +617,7 @@ class ControlPlane:
                         instance_owners=dict(membership.instance_owners),
                     )
                 )
+                self.kv_capacity_policy = policy
                 self.serving_startup = ServingStartupState(generation=installed_plan.generation)
             logger.info(
                 "fabric plan installed generation=%s model_count=%s pe_count=%s elapsed=%.3fs",
@@ -620,6 +633,41 @@ class ControlPlane:
 
         with self.lock:
             return self.fabric_controller.require_plan()
+
+    def kv_capacity_channel(self, generation: FabricGenerationId) -> KvCapacityChannelRef:
+        """Return the capacity channel for the retained Fabric generation."""
+
+        with self.lock:
+            fabric = self.fabric_controller.generation
+            policy = self.kv_capacity_policy
+            if fabric is None or policy is None or fabric.plan.generation != generation:
+                raise XpoolDaemonError("not_found", "kv capacity channel generation is not retained")
+            return policy.channel_ref
+
+    def step_kv_capacity(self) -> None:
+        """Advance one Generation-scoped KV policy transition."""
+
+        with self.lock:
+            fabric = self.fabric_controller.generation
+            policy = self.kv_capacity_policy
+            if fabric is None or policy is None:
+                return
+            if fabric.phase is not FabricGenerationPhase.EXECUTABLE:
+                return
+            try:
+                policy.step(self.registrations, fabric)
+            except Exception as error:
+                fabric.record_control_failure(f"kv capacity policy failed: {error}")
+                self.fabric_controller.abort(now=monotonic())
+                raise
+
+    def close(self) -> None:
+        """Release daemon-owned Generation resources during lifespan shutdown."""
+
+        with self.lock:
+            if self.kv_capacity_policy is not None:
+                self.kv_capacity_policy.close()
+                self.kv_capacity_policy = None
 
     def request_fabric_quiesce(self, request: FabricQuiesceRequest) -> None:
         """Authenticate an Agent owner and stop generation admission."""

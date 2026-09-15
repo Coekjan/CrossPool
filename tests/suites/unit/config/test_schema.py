@@ -14,6 +14,7 @@ def test_example_config_defines_documented_topology() -> None:
     config = XpoolConfig.from_file(Path("configs/xpool.example.toml"))
 
     assert config.atn.devices == [0]
+    assert config.atn.device_memory_utilization == 0.95
     assert config.ffn.devices == [1]
     assert config.ffn.loader.parallelism == 4
     assert config.ffn.device_memory_extra_margin_bytes == 0

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from sglang.srt.environ import envs
 from sglang.srt.model_executor.cuda_graph_config import Backend
 from sglang.srt.runtime_context import (
     get_disagg,
@@ -62,7 +63,7 @@ SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (
         ),
     ),
     ServerArgRule("Attention Context Parallelism", lambda: get_parallel().attn_cp_size == 1),
-    ServerArgRule("Speculative Decoding", lambda: disabled_string_option(get_spec().speculative_algorithm)),
+    ServerArgRule("Speculative Decoding", lambda: get_spec().speculative_algorithm is None),
     ServerArgRule("LoRA", lambda: not get_lora().enable_lora and not get_lora().lora_paths),
     ServerArgRule("Quantization", lambda: get_model().quantization is None),
     ServerArgRule("Expert Parallelism", lambda: get_parallel().ep_size == 1),
@@ -70,7 +71,7 @@ SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (
     ServerArgRule("MoE A2A Backend", lambda: get_exec().moe.moe_a2a_backend == "none"),
     ServerArgRule(
         "Speculative MoE A2A Backend",
-        lambda: disabled_string_option(get_spec().speculative_moe_a2a_backend),
+        lambda: get_spec().speculative_moe_a2a_backend in (None, "none"),
     ),
     ServerArgRule("DeepEP Waterfill", lambda: not get_exec().moe.enable_waterfill),
     ServerArgRule("Elastic Expert Parallelism", lambda: get_exec().moe.elastic_ep_backend is None),
@@ -102,25 +103,22 @@ SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (
     ServerArgRule("AITER All-Reduce Fusion", lambda: not get_exec().comm.enable_aiter_allreduce_fusion),
     ServerArgRule("SGLang CPU Offload", lambda: get_exec().offload.cpu_offload_gb == 0),
     ServerArgRule("SGLang Layer Offload", lambda: get_exec().offload.offload_group_size <= 0),
+    ServerArgRule("Startup Weight Loading", lambda: get_model().startup_weight_load_mode == "serial"),
+    ServerArgRule("Unified Memory KV Allocator", lambda: not get_memory().enable_unified_memory),
+    ServerArgRule("Page-Major KV Layout", lambda: not get_memory().enable_page_major_kv_layout),
+    ServerArgRule("HND KV Layout", lambda: not envs.SGLANG_USE_HND_KVCACHE.get()),
+    ServerArgRule("Disabled Radix Cache", lambda: not get_memory().disable_radix_cache),
+    ServerArgRule("LMCache", lambda: not get_memory().enable_lmcache),
+    ServerArgRule("FlexKV", lambda: not get_memory().enable_flexkv),
+    ServerArgRule("Custom Radix Cache Backend", lambda: get_memory().radix_cache_backend is None),
+    ServerArgRule("C++ Radix Tree", lambda: not envs.SGLANG_EXPERIMENTAL_CPP_RADIX_TREE.get()),
+    ServerArgRule(
+        "Unified Radix TreeCore Backend",
+        lambda: envs.SGLANG_UNIFIED_RADIX_TREE_CORE_BACKEND.get() == "python",
+    ),
     ServerArgRule("Hierarchical Cache", lambda: not get_memory().enable_hierarchical_cache),
     ServerArgRule("Decode KV Offload", lambda: not get_disagg().disaggregation_decode_enable_offload_kvcache),
     ServerArgRule("PD Disaggregation", lambda: get_disagg().disaggregation_mode == "null"),
     ServerArgRule("Diffusion LLM", lambda: get_exec().dllm.dllm_algorithm is None),
     ServerArgRule("PD Multiplexing", lambda: not get_disagg().enable_pdmux),
 )
-
-
-def disabled_string_option(value: str | None) -> bool:
-    """Return whether a nullable string-valued SGLang option is disabled.
-
-    Args:
-        value: Raw SGLang option value, usually ``None`` or a string sentinel.
-
-    Returns:
-        ``True`` when the option is absent or normalized to a disabled sentinel.
-    """
-
-    if value is None:
-        return True
-    normalized = str(value).strip().lower()
-    return normalized in {"", "none", "null", "no", "false"}

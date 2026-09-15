@@ -432,6 +432,14 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="CUDA devices that host attention execution and attention-side CrossPool agents.",
     ),
     ConfigSetting(
+        name="atn_device_memory_utilization",
+        path=("atn", "device_memory_utilization"),
+        parser="raw",
+        allowed_sources=(ConfigSource.CONFIG, ConfigSource.DEFAULT),
+        default=0.95,
+        description="Fraction of post-capture device memory available to the elastic KV capacity pool.",
+    ),
+    ConfigSetting(
         name="ffn_devices",
         path=("ffn", "devices"),
         parser="raw",
@@ -509,7 +517,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         allowed_sources=TOP_LEVEL_SOURCES,
         default=1,
         cli="--atn-concurrency",
-        description="Reserved attention-side concurrency setting for future KV-pool admission.",
+        description="Reserved attention-side concurrency setting for future attention compute admission.",
     ),
     ConfigSetting(
         name="scheduler_ffn_concurrency",
@@ -614,7 +622,7 @@ class SchedulerConfig(BaseModel):
 
     atn_concurrency: int = Field(
         ge=1,
-        description="Reserved attention-side concurrency setting for future KV-pool admission.",
+        description="Reserved attention-side concurrency setting for future attention compute admission.",
     )
     ffn_concurrency: int = Field(
         ge=1,
@@ -681,13 +689,19 @@ def validate_device_sequence(devices: list[int]) -> list[int]:
 
 
 class AtnConfig(BaseModel):
-    """ATN-owned device assignment."""
+    """ATN-owned device assignment and memory policy."""
 
     model_config = ConfigDict(extra="forbid")
 
     devices: list[int] = Field(
         min_length=1,
         description="CUDA device indices that host attention execution and attention-side CrossPool agents.",
+    )
+    device_memory_utilization: float = Field(
+        default=0.95,
+        gt=0,
+        lt=1,
+        description="Fraction of post-capture device memory available to the elastic KV capacity pool.",
     )
 
     @field_validator("devices")
