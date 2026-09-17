@@ -127,6 +127,7 @@ def test_daemon_lease_quiesce_terminates_all_live_owners_concurrently(
 ) -> None:
     config = XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [

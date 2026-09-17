@@ -30,6 +30,7 @@ def test_example_config_defines_documented_topology() -> None:
 def test_derived_placements_follow_declared_order() -> None:
     config = XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [2, 4]},
             "ffn": {"devices": [3, 7, 10]},
             "models": [
@@ -47,10 +48,62 @@ def test_derived_placements_follow_declared_order() -> None:
     assert config.instance_by_id["m2"].instance_index == 1
 
 
+def test_latency_slo_uses_global_default_and_complete_model_override() -> None:
+    config = XpoolConfig.from_mapping(
+        {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
+            "models": [
+                {"id": "m1", "path": "/models/m1"},
+                {"id": "m2", "path": "/models/m2", "slo": {"ttft_ms": 800, "tbt_ms": 40}},
+            ],
+        }
+    )
+
+    assert config.models[0].slo is None
+    assert (config.scheduler.slo.ttft_ms, config.scheduler.slo.tbt_ms) == (1000, 50)
+    assert config.models[1].slo is not None
+    assert (config.models[1].slo.ttft_ms, config.models[1].slo.tbt_ms) == (800, 40)
+
+
+@pytest.mark.parametrize(
+    "slo",
+    [
+        {"ttft_ms": 1000},
+        {"ttft_ms": 0, "tbt_ms": 50},
+        {"ttft_ms": 1000, "tbt_ms": float("inf")},
+        {"ttft_ms": 1000, "tbt_ms": 50, "unknown": 1},
+    ],
+)
+def test_latency_slo_rejects_incomplete_nonpositive_nonfinite_and_extra_fields(slo: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        XpoolConfig.from_mapping(
+            {
+                "scheduler": {"slo": slo},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
+                "models": [{"id": "m", "path": "/models/m"}],
+            }
+        )
+
+
+def test_scheduler_latency_slo_is_required() -> None:
+    with pytest.raises(MissingRequiredConfig, match="scheduler_slo"):
+        XpoolConfig.from_mapping(
+            {
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1]},
+                "models": [{"id": "m", "path": "/models/m"}],
+            }
+        )
+
+
 def test_config_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
@@ -62,6 +115,7 @@ def test_config_rejects_unknown_fields() -> None:
 def test_derived_placement_views_are_immutable() -> None:
     config = XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
@@ -93,6 +147,7 @@ def test_invalid_role_device_sequences_are_rejected(
     with pytest.raises(ValidationError, match=message):
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": atn_devices},
                 "ffn": {"devices": ffn_devices},
                 "models": [{"id": "m", "path": "/models/m"}],
@@ -104,6 +159,7 @@ def test_overlapping_role_devices_are_rejected() -> None:
     with pytest.raises(ValidationError, match="overlapping devices"):
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [0]},
                 "models": [{"id": "m", "path": "/models/m"}],
@@ -120,6 +176,7 @@ def test_missing_required_ffn_devices_fails() -> None:
     with pytest.raises(MissingRequiredConfig, match="ffn_devices"):
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "models": [{"id": "m", "path": "/models/m"}],
             },

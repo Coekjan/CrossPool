@@ -40,7 +40,7 @@ from xpool.runtime.agent import AgentError
 from xpool.runtime.atnagent import AtnAgent
 from xpool.runtime.ffnagent import FfnAgent
 from xpool.service.client import XpoolClient, XpoolClientError
-from xpool.service.wire import FabricParticipantReport, KvCapacityChannelRef
+from xpool.service.wire import FabricParticipantReport, KvControlChannelRef
 
 pytestmark = pytest.mark.usefixtures(
     reset_global_config.__name__,
@@ -96,6 +96,7 @@ def test_agent_construction_initializes_role_and_devkit(
 ) -> None:
     config = XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
@@ -166,6 +167,7 @@ def test_cuda_device_selection_rejects_unknown_device() -> None:
 def test_participant_report_commits_only_after_daemon_acknowledgement(monkeypatch: pytest.MonkeyPatch) -> None:
     config = XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
@@ -210,6 +212,7 @@ def test_post_join_value_error_is_reported_as_control_failure(monkeypatch: pytes
 
     config = XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
@@ -253,6 +256,7 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
 
     config = XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
@@ -279,15 +283,15 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
         def report_fabric_participant(self, report: FabricParticipantReport) -> None:
             events.append(report.phase)
 
-        def kv_capacity_channel(self, generation: FabricGenerationId) -> KvCapacityChannelRef:
+        def kv_control_channel(self, generation: FabricGenerationId) -> KvControlChannelRef:
             events.append("capacity_channel")
-            return KvCapacityChannelRef(generation=generation, name="/xpool-kv-test")
+            return KvControlChannelRef(generation=generation, name="/xpool-kv-test")
 
     agent.client = cast(XpoolClient, FabricClient())
     monkeypatch.setattr(agent, "prepare_fabric_join", lambda: events.append("prepare") or True)
     monkeypatch.setattr(xpool.native.fabric, "join", lambda projection, pe: events.append("join"))
     monkeypatch.setattr(
-        xpool.native.kv.AtnAgentCapacityChannel,
+        xpool.native.kv.AtnAgentControlChannel,
         "attach",
         lambda name, pool_index, partition_indices: (
             events.append(("capacity_attach", name, pool_index, partition_indices)) or object()
@@ -323,7 +327,7 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
 def test_atnagent_publishes_device_memory_once_after_capture(monkeypatch: pytest.MonkeyPatch) -> None:
     publications: list[tuple[int, int]] = []
 
-    class CapacityChannel:
+    class ControlChannel:
         def captures_complete(self) -> bool:
             return True
 
@@ -331,7 +335,7 @@ def test_atnagent_publishes_device_memory_once_after_capture(monkeypatch: pytest
             publications.append((total_bytes, free_bytes))
 
     agent = object.__new__(AtnAgent)
-    agent.capacity_channel = CapacityChannel()
+    agent.control_channel = ControlChannel()
     agent.capacity_memory_published = False
     agent.participant_report = None
     agent.fabric_phase = None

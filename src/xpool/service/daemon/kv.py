@@ -3,32 +3,67 @@
 from __future__ import annotations
 
 import logging
-from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from time import perf_counter_ns
 
 import xpool.native
 from xpool.config import XpoolConfig, get_global_config
 from xpool.fabric import FabricGenerationId
 from xpool.service.daemon.fabric import FabricGenerationState
 from xpool.service.daemon.registration import InstanceRankId, InstanceRankRegistrationState, RegistrationBook
-from xpool.service.wire import KvCapacityChannelRef
+from xpool.service.wire import KvCapacityPartitionProfile, KvControlChannelRef
 
 __all__ = ["KvCapacityPolicy"]
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class CapacityOperation:
+    """One outstanding immutable group capacity operation."""
+
+    command: xpool.native.kv.KvCapacityCommand
+    start_bundles: int
+
+
+@dataclass(slots=True)
+class FundingAttempt:
+    """One borrower's serialized donor negotiation."""
+
+    borrower_index: int
+    evaluated_sequence: int
+    target_bundles: int
+    deadline_monotonic_ns: int
+    attempted_donors: set[int] = field(default_factory=set)
+    donor_index: int | None = None
+
+
 @dataclass(slots=True)
 class KvCapacityPolicy:
-    """Own one Generation's shared channel and initial capacity allocation."""
+    """Own one Generation's shared channel and elastic capacity accounting."""
 
     generation: FabricGenerationId
-    channel: xpool.native.kv.DaemonCapacityChannel
-    commands: list[xpool.native.kv.KvCapacityCommand | None]
-    pressure_sequences: list[int]
-    pressure_queue: deque[int]
-    priority_borrower_index: int | None = None
+    channel: xpool.native.kv.DaemonControlChannel
+    command_sequences: list[int] = field(init=False)
+    applied_sequences: list[int] = field(init=False)
+    active_bundles: list[int | None] = field(init=False)
+    operations: list[CapacityOperation | None] = field(init=False)
+    demands: list[xpool.native.kv.KvCapacityDemand | None] = field(init=False)
+    completed_grant_orders: list[int | None] = field(init=False)
+    next_grant_order: int = 0
+    service_ceilings: list[int | None] = field(init=False)
+    funding_attempt: FundingAttempt | None = None
     pool_capacity_bytes: tuple[int, ...] | None = None
+
+    def __post_init__(self) -> None:
+        slot_count = len(get_global_config().instances) * get_global_config().atn_world_size
+        self.command_sequences = [0] * slot_count
+        self.applied_sequences = [0] * slot_count
+        self.active_bundles = [None] * slot_count
+        self.operations = [None] * slot_count
+        self.demands = [None] * slot_count
+        self.completed_grant_orders = [None] * slot_count
+        self.service_ceilings = [None] * slot_count
 
     @classmethod
     def create(cls, config: XpoolConfig, generation: FabricGenerationId) -> KvCapacityPolicy:
@@ -37,21 +72,18 @@ class KvCapacityPolicy:
         slot_count = len(config.instances) * config.atn_world_size
         return cls(
             generation=generation,
-            channel=xpool.native.kv.DaemonCapacityChannel.create(
+            channel=xpool.native.kv.DaemonControlChannel.create(
                 pool_count=config.atn_world_size,
                 group_count=slot_count,
                 partition_count=slot_count,
             ),
-            commands=[None] * slot_count,
-            pressure_sequences=[0] * slot_count,
-            pressure_queue=deque(),
         )
 
     @property
-    def channel_ref(self) -> KvCapacityChannelRef:
+    def channel_ref(self) -> KvControlChannelRef:
         """Return the discovery value for this policy's native channel."""
 
-        return KvCapacityChannelRef(generation=self.generation, name=self.channel.name)
+        return KvControlChannelRef(generation=self.generation, name=self.channel.name)
 
     def partition(
         self,
@@ -66,14 +98,56 @@ class KvCapacityPolicy:
             raise RuntimeError(f"kv capacity policy lost registration for instance {instance_id} rank {rank}")
         return registration
 
+    def capacity_groups(self, fabric: FabricGenerationState) -> list[tuple[int, int, int]]:
+        """Return ``(group index, instance index, DP rank)`` in stable order."""
+
+        stride = get_global_config().atn_world_size
+        return [
+            (instance_index * stride + dp_rank, instance_index, dp_rank)
+            for instance_index, instance_plan in enumerate(fabric.plan.instance_plans)
+            for dp_rank in range(instance_plan.instance_rank_topology.atn_dp_size)
+        ]
+
+    def group_profiles(
+        self,
+        registrations: RegistrationBook,
+        fabric: FabricGenerationState,
+        instance_index: int,
+        dp_rank: int,
+    ) -> tuple[tuple[int, KvCapacityPartitionProfile], ...]:
+        """Return one Capacity Group's physical-pool profiles in TP-rank order."""
+
+        instance_plan = fabric.plan.instance_plans[instance_index]
+        topology = instance_plan.instance_rank_topology
+        start_rank = dp_rank * topology.atn_tp_size
+        return tuple(
+            (
+                worker_rank,
+                self.partition(registrations, instance_plan.instance_id, worker_rank).kv_capacity,
+            )
+            for worker_rank in range(start_rank, start_rank + topology.atn_tp_size)
+        )
+
+    def group_partition_indices(
+        self,
+        fabric: FabricGenerationState,
+        instance_index: int,
+        dp_rank: int,
+    ) -> tuple[int, ...]:
+        """Return one Capacity Group's partition slots in TP-rank order."""
+
+        topology = fabric.plan.instance_plans[instance_index].instance_rank_topology
+        row = instance_index * get_global_config().atn_world_size
+        return tuple(row + dp_rank * topology.atn_tp_size + tp_rank for tp_rank in range(topology.atn_tp_size))
+
     def freeze_pools(
         self,
         registrations: RegistrationBook,
         fabric: FabricGenerationState,
-        backing_reports: list[xpool.native.kv.KvCapacityBackingReport | None],
+        initial_backing: list[int | None],
         device_reports: list[xpool.native.kv.KvDeviceMemoryReport | None],
     ) -> None:
-        """Freeze each attention GPU's immutable post-capture physical pool."""
+        """Freeze physical pools, group floors, and immutable service ceilings."""
 
         config = get_global_config()
         pool_capacities: list[int] = []
@@ -85,11 +159,11 @@ class KvCapacityPolicy:
             floor_bytes = 0
             for instance_index, instance_plan in enumerate(fabric.plan.instance_plans):
                 partition_index = instance_index * config.atn_world_size + pool_index
-                backing_report = backing_reports[partition_index]
-                if backing_report is None:
+                backed_bundles = initial_backing[partition_index]
+                if backed_bundles is None:
                     raise RuntimeError("kv capacity pool freezing requires every partition backing report")
                 profile = self.partition(registrations, instance_plan.instance_id, pool_index).kv_capacity
-                already_mapped_bytes += profile.bundle_bytes * backing_report.backed_bundles
+                already_mapped_bytes += profile.bundle_bytes * backed_bundles
                 floor_bytes += profile.bundle_bytes * profile.floor_bundles
 
             non_kv_used_bytes = device_report.total_bytes - device_report.free_bytes - already_mapped_bytes
@@ -104,6 +178,20 @@ class KvCapacityPolicy:
             pool_capacities.append(physical_pool_bytes)
             pool_floor_bytes.append(floor_bytes)
         self.pool_capacity_bytes = tuple(pool_capacities)
+
+        for group_index, instance_index, dp_rank in self.capacity_groups(fabric):
+            profiles = self.group_profiles(registrations, fabric, instance_index, dp_rank)
+            floors = {profile.floor_bundles for _, profile in profiles}
+            backing = {
+                initial_backing[index] for index in self.group_partition_indices(fabric, instance_index, dp_rank)
+            }
+            if len(floors) != 1 or backing != floors:
+                raise RuntimeError("kv capacity group ranks did not publish one common configured floor")
+            self.active_bundles[group_index] = floors.pop()
+            ceiling = self.service_ceiling(registrations, fabric, instance_index, dp_rank)
+            self.service_ceilings[group_index] = ceiling
+            self.channel.publish_service_ceiling(group_index, ceiling)
+
         for device, capacity_bytes, floor_bytes in zip(
             config.atn.devices,
             pool_capacities,
@@ -125,23 +213,19 @@ class KvCapacityPolicy:
         instance_index: int,
         dp_rank: int,
     ) -> int:
-        """Return the common floor-first target for one TP capacity group."""
+        """Return the common floor-first target for one TP Capacity Group."""
 
         pool_capacities = self.pool_capacity_bytes
         if pool_capacities is None:
             raise RuntimeError("kv capacity pools are not frozen")
-        instance_plan = fabric.plan.instance_plans[instance_index]
-        topology = instance_plan.instance_rank_topology
         candidates: list[int] = []
-        for tp_rank in range(topology.atn_tp_size):
-            worker_rank = dp_rank * topology.atn_tp_size + tp_rank
+        for pool_index, profile in self.group_profiles(registrations, fabric, instance_index, dp_rank):
             local_profiles = tuple(
-                self.partition(registrations, plan.instance_id, worker_rank).kv_capacity
+                self.partition(registrations, plan.instance_id, pool_index).kv_capacity
                 for plan in fabric.plan.instance_plans
             )
-            profile = local_profiles[instance_index]
             floor_bytes = sum(candidate.bundle_bytes * candidate.floor_bundles for candidate in local_profiles)
-            incremental_share_bytes = (pool_capacities[worker_rank] - floor_bytes) // len(fabric.plan.instance_plans)
+            incremental_share_bytes = (pool_capacities[pool_index] - floor_bytes) // len(fabric.plan.instance_plans)
             candidates.append(
                 min(
                     profile.bundle_capacity,
@@ -150,16 +234,6 @@ class KvCapacityPolicy:
             )
         return min(candidates)
 
-    def capacity_groups(self, fabric: FabricGenerationState) -> list[tuple[int, int, int]]:
-        """Return ``(group index, instance index, DP rank)`` in stable order."""
-
-        stride = get_global_config().atn_world_size
-        return [
-            (instance_index * stride + dp_rank, instance_index, dp_rank)
-            for instance_index, instance_plan in enumerate(fabric.plan.instance_plans)
-            for dp_rank in range(instance_plan.instance_rank_topology.atn_dp_size)
-        ]
-
     def service_ceiling(
         self,
         registrations: RegistrationBook,
@@ -167,27 +241,23 @@ class KvCapacityPolicy:
         instance_index: int,
         dp_rank: int,
     ) -> int:
-        """Return the fixed and pool-physical ceiling common to a TP group."""
+        """Return the fixed physical ceiling common to one TP Capacity Group."""
 
         pool_capacities = self.pool_capacity_bytes
         if pool_capacities is None:
             raise RuntimeError("kv capacity pools are not frozen")
-        instance_plan = fabric.plan.instance_plans[instance_index]
-        topology = instance_plan.instance_rank_topology
         candidates: list[int] = []
-        for tp_rank in range(topology.atn_tp_size):
-            worker_rank = dp_rank * topology.atn_tp_size + tp_rank
-            profile = self.partition(registrations, instance_plan.instance_id, worker_rank).kv_capacity
-            other_floor_bytes = 0
-            for other_index, other_plan in enumerate(fabric.plan.instance_plans):
-                if other_index == instance_index:
-                    continue
-                other_profile = self.partition(registrations, other_plan.instance_id, worker_rank).kv_capacity
-                other_floor_bytes += other_profile.bundle_bytes * other_profile.floor_bundles
+        for pool_index, profile in self.group_profiles(registrations, fabric, instance_index, dp_rank):
+            other_floor_bytes = sum(
+                candidate.bundle_bytes * candidate.floor_bundles
+                for other_index, plan in enumerate(fabric.plan.instance_plans)
+                if other_index != instance_index
+                for candidate in (self.partition(registrations, plan.instance_id, pool_index).kv_capacity,)
+            )
             candidates.append(
                 min(
                     profile.bundle_capacity,
-                    (pool_capacities[worker_rank] - other_floor_bytes) // profile.bundle_bytes,
+                    (pool_capacities[pool_index] - other_floor_bytes) // profile.bundle_bytes,
                 )
             )
         return min(candidates)
@@ -196,326 +266,388 @@ class KvCapacityPolicy:
         self,
         registrations: RegistrationBook,
         fabric: FabricGenerationState,
-        backing_reports: list[xpool.native.kv.KvCapacityBackingReport | None],
     ) -> list[int]:
-        """Return actual uncommitted bytes in each attention-device pool."""
+        """Return unassigned bytes after conservative in-flight charging."""
 
-        pool_capacities = self.pool_capacity_bytes
-        if pool_capacities is None:
+        if self.pool_capacity_bytes is None:
             raise RuntimeError("kv capacity pools are not frozen")
-        stride = get_global_config().atn_world_size
-        free = list(pool_capacities)
+        free = list(self.pool_capacity_bytes)
         for group_index, instance_index, dp_rank in self.capacity_groups(fabric):
-            command = self.commands[group_index]
-            if command is None:
+            active = self.active_bundles[group_index]
+            if active is None:
                 continue
-            instance_plan = fabric.plan.instance_plans[instance_index]
-            topology = instance_plan.instance_rank_topology
-            for tp_rank in range(topology.atn_tp_size):
-                worker_rank = dp_rank * topology.atn_tp_size + tp_rank
-                partition_index = instance_index * stride + worker_rank
-                report = backing_reports[partition_index]
-                if report is None:
-                    raise RuntimeError("kv capacity accounting requires every partition backing report")
-                profile = self.partition(registrations, instance_plan.instance_id, worker_rank).kv_capacity
-                free[worker_rank] -= max(command.target_bundles, report.backed_bundles) * profile.bundle_bytes
+            operation = self.operations[group_index]
+            charged_bundles = max(active, operation.command.target_bundles) if operation is not None else active
+            for pool_index, profile in self.group_profiles(registrations, fabric, instance_index, dp_rank):
+                free[pool_index] -= charged_bundles * profile.bundle_bytes
+        if any(byte_count < 0 for byte_count in free):
+            raise RuntimeError("kv capacity accounting exceeded a physical pool")
         return free
 
-    def publish_initial_target(
+    def growth_bytes(
         self,
         registrations: RegistrationBook,
         fabric: FabricGenerationState,
-    ) -> bool:
-        """Publish the next missing floor-first target."""
-
-        for group_index, instance_index, dp_rank in self.capacity_groups(fabric):
-            instance_plan = fabric.plan.instance_plans[instance_index]
-            topology = instance_plan.instance_rank_topology
-            if self.commands[group_index] is not None:
-                continue
-            target = self.initial_target(registrations, fabric, instance_index, dp_rank)
-            floor = self.partition(
-                registrations,
-                instance_plan.instance_id,
-                dp_rank * topology.atn_tp_size,
-            ).kv_capacity.floor_bundles
-            command = xpool.native.kv.KvCapacityCommand(
-                sequence=1,
-                target_bundles=target,
-                active_bundles=floor,
-            )
-            self.channel.publish_command(group_index, command)
-            self.commands[group_index] = command
-            return True
-        return False
-
-    def activate_prepared_target(
-        self,
-        fabric: FabricGenerationState,
-        backing_reports: list[xpool.native.kv.KvCapacityBackingReport | None],
-    ) -> bool:
-        """Activate the next target prepared by every TP rank."""
-
-        config = get_global_config()
-        for group_index, instance_index, dp_rank in self.capacity_groups(fabric):
-            command = self.commands[group_index]
-            if command is None or command.active_bundles == command.target_bundles:
-                continue
-            topology = fabric.plan.instance_plans[instance_index].instance_rank_topology
-            prepared = all(
-                (
-                    report := backing_reports[
-                        instance_index * config.atn_world_size + dp_rank * topology.atn_tp_size + tp_rank
-                    ]
-                )
-                is not None
-                and report.prepared_sequence == command.sequence
-                and report.backed_bundles >= command.target_bundles
-                for tp_rank in range(topology.atn_tp_size)
-            )
-            if prepared:
-                active = xpool.native.kv.KvCapacityCommand(
-                    sequence=command.sequence,
-                    target_bundles=command.target_bundles,
-                    active_bundles=command.target_bundles,
-                )
-                self.channel.publish_command(group_index, active)
-                self.commands[group_index] = active
-                logger.info(
-                    "kv capacity activated generation=%s instance=%s dp_rank=%s active_bundles=%s command_sequence=%s",
-                    self.generation.format(),
-                    fabric.plan.instance_plans[instance_index].instance_id,
-                    dp_rank,
-                    active.active_bundles,
-                    active.sequence,
-                )
-                return True
-        return False
-
-    def consume_pressure(
-        self,
-        registrations: RegistrationBook,
-        fabric: FabricGenerationState,
-        pressure_reports: list[xpool.native.kv.KvCapacityPressureReport | None],
-    ) -> set[int]:
-        """Consume new pressure edges and return currently pressured groups."""
-
-        groups = self.capacity_groups(fabric)
-        for group_index, instance_index, dp_rank in groups:
-            report = pressure_reports[group_index]
-            if report is None or report.sequence <= self.pressure_sequences[group_index]:
-                continue
-            self.pressure_sequences[group_index] = report.sequence
-            if report.active_bundles is None:
-                self.pressure_queue = deque(index for index in self.pressure_queue if index != group_index)
-                if self.priority_borrower_index == group_index:
-                    self.priority_borrower_index = None
-                logger.info(
-                    "kv capacity pressure cleared generation=%s instance=%s dp_rank=%s pressure_sequence=%s",
-                    self.generation.format(),
-                    fabric.plan.instance_plans[instance_index].instance_id,
-                    dp_rank,
-                    report.sequence,
-                )
-                continue
-            command = self.commands[group_index]
-            if command is None:
-                continue
-            ceiling = self.service_ceiling(registrations, fabric, instance_index, dp_rank)
-            if self.priority_borrower_index == group_index and command.active_bundles >= ceiling:
-                self.priority_borrower_index = None
-            if command.active_bundles < ceiling and group_index not in self.pressure_queue:
-                self.pressure_queue.append(group_index)
-            logger.info(
-                "kv capacity pressure entered generation=%s instance=%s dp_rank=%s active_bundles=%s "
-                "pressure_sequence=%s",
-                self.generation.format(),
-                fabric.plan.instance_plans[instance_index].instance_id,
-                dp_rank,
-                report.active_bundles,
-                report.sequence,
-            )
+        instance_index: int,
+        dp_rank: int,
+        start_bundles: int,
+        target_bundles: int,
+    ) -> dict[int, int]:
+        """Return additional per-pool bytes required by one group growth."""
 
         return {
-            group_index
-            for group_index, _, _ in groups
-            if (report := pressure_reports[group_index]) is not None and report.active_bundles is not None
+            pool_index: (target_bundles - start_bundles) * profile.bundle_bytes
+            for pool_index, profile in self.group_profiles(registrations, fabric, instance_index, dp_rank)
         }
 
-    def schedule_service_transition(
+    def publish_operation(self, group_index: int, target_bundles: int) -> None:
+        """Publish one immutable operation for an idle Capacity Group."""
+
+        start_bundles = self.active_bundles[group_index]
+        if start_bundles is None or self.operations[group_index] is not None:
+            raise RuntimeError("kv capacity operation requires one initialized idle group")
+        sequence = self.command_sequences[group_index] + 1
+        command = xpool.native.kv.KvCapacityCommand(sequence=sequence, target_bundles=target_bundles)
+        self.channel.publish_command(group_index, command)
+        self.command_sequences[group_index] = sequence
+        self.operations[group_index] = CapacityOperation(command=command, start_bundles=start_bundles)
+
+    def retire_operations(
+        self,
+        fabric: FabricGenerationState,
+        completions: list[xpool.native.kv.KvCapacityCompletion | None],
+    ) -> list[tuple[int, CapacityOperation]]:
+        """Retire an operation only after every TP partition completes physical work."""
+
+        retired: list[tuple[int, CapacityOperation]] = []
+        for group_index, instance_index, dp_rank in self.capacity_groups(fabric):
+            operation = self.operations[group_index]
+            if operation is None:
+                continue
+            sequence = operation.command.sequence
+            replies = [completions[index] for index in self.group_partition_indices(fabric, instance_index, dp_rank)]
+            if not all(reply is not None and reply.sequence == sequence for reply in replies):
+                continue
+            expected = operation.command.target_bundles
+            if any(reply is None or reply.backed_bundles != expected for reply in replies):
+                raise RuntimeError("kv capacity completion does not match the command target")
+            self.active_bundles[group_index] = expected
+            self.applied_sequences[group_index] = sequence
+            self.operations[group_index] = None
+            if sequence != 1 and expected > operation.start_bundles:
+                self.completed_grant_orders[group_index] = self.next_grant_order
+                self.next_grant_order += 1
+            retired.append((group_index, operation))
+        return retired
+
+    def publish_next_initial_operation(
         self,
         registrations: RegistrationBook,
         fabric: FabricGenerationState,
-        backing_reports: list[xpool.native.kv.KvCapacityBackingReport | None],
-        pressure_reports: list[xpool.native.kv.KvCapacityPressureReport | None],
-        pressured_groups: set[int],
     ) -> bool:
-        """Publish at most one FIFO growth or reclaim transition."""
+        """Publish the next sequential startup allocation."""
 
-        groups = self.capacity_groups(fabric)
-        locations = {group_index: (instance_index, dp_rank) for group_index, instance_index, dp_rank in groups}
-        for borrower_index in tuple(self.pressure_queue):
-            location = locations.get(borrower_index)
-            report = pressure_reports[borrower_index]
-            command = self.commands[borrower_index]
-            if location is None or report is None or report.active_bundles is None or command is None:
-                self.pressure_queue.remove(borrower_index)
-                continue
-            if command.target_bundles != command.active_bundles:
-                continue
-            instance_index, dp_rank = location
-            ceiling = self.service_ceiling(registrations, fabric, instance_index, dp_rank)
-            desired = min(report.active_bundles + 1, ceiling)
-            if command.active_bundles >= desired:
-                self.pressure_queue.remove(borrower_index)
-                continue
-
-            instance_plan = fabric.plan.instance_plans[instance_index]
-            topology = instance_plan.instance_rank_topology
-            delta = desired - command.target_bundles
-            free = self.pool_free_bytes(registrations, fabric, backing_reports)
-            required: dict[int, int] = {}
-            for tp_rank in range(topology.atn_tp_size):
-                worker_rank = dp_rank * topology.atn_tp_size + tp_rank
-                profile = self.partition(registrations, instance_plan.instance_id, worker_rank).kv_capacity
-                required[worker_rank] = delta * profile.bundle_bytes
-
-            if all(free[pool_index] >= byte_count for pool_index, byte_count in required.items()):
-                next_command = xpool.native.kv.KvCapacityCommand(
-                    sequence=command.sequence + 1,
-                    target_bundles=desired,
-                    active_bundles=command.active_bundles,
-                )
-                self.channel.publish_command(borrower_index, next_command)
-                self.commands[borrower_index] = next_command
-                self.pressure_queue.remove(borrower_index)
-                logger.info(
-                    "kv capacity growth requested generation=%s instance=%s dp_rank=%s active_bundles=%s "
-                    "target_bundles=%s command_sequence=%s",
-                    self.generation.format(),
-                    instance_plan.instance_id,
-                    dp_rank,
-                    next_command.active_bundles,
-                    next_command.target_bundles,
-                    next_command.sequence,
+        if any(operation is not None for operation in self.operations):
+            return False
+        for group_index, instance_index, dp_rank in self.capacity_groups(fabric):
+            if self.command_sequences[group_index] == 0:
+                self.publish_operation(
+                    group_index,
+                    self.initial_target(registrations, fabric, instance_index, dp_rank),
                 )
                 return True
-
-            short_pools = {pool_index for pool_index, byte_count in required.items() if free[pool_index] < byte_count}
-
-            def donor_candidates(*, allow_pressure: bool) -> list[tuple[int, int]]:
-                candidates: list[tuple[int, int]] = []
-                for donor_index, donor_instance_index, donor_dp_rank in groups:
-                    if donor_index == borrower_index or (donor_index in pressured_groups) != allow_pressure:
-                        continue
-                    donor_command = self.commands[donor_index]
-                    donor_plan = fabric.plan.instance_plans[donor_instance_index]
-                    donor_topology = donor_plan.instance_rank_topology
-                    donor_profile = self.partition(
-                        registrations,
-                        donor_plan.instance_id,
-                        donor_dp_rank * donor_topology.atn_tp_size,
-                    ).kv_capacity
-                    donor_pools = {
-                        donor_dp_rank * donor_topology.atn_tp_size + tp_rank
-                        for tp_rank in range(donor_topology.atn_tp_size)
-                    }
-                    if (
-                        donor_command is not None
-                        and donor_command.target_bundles == donor_command.active_bundles
-                        and donor_command.target_bundles > donor_profile.floor_bundles
-                        and donor_pools & short_pools
-                    ):
-                        candidates.append((donor_command.target_bundles * donor_profile.bundle_bytes, donor_index))
-                return candidates
-
-            candidates = donor_candidates(allow_pressure=False)
-            if not candidates:
-                if self.priority_borrower_index is None:
-                    self.priority_borrower_index = borrower_index
-                if self.priority_borrower_index != borrower_index:
-                    continue
-                candidates = [
-                    candidate
-                    for candidate in donor_candidates(allow_pressure=True)
-                    if candidate[1] != self.priority_borrower_index
-                ]
-            if not candidates:
-                continue
-
-            _, donor_index = max(candidates, key=lambda candidate: (candidate[0], -candidate[1]))
-            donor_instance_index, donor_dp_rank = locations[donor_index]
-            donor_command = self.commands[donor_index]
-            if donor_command is None:
-                continue
-            next_command = xpool.native.kv.KvCapacityCommand(
-                sequence=donor_command.sequence + 1,
-                target_bundles=donor_command.target_bundles - 1,
-                active_bundles=min(donor_command.active_bundles, donor_command.target_bundles - 1),
-            )
-            self.channel.publish_command(donor_index, next_command)
-            self.commands[donor_index] = next_command
-            logger.info(
-                "kv capacity reclaim requested generation=%s borrower_instance=%s borrower_dp_rank=%s "
-                "donor_instance=%s donor_dp_rank=%s donor_active_bundles=%s donor_target_bundles=%s "
-                "donor_pressured=%s command_sequence=%s",
-                self.generation.format(),
-                instance_plan.instance_id,
-                dp_rank,
-                fabric.plan.instance_plans[donor_instance_index].instance_id,
-                donor_dp_rank,
-                donor_command.active_bundles,
-                next_command.target_bundles,
-                donor_index in pressured_groups,
-                next_command.sequence,
-            )
-
-            donor_report = pressure_reports[donor_index]
-            if donor_report is not None and donor_report.active_bundles is not None:
-                ceiling = self.service_ceiling(registrations, fabric, donor_instance_index, donor_dp_rank)
-                if (
-                    next_command.active_bundles < min(donor_report.active_bundles + 1, ceiling)
-                    and donor_index not in self.pressure_queue
-                ):
-                    self.pressure_queue.append(donor_index)
-            return True
         return False
 
-    def step(self, registrations: RegistrationBook, fabric: FabricGenerationState) -> None:
-        """Advance at most one startup or service capacity transition."""
+    def consume_demands(self, fabric: FabricGenerationState) -> None:
+        """Refresh persistent coherent demand snapshots."""
 
-        backing_reports = self.channel.read_backing_reports()
-        if any(report is None for report in backing_reports):
+        publications = self.channel.read_demands()
+        for group_index, _, _ in self.capacity_groups(fabric):
+            demand = publications[group_index]
+            if demand is None:
+                continue
+            if demand.evaluated_sequence > self.command_sequences[group_index]:
+                raise RuntimeError("kv capacity demand refers to an unpublished operation")
+            self.demands[group_index] = demand
+
+    def eligible_demand(self, group_index: int) -> xpool.native.kv.KvCapacityDemand | None:
+        """Return one idle group's currently eligible complete demand witness."""
+
+        demand = self.demands[group_index]
+        active = self.active_bundles[group_index]
+        ceiling = self.service_ceilings[group_index]
+        if (
+            demand is None
+            or active is None
+            or ceiling is None
+            or self.operations[group_index] is not None
+            or demand.evaluated_sequence != self.applied_sequences[group_index]
+            or demand.requested_bundles is None
+            or demand.deadline_monotonic_ns is None
+            or demand.requested_bundles <= active
+            or demand.requested_bundles > ceiling
+        ):
+            return None
+        return demand
+
+    def ordered_borrowers(
+        self,
+        registrations: RegistrationBook,
+        fabric: FabricGenerationState,
+        now_ns: int,
+    ) -> list[int]:
+        """Order overdue demands, then predeadline demands on unrelated pools."""
+
+        candidates: list[tuple[int, int, set[int]]] = []
+        for group_index, instance_index, dp_rank in self.capacity_groups(fabric):
+            demand = self.eligible_demand(group_index)
+            if demand is None or demand.deadline_monotonic_ns is None:
+                continue
+            pools = {
+                pool_index for pool_index, _ in self.group_profiles(registrations, fabric, instance_index, dp_rank)
+            }
+            candidates.append((group_index, demand.deadline_monotonic_ns, pools))
+        overdue = [candidate for candidate in candidates if candidate[1] <= now_ns]
+        protected_pools = set().union(*(pools for _, _, pools in overdue))
+        ordered_overdue = sorted(
+            overdue,
+            key=lambda candidate: (
+                self.completed_grant_orders[candidate[0]] is not None,
+                self.completed_grant_orders[candidate[0]] or 0,
+                candidate[1],
+                candidate[0],
+            ),
+        )
+        ordered_predeadline = sorted(
+            (
+                candidate
+                for candidate in candidates
+                if candidate[1] > now_ns and candidate[2].isdisjoint(protected_pools)
+            ),
+            key=lambda candidate: (candidate[1], candidate[0]),
+        )
+        return [group_index for group_index, _, _ in (*ordered_overdue, *ordered_predeadline)]
+
+    def attempt_is_current(self, attempt: FundingAttempt) -> bool:
+        """Return whether a donor attempt still serves its exact demand witness."""
+
+        demand = self.eligible_demand(attempt.borrower_index)
+        return (
+            demand is not None
+            and demand.evaluated_sequence == attempt.evaluated_sequence
+            and demand.requested_bundles == attempt.target_bundles
+            and demand.deadline_monotonic_ns == attempt.deadline_monotonic_ns
+        )
+
+    def advance_attempt(
+        self,
+        registrations: RegistrationBook,
+        fabric: FabricGenerationState,
+        attempt: FundingAttempt,
+    ) -> bool:
+        """Publish one borrower growth or donor shrink for an exact witness."""
+
+        if attempt.donor_index is not None:
+            return False
+        if not self.attempt_is_current(attempt):
+            self.funding_attempt = None
+            return False
+        locations = {
+            group_index: (instance_index, dp_rank)
+            for group_index, instance_index, dp_rank in self.capacity_groups(fabric)
+        }
+        free = self.pool_free_bytes(registrations, fabric)
+        borrower_instance, borrower_dp = locations[attempt.borrower_index]
+        borrower_active = self.active_bundles[attempt.borrower_index]
+        if borrower_active is None:
+            raise RuntimeError("kv capacity funding borrower is uninitialized")
+        required = self.growth_bytes(
+            registrations,
+            fabric,
+            borrower_instance,
+            borrower_dp,
+            borrower_active,
+            attempt.target_bundles,
+        )
+        if all(free[pool_index] >= byte_count for pool_index, byte_count in required.items()):
+            self.publish_operation(attempt.borrower_index, attempt.target_bundles)
+            self.funding_attempt = None
+            logger.info(
+                "kv capacity growth requested generation=%s instance=%s dp_rank=%s start_bundles=%s "
+                "target_bundles=%s command_sequence=%s",
+                self.generation.format(),
+                fabric.plan.instance_plans[borrower_instance].instance_id,
+                borrower_dp,
+                borrower_active,
+                attempt.target_bundles,
+                self.command_sequences[attempt.borrower_index],
+            )
+            return True
+        short_pools = {
+            pool_index: byte_count - free[pool_index]
+            for pool_index, byte_count in required.items()
+            if byte_count > free[pool_index]
+        }
+
+        candidates: list[tuple[tuple[int, int, int, int], int, int]] = []
+        for donor_index, donor_instance, donor_dp in self.capacity_groups(fabric):
+            if donor_index == attempt.borrower_index or donor_index in attempt.attempted_donors:
+                continue
+            donor_active = self.active_bundles[donor_index]
+            donor_demand = self.demands[donor_index]
+            if (
+                donor_active is None
+                or self.operations[donor_index] is not None
+                or donor_demand is None
+                or donor_demand.evaluated_sequence != self.applied_sequences[donor_index]
+            ):
+                continue
+            profiles = self.group_profiles(registrations, fabric, donor_instance, donor_dp)
+            floors = {profile.floor_bundles for _, profile in profiles}
+            if len(floors) != 1:
+                raise RuntimeError("kv capacity donor ranks have different floors")
+            floor = floors.pop()
+            if donor_active <= floor:
+                continue
+            release_bundles = max(
+                (
+                    (short_pools[pool_index] + profile.bundle_bytes - 1) // profile.bundle_bytes
+                    for pool_index, profile in profiles
+                    if pool_index in short_pools
+                ),
+                default=0,
+            )
+            target = max(floor, donor_active - release_bundles)
+            if target < donor_active:
+                has_demand = donor_demand.requested_bundles is not None
+                deadline = donor_demand.deadline_monotonic_ns or 0
+                grant_order = self.completed_grant_orders[donor_index]
+                candidates.append(
+                    (
+                        (
+                            int(has_demand),
+                            -deadline if has_demand else 0,
+                            -(grant_order if grant_order is not None else -1),
+                            donor_index,
+                        ),
+                        donor_index,
+                        target,
+                    )
+                )
+
+        if not candidates:
+            self.funding_attempt = None
+            return False
+
+        _, donor_index, target = min(candidates)
+        donor_instance, donor_dp = locations[donor_index]
+        donor_active = self.active_bundles[donor_index]
+        self.publish_operation(donor_index, target)
+        attempt.donor_index = donor_index
+        logger.info(
+            "kv capacity reclaim requested generation=%s borrower_instance=%s borrower_dp_rank=%s "
+            "donor_instance=%s donor_dp_rank=%s donor_start_bundles=%s donor_target_bundles=%s "
+            "command_sequence=%s",
+            self.generation.format(),
+            fabric.plan.instance_plans[borrower_instance].instance_id,
+            borrower_dp,
+            fabric.plan.instance_plans[donor_instance].instance_id,
+            donor_dp,
+            donor_active,
+            target,
+            self.command_sequences[donor_index],
+        )
+        return True
+
+    def note_retired_donor(self, group_index: int) -> None:
+        """Release one completed donor slot for exact-witness revalidation."""
+
+        attempt = self.funding_attempt
+        if attempt is None or attempt.donor_index != group_index:
+            return
+        attempt.donor_index = None
+        attempt.attempted_donors.add(group_index)
+
+    def step(self, registrations: RegistrationBook, fabric: FabricGenerationState) -> None:
+        """Advance completions and publish at most one new capacity operation."""
+
+        initial_backing = self.channel.read_initial_backing()
+        if any(report is None for report in initial_backing):
             return
         device_reports = self.channel.read_device_memory()
         if any(report is None for report in device_reports):
             return
         if self.pool_capacity_bytes is None:
-            self.freeze_pools(registrations, fabric, backing_reports, device_reports)
+            self.freeze_pools(registrations, fabric, initial_backing, device_reports)
 
-        if self.publish_initial_target(registrations, fabric):
-            return
-        if self.activate_prepared_target(fabric, backing_reports):
-            return
+        retired = self.retire_operations(
+            fabric,
+            self.channel.read_completions(),
+        )
+        for group_index, _ in retired:
+            self.note_retired_donor(group_index)
 
         groups = self.capacity_groups(fabric)
-        group_commands = tuple(
-            command for group_index, _, _ in groups if (command := self.commands[group_index]) is not None
-        )
-        if all(command.sequence == 1 for command in group_commands) and any(
-            command.active_bundles != command.target_bundles for command in group_commands
-        ):
+        if any(self.command_sequences[group_index] == 0 for group_index, _, _ in groups):
+            self.publish_next_initial_operation(registrations, fabric)
+            return
+        if any(operation is not None and operation.command.sequence == 1 for operation in self.operations):
             return
 
-        pressure_reports = self.channel.read_pressure_reports()
-        pressured_groups = self.consume_pressure(registrations, fabric, pressure_reports)
-        self.schedule_service_transition(
-            registrations,
-            fabric,
-            backing_reports,
-            pressure_reports,
-            pressured_groups,
-        )
+        self.consume_demands(fabric)
+        attempt = self.funding_attempt
+        if attempt is not None:
+            if self.advance_attempt(registrations, fabric, attempt):
+                return
+            if attempt.donor_index is not None:
+                locations = {group_index: (instance_index, dp_rank) for group_index, instance_index, dp_rank in groups}
+                borrower_instance, borrower_dp = locations[attempt.borrower_index]
+                donor_instance, donor_dp = locations[attempt.donor_index]
+                reserved_pools = {
+                    pool_index
+                    for instance_index, dp_rank in ((borrower_instance, borrower_dp), (donor_instance, donor_dp))
+                    for pool_index, _ in self.group_profiles(registrations, fabric, instance_index, dp_rank)
+                }
+                free = self.pool_free_bytes(registrations, fabric)
+                for candidate_index in self.ordered_borrowers(registrations, fabric, perf_counter_ns()):
+                    candidate_instance, candidate_dp = locations[candidate_index]
+                    required_pools = self.group_profiles(registrations, fabric, candidate_instance, candidate_dp)
+                    if any(pool_index in reserved_pools for pool_index, _ in required_pools):
+                        continue
+                    demand = self.eligible_demand(candidate_index)
+                    active = self.active_bundles[candidate_index]
+                    if demand is None or demand.requested_bundles is None or active is None:
+                        continue
+                    required = self.growth_bytes(
+                        registrations, fabric, candidate_instance, candidate_dp, active, demand.requested_bundles
+                    )
+                    if all(free[pool_index] >= byte_count for pool_index, byte_count in required.items()):
+                        self.publish_operation(candidate_index, demand.requested_bundles)
+                        logger.info(
+                            "kv capacity growth requested generation=%s instance=%s dp_rank=%s "
+                            "start_bundles=%s target_bundles=%s command_sequence=%s",
+                            self.generation.format(),
+                            fabric.plan.instance_plans[candidate_instance].instance_id,
+                            candidate_dp,
+                            active,
+                            demand.requested_bundles,
+                            self.command_sequences[candidate_index],
+                        )
+                        return
+                return
+        for borrower_index in self.ordered_borrowers(registrations, fabric, perf_counter_ns()):
+            demand = self.eligible_demand(borrower_index)
+            if demand is None or demand.requested_bundles is None or demand.deadline_monotonic_ns is None:
+                continue
+            attempt = FundingAttempt(
+                borrower_index=borrower_index,
+                evaluated_sequence=demand.evaluated_sequence,
+                target_bundles=demand.requested_bundles,
+                deadline_monotonic_ns=demand.deadline_monotonic_ns,
+            )
+            self.funding_attempt = attempt
+            if self.advance_attempt(registrations, fabric, attempt):
+                return
 
     def close(self) -> None:
         """Close and unlink this Generation's channel."""

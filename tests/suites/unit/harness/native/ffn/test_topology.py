@@ -23,6 +23,7 @@ def test_materialization_installs_exact_topology_without_integration_policy(
         {
             "daemon": {"host": "127.0.0.1", "port": 19000},
             "vendor": {"model_base_uri": str(model_root)},
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "base"}],

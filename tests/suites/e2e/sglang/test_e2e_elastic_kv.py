@@ -28,6 +28,7 @@ pytest_plugins = ("tests.harness.support.config",)
 
 MANIFEST = E2eManifest.load(E2E_MANIFEST_PATH)
 HTTP_TIMEOUT_SECONDS = 5 * 60.0
+SUSTAINED_REQUEST_COUNT = 4
 
 
 def case_parameter(case: E2eServingCase) -> ParameterSet:
@@ -89,7 +90,7 @@ def test_e2e_elastic_kv(
     e2e_base_config: XpoolConfig,
     tmp_path: Path,
 ) -> None:
-    """Prove prefix hit, cross-Instance reclamation, and repopulation."""
+    """Observe prefix hits, peer-pressure cache loss, and renewed hits."""
 
     workload = case.elastic_kv
     assert workload is not None
@@ -116,9 +117,22 @@ def test_e2e_elastic_kv(
             workload.prefix_tokens,
         )
 
+        def sustain(alias: str, server: SglangServerProcess, token_count: int) -> int:
+            for index in range(SUSTAINED_REQUEST_COUNT):
+                generate(server, f"xpool-elastic-kv-{alias}-{index}", token_count)
+            return SUSTAINED_REQUEST_COUNT
+
+        with ThreadPoolExecutor(max_workers=2) as pressure_executor:
+            futures = (
+                pressure_executor.submit(sustain, "prefix-pressure", prefix_server, workload.prefix_tokens),
+                pressure_executor.submit(sustain, "peer-pressure", pressure_server, workload.pressure_tokens),
+            )
+            completed = tuple(future.result() for future in futures)
+
         assert initial < hit
         assert after_pressure < hit
         assert repopulated == hit
+        assert completed == (SUSTAINED_REQUEST_COUNT, SUSTAINED_REQUEST_COUNT)
         assert hit_output_ids == after_pressure_output_ids == repopulated_output_ids == expected_output_ids
         print(
             "XPOOL_ELASTIC_KV_CACHE="

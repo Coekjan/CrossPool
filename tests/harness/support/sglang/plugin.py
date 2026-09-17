@@ -51,6 +51,7 @@ def configure_xpool_model(
     ffn_cuda_devices: tuple[int, ...] = (1,),
     atn_kind: SglangAttentionKind = SglangAttentionKind.GQA,
     num_key_value_heads: int = 2,
+    model_slo: tuple[int, int] | None = None,
 ) -> None:
     resolved_model_path = Path(model_path).expanduser().resolve()
     resolved_model_path.mkdir(parents=True, exist_ok=True)
@@ -70,6 +71,7 @@ def configure_xpool_model(
     config_path = tmp_path / "xpool.toml"
     atn_devices = ", ".join(str(device) for device in atn_cuda_devices)
     ffn_devices = ", ".join(str(device) for device in ffn_cuda_devices)
+    model_slo_line = "" if model_slo is None else f"\nslo = {{ ttft_ms = {model_slo[0]}, tbt_ms = {model_slo[1]} }}"
     config_path.write_text(
         f"""
 [daemon]
@@ -79,6 +81,7 @@ port = 9810
 [scheduler]
 atn_concurrency = 1
 ffn_concurrency = 1
+slo = {{ ttft_ms = 1000, tbt_ms = 50 }}
 
 [atn]
 devices = [{atn_devices}]
@@ -88,7 +91,7 @@ devices = [{ffn_devices}]
 
 [[models]]
 id = "{TEST_MODEL_ID}"
-path = "{resolved_model_path}"
+path = "{resolved_model_path}"{model_slo_line}
 """.strip(),
         encoding="utf-8",
     )
@@ -150,6 +153,7 @@ def minimal_config() -> XpoolConfig:
 
     return XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],

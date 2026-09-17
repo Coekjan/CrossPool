@@ -26,6 +26,7 @@ def observer_enabled_config(observer_name: str, outdir: Path) -> XpoolConfig:
     env_prefix = f"XPOOL_DEBUG_{observer_name.upper()}"
     return XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
@@ -42,6 +43,7 @@ def observers_disabled_config() -> XpoolConfig:
 
     return XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],

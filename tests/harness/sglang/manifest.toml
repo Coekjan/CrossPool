@@ -1,3 +1,7 @@
+[serving_slo]
+ttft_ms = 1000
+tbt_ms = 50
+
 [models.qwen3_14b]
 model_id = "Qwen/Qwen3-14B"
 architecture = "Qwen3ForCausalLM"
@@ -77,6 +81,26 @@ prefix_tokens = 4500
 pressure_model = "deepseek_v2_lite"
 pressure_tokens = 15000
 atn_device_memory_utilization = 0.485
+
+[[model_serving_cases]]
+id = "deepseek-qwen-tp2-dp1-f2-e2"
+models = [
+  { model = "deepseek_v2_lite", atn_tp_size = 2, atn_dp_size = 1 },
+  { model = "qwen3_14b", atn_tp_size = 2, atn_dp_size = 1 },
+]
+ffnagent_count = 2
+executor_lane_count = 2
+estimated_duration_seconds = 1400
+timeout_seconds = 3600
+transport_record_capacity = 32768
+fabric_record_capacity = 32768
+
+[model_serving_cases.elastic_kv]
+prefix_model = "qwen3_14b"
+prefix_tokens = 4500
+pressure_model = "deepseek_v2_lite"
+pressure_tokens = 15000
+atn_device_memory_utilization = 0.404
 
 [[model_serving_cases]]
 id = "glm4-7-flash-tp1-dp1-f2-e1"

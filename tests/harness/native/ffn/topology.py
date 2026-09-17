@@ -82,6 +82,7 @@ def materialize_ffn_cluster_launch(
         "atn_concurrency": len(model_tp_sizes),
         "ffn_concurrency": executor_lane_count,
         "ffn_policy": scheduler.policy.value,
+        "slo": base_config.scheduler.slo.model_dump(),
     }
     if isinstance(scheduler, RandomSchedulerPolicy):
         scheduler_payload["ffn_random_seed"] = scheduler.seed

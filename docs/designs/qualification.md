@@ -82,13 +82,16 @@ observable through the accepted public and Devkit boundaries, stop for design
 review instead of widening the product surface implicitly.
 
 Elastic KV qualification follows the same evidence ownership. Native tests
-prove the process-shared capacity channel. Integration tests prove physical
+prove the process-shared KV Control Channel. Integration tests prove physical
 VMM behavior and CUDA Event ordering together with allocator, prefix-cache,
 command, and daemon-policy behavior. Ordinary subprocess serving E2E proves
 mandatory Elastic KV startup across its graph-mode matrix. The dedicated
-Elastic KV E2E proves workload-level same-GPU multi-Instance reclamation and
-repopulation under Decode Full plus Prefill Breakable. Operational logs are
-diagnostics and are not a correctness assertion surface. Qualified model,
+Elastic KV E2E observes prefix-cache hit loss after peer pressure, renewed
+hits after repopulation, and concurrent request completion by both models on
+the same GPU under Decode Full plus Prefill Breakable. It does not directly
+observe capacity commands, terminal completions, or physical map/unmap; native
+and integration tests own those contracts. Operational logs are diagnostics
+and are not a correctness assertion surface. Qualified model,
 dtype, graph, and topology cases do not form a runtime allowlist: only a known
 structural incompatibility at the SGLang memory or cache seam is rejected.
 

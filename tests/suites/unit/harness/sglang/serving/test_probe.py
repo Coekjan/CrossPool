@@ -28,7 +28,7 @@ from tests.harness.sglang.serving.graph import SglangGraphMode, SglangGraphSetti
 from tests.harness.sglang.serving.launch import E2eLaunch, E2eLaunchModel
 from tests.harness.sglang.serving.probe import run_probe
 from tests.harness.sglang.serving.server import SglangServerProcess, SglangServerResult
-from xpool.config import XpoolConfig
+from xpool.config import LatencySloConfig, XpoolConfig
 
 
 def test_probe_retries_only_complete_endpoint_conflicts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -252,6 +252,7 @@ def probe_launch(tmp_path: Path) -> E2eLaunch:
         {
             "daemon": {"host": "127.0.0.1", "port": 19810},
             "vendor": {"model_base_uri": str(tmp_path / "models")},
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "model-a"}],
@@ -307,6 +308,7 @@ def probe_manifest() -> E2eManifest:
     )
     return E2eManifest(
         models=(model,),
+        serving_slo=LatencySloConfig(ttft_ms=1000, tbt_ms=50),
         model_serving_cases=(case,),
         ffn_numerical_cases=(numerical,),
         ffn_topology_cases=(topology,),

@@ -153,6 +153,14 @@ class KvVmmBacking:
         )
         return min(self.token_capacity, max(0, backed_tokens)) // self.token_page_size * self.token_page_size
 
+    def required_bundles(self, token_count: int) -> int:
+        """Return the smallest compound-bundle count covering ``token_count`` tokens."""
+
+        if token_count < 0:
+            raise ValueError("xpool elastic kv token demand must be nonnegative")
+        required_rows = math.ceil((token_count + self.token_page_size) / self.tokens_per_row)
+        return math.ceil(required_rows * self.row_bytes / self.mapping_granularity_bytes)
+
     def resize(self, bundle_count: int) -> None:
         """Map or unmap complete tail bundles until the physical prefix reaches ``bundle_count``."""
 

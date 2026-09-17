@@ -243,6 +243,7 @@ reference:
 | `vendor.model_base_uri` | Sets the absolute local model root. |
 | `models[].id` / `models[].path` | Identifies a model and optionally overrides its absolute local weight path. |
 | `models[].ffn_tp_size` | Fixes the model's FFN tensor-parallel width; omission uses the number of FfnAgents. |
+| `scheduler.slo` / `models[].slo` | Sets required default scheduler-local TTFT/TBT targets in milliseconds, with an optional complete per-model override for Elastic KV arbitration. |
 | `atn.devices` / `ffn.devices` | Assigns attention-side and FFN-side CUDA devices. |
 | `scheduler.ffn_concurrency` | Sets the Executor Lane count, not a row or token budget. |
 | `scheduler.ffn_policy` | Selects `fifo` or `random` admission. |

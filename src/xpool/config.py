@@ -17,7 +17,7 @@ from threading import Lock
 from types import MappingProxyType
 from typing import Literal, TypedDict, cast
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, PrivateAttr, field_validator, model_validator
 
 import xpool.native
 
@@ -39,6 +39,7 @@ __all__ = [
     "FfnSchedulingPolicy",
     "GraphObserverDebugConfig",
     "InstanceConfig",
+    "LatencySloConfig",
     "LoggingConfig",
     "MissingRequiredConfig",
     "ModelConfig",
@@ -545,6 +546,14 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Optional nonzero uint64 seed used only by the random FFN scheduler.",
     ),
     ConfigSetting(
+        name="scheduler_slo",
+        path=("scheduler", "slo"),
+        parser="raw",
+        allowed_sources=CONFIG_REQUIRED,
+        required=True,
+        description="Scheduler-local TTFT and TBT objectives used for elastic KV capacity arbitration.",
+    ),
+    ConfigSetting(
         name="models",
         path=("models",),
         parser="raw",
@@ -573,6 +582,13 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="int",
         allowed_sources=(ConfigSource.CONFIG,),
         description="Optional fixed FFN tensor-parallel width for this model.",
+    ),
+    ConfigSetting(
+        name="model_slo",
+        path=("models", "*", "slo"),
+        parser="raw",
+        allowed_sources=(ConfigSource.CONFIG,),
+        description="Optional complete model override of scheduler-local TTFT and TBT objectives.",
     ),
 )
 
@@ -615,6 +631,15 @@ class LoggingConfig(BaseModel):
     )
 
 
+class LatencySloConfig(BaseModel):
+    """Scheduler-local latency objectives for elastic KV arbitration."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ttft_ms: FiniteFloat = Field(gt=0, description="Scheduler-local time-to-first-token objective in milliseconds.")
+    tbt_ms: FiniteFloat = Field(gt=0, description="Time-between-tokens objective in milliseconds.")
+
+
 class SchedulerConfig(BaseModel):
     """FFN lane scheduling and reserved attention admission settings."""
 
@@ -637,6 +662,7 @@ class SchedulerConfig(BaseModel):
         le=2**64 - 1,
         description="Explicit generation seed for the random FFN scheduler.",
     )
+    slo: LatencySloConfig = Field(description="Default latency objectives for elastic KV capacity arbitration.")
 
     @model_validator(mode="after")
     def validate_ffn_scheduler(self) -> SchedulerConfig:
@@ -773,6 +799,10 @@ class ModelConfig(BaseModel):
         default=None,
         ge=1,
         description="Optional fixed FFN tensor-parallel width; omission resolves to the FfnAgent Fleet width.",
+    )
+    slo: LatencySloConfig | None = Field(
+        default=None,
+        description="Optional complete override of scheduler latency objectives for this model.",
     )
 
     @model_validator(mode="after")

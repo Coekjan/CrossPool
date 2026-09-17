@@ -37,6 +37,7 @@ def transport_config(*model_ids: str) -> XpoolConfig:
 
     config = XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": model_id, "path": f"/models/{model_id}"} for model_id in model_ids],

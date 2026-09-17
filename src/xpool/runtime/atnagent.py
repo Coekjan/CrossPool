@@ -327,7 +327,7 @@ class AtnAgent(Agent):
             local_rank=self.local_rank,
             publisher=self.process_ref,
         )
-        self.capacity_channel: xpool.native.kv.AtnAgentCapacityChannel | None = None
+        self.control_channel: xpool.native.kv.AtnAgentControlChannel | None = None
         self.capacity_memory_published = False
         self.heartbeat_worker = AgentHeartbeat(agent=self)
 
@@ -373,18 +373,18 @@ class AtnAgent(Agent):
         return prepared
 
     def prepare_fabric_execution(self) -> None:
-        """Attach this rank to the Generation-scoped KV capacity channel."""
+        """Attach this rank to the Generation-scoped KV Control Channel."""
 
-        if self.capacity_channel is not None:
+        if self.control_channel is not None:
             return
         plan = self.fabric_plan
         if plan is None:
             raise AgentError("atnagent cannot attach kv capacity before receiving a fabric plan")
         config = get_global_config()
-        channel_ref = self.client.kv_capacity_channel(plan.generation)
+        channel_ref = self.client.kv_control_channel(plan.generation)
         if channel_ref.generation != plan.generation:
-            raise AgentError("daemon returned a kv capacity channel for a different fabric generation")
-        self.capacity_channel = xpool.native.kv.AtnAgentCapacityChannel.attach(
+            raise AgentError("daemon returned a kv control channel for a different fabric generation")
+        self.control_channel = xpool.native.kv.AtnAgentControlChannel.attach(
             channel_ref.name,
             pool_index=self.local_rank,
             partition_indices=[
@@ -408,13 +408,13 @@ class AtnAgent(Agent):
         """Publish the one-shot post-capture device-memory observation."""
 
         if (
-            self.capacity_channel is None
+            self.control_channel is None
             or self.capacity_memory_published
-            or not self.capacity_channel.captures_complete()
+            or not self.control_channel.captures_complete()
         ):
             return
         free_bytes, total_bytes = torch.cuda.mem_get_info(self.cuda_device)
-        self.capacity_channel.publish_device_memory(total_bytes, free_bytes)
+        self.control_channel.publish_device_memory(total_bytes, free_bytes)
         self.capacity_memory_published = True
         logger.info(
             "kv capacity memory published device=%s total_bytes=%s free_bytes=%s",
@@ -447,7 +447,7 @@ class AtnAgent(Agent):
         if self.registered and self.transport.published:
             self.transport.quiesce_leases()
         self.transport.close()
-        if self.capacity_channel is not None:
-            self.capacity_channel.close()
-            self.capacity_channel = None
+        if self.control_channel is not None:
+            self.control_channel.close()
+            self.control_channel = None
         self.capacity_memory_published = False

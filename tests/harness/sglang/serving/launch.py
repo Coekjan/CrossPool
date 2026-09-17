@@ -75,6 +75,7 @@ def materialize(
         "atn_concurrency": len(case.models),
         "ffn_concurrency": case.executor_lane_count,
         "ffn_policy": base_config.scheduler.ffn_policy.value,
+        "slo": manifest.serving_slo.model_dump(),
     }
     if base_config.scheduler.ffn_policy is FfnSchedulingPolicy.RANDOM:
         scheduler["ffn_random_seed"] = base_config.scheduler.ffn_random_seed

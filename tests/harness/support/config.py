@@ -47,7 +47,12 @@ def synthetic_config(
     return XpoolConfig.from_mapping(
         {
             "daemon": {"host": "127.0.0.1", "port": 9810},
-            "scheduler": {"atn_concurrency": 1, "ffn_concurrency": 1, "ffn_policy": "fifo"},
+            "scheduler": {
+                "atn_concurrency": 1,
+                "ffn_concurrency": 1,
+                "ffn_policy": "fifo",
+                "slo": {"ttft_ms": 1000, "tbt_ms": 50},
+            },
             "vendor": {"model_base_uri": "/models"},
             "atn": {"devices": list(atn_cuda_devices)},
             "ffn": {"devices": list(ffn_cuda_devices)},
@@ -101,6 +106,7 @@ port = {daemon_port}
 [scheduler]
 atn_concurrency = {atn_concurrency}
 ffn_concurrency = {ffn_concurrency}
+slo = {{ ttft_ms = 1000, tbt_ms = 50 }}
 
 [atn]
 devices = [{atn_devices}]

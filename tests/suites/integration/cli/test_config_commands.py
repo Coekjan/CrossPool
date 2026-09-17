@@ -113,6 +113,9 @@ def test_config_dump_reports_configuration_errors_without_traceback(
     elif failure == "schema":
         config_path.write_text(
             """
+[scheduler]
+slo = { ttft_ms = 1000, tbt_ms = 50 }
+
 [atn]
 devices = [0]
 

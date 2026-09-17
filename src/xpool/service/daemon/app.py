@@ -38,7 +38,7 @@ from xpool.service.wire import (
     HeartbeatResponse,
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
-    KvCapacityChannelRef,
+    KvControlChannelRef,
     ProcessRef,
     ReadinessSnapshot,
     ServingListener,
@@ -232,9 +232,9 @@ def create_daemon() -> FastAPI:
 
         return await asyncio.to_thread(control_plane.require_fabric_plan)
 
-    @app.get("/kv/capacity-channel/{generation}")
-    async def get_kv_capacity_channel(generation: str) -> KvCapacityChannelRef:
-        """Return the native capacity channel for the retained Fabric generation.
+    @app.get("/kv/control-channel/{generation}")
+    async def get_kv_control_channel(generation: str) -> KvControlChannelRef:
+        """Return the native KV control channel for the retained Fabric generation.
 
         Raises:
             404: The generation identity is invalid or is not retained.
@@ -243,8 +243,8 @@ def create_daemon() -> FastAPI:
         try:
             generation_id = FabricGenerationId.parse(generation)
         except ValueError as error:
-            raise XpoolDaemonError("not_found", "kv capacity channel generation is invalid") from error
-        return await asyncio.to_thread(control_plane.kv_capacity_channel, generation_id)
+            raise XpoolDaemonError("not_found", "kv control channel generation is invalid") from error
+        return await asyncio.to_thread(control_plane.kv_control_channel, generation_id)
 
     @app.post("/fabric/quiesce")
     async def request_fabric_quiesce(request: FabricQuiesceRequest) -> Response:

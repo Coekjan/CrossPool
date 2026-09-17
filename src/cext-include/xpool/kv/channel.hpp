@@ -1,7 +1,7 @@
 #pragma once
 
 /// \file xpool/kv/channel.hpp
-/// \brief Host-local elastic KV-capacity command and report channel.
+/// \brief Host-local elastic KV control channel.
 
 #include <cstddef>
 #include <cstdint>
@@ -17,37 +17,36 @@
 
 namespace xpool::kv {
 
-/// One coherent group capacity command.
+/// One immutable group capacity operation.
 struct KvCapacityCommand {
-  /// Nonzero group-local command identity.
+  /// Nonzero group-local operation identity.
   std::uint32_t sequence;
-  /// Physical bundle prefix every partition must protect.
+  /// Absolute physical and logical bundle target.
   std::uint32_t target_bundles;
-  /// Logical bundle prefix currently exposed to allocators.
-  std::uint32_t active_bundles;
 
   bool operator==(const KvCapacityCommand &) const = default;
 };
 
-/// One partition's physical progress and protected command prefix.
-struct KvCapacityBackingReport {
-  /// Command sequence whose target prefix this partition protects, or zero
-  /// during bootstrap.
-  std::uint32_t prepared_sequence;
-  /// Actual contiguous physical bundle prefix.
-  std::uint32_t backed_bundles;
+/// Latest admission demand evaluated under one completed operation.
+struct KvCapacityDemand {
+  /// Completed operation whose capacity was evaluated.
+  std::uint32_t evaluated_sequence;
+  /// Absolute required capacity, or no value when demand resolved.
+  std::optional<std::uint32_t> requested_bundles;
+  /// Absolute scheduler-local SLO deadline, or no value when demand resolved.
+  std::optional<std::uint64_t> deadline_monotonic_ns;
 
-  bool operator==(const KvCapacityBackingReport &) const = default;
+  bool operator==(const KvCapacityDemand &) const = default;
 };
 
-/// Latest capacity-pressure state published by one logical group.
-struct KvCapacityPressureReport {
-  /// Nonzero group-local pressure publication identity.
+/// One partition's terminal operation result.
+struct KvCapacityCompletion {
+  /// Completed operation.
   std::uint32_t sequence;
-  /// Active capacity at an admission failure, or no value after resolution.
-  std::optional<std::uint32_t> active_bundles;
+  /// Actual contiguous physical backing after the logical switch and terminal physical work.
+  std::uint32_t backed_bundles;
 
-  bool operator==(const KvCapacityPressureReport &) const = default;
+  bool operator==(const KvCapacityCompletion &) const = default;
 };
 
 /// One attention GPU's post-capture memory observation.
@@ -61,43 +60,43 @@ struct KvDeviceMemoryReport {
 };
 
 /// Move-only owner and typed access surface for one validated channel mapping.
-class CapacityChannelMapping {
+class ControlChannelMapping {
 public:
   /// Construct an empty mapping owner.
-  CapacityChannelMapping() = default;
+  ControlChannelMapping() = default;
 
   /// Create shared storage and initialize its channel header.
-  static CapacityChannelMapping create(std::string name, CapacityChannelLayout layout);
+  static ControlChannelMapping create(std::string name, ControlChannelLayout layout);
 
   /// Attach shared storage and validate its channel header and layout.
-  static CapacityChannelMapping attach(std::string_view name);
+  static ControlChannelMapping attach(std::string_view name);
 
-  ~CapacityChannelMapping() noexcept = default;
-  CapacityChannelMapping(const CapacityChannelMapping &) = delete;
-  CapacityChannelMapping &operator=(const CapacityChannelMapping &) = delete;
+  ~ControlChannelMapping() noexcept = default;
+  ControlChannelMapping(const ControlChannelMapping &) = delete;
+  ControlChannelMapping &operator=(const ControlChannelMapping &) = delete;
   /// Transfer the mapping and optional unlink authority, leaving the source empty.
-  CapacityChannelMapping(CapacityChannelMapping &&) noexcept = default;
+  ControlChannelMapping(ControlChannelMapping &&) noexcept = default;
   /// Close this mapping before taking the source's mapping and optional unlink authority.
-  CapacityChannelMapping &operator=(CapacityChannelMapping &&) noexcept = default;
+  ControlChannelMapping &operator=(ControlChannelMapping &&) noexcept = default;
 
   /// Return the creator-owned name used for participant attachment.
   /// \pre This mapping was returned by create() and has not been closed.
   std::string_view unlink_name() const noexcept { return memory_.unlink_name(); }
 
   /// Return the mapping's canonical counts and offsets.
-  const CapacityChannelLayout &layout() const noexcept { return layout_; }
+  const ControlChannelLayout &layout() const noexcept { return layout_; }
 
   /// Return every attention-device observation slot.
   std::span<PoolEntry> pool_entries() const noexcept {
     return {reinterpret_cast<PoolEntry *>(memory_.bytes().data() + layout_.pools_offset), layout_.pool_count};
   }
 
-  /// Return every logical-group command and pressure slot.
+  /// Return every logical Capacity Group slot.
   std::span<GroupEntry> group_entries() const noexcept {
     return {reinterpret_cast<GroupEntry *>(memory_.bytes().data() + layout_.groups_offset), layout_.group_count};
   }
 
-  /// Return every Instance-rank capture and backing slot.
+  /// Return every Instance-rank startup and operation-completion slot.
   std::span<PartitionEntry> partition_entries() const noexcept {
     return {reinterpret_cast<PartitionEntry *>(memory_.bytes().data() + layout_.partitions_offset),
             layout_.partition_count};
@@ -107,26 +106,26 @@ public:
   void close() { memory_.close(); }
 
 private:
-  CapacityChannelMapping(xpool::utils::PosixSharedMemoryMapping memory, CapacityChannelLayout layout)
+  ControlChannelMapping(xpool::utils::PosixSharedMemoryMapping memory, ControlChannelLayout layout)
       : memory_(std::move(memory)), layout_(layout) {}
 
   xpool::utils::PosixSharedMemoryMapping memory_;
-  CapacityChannelLayout layout_{};
+  ControlChannelLayout layout_{};
 };
 
 /// Daemon-owned writer and aggregate reader for one Generation channel.
-class DaemonCapacityChannel {
+class DaemonControlChannel {
 public:
   /// Create a zero-initialized POSIX shared-memory channel.
-  static DaemonCapacityChannel create(std::size_t pool_count, std::size_t group_count, std::size_t partition_count);
+  static DaemonControlChannel create(std::size_t pool_count, std::size_t group_count, std::size_t partition_count);
 
-  ~DaemonCapacityChannel() = default;
-  /// Transfer the mapping and unlink ownership, leaving the source empty.
-  DaemonCapacityChannel(DaemonCapacityChannel &&other) noexcept = default;
-  /// Close this mapping before taking the source's mapping and unlink ownership.
-  DaemonCapacityChannel &operator=(DaemonCapacityChannel &&other) noexcept = default;
-  DaemonCapacityChannel(const DaemonCapacityChannel &) = delete;
-  DaemonCapacityChannel &operator=(const DaemonCapacityChannel &) = delete;
+  ~DaemonControlChannel() = default;
+  /// Transfer channel ownership, leaving the source empty.
+  DaemonControlChannel(DaemonControlChannel &&other) noexcept = default;
+  /// Replace this channel with the source, leaving the source empty.
+  DaemonControlChannel &operator=(DaemonControlChannel &&other) noexcept = default;
+  DaemonControlChannel(const DaemonControlChannel &) = delete;
+  DaemonControlChannel &operator=(const DaemonControlChannel &) = delete;
 
   /// Return the opaque POSIX shared-memory name used by participants.
   std::string name() const;
@@ -134,38 +133,44 @@ public:
   /// Read pool observations in pool-index order.
   std::vector<std::optional<KvDeviceMemoryReport>> read_device_memory() const;
 
-  /// Publish one complete command for a logical group.
+  /// Read one-time startup backing in partition-index order.
+  std::vector<std::optional<std::uint32_t>> read_initial_backing() const;
+
+  /// Publish one Capacity Group's immutable service ceiling.
+  void publish_service_ceiling(std::size_t group_index, std::uint32_t bundles);
+
+  /// Publish one immutable operation for a Capacity Group.
   void publish_command(std::size_t group_index, KvCapacityCommand command);
 
-  /// Read partition reports in partition-index order.
-  std::vector<std::optional<KvCapacityBackingReport>> read_backing_reports() const;
+  /// Read latest demand snapshots in group-index order.
+  std::vector<std::optional<KvCapacityDemand>> read_demands() const;
 
-  /// Read pressure snapshots in group-index order.
-  std::vector<std::optional<KvCapacityPressureReport>> read_pressure_reports() const;
+  /// Read terminal partition completions in partition-index order.
+  std::vector<std::optional<KvCapacityCompletion>> read_completions() const;
 
   /// Unmap, close, and unlink the channel. Repeated calls are no-ops.
   void close();
 
 private:
-  DaemonCapacityChannel() = default;
+  DaemonControlChannel() = default;
 
-  CapacityChannelMapping mapping_;
+  ControlChannelMapping mapping_;
 };
 
 /// AtnAgent-owned publisher for one device observation.
-class AtnAgentCapacityChannel {
+class AtnAgentControlChannel {
 public:
   /// Attach to a Generation channel and bind this AtnAgent's owned slots.
-  static AtnAgentCapacityChannel attach(std::string_view name, std::size_t pool_index,
-                                        std::vector<std::size_t> partition_indices);
+  static AtnAgentControlChannel attach(std::string_view name, std::size_t pool_index,
+                                       std::vector<std::size_t> partition_indices);
 
-  ~AtnAgentCapacityChannel() = default;
-  /// Transfer the local mapping, leaving the source empty.
-  AtnAgentCapacityChannel(AtnAgentCapacityChannel &&other) noexcept = default;
-  /// Close this mapping before taking the source's local mapping.
-  AtnAgentCapacityChannel &operator=(AtnAgentCapacityChannel &&other) noexcept = default;
-  AtnAgentCapacityChannel(const AtnAgentCapacityChannel &) = delete;
-  AtnAgentCapacityChannel &operator=(const AtnAgentCapacityChannel &) = delete;
+  ~AtnAgentControlChannel() = default;
+  /// Transfer the attachment, leaving the source empty.
+  AtnAgentControlChannel(AtnAgentControlChannel &&other) noexcept = default;
+  /// Replace this attachment with the source, leaving the source empty.
+  AtnAgentControlChannel &operator=(AtnAgentControlChannel &&other) noexcept = default;
+  AtnAgentControlChannel(const AtnAgentControlChannel &) = delete;
+  AtnAgentControlChannel &operator=(const AtnAgentControlChannel &) = delete;
 
   /// Return whether every bound Instance partition completed Graph capture.
   bool captures_complete() const;
@@ -177,50 +182,56 @@ public:
   void close();
 
 private:
-  AtnAgentCapacityChannel() = default;
+  AtnAgentControlChannel() = default;
 
-  CapacityChannelMapping mapping_;
+  ControlChannelMapping mapping_;
   std::size_t pool_index_ = 0;
   std::vector<std::size_t> partition_indices_;
 };
 
-/// Instance-Rank-owned command reader and partition/group publisher.
-class InstanceCapacityChannel {
+/// Instance-rank-owned group negotiation and partition publication surface.
+class InstanceControlChannel {
 public:
-  /// Attach to one Instance row and bind the rank's owned group and partition.
-  static InstanceCapacityChannel attach(std::string_view name, std::size_t group_index, std::size_t partition_index,
-                                        std::size_t group_count);
+  /// Attach to one Instance row and bind the rank's group and partition.
+  static InstanceControlChannel attach(std::string_view name, std::size_t group_index, std::size_t partition_index,
+                                       std::size_t dp_group_count);
 
-  ~InstanceCapacityChannel() = default;
-  /// Transfer the local mapping, leaving the source empty.
-  InstanceCapacityChannel(InstanceCapacityChannel &&other) noexcept = default;
-  /// Close this mapping before taking the source's local mapping.
-  InstanceCapacityChannel &operator=(InstanceCapacityChannel &&other) noexcept = default;
-  InstanceCapacityChannel(const InstanceCapacityChannel &) = delete;
-  InstanceCapacityChannel &operator=(const InstanceCapacityChannel &) = delete;
+  ~InstanceControlChannel() = default;
+  /// Transfer the attachment, leaving the source empty.
+  InstanceControlChannel(InstanceControlChannel &&other) noexcept = default;
+  /// Replace this attachment with the source, leaving the source empty.
+  InstanceControlChannel &operator=(InstanceControlChannel &&other) noexcept = default;
+  InstanceControlChannel(const InstanceControlChannel &) = delete;
+  InstanceControlChannel &operator=(const InstanceControlChannel &) = delete;
+
+  /// Publish this partition's one-time startup backing.
+  void publish_initial_backing(std::uint32_t bundles);
 
   /// Publish the one-way Graph-capture completion barrier.
   void publish_capture_complete();
 
-  /// Publish this partition's actual and command-correlated backing state.
-  void publish_backing_report(KvCapacityBackingReport report);
+  /// Read this Capacity Group's immutable service ceiling.
+  std::optional<std::uint32_t> service_ceiling() const;
 
   /// Read coherent commands for this Instance's DP groups in DP-rank order.
   std::vector<std::optional<KvCapacityCommand>> read_commands() const;
 
-  /// Publish a new pressure attempt or its resolution.
-  void publish_pressure(std::optional<std::uint32_t> active_bundles);
+  /// Publish this partition's terminal operation result.
+  void publish_completion(KvCapacityCompletion completion);
+
+  /// Publish the latest leader-owned admission-demand snapshot.
+  void publish_demand(KvCapacityDemand demand);
 
   /// Release this process's local mapping and descriptor.
   void close();
 
 private:
-  InstanceCapacityChannel() = default;
+  InstanceControlChannel() = default;
 
-  CapacityChannelMapping mapping_;
+  ControlChannelMapping mapping_;
   std::size_t group_index_ = 0;
   std::size_t group_row_begin_ = 0;
-  std::size_t group_count_ = 0;
+  std::size_t dp_group_count_ = 0;
   std::size_t partition_index_ = 0;
 };
 

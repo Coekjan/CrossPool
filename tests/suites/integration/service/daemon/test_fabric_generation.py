@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from http import HTTPStatus
+from typing import cast
 
 import pytest
 
@@ -52,8 +53,15 @@ def invocation_failure(*, origin_pe: int, sequence: int = 1) -> dict[str, object
     }
 
 
+def make_config(payload: dict[str, object]) -> XpoolConfig:
+    """Supply the required global latency objective to generation tests."""
+
+    scheduler = cast(dict[str, object], payload.get("scheduler", {}))
+    return XpoolConfig.from_mapping(payload | {"scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}, **scheduler}})
+
+
 def test_registration_and_reports_form_executable_ready_generation() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
@@ -121,7 +129,7 @@ def test_registration_and_reports_form_executable_ready_generation() -> None:
 
 
 def test_instance_initialized_listener_mismatch_is_atomic() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0, 1]},
             "ffn": {"devices": [2]},
@@ -188,7 +196,7 @@ def test_instance_initialized_listener_mismatch_is_atomic() -> None:
 
 
 def test_generation_allows_instance_to_use_atnagent_prefix() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0, 1]},
             "ffn": {"devices": [2]},
@@ -231,7 +239,7 @@ def test_generation_allows_instance_to_use_atnagent_prefix() -> None:
 
 
 def test_plan_waits_for_every_model_while_transport_publication_is_incremental() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
@@ -274,7 +282,7 @@ def test_plan_waits_for_every_model_while_transport_publication_is_incremental()
 
 
 def test_random_scheduler_seed_is_generated_once_and_persisted_in_plan(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
@@ -303,7 +311,7 @@ def test_random_scheduler_seed_is_generated_once_and_persisted_in_plan(monkeypat
 
 
 def test_rank_independent_ffn_profile_mismatch_is_rejected_during_registration() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0, 1]},
             "ffn": {"devices": [2]},
@@ -323,7 +331,7 @@ def test_rank_independent_ffn_profile_mismatch_is_rejected_during_registration()
 
 
 def test_kv_capacity_geometry_mismatch_is_rejected_during_registration() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0, 1]},
             "ffn": {"devices": [2]},
@@ -343,7 +351,7 @@ def test_kv_capacity_geometry_mismatch_is_rejected_during_registration() -> None
 
 
 def test_kv_capacity_geometry_may_differ_between_dp_groups() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0, 1]},
             "ffn": {"devices": [2]},
@@ -376,7 +384,7 @@ def test_kv_capacity_geometry_may_differ_between_dp_groups() -> None:
 
 
 def test_owner_invocation_and_control_failures_are_retained_independently() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
@@ -427,7 +435,7 @@ def test_owner_invocation_and_control_failures_are_retained_independently() -> N
 
 
 def test_illegal_report_aborts_but_exact_committed_retry_remains_idempotent() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
@@ -449,7 +457,7 @@ def test_illegal_report_aborts_but_exact_committed_retry_remains_idempotent() ->
 
 
 def test_quiesce_requires_current_agent_owner_and_generation() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
@@ -488,7 +496,7 @@ def test_quiesce_requires_current_agent_owner_and_generation() -> None:
 def test_transition_timeout_records_control_failure_and_selects_abort(
     deterministic_daemon_dependencies: FakeMonotonicClock,
 ) -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
@@ -518,7 +526,7 @@ def test_transition_timeout_records_control_failure_and_selects_abort(
 
 
 def test_finalized_agent_exit_does_not_convert_cooperative_cleanup_to_abort() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
@@ -569,7 +577,7 @@ def test_finalized_agent_exit_does_not_convert_cooperative_cleanup_to_abort() ->
 
 
 def test_termination_requested_instance_exit_during_quiesce_does_not_record_owner_failure() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
@@ -635,7 +643,7 @@ def test_termination_requested_instance_exit_during_quiesce_does_not_record_owne
 
 
 def test_unrequested_instance_exit_during_quiesce_records_owner_failure() -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
@@ -682,7 +690,7 @@ def test_unrequested_instance_exit_during_quiesce_records_owner_failure() -> Non
 def test_instance_exit_after_activation_completes_cooperative_shutdown() -> None:
     """Retain Instance owner loss while live Fabric PEs finish every barrier."""
 
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
@@ -737,7 +745,7 @@ def test_instance_exit_after_activation_completes_cooperative_shutdown() -> None
 def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
@@ -832,7 +840,7 @@ def test_fabric_pe_exit_records_owner_failure_and_selects_fail_stop(
     target_pe: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = XpoolConfig.from_mapping(
+    config = make_config(
         {
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},

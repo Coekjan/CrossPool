@@ -150,7 +150,7 @@ def test_instance_deregistration_preserves_rank_and_owner(monkeypatch: pytest.Mo
     ]
 
 
-def test_kv_capacity_channel_uses_generation_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_kv_control_channel_uses_generation_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     generation = FabricGenerationId(high=1, low=2)
     probe = install_scripted_http_client(
         monkeypatch,
@@ -162,7 +162,7 @@ def test_kv_capacity_channel_uses_generation_identity(monkeypatch: pytest.Monkey
 
     client = XpoolClient()
     try:
-        channel = client.kv_capacity_channel(generation)
+        channel = client.kv_control_channel(generation)
     finally:
         client.close()
 
@@ -170,5 +170,5 @@ def test_kv_capacity_channel_uses_generation_identity(monkeypatch: pytest.Monkey
     assert channel.name == "/xpool-kv-test"
     assert probe.calls == [
         ("GET", "/health", None),
-        ("GET", "/kv/capacity-channel/00000000000000010000000000000002", None),
+        ("GET", "/kv/control-channel/00000000000000010000000000000002", None),
     ]

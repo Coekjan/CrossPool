@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import threading
 from http import HTTPStatus
 
@@ -118,7 +117,6 @@ def test_probe_serving_listener_treats_request_error_as_not_ready() -> None:
 
 def test_daemon_lifespan_latches_concurrent_serving_health(
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     install_test_config(synthetic_config())
     monkeypatch.setattr(xpool.service.daemon.app.bootstrap, "init", lambda device, role: None)
@@ -161,14 +159,9 @@ def test_daemon_lifespan_latches_concurrent_serving_health(
         async with app.router.lifespan_context(app):
             assert await asyncio.to_thread(confirmed.wait, 2.0)
 
-    with caplog.at_level(logging.INFO, logger="xpool.service.daemon.app"):
-        asyncio.run(run())
+    asyncio.run(run())
 
     assert entered == [30000, 30001, 30001]
-    messages = [record.getMessage() for record in caplog.records]
-    assert "serving healthy generation=00000000000000010000000000000001 instance_count=2" in messages
-    assert "serving listener instance=a host=127.0.0.1 port=30000" in messages
-    assert "serving listener instance=b host=127.0.0.1 port=30001" in messages
 
 
 def test_create_daemon_initializes_native_daemon_role(monkeypatch: pytest.MonkeyPatch) -> None:

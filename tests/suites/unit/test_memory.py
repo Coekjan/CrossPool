@@ -71,6 +71,7 @@ def install_config(path: Path | None) -> None:
 
     ffn: dict[str, object] = {"devices": [1]}
     payload: dict[str, object] = {
+        "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": ffn,
         "models": [{"id": "m", "path": "/models/m"}],

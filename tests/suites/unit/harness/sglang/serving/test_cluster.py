@@ -227,6 +227,7 @@ def cluster_launch(tmp_path: Path, *, daemon_port: int = 19810) -> E2eLaunch:
         {
             "daemon": {"host": "127.0.0.1", "port": daemon_port},
             "vendor": {"model_base_uri": str(tmp_path / "models")},
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1, 2]},
             "models": [{"id": "organization/model"}],

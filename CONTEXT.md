@@ -57,11 +57,12 @@ The physical-memory capacity available for KV mappings across the Instance
 Ranks colocated on one attention GPU.
 _Avoid_: Global KV cache, KV tensor pool
 
-**KV Capacity Channel**:
+**KV Control Channel**:
 The daemon-owned, Fabric-Generation-scoped host-local control surface that
 connects per-GPU KV Capacity Pools, logical KV Capacity Groups, and their
-rank-local partitions.
-_Avoid_: AtnAgent channel, TP-group channel, KV data channel
+rank-local partitions. It carries capacity demand, adjustment commands, group
+coordination, and physical completion observations.
+_Avoid_: KV Capacity Channel, AtnAgent channel, TP-group channel, KV data channel
 
 **KV Capacity Group**:
 The Instance ranks for one `(instance_id, atn_dp_rank)` that share a logical KV
@@ -81,13 +82,20 @@ required physical backing.
 _Avoid_: Applied target, mapped capacity, active requests
 
 **KV Capacity Command**:
-A distinct group capacity adjustment coupling its physical target with its
-currently authorized logical capacity.
+A distinct group capacity adjustment with a fixed target. The daemon authorizes
+the target; the group coordinates safe application and reports its outcome.
 
-**KV Capacity Preparation**:
-A local partition's guarantee that a command's required physical prefix is
-backed and cannot be removed by an earlier adjustment. It is distinct from
-completing reclamation of all backing beyond that prefix.
+**KV Capacity Demand**:
+The Capacity Group leader's persistent latest-state report of the completed
+capacity operation evaluated by scheduling and the absolute bundle capacity
+required by one unresolved authoritative admission-failure witness, paired with
+that witness's scheduler-local SLO deadline. It is state, not a consumed pressure
+event.
+_Avoid_: KV pressure, capacity request event, one-bundle request
+
+**KV Capacity Completion**:
+One partition's terminal report that a Capacity Command has been applied and
+its physical backing has reached the reported bundle count.
 
 **KV Page Bundle**:
 One rank-local compound VMM mapping unit covering the same KV page index across

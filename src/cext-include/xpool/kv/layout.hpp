@@ -1,7 +1,7 @@
 #pragma once
 
 /// \file xpool/kv/layout.hpp
-/// \brief Shared-memory layout for one Generation's elastic KV-capacity channel.
+/// \brief Shared-memory layout for one Generation's elastic KV control channel.
 
 #include <cstddef>
 #include <cstdint>
@@ -9,11 +9,11 @@
 
 namespace xpool::kv {
 
-/// Stable magic identifying an elastic KV-capacity channel.
-inline constexpr std::uint64_t kCapacityChannelMagic = 0x58504f4f4c4b5631ULL;
+/// Stable magic identifying an elastic KV control channel.
+inline constexpr std::uint64_t kControlChannelMagic = 0x58504f4f4c4b5631ULL;
 
-/// Fixed prefix stored at offset zero of a capacity-channel mapping.
-struct alignas(std::uint64_t) CapacityChannelHeader {
+/// Fixed prefix stored at offset zero of a control-channel mapping.
+struct alignas(std::uint64_t) ControlChannelHeader {
   /// Domain-specific channel identity.
   std::uint64_t magic;
   /// Native ABI version required to interpret the mapping.
@@ -26,10 +26,10 @@ struct alignas(std::uint64_t) CapacityChannelHeader {
   std::uint64_t pool_count;
   /// Number of logical capacity groups.
   std::uint64_t group_count;
-  /// Number of Instance-rank backing reports.
+  /// Number of Instance-rank partition entries.
   std::uint64_t partition_count;
 
-  constexpr bool operator==(const CapacityChannelHeader &) const = default;
+  constexpr bool operator==(const ControlChannelHeader &) const = default;
 };
 
 /// One AtnAgent-owned device-memory publication.
@@ -40,38 +40,44 @@ struct alignas(std::uint64_t) PoolEntry {
   std::uint64_t device_free_bytes;
 };
 
-/// One sequence and bundle count published as a coherent atomic value.
-struct alignas(std::uint64_t) CapacityPublication {
+/// One sequence and value published as a coherent atomic value.
+struct alignas(std::uint64_t) SequencedValue {
   /// Monotonic identity within the owning publication stream.
   std::uint32_t sequence;
-  /// Bundle count associated with the sequence.
-  std::uint32_t bundles;
+  /// Domain-specific value associated with the sequence.
+  std::uint32_t value;
 
-  constexpr bool operator==(const CapacityPublication &) const = default;
+  constexpr bool operator==(const SequencedValue &) const = default;
 };
 
-static_assert(sizeof(CapacityPublication) == sizeof(std::uint64_t));
+static_assert(sizeof(SequencedValue) == sizeof(std::uint64_t));
 
-/// One daemon-owned command and Instance-owned pressure publication.
+/// One Capacity Group's command, demand, and service ceiling.
 struct alignas(std::uint64_t) GroupEntry {
-  /// Command sequence and target bundle count.
-  CapacityPublication target_publication;
-  /// Command sequence and active bundle count.
-  CapacityPublication active_publication;
-  /// Pressure sequence and observed active bundle count.
-  CapacityPublication pressure_publication;
+  /// Daemon-owned fixed operation sequence and target bundle count.
+  SequencedValue command;
+  /// TP-leader-owned evaluated sequence and absolute requested bundle count.
+  SequencedValue demand_payload;
+  /// Encoded deadline; one means resolved demand.
+  std::uint64_t demand_deadline;
+  /// Even nonzero values commit a coherent demand; odd values mark a writer in progress.
+  std::uint64_t demand_revision;
+  /// Daemon-owned immutable service ceiling; zero until published.
+  std::uint32_t service_ceiling_bundles;
 };
 
-/// One Instance-rank-owned capture and backing publication.
+/// One Instance-rank's startup publications and terminal operation completion.
 struct alignas(std::uint64_t) PartitionEntry {
-  /// Prepared command sequence and actual backing count.
-  CapacityPublication backing_publication;
+  /// One-time startup physical backing count; zero until published.
+  std::uint32_t initial_backing_bundles;
   /// One-way post-capture completion publication.
   std::uint32_t capture_complete;
+  /// Completed operation sequence and actual physical backing count.
+  SequencedValue completion;
 };
 
-/// Canonical counts and region offsets for a capacity-channel mapping.
-struct CapacityChannelLayout {
+/// Canonical counts and region offsets for a control-channel mapping.
+struct ControlChannelLayout {
   /// Number of attention-device publication entries.
   std::size_t pool_count;
   /// Number of logical capacity-group entries.
@@ -88,14 +94,14 @@ struct CapacityChannelLayout {
   std::size_t total_bytes;
 
   /// Materialize one complete layout from stable Generation membership.
-  static CapacityChannelLayout create(std::size_t pool_count, std::size_t group_count, std::size_t partition_count);
+  static ControlChannelLayout create(std::size_t pool_count, std::size_t group_count, std::size_t partition_count);
 
   /// Validate a mapped header and byte extent against this canonical layout.
-  void validate(const CapacityChannelHeader &header, std::size_t mapping_bytes) const;
+  void validate(const ControlChannelHeader &header, std::size_t mapping_bytes) const;
 
-  constexpr bool operator==(const CapacityChannelLayout &) const = default;
+  constexpr bool operator==(const ControlChannelLayout &) const = default;
 };
 
-static_assert(std::is_trivially_copyable_v<CapacityChannelHeader>);
+static_assert(std::is_trivially_copyable_v<ControlChannelHeader>);
 
 } // namespace xpool::kv

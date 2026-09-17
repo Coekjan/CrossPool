@@ -13,6 +13,7 @@ def test_duplicate_model_paths_are_rejected() -> None:
     with pytest.raises(ValidationError, match="model paths must be unique"):
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
                 "models": [
@@ -28,6 +29,7 @@ def test_vendor_model_base_uri_from_config_derives_model_path() -> None:
     config = XpoolConfig.from_mapping(
         {
             "vendor": {"model_base_uri": "/models"},
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "test/model"}],
@@ -43,6 +45,7 @@ def test_vendor_model_base_uri_is_config_only(caplog: pytest.LogCaptureFixture) 
         config = XpoolConfig.from_mapping(
             {
                 "vendor": {"model_base_uri": "/models-from-config"},
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
                 "models": [{"id": "test/model"}],
@@ -59,6 +62,7 @@ def test_explicit_model_path_overrides_vendor_model_base_uri() -> None:
     config = XpoolConfig.from_mapping(
         {
             "vendor": {"model_base_uri": "/models"},
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "test/model", "path": "/custom/deepseek"}],
@@ -73,6 +77,7 @@ def test_model_path_lookup_rejects_unknown_model_id() -> None:
     config = XpoolConfig.from_mapping(
         {
             "vendor": {"model_base_uri": "/models"},
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "test/model"}],
@@ -87,6 +92,7 @@ def test_model_path_or_vendor_model_base_uri_is_required() -> None:
     with pytest.raises(ValidationError, match=r"vendor\.model_base_uri"):
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
                 "models": [{"id": "test/model"}],
@@ -99,6 +105,7 @@ def test_vendor_model_base_uri_must_be_absolute() -> None:
         XpoolConfig.from_mapping(
             {
                 "vendor": {"model_base_uri": "relative/models"},
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
                 "models": [{"id": "test/model"}],
@@ -110,6 +117,7 @@ def test_model_path_must_be_absolute() -> None:
     with pytest.raises(ValidationError, match="path must be absolute"):
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
                 "models": [{"id": "m", "path": "relative/model"}],

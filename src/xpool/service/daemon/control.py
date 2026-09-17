@@ -60,7 +60,7 @@ from xpool.service.wire import (
     InstanceRankInitializedPublication,
     InstanceRankRef,
     InstanceRankRegistration,
-    KvCapacityChannelRef,
+    KvControlChannelRef,
     ProcessRef,
     ReadinessSnapshot,
     ReadinessStatus,
@@ -634,14 +634,14 @@ class ControlPlane:
         with self.lock:
             return self.fabric_controller.require_plan()
 
-    def kv_capacity_channel(self, generation: FabricGenerationId) -> KvCapacityChannelRef:
-        """Return the capacity channel for the retained Fabric generation."""
+    def kv_control_channel(self, generation: FabricGenerationId) -> KvControlChannelRef:
+        """Return the KV control channel for the retained Fabric generation."""
 
         with self.lock:
             fabric = self.fabric_controller.generation
             policy = self.kv_capacity_policy
             if fabric is None or policy is None or fabric.plan.generation != generation:
-                raise XpoolDaemonError("not_found", "kv capacity channel generation is not retained")
+                raise XpoolDaemonError("not_found", "kv control channel generation is not retained")
             return policy.channel_ref
 
     def step_kv_capacity(self) -> None:

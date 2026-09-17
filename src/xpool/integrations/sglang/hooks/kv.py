@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -11,7 +12,7 @@ from inspect import signature
 import torch
 from sglang.srt.beam_search.batch_tail import beam_retraction_order
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, retract_all
-from sglang.srt.managers.schedule_policy import AddReqResult, PrefillAdder
+from sglang.srt.managers.schedule_policy import CLIP_MAX_NEW_TOKENS, AddReqResult, PrefillAdder
 from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.managers.scheduler_components.invariant_checker import SchedulerInvariantChecker
 from sglang.srt.managers.scheduler_components.new_token_ratio_tracker import NewTokenRatioTracker
@@ -95,15 +96,22 @@ class ElasticPrefillAdder(PrefillAdder):
 
     tree_cache: UnifiedRadixCache
     token_to_kv_pool_allocator: ElasticTokenToKVPoolAllocator | ElasticPagedTokenToKVPoolAllocator
+    track_remaining_tokens = False
+    minimum_remaining_tokens: float | None = None
 
     @property
     def rem_total_tokens(self) -> float:
         allocator = self.token_to_kv_pool_allocator
-        return (
+        remaining = (
             allocator.available_size()
             + admission_evictable_size(self.tree_cache, allocator.token_capacity)
             - self.rem_total_token_offset
         )
+        if self.track_remaining_tokens:
+            self.minimum_remaining_tokens = (
+                remaining if self.minimum_remaining_tokens is None else min(self.minimum_remaining_tokens, remaining)
+            )
+        return remaining
 
     @property
     def cur_rem_tokens(self) -> int:
@@ -134,9 +142,7 @@ def compute_post_capture_kv_resize(model_runner: ModelRunner) -> PostCaptureKVRe
     runtime = SglangInstanceRankRuntime.require(model_runner)
     if runtime.kv_capacity is None:
         raise RuntimeError("xpool post-capture kv finalization requires an attached capacity reconciler")
-    if runtime.instance_rank is None:
-        raise RuntimeError("xpool post-capture kv finalization requires an active instance rank")
-    return runtime.kv_capacity.finalize_after_capture(model_runner, runtime.instance_rank)
+    return runtime.kv_capacity.finalize_after_capture(model_runner)
 
 
 def after_scheduler_init_request_receiver(result: None, scheduler: Scheduler) -> None:
@@ -193,8 +199,8 @@ def around_scheduler_get_next_batch_to_run[R](
     return result
 
 
-def after_prefill_add_one_req(
-    result: AddReqResult,
+def around_prefill_add_one_req(
+    original_fn: Callable[[PrefillAdder, Req, bool, int | None], AddReqResult],
     adder: PrefillAdder,
     req: Req,
     has_chunked_req: bool,
@@ -202,8 +208,37 @@ def after_prefill_add_one_req(
 ) -> AddReqResult:
     """Record authoritative prefill capacity rejection."""
 
-    if result is AddReqResult.NO_TOKEN and req not in adder.can_run_list:
-        current_capacity_reconciler().record_pressure((req,))
+    if not isinstance(adder, ElasticPrefillAdder):
+        return original_fn(adder, req, has_chunked_req, truncation_align_size)
+    reconciler = current_capacity_reconciler()
+    if reconciler.draining:
+        return AddReqResult.NO_TOKEN
+
+    adder.minimum_remaining_tokens = None
+    adder.track_remaining_tokens = True
+    try:
+        result = original_fn(adder, req, has_chunked_req, truncation_align_size)
+    finally:
+        adder.track_remaining_tokens = False
+    remaining = adder.minimum_remaining_tokens
+    if result is AddReqResult.NO_TOKEN and req not in adder.can_run_list and remaining is not None:
+        max_new_tokens = min(
+            max(req.sampling_params.max_new_tokens - len(req.output_ids), 0),
+            CLIP_MAX_NEW_TOKENS,
+        )
+        required_tokens = (
+            len(req.full_untruncated_fill_ids)
+            - len(req.prefix_indices)
+            + max_new_tokens
+            + adder.page_size
+            + adder._mamba_gap_budget_for_req(req)
+        )
+        shortfall = math.floor(required_tokens - remaining) + 1
+        if shortfall > 0:
+            reconciler.record_prefill_requirement(
+                req,
+                adder.token_to_kv_pool_allocator.token_capacity + shortfall,
+            )
     return result
 
 
@@ -215,7 +250,13 @@ def after_check_decode_mem(
     """Record authoritative full-batch Decode capacity rejection."""
 
     if not result and selected_indices is None:
-        current_capacity_reconciler().record_pressure(batch.reqs)
+        required_tokens = batch.new_tokens_required_next_decode()
+        allocator = batch.token_to_kv_pool_allocator
+        if isinstance(allocator, ElasticTokenToKVPoolAllocator | ElasticPagedTokenToKVPoolAllocator):
+            current_capacity_reconciler().record_decode_requirement(
+                batch.reqs,
+                allocator.token_capacity + required_tokens - allocator.available_size(),
+            )
     return result
 
 
@@ -259,7 +300,7 @@ def after_pool_stats(result: PoolStats, observer: SchedulerPoolStatsObserver) ->
         observer.max_total_num_tokens
         - result.full_available_size
         - result.full_evictable_size
-        - allocator.withheld_size()
+        - (observer.max_total_num_tokens - allocator.token_capacity)
     )
     return replace(
         result,
@@ -280,7 +321,9 @@ def around_check_full_pool(
     if isinstance(allocator, ElasticTokenToKVPoolAllocator | ElasticPagedTokenToKVPoolAllocator):
         pool_stats = replace(
             pool_stats,
-            full_available_size=pool_stats.full_available_size + allocator.withheld_size(),
+            full_available_size=(
+                pool_stats.full_available_size + checker.max_total_num_tokens - allocator.token_capacity
+            ),
         )
     return original_fn(checker, pool_stats, uncached)
 
@@ -378,8 +421,8 @@ class KvHookSet(SglangHookSet):
             ),
             SglangHook(
                 "sglang.srt.managers.schedule_policy.PrefillAdder.add_one_req",
-                after_prefill_add_one_req,
-                HookType.AFTER,
+                around_prefill_add_one_req,
+                HookType.AROUND,
             ),
             SglangHook(
                 "sglang.srt.managers.schedule_batch.ScheduleBatch.check_decode_mem",

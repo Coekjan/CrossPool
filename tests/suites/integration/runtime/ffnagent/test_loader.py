@@ -28,6 +28,7 @@ def install_loader_config() -> None:
     install_test_config(
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [1]},
                 "ffn": {"devices": [0], "loader": {"parallelism": 2}},
                 "models": [{"id": "model", "path": "/models/model"}],

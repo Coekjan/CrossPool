@@ -22,13 +22,13 @@ static_assert(std::atomic_ref<std::uint64_t>::is_always_lock_free &&
               alignof(std::uint64_t) >= std::atomic_ref<std::uint64_t>::required_alignment);
 static_assert(std::atomic_ref<std::uint32_t>::is_always_lock_free &&
               alignof(std::uint32_t) >= std::atomic_ref<std::uint32_t>::required_alignment);
-static_assert(std::atomic_ref<CapacityPublication>::is_always_lock_free &&
-              alignof(CapacityPublication) >= std::atomic_ref<CapacityPublication>::required_alignment);
+static_assert(std::atomic_ref<SequencedValue>::is_always_lock_free &&
+              alignof(SequencedValue) >= std::atomic_ref<SequencedValue>::required_alignment);
 
-CapacityChannelMapping CapacityChannelMapping::create(std::string name, CapacityChannelLayout layout) {
+ControlChannelMapping ControlChannelMapping::create(std::string name, ControlChannelLayout layout) {
   auto memory = xpool::utils::PosixSharedMemoryMapping::create(std::move(name), layout.total_bytes);
-  *reinterpret_cast<CapacityChannelHeader *>(memory.bytes().data()) = CapacityChannelHeader{
-      .magic = kCapacityChannelMagic,
+  *reinterpret_cast<ControlChannelHeader *>(memory.bytes().data()) = ControlChannelHeader{
+      .magic = kControlChannelMagic,
       .abi_version = xpool::abi::kVersion,
       .reserved = 0,
       .total_bytes = layout.total_bytes,
@@ -39,36 +39,35 @@ CapacityChannelMapping CapacityChannelMapping::create(std::string name, Capacity
   return {std::move(memory), layout};
 }
 
-CapacityChannelMapping CapacityChannelMapping::attach(std::string_view name) {
+ControlChannelMapping ControlChannelMapping::attach(std::string_view name) {
   auto memory = xpool::utils::PosixSharedMemoryMapping::attach(name);
   const auto bytes = memory.bytes();
-  TORCH_CHECK(bytes.size() >= sizeof(CapacityChannelHeader), "xpool kv channel shared memory is truncated");
-  const auto &header = *reinterpret_cast<const CapacityChannelHeader *>(bytes.data());
-  const auto layout = CapacityChannelLayout::create(static_cast<std::size_t>(header.pool_count),
-                                                    static_cast<std::size_t>(header.group_count),
-                                                    static_cast<std::size_t>(header.partition_count));
+  TORCH_CHECK(bytes.size() >= sizeof(ControlChannelHeader), "xpool kv channel shared memory is truncated");
+  const auto &header = *reinterpret_cast<const ControlChannelHeader *>(bytes.data());
+  const auto layout = ControlChannelLayout::create(static_cast<std::size_t>(header.pool_count),
+                                                   static_cast<std::size_t>(header.group_count),
+                                                   static_cast<std::size_t>(header.partition_count));
   layout.validate(header, bytes.size());
   return {std::move(memory), layout};
 }
 
-DaemonCapacityChannel DaemonCapacityChannel::create(std::size_t pool_count, std::size_t group_count,
-                                                    std::size_t partition_count) {
-  const auto layout = CapacityChannelLayout::create(pool_count, group_count, partition_count);
+DaemonControlChannel DaemonControlChannel::create(std::size_t pool_count, std::size_t group_count,
+                                                  std::size_t partition_count) {
+  const auto layout = ControlChannelLayout::create(pool_count, group_count, partition_count);
   static auto next_name = std::atomic<std::uint64_t>{1};
   const auto suffix = next_name.fetch_add(1, std::memory_order_relaxed);
   TORCH_CHECK(suffix != 0, "xpool kv channel name space is exhausted");
-  auto channel = DaemonCapacityChannel{};
+  auto channel = DaemonControlChannel{};
   channel.mapping_ =
-      CapacityChannelMapping::create("/xpool-kv-" + std::to_string(getpid()) + "-" + std::to_string(suffix), layout);
+      ControlChannelMapping::create("/xpool-kv-" + std::to_string(getpid()) + "-" + std::to_string(suffix), layout);
   return channel;
 }
 
-std::string DaemonCapacityChannel::name() const { return std::string{mapping_.unlink_name()}; }
+std::string DaemonControlChannel::name() const { return std::string{mapping_.unlink_name()}; }
 
-std::vector<std::optional<KvDeviceMemoryReport>> DaemonCapacityChannel::read_device_memory() const {
-  const auto &channel = mapping_;
-  const auto entries = channel.pool_entries();
-  auto reports = std::vector<std::optional<KvDeviceMemoryReport>>(channel.layout().pool_count);
+std::vector<std::optional<KvDeviceMemoryReport>> DaemonControlChannel::read_device_memory() const {
+  const auto entries = mapping_.pool_entries();
+  auto reports = std::vector<std::optional<KvDeviceMemoryReport>>(entries.size());
   for (auto index = std::size_t{0}; index < reports.size(); ++index) {
     const auto total = std::atomic_ref{entries[index].device_total_bytes}.load(std::memory_order_acquire);
     if (total != 0) {
@@ -81,70 +80,83 @@ std::vector<std::optional<KvDeviceMemoryReport>> DaemonCapacityChannel::read_dev
   return reports;
 }
 
-void DaemonCapacityChannel::publish_command(std::size_t group_index, KvCapacityCommand command) {
-  const auto &channel = mapping_;
-  TORCH_CHECK(group_index < channel.layout().group_count, "xpool kv command group index is out of range");
-  TORCH_CHECK(command.sequence != 0 && command.target_bundles != 0 && command.active_bundles != 0 &&
-                  command.active_bundles <= command.target_bundles,
+std::vector<std::optional<std::uint32_t>> DaemonControlChannel::read_initial_backing() const {
+  const auto entries = mapping_.partition_entries();
+  auto backing = std::vector<std::optional<std::uint32_t>>(entries.size());
+  for (auto index = std::size_t{0}; index < backing.size(); ++index) {
+    const auto bundles = std::atomic_ref{entries[index].initial_backing_bundles}.load(std::memory_order_acquire);
+    if (bundles != 0) {
+      backing[index] = bundles;
+    }
+  }
+  return backing;
+}
+
+void DaemonControlChannel::publish_service_ceiling(std::size_t group_index, std::uint32_t bundles) {
+  TORCH_CHECK(group_index < mapping_.layout().group_count && bundles != 0,
+              "xpool kv service ceiling values are invalid");
+  auto &storage = mapping_.group_entries()[group_index].service_ceiling_bundles;
+  const auto previous = std::atomic_ref{storage}.load(std::memory_order_acquire);
+  TORCH_CHECK(previous == 0 || previous == bundles, "xpool kv service ceiling is immutable");
+  std::atomic_ref{storage}.store(bundles, std::memory_order_release);
+}
+
+void DaemonControlChannel::publish_command(std::size_t group_index, KvCapacityCommand command) {
+  TORCH_CHECK(group_index < mapping_.layout().group_count && command.sequence != 0 && command.target_bundles != 0,
               "xpool kv command values are invalid");
-  auto &entry = channel.group_entries()[group_index];
-  const auto previous_target = std::atomic_ref{entry.target_publication}.load(std::memory_order_acquire);
-  const auto previous_active = std::atomic_ref{entry.active_publication}.load(std::memory_order_acquire);
-  const auto previous_sequence = previous_target.sequence;
-  if (previous_sequence == command.sequence) {
-    TORCH_CHECK(previous_target.bundles == command.target_bundles && previous_active.sequence == command.sequence &&
-                    command.active_bundles >= previous_active.bundles,
-                "xpool kv command mutates an existing sequence");
-  } else {
-    TORCH_CHECK(previous_sequence != std::numeric_limits<std::uint32_t>::max() &&
-                    command.sequence == previous_sequence + 1,
-                "xpool kv command sequence is not the next publication");
+  auto &storage = mapping_.group_entries()[group_index].command;
+  const auto previous = std::atomic_ref{storage}.load(std::memory_order_acquire);
+  if (previous.sequence == command.sequence) {
+    TORCH_CHECK(previous.value == command.target_bundles, "xpool kv command mutates an existing sequence");
+    return;
   }
-  std::atomic_ref{entry.target_publication}.store(
-      CapacityPublication{.sequence = command.sequence, .bundles = command.target_bundles}, std::memory_order_release);
-  std::atomic_ref{entry.active_publication}.store(
-      CapacityPublication{.sequence = command.sequence, .bundles = command.active_bundles}, std::memory_order_release);
+  TORCH_CHECK(previous.sequence != std::numeric_limits<std::uint32_t>::max() &&
+                  command.sequence == previous.sequence + 1,
+              "xpool kv command sequence is not the next publication");
+  std::atomic_ref{storage}.store(SequencedValue{.sequence = command.sequence, .value = command.target_bundles},
+                                 std::memory_order_release);
 }
 
-std::vector<std::optional<KvCapacityBackingReport>> DaemonCapacityChannel::read_backing_reports() const {
-  const auto &channel = mapping_;
-  const auto entries = channel.partition_entries();
-  auto reports = std::vector<std::optional<KvCapacityBackingReport>>(channel.layout().partition_count);
-  for (auto index = std::size_t{0}; index < reports.size(); ++index) {
-    const auto publication = std::atomic_ref{entries[index].backing_publication}.load(std::memory_order_acquire);
-    if (publication.bundles != 0) {
-      reports[index] = KvCapacityBackingReport{
-          .prepared_sequence = publication.sequence,
-          .backed_bundles = publication.bundles,
+std::vector<std::optional<KvCapacityDemand>> DaemonControlChannel::read_demands() const {
+  const auto entries = mapping_.group_entries();
+  auto demands = std::vector<std::optional<KvCapacityDemand>>(entries.size());
+  for (auto index = std::size_t{0}; index < demands.size(); ++index) {
+    auto &entry = entries[index];
+    const auto first_revision = std::atomic_ref{entry.demand_revision}.load(std::memory_order_seq_cst);
+    if (first_revision == 0 || (first_revision & 1) != 0) {
+      continue;
+    }
+    const auto payload = std::atomic_ref{entry.demand_payload}.load(std::memory_order_seq_cst);
+    const auto deadline = std::atomic_ref{entry.demand_deadline}.load(std::memory_order_seq_cst);
+    const auto second_revision = std::atomic_ref{entry.demand_revision}.load(std::memory_order_seq_cst);
+    if (first_revision == second_revision && payload.sequence != 0) {
+      demands[index] = KvCapacityDemand{
+          .evaluated_sequence = payload.sequence,
+          .requested_bundles = deadline == 1 ? std::nullopt : std::optional{payload.value},
+          .deadline_monotonic_ns = deadline == 1 ? std::nullopt : std::optional{deadline - 1},
       };
     }
   }
-  return reports;
+  return demands;
 }
 
-std::vector<std::optional<KvCapacityPressureReport>> DaemonCapacityChannel::read_pressure_reports() const {
-  const auto &channel = mapping_;
-  const auto entries = channel.group_entries();
-  auto reports = std::vector<std::optional<KvCapacityPressureReport>>(channel.layout().group_count);
-  for (auto index = std::size_t{0}; index < reports.size(); ++index) {
-    const auto publication = std::atomic_ref{entries[index].pressure_publication}.load(std::memory_order_acquire);
-    const auto sequence = publication.sequence;
-    if (sequence != 0) {
-      const auto active_bundles = publication.bundles;
-      reports[index] = KvCapacityPressureReport{
-          .sequence = sequence,
-          .active_bundles = active_bundles == 0 ? std::nullopt : std::optional{active_bundles},
-      };
+std::vector<std::optional<KvCapacityCompletion>> DaemonControlChannel::read_completions() const {
+  const auto entries = mapping_.partition_entries();
+  auto completions = std::vector<std::optional<KvCapacityCompletion>>(entries.size());
+  for (auto index = std::size_t{0}; index < completions.size(); ++index) {
+    const auto completion = std::atomic_ref{entries[index].completion}.load(std::memory_order_acquire);
+    if (completion.sequence != 0) {
+      completions[index] = KvCapacityCompletion{.sequence = completion.sequence, .backed_bundles = completion.value};
     }
   }
-  return reports;
+  return completions;
 }
 
-void DaemonCapacityChannel::close() { mapping_.close(); }
+void DaemonControlChannel::close() { mapping_.close(); }
 
-AtnAgentCapacityChannel AtnAgentCapacityChannel::attach(std::string_view name, std::size_t pool_index,
-                                                        std::vector<std::size_t> partition_indices) {
-  auto mapping = CapacityChannelMapping::attach(name);
+AtnAgentControlChannel AtnAgentControlChannel::attach(std::string_view name, std::size_t pool_index,
+                                                      std::vector<std::size_t> partition_indices) {
+  auto mapping = ControlChannelMapping::attach(name);
   TORCH_CHECK(pool_index < mapping.layout().pool_count, "xpool kv atnagent pool index is out of range");
   TORCH_CHECK(!partition_indices.empty(), "xpool kv atnagent partition indices must not be empty");
   TORCH_CHECK(std::ranges::all_of(partition_indices,
@@ -154,21 +166,21 @@ AtnAgentCapacityChannel AtnAgentCapacityChannel::attach(std::string_view name, s
   std::ranges::sort(sorted);
   TORCH_CHECK(std::adjacent_find(sorted.begin(), sorted.end()) == sorted.end(),
               "xpool kv atnagent partition indices must be unique");
-  auto channel = AtnAgentCapacityChannel{};
+  auto channel = AtnAgentControlChannel{};
   channel.mapping_ = std::move(mapping);
   channel.pool_index_ = pool_index;
   channel.partition_indices_ = std::move(partition_indices);
   return channel;
 }
 
-bool AtnAgentCapacityChannel::captures_complete() const {
+bool AtnAgentControlChannel::captures_complete() const {
   const auto entries = mapping_.partition_entries();
   return std::ranges::all_of(partition_indices_, [&](std::size_t index) {
     return std::atomic_ref{entries[index].capture_complete}.load(std::memory_order_acquire) != 0;
   });
 }
 
-void AtnAgentCapacityChannel::publish_device_memory(std::uint64_t total_bytes, std::uint64_t free_bytes) {
+void AtnAgentControlChannel::publish_device_memory(std::uint64_t total_bytes, std::uint64_t free_bytes) {
   TORCH_CHECK(total_bytes != 0 && free_bytes <= total_bytes, "xpool kv device-memory observation is invalid");
   auto &entry = mapping_.pool_entries()[pool_index_];
   const auto published_total = std::atomic_ref{entry.device_total_bytes}.load(std::memory_order_acquire);
@@ -182,76 +194,98 @@ void AtnAgentCapacityChannel::publish_device_memory(std::uint64_t total_bytes, s
   std::atomic_ref{entry.device_total_bytes}.store(total_bytes, std::memory_order_release);
 }
 
-void AtnAgentCapacityChannel::close() { mapping_.close(); }
+void AtnAgentControlChannel::close() { mapping_.close(); }
 
-InstanceCapacityChannel InstanceCapacityChannel::attach(std::string_view name, std::size_t group_index,
-                                                        std::size_t partition_index, std::size_t group_count) {
-  auto mapping = CapacityChannelMapping::attach(name);
+InstanceControlChannel InstanceControlChannel::attach(std::string_view name, std::size_t group_index,
+                                                      std::size_t partition_index, std::size_t dp_group_count) {
+  auto mapping = ControlChannelMapping::attach(name);
   const auto &layout = mapping.layout();
-  TORCH_CHECK(group_count != 0 && group_count <= layout.pool_count, "xpool kv instance group count is out of range");
+  TORCH_CHECK(dp_group_count != 0 && dp_group_count <= layout.pool_count && layout.pool_count % dp_group_count == 0,
+              "xpool kv instance DP group count is invalid");
   TORCH_CHECK(group_index < layout.group_count && partition_index < layout.partition_count,
               "xpool kv instance slot index is out of range");
   const auto group_row_begin = group_index - group_index % layout.pool_count;
-  TORCH_CHECK(group_index - group_row_begin < group_count && group_row_begin + group_count <= layout.group_count,
-              "xpool kv instance group slot is outside its effective DP row");
+  const auto dp_rank = group_index - group_row_begin;
+  TORCH_CHECK(dp_rank < dp_group_count && group_row_begin + dp_group_count <= layout.group_count,
+              "xpool kv instance group slot is outside its DP row");
   TORCH_CHECK(partition_index / layout.pool_count == group_index / layout.pool_count,
               "xpool kv instance group and partition slots belong to different instances");
-  auto channel = InstanceCapacityChannel{};
+  const auto tp_size = layout.pool_count / dp_group_count;
+  const auto partition_group_begin = group_row_begin + dp_rank * tp_size;
+  TORCH_CHECK(partition_index >= partition_group_begin && partition_index < partition_group_begin + tp_size,
+              "xpool kv instance partition slot is outside its Capacity Group");
+  auto channel = InstanceControlChannel{};
   channel.mapping_ = std::move(mapping);
   channel.group_index_ = group_index;
   channel.group_row_begin_ = group_row_begin;
-  channel.group_count_ = group_count;
+  channel.dp_group_count_ = dp_group_count;
   channel.partition_index_ = partition_index;
   return channel;
 }
 
-void InstanceCapacityChannel::publish_capture_complete() {
+void InstanceControlChannel::publish_initial_backing(std::uint32_t bundles) {
+  TORCH_CHECK(bundles != 0, "xpool kv initial backing must be positive");
+  auto &storage = mapping_.partition_entries()[partition_index_].initial_backing_bundles;
+  const auto previous = std::atomic_ref{storage}.load(std::memory_order_acquire);
+  TORCH_CHECK(previous == 0 || previous == bundles, "xpool kv initial backing is immutable");
+  std::atomic_ref{storage}.store(bundles, std::memory_order_release);
+}
+
+void InstanceControlChannel::publish_capture_complete() {
   std::atomic_ref{mapping_.partition_entries()[partition_index_].capture_complete}.store(1, std::memory_order_release);
 }
 
-void InstanceCapacityChannel::publish_backing_report(KvCapacityBackingReport report) {
-  TORCH_CHECK(report.backed_bundles != 0, "xpool kv backing report must retain a positive bundle prefix");
-  auto &publication = mapping_.partition_entries()[partition_index_].backing_publication;
-  const auto previous = std::atomic_ref{publication}.load(std::memory_order_acquire);
-  TORCH_CHECK(previous.sequence <= report.prepared_sequence, "xpool kv backing report prepared sequence regressed");
-  std::atomic_ref{publication}.store(
-      CapacityPublication{.sequence = report.prepared_sequence, .bundles = report.backed_bundles},
-      std::memory_order_release);
+std::optional<std::uint32_t> InstanceControlChannel::service_ceiling() const {
+  const auto bundles =
+      std::atomic_ref{mapping_.group_entries()[group_index_].service_ceiling_bundles}.load(std::memory_order_acquire);
+  return bundles == 0 ? std::nullopt : std::optional{bundles};
 }
 
-std::vector<std::optional<KvCapacityCommand>> InstanceCapacityChannel::read_commands() const {
+std::vector<std::optional<KvCapacityCommand>> InstanceControlChannel::read_commands() const {
   const auto entries = mapping_.group_entries();
-  auto commands = std::vector<std::optional<KvCapacityCommand>>(group_count_);
-  for (auto offset = std::size_t{0}; offset < group_count_; ++offset) {
-    const auto &entry = entries[group_row_begin_ + offset];
-    const auto first_target = std::atomic_ref{entry.target_publication}.load(std::memory_order_acquire);
-    const auto active = std::atomic_ref{entry.active_publication}.load(std::memory_order_acquire);
-    const auto second_target = std::atomic_ref{entry.target_publication}.load(std::memory_order_acquire);
-    const auto sequence = first_target.sequence;
-    if (first_target == second_target && sequence != 0 && active.sequence == sequence) {
-      commands[offset] = KvCapacityCommand{
-          .sequence = sequence,
-          .target_bundles = first_target.bundles,
-          .active_bundles = active.bundles,
-      };
+  auto commands = std::vector<std::optional<KvCapacityCommand>>(dp_group_count_);
+  for (auto offset = std::size_t{0}; offset < commands.size(); ++offset) {
+    const auto publication =
+        std::atomic_ref{entries[group_row_begin_ + offset].command}.load(std::memory_order_acquire);
+    if (publication.sequence != 0) {
+      commands[offset] = KvCapacityCommand{.sequence = publication.sequence, .target_bundles = publication.value};
     }
   }
   return commands;
 }
 
-void InstanceCapacityChannel::publish_pressure(std::optional<std::uint32_t> active_bundles) {
-  TORCH_CHECK(!active_bundles.has_value() || *active_bundles != 0,
-              "xpool kv pressure capacity must be positive when present");
-  auto &publication = mapping_.group_entries()[group_index_].pressure_publication;
-  const auto previous = std::atomic_ref{publication}.load(std::memory_order_acquire);
-  const auto previous_sequence = previous.sequence;
-  TORCH_CHECK(previous_sequence != std::numeric_limits<std::uint32_t>::max(),
-              "xpool kv pressure sequence is exhausted");
-  std::atomic_ref{publication}.store(
-      CapacityPublication{.sequence = previous_sequence + 1, .bundles = active_bundles.value_or(0)},
-      std::memory_order_release);
+void InstanceControlChannel::publish_completion(KvCapacityCompletion completion) {
+  TORCH_CHECK(completion.sequence != 0 && completion.backed_bundles != 0, "xpool kv completion values are invalid");
+  auto &storage = mapping_.partition_entries()[partition_index_].completion;
+  const auto previous = std::atomic_ref{storage}.load(std::memory_order_acquire);
+  TORCH_CHECK(previous.sequence <= completion.sequence, "xpool kv completion sequence regressed");
+  TORCH_CHECK(previous.sequence != completion.sequence || previous.value == completion.backed_bundles,
+              "xpool kv completion mutates an existing sequence");
+  std::atomic_ref{storage}.store(SequencedValue{.sequence = completion.sequence, .value = completion.backed_bundles},
+                                 std::memory_order_release);
 }
 
-void InstanceCapacityChannel::close() { mapping_.close(); }
+void InstanceControlChannel::publish_demand(KvCapacityDemand demand) {
+  TORCH_CHECK(demand.evaluated_sequence != 0 &&
+                  demand.requested_bundles.has_value() == demand.deadline_monotonic_ns.has_value() &&
+                  (!demand.requested_bundles || *demand.requested_bundles != 0) &&
+                  (!demand.deadline_monotonic_ns ||
+                   (*demand.deadline_monotonic_ns != 0 &&
+                    *demand.deadline_monotonic_ns != std::numeric_limits<std::uint64_t>::max())),
+              "xpool kv demand values are invalid");
+  auto &entry = mapping_.group_entries()[group_index_];
+  const auto previous = std::atomic_ref{entry.demand_payload}.load(std::memory_order_acquire);
+  TORCH_CHECK(previous.sequence <= demand.evaluated_sequence, "xpool kv demand evaluated sequence regressed");
+  auto revision = std::atomic_ref{entry.demand_revision};
+  revision.fetch_add(1, std::memory_order_seq_cst);
+  std::atomic_ref{entry.demand_payload}.store(
+      SequencedValue{.sequence = demand.evaluated_sequence, .value = demand.requested_bundles.value_or(0)},
+      std::memory_order_seq_cst);
+  std::atomic_ref{entry.demand_deadline}.store(demand.deadline_monotonic_ns ? *demand.deadline_monotonic_ns + 1 : 1,
+                                               std::memory_order_seq_cst);
+  revision.fetch_add(1, std::memory_order_seq_cst);
+}
+
+void InstanceControlChannel::close() { mapping_.close(); }
 
 } // namespace xpool::kv

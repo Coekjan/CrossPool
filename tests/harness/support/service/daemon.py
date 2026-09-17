@@ -23,7 +23,7 @@ from xpool.fabric import FabricGenerationId, FabricParticipantPhase, FabricPlan
 from xpool.mps import MpsProbeResult
 from xpool.native import ABI_VERSION
 from xpool.service.daemon.app import create_daemon
-from xpool.service.wire import KvCapacityChannelRef
+from xpool.service.wire import KvControlChannelRef
 from xpool.utils.procs import ProcUniqId
 
 
@@ -93,8 +93,8 @@ def deterministic_daemon_dependencies(
             self.closed = False
 
         @property
-        def channel_ref(self) -> KvCapacityChannelRef:
-            return KvCapacityChannelRef(generation=self.generation, name="/xpool-kv-test")
+        def channel_ref(self) -> KvControlChannelRef:
+            return KvControlChannelRef(generation=self.generation, name="/xpool-kv-test")
 
         def step(self, registrations: object, fabric: object) -> None:
             return

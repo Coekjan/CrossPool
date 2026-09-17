@@ -9,6 +9,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from tests.harness.sglang.serving.graph import SglangGraphMode
+from xpool.config import LatencySloConfig
 
 E2E_MANIFEST_PATH = Path(__file__).with_name("manifest.toml")
 
@@ -246,6 +247,7 @@ class E2eManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     models: tuple[E2eModel, ...]
+    serving_slo: LatencySloConfig
     model_serving_cases: tuple[E2eServingCase, ...]
     ffn_numerical_cases: tuple[E2eFfnNumericalCase, ...]
     ffn_topology_cases: tuple[E2eFfnTopologyCase, ...]

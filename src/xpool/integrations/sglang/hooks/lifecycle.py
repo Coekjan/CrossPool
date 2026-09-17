@@ -206,18 +206,21 @@ def after_model_runner_alloc_memory_pool[R](
             kv_capacity=pool.backing.partition_profile(),
         )
         plan = runtime.instance_rank.wait_for_fabric_executable()
-        channel_ref = runtime.instance_rank.client.kv_capacity_channel(plan.generation)
+        channel_ref = runtime.instance_rank.client.kv_control_channel(plan.generation)
         if channel_ref.generation != plan.generation:
-            raise RuntimeError("xpool daemon returned a kv capacity channel for a different fabric generation")
+            raise RuntimeError("xpool daemon returned a kv control channel for a different fabric generation")
         config = get_global_config()
+        model = config.models[binding.instance_index]
         runtime.kv_capacity = CapacityReconciler.attach(
             channel_name=channel_ref.name,
             group_index=binding.instance_index * config.atn_world_size + binding.atn_dp_rank,
             partition_index=binding.instance_index * config.atn_world_size + binding.worker_rank,
-            group_count=binding.atn_dp_size,
+            dp_group_count=binding.atn_dp_size,
             backing=pool.backing,
             allocator=allocator,
             request_pool=request_pool,
+            instance_rank=runtime.instance_rank,
+            slo=model.slo or config.scheduler.slo,
         )
         runtime.instance_rank.attach_arena_from_daemon()
         logger.info(

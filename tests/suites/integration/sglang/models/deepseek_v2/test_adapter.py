@@ -135,6 +135,7 @@ port = 9810
 [scheduler]
 atn_concurrency = 1
 ffn_concurrency = 1
+slo = {{ ttft_ms = 1000, tbt_ms = 50 }}
 
 [atn]
 devices = [0]

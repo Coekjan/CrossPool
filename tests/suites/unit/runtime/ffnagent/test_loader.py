@@ -93,6 +93,7 @@ def test_plan_materialization_selects_only_local_layers(
     install_test_config(
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1, 2]},
                 "models": [{"id": "model", "path": str(tmp_path)}],

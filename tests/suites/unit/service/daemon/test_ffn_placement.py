@@ -32,6 +32,7 @@ def config(*, tp_size: int | None = None) -> XpoolConfig:
         model["ffn_tp_size"] = tp_size
     return XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1, 2]},
             "models": [model],
@@ -87,6 +88,7 @@ def test_equal_optimum_placement_uses_lowest_index_groups() -> None:
     install_test_config(
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1, 2, 3, 4]},
                 "models": [

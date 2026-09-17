@@ -30,6 +30,7 @@ pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_offli
 def test_instance_register_rejects_unknown_instance() -> None:
     config = XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],

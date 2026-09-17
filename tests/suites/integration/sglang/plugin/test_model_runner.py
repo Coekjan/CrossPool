@@ -24,7 +24,7 @@ from tests.harness.support.sglang.plugin import (
     reset_plugin_required_hook_targets,
 )
 from tests.harness.support.sglang.runtime import published_sglang_config
-from xpool.config import MissingRequiredConfig
+from xpool.config import LatencySloConfig, MissingRequiredConfig
 from xpool.fabric import FabricGenerationId
 from xpool.integrations.sglang.adapter import SglangInstanceRankRuntime
 from xpool.integrations.sglang.kv.allocator import ElasticTokenToKVPoolAllocator
@@ -33,7 +33,7 @@ from xpool.integrations.sglang.kv.vmm import KvVmmBacking
 from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
 from xpool.native import RuntimeRole
 from xpool.runtime.transport import InstanceRankTransportProfile
-from xpool.service.wire import KvCapacityChannelRef, ServingListener
+from xpool.service.wire import KvControlChannelRef, ServingListener
 
 pytestmark = pytest.mark.usefixtures(
     reset_global_config.__name__, reset_plugin_required_hook_targets.__name__, published_sglang_config.__name__
@@ -117,6 +117,7 @@ port = 9810
 [scheduler]
 atn_concurrency = 1
 ffn_concurrency = 1
+slo = {{ ttft_ms = 1000, tbt_ms = 50 }}
 
 [atn]
 devices = [0]
@@ -175,11 +176,12 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     installs: list[tuple[str, int]] = []
     registrations: list[tuple[str, int, int]] = []
     profiles: list[object] = []
+    capacity_attachments: list[dict[str, object]] = []
     listeners: list[ServingListener] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
     install_fake_elastic_kv(runner)
-    configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
+    configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path, model_slo=(800, 40))
     monkeypatch.setattr(
         xpool.integrations.sglang.hooks.lifecycle.bootstrap,
         "init",
@@ -193,10 +195,10 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     generation = FabricGenerationId(high=1, low=2)
 
     class FakeClient:
-        def kv_capacity_channel(self, candidate: FabricGenerationId) -> KvCapacityChannelRef:
+        def kv_control_channel(self, candidate: FabricGenerationId) -> KvControlChannelRef:
             assert candidate == generation
             events.append("discover_capacity")
-            return KvCapacityChannelRef(generation=generation, name="/xpool-kv-test")
+            return KvControlChannelRef(generation=generation, name="/xpool-kv-test")
 
     class FakeInstanceRuntime:
         fabric_plan = None
@@ -238,11 +240,13 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         return FakeInstanceRuntime()
 
     monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.InstanceRankRuntime, "start", fake_instance_init)
-    monkeypatch.setattr(
-        xpool.integrations.sglang.hooks.lifecycle.CapacityReconciler,
-        "attach",
-        lambda **kwargs: events.append("attach_capacity") or SimpleNamespace(close=lambda: None),
-    )
+
+    def attach_capacity(**kwargs: object) -> SimpleNamespace:
+        capacity_attachments.append(kwargs)
+        events.append("attach_capacity")
+        return SimpleNamespace(close=lambda: None)
+
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.CapacityReconciler, "attach", attach_capacity)
     profile = ffn_profile()
     monkeypatch.setattr(
         xpool.integrations.sglang.hooks.lifecycle, "derive_instance_ffn_profile", lambda model_runner, binding: profile
@@ -297,6 +301,7 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     assert registrations == [(TEST_MODEL_ID, 0, 8)]
     assert installs == [(TEST_MODEL_ID, 0)]
     assert profiles == [profile]
+    assert capacity_attachments[0]["slo"] == LatencySloConfig(ttft_ms=800, tbt_ms=40)
     assert listeners == [ServingListener(host=runner.server_args.host, port=runner.server_args.port)]
 
 
@@ -404,9 +409,9 @@ def test_model_runner_hook_cleans_up_when_post_executable_transport_attach_fails
     generation = FabricGenerationId(high=1, low=2)
 
     class FakeClient:
-        def kv_capacity_channel(self, candidate: FabricGenerationId) -> KvCapacityChannelRef:
+        def kv_control_channel(self, candidate: FabricGenerationId) -> KvControlChannelRef:
             assert candidate == generation
-            return KvCapacityChannelRef(generation=generation, name="/xpool-kv-test")
+            return KvControlChannelRef(generation=generation, name="/xpool-kv-test")
 
     class FakeInstanceRuntime:
         client = FakeClient()
@@ -472,10 +477,10 @@ def test_model_runner_hook_waits_for_executable_fabric(
     generation = FabricGenerationId(high=1, low=2)
 
     class FakeClient:
-        def kv_capacity_channel(self, candidate: FabricGenerationId) -> KvCapacityChannelRef:
+        def kv_control_channel(self, candidate: FabricGenerationId) -> KvControlChannelRef:
             assert candidate == generation
             events.append("discover_capacity")
-            return KvCapacityChannelRef(generation=generation, name="/xpool-kv-test")
+            return KvControlChannelRef(generation=generation, name="/xpool-kv-test")
 
     class FakeInstanceRuntime:
         client = FakeClient()

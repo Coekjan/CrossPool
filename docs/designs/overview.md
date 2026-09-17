@@ -85,7 +85,7 @@ functions rather than Torch operators.
 
 The native binding tree follows ownership. The module root contains only ABI
 identity, runtime role, and initialization. Shared FFN semantics live under
-`xpool.native.ffn`; KV capacity channels live under `xpool.native.kv`; Debug
+`xpool.native.ffn`; KV Control Channels live under `xpool.native.kv`; Debug
 options, Transport, Fabric, FfnAgent, and each Devkit Observer own their values
 and lifecycle in their corresponding submodules. Values are not re-exported at
 the root, and generic `types`, `common`, or `protocol` buckets are not part of

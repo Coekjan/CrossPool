@@ -85,6 +85,7 @@ def test_prefill_logit_observer_skips_nonzero_tp_rank(
 def observer_config(outdir: Path) -> XpoolConfig:
     return XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],

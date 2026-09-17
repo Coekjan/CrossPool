@@ -185,8 +185,8 @@ class KvCapacityPartitionProfile(WireModel):
         return self
 
 
-class KvCapacityChannelRef(WireModel):
-    """Generation-scoped discovery reference for one native KV channel."""
+class KvControlChannelRef(WireModel):
+    """Generation-scoped discovery reference for one native KV control channel."""
 
     generation: FabricGenerationId = Field(description="Fabric generation owning the channel.")
     name: str = Field(min_length=1, description="Opaque POSIX shared-memory channel name.")

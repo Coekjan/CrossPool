@@ -39,6 +39,7 @@ def estimator_and_plan() -> tuple[device_memory.DeviceMemoryEstimator, FabricPla
 
     config = XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1, 2]},
             "models": [{"id": "m", "path": "/models/m"}],
@@ -79,6 +80,7 @@ def test_glm_router_memory_keeps_fp32_weights_and_input_workspace() -> None:
     install_test_config(
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1, 2]},
                 "models": [{"id": spec.model_id, "path": "/models/glm"}],

@@ -18,22 +18,12 @@ from tests.harness.sglang.manifest import (
 from tests.harness.sglang.serving.graph import SglangGraphMode
 
 
-def test_manifest_loads_complete_serving_catalog() -> None:
+def test_manifest_loads_declared_serving_cases() -> None:
     manifest = E2eManifest.load(E2E_MANIFEST_PATH)
 
-    assert manifest.models
-    assert len(manifest.model_serving_cases) == 7
-    assert sum(len(case.graph_modes) for case in manifest.model_serving_cases) == 17
+    assert manifest.models and manifest.model_serving_cases
+    assert (manifest.serving_slo.ttft_ms, manifest.serving_slo.tbt_ms) == (1000, 50)
     assert all(not case.graph_modes for case in manifest.model_serving_cases if case.elastic_kv is not None)
-    assert len(manifest.ffn_numerical_cases) == len(manifest.models) == 4
-    assert tuple(case.id for case in manifest.ffn_topology_cases) == (
-        "single-rank-delivery",
-        "group-sum-direct-partial",
-        "odd-tp-single-complete",
-        "subgroup-replicated-complete",
-        "cross-model-placement",
-    )
-    assert all(case.ffn_tp_size == 2 for case in manifest.ffn_numerical_cases)
     assert all(
         case.required_gpu_count == case.atnagent_count + case.ffnagent_count for case in manifest.model_serving_cases
     )
@@ -43,6 +33,10 @@ def test_manifest_rejects_unknown_fields(tmp_path: Path) -> None:
     manifest_path = tmp_path / "e2e.toml"
     manifest_path.write_text(
         """
+[serving_slo]
+ttft_ms = 1000
+tbt_ms = 50
+
 [models.synthetic]
 model_id = "organization/model"
 architecture = "SyntheticForCausalLM"

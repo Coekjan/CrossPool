@@ -12,6 +12,7 @@ atn_concurrency = 1
 # Executor Lane count materialized for each Fabric generation.
 ffn_concurrency = 1
 ffn_policy = "fifo"
+slo = { ttft_ms = 1000, tbt_ms = 50 }
 # Optional and used only when ffn_policy = "random"; omitted means generated.
 # ffn_random_seed = 1
 
@@ -44,3 +45,5 @@ id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
 
 [[models]]
 id = "Qwen/Qwen3-14B"
+# Optional complete model-specific latency objective override.
+# slo = { ttft_ms = 800, tbt_ms = 40 }

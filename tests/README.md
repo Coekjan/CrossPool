@@ -66,9 +66,10 @@ perform their own MPS preflight.
 
 A missing or ABI-incompatible native extension is a session failure, including
 for Unit-only sessions, never a resource skip. E2E tests run without strict mode
-when all declared and derived requirements are available. Their configuration
-comes only from `XPOOL_CONFIG`; each task materializes a private config containing
-its selected manifest models, without waiting for unrelated configured models.
+when all declared and derived requirements are available. Each task materializes
+a private config from `XPOOL_CONFIG` and its selected manifest models, without
+waiting for unrelated configured models. All serving E2E cases use the manifest's
+shared `serving_slo` rather than external scheduler or model SLO values.
 
 Graph-mode acceptance criteria belong to
 [Qualification](../docs/designs/qualification.md#numerical-and-graph-evidence).

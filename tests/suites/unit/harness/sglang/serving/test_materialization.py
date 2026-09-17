@@ -61,6 +61,7 @@ def test_materialize_writes_config_policy_and_sanitizes_environment(
         "atn_concurrency": len(case.models),
         "ffn_concurrency": case.executor_lane_count,
         "ffn_policy": "fifo",
+        "slo": {"ttft_ms": 1000.0, "tbt_ms": 50.0},
     }
     assert case.elastic_kv is not None
     assert raw["atn"] == {
@@ -146,6 +147,7 @@ def base_e2e_config(manifest: E2eManifest, tmp_path: Path) -> XpoolConfig:
     return XpoolConfig.from_mapping(
         {
             "vendor": {"model_base_uri": str(model_base_uri)},
+            "scheduler": {"slo": {"ttft_ms": 5000, "tbt_ms": 500}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1, 2]},
             "models": [{"id": "external/model-not-owned-by-tests"}],

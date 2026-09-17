@@ -25,7 +25,7 @@ from xpool.service.wire import (
     HeartbeatResponse,
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
-    KvCapacityChannelRef,
+    KvControlChannelRef,
     ProcessRef,
     ReadinessSnapshot,
     XpoolDaemonErrorDetail,
@@ -206,11 +206,11 @@ class XpoolClient:
         response = self.request("GET", "/fabric/plan")
         return self.decode_model(response, FabricPlan, "fabric plan")
 
-    def kv_capacity_channel(self, generation: FabricGenerationId) -> KvCapacityChannelRef:
-        """Return the native KV-capacity channel for one current generation."""
+    def kv_control_channel(self, generation: FabricGenerationId) -> KvControlChannelRef:
+        """Return the native KV control channel for one current generation."""
 
-        response = self.request("GET", f"/kv/capacity-channel/{quote(generation.format(), safe='')}")
-        return self.decode_model(response, KvCapacityChannelRef, "kv capacity channel")
+        response = self.request("GET", f"/kv/control-channel/{quote(generation.format(), safe='')}")
+        return self.decode_model(response, KvControlChannelRef, "kv control channel")
 
     def request_fabric_quiesce(self, request: FabricQuiesceRequest) -> None:
         """Ask the daemon to stop admission for one retained generation."""

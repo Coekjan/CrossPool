@@ -54,6 +54,7 @@ def test_cli_config_default_precedence_without_config_field_env(
 def test_defaults_fill_missing_optional_sections() -> None:
     config = XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [{"id": "m", "path": "/models/m"}],
@@ -78,6 +79,7 @@ def test_defaults_fill_missing_optional_sections() -> None:
 
 def test_ffn_loader_parallelism_uses_cli_env_config_default_precedence() -> None:
     payload = {
+        "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1], "loader": {"parallelism": 2}},
         "models": [{"id": "m", "path": "/models/m"}],
@@ -97,6 +99,7 @@ def test_ffn_loader_parallelism_uses_cli_env_config_default_precedence() -> None
 
 def test_ffn_placement_parallelism_uses_cli_env_config_default_precedence() -> None:
     payload = {
+        "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1], "placement": {"parallelism": 2}},
         "models": [{"id": "m", "path": "/models/m"}],
@@ -119,6 +122,7 @@ def test_ffn_placement_parallelism_uses_cli_env_config_default_precedence() -> N
 def test_logging_level_uses_cli_env_config_default_precedence() -> None:
     payload = {
         "logging": {"level": "warning"},
+        "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
@@ -139,6 +143,7 @@ def test_logging_level_uses_cli_env_config_default_precedence() -> None:
 def test_logging_color_uses_toml_and_ignores_environment_override(caplog: pytest.LogCaptureFixture) -> None:
     payload = {
         "logging": {"color": False},
+        "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
         "models": [{"id": "m", "path": "/models/m"}],
@@ -153,6 +158,7 @@ def test_logging_color_uses_toml_and_ignores_environment_override(caplog: pytest
 
 def test_ffn_device_memory_calibration_uses_env_before_config() -> None:
     payload = {
+        "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1], "device_memory_calibration": "/config/memory.json"},
         "models": [{"id": "m", "path": "/models/m"}],
@@ -169,6 +175,7 @@ def test_ffn_device_memory_calibration_must_be_absolute() -> None:
     with pytest.raises(ValidationError, match=r"ffn\.device_memory_calibration must be absolute"):
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1], "device_memory_calibration": "relative.json"},
                 "models": [{"id": "m", "path": "/models/m"}],
@@ -180,6 +187,7 @@ def test_ffn_device_memory_calibration_expands_home(tmp_path: Path, monkeypatch:
     monkeypatch.setenv("HOME", str(tmp_path))
     config = XpoolConfig.from_mapping(
         {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1], "device_memory_calibration": "~/memory.json"},
             "models": [{"id": "m", "path": "/models/m"}],
@@ -191,6 +199,7 @@ def test_ffn_device_memory_calibration_expands_home(tmp_path: Path, monkeypatch:
 
 def test_config_resolution_does_not_mutate_caller_mapping() -> None:
     payload: dict[str, object] = {
+        "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
         "vendor": {"model_base_uri": "/models"},
@@ -292,6 +301,7 @@ def test_config_sources_format_multiple_model_indices() -> None:
     config = XpoolConfig.from_mapping(
         {
             "vendor": {"model_base_uri": "/models"},
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [
@@ -316,6 +326,7 @@ def test_config_rejects_non_list_models_for_registered_wildcard_settings() -> No
     with pytest.raises(ConfigError, match="expected list config value"):
         XpoolConfig.from_mapping(
             {
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
                 "models": {"id": "m", "path": "/models/m"},
@@ -338,6 +349,7 @@ def test_int_source_rejects_invalid_integer() -> None:
         XpoolConfig.from_mapping(
             {
                 "daemon": {"port": "not-an-int"},
+                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
                 "models": [{"id": "m", "path": "/models/m"}],
