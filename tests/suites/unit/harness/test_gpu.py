@@ -17,6 +17,7 @@ def test_pool_normalizes_ordinals_and_uuids_in_user_order(
     pool = GpuPool.from_environment()
     try:
         assert pool.uuids == ("GPU-c", "GPU-a", "GPU-b")
+        assert pool.physical_index_by_uuid == {"GPU-a": 0, "GPU-b": 1, "GPU-c": 2}
         assert pool.available_count == 3
     finally:
         pool.close()

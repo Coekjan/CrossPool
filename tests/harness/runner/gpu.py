@@ -27,8 +27,9 @@ class GpuLease:
 class GpuPool:
     """Visible physical GPUs with deterministic task-local leasing."""
 
-    def __init__(self, uuids: tuple[str, ...]) -> None:
+    def __init__(self, uuids: tuple[str, ...], physical_index_by_uuid: dict[str, int]) -> None:
         self.uuids = uuids
+        self.physical_index_by_uuid = physical_index_by_uuid
         self.available_uuids = list(uuids)
         self.active_leases: set[GpuLease] = set()
         self.closed = False
@@ -62,7 +63,7 @@ class GpuPool:
         if len(normalized) != len(set(normalized)):
             raise RuntimeError("CUDA_VISIBLE_DEVICES resolves to duplicate physical GPU UUIDs")
 
-        return cls(tuple(normalized))
+        return cls(tuple(normalized), {uuid: int(index) for index, uuid in gpu_by_index.items()})
 
     @property
     def available_count(self) -> int:

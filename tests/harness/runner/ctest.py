@@ -79,6 +79,7 @@ class CtestSuite:
             "--test-dir",
             str(build_directory),
             "--output-on-failure",
+            "--verbose",
             "--output-junit",
             str(junit_path),
             "--resource-spec-file",

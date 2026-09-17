@@ -46,6 +46,7 @@ def test_ctest_suite_classifies_ordinary_failure_with_junit(
 
     def run(name: str, command: list[str], **kwargs: object) -> TaskCompletion:
         assert name == "ctest"
+        assert "--verbose" in command
         junit_path = Path(command[command.index("--output-junit") + 1])
         junit_path.write_text("<testsuites/>", encoding="utf-8")
         return TaskCompletion(TaskCompletionKind.EXITED, 8, None)

@@ -10,10 +10,14 @@ from tests.harness.runner.ctest_launcher import configure_cuda_visibility, decod
 from xpool.mps import MpsProbeResult
 
 
-def test_launch_prepends_native_dependency_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_launch_prepends_native_dependency_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     paths = (Path("/torch/lib"), Path("/nvshmem/lib"))
     monkeypatch.setattr(tests.harness.runner.ctest_launcher, "native_library_paths", lambda: paths)
-    monkeypatch.delenv("XPOOL_CTEST_CANONICAL", raising=False)
+    monkeypatch.setenv("XPOOL_CTEST_CANONICAL", "1")
+    monkeypatch.setenv("CTEST_RESOURCE_GROUP_COUNT", "0")
     monkeypatch.setenv("LD_LIBRARY_PATH", "/existing")
     captured: tuple[str, list[str], dict[str, str]] | None = None
 
@@ -31,6 +35,7 @@ def test_launch_prepends_native_dependency_paths(monkeypatch: pytest.MonkeyPatch
     assert executable == "native-test"
     assert arguments == ["native-test", "--gtest_filter=Suite.Case"]
     assert environment["LD_LIBRARY_PATH"] == "/torch/lib:/nvshmem/lib:/existing"
+    assert "GPU ASSIGNMENT gpus=none" in capsys.readouterr().out
 
 
 def test_launch_requires_an_executable() -> None:

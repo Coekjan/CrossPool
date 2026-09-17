@@ -31,6 +31,8 @@ def launch(arguments: list[str]) -> NoReturn:
     except (OSError, RuntimeError, ValueError) as error:
         report_infrastructure_failure(str(error))
         raise SystemExit(125) from error
+    if environment.get("XPOOL_CTEST_CANONICAL") == "1":
+        print(f"GPU ASSIGNMENT gpus={environment['CUDA_VISIBLE_DEVICES'] or 'none'}", flush=True)
     paths = tuple(str(path) for path in native_library_paths())
     existing = environment.get("LD_LIBRARY_PATH")
     environment["LD_LIBRARY_PATH"] = os.pathsep.join((*paths, *((existing,) if existing else ())))

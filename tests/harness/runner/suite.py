@@ -242,6 +242,8 @@ class SuiteRunner:
             f"--basetemp={temporary_directory}",
             f"--junitxml={directory / 'pytest.xml'}",
         ]
+        if task.requirements.cuda_count:
+            command.append("-v")
         if self.strict_requirements:
             command.append("--strict-requirements")
         command.append(f"--xpool-task-artifact-dir={artifact_directory}")
@@ -251,6 +253,15 @@ class SuiteRunner:
             lease = self.gpu_pool.try_lease(task.requirements.cuda_count)
             if lease is None:
                 raise SuiteInfrastructureFailure(f"scheduler selected GPU task {task.key} without capacity")
+        gpu_assignments = (
+            ",".join(f"{self.gpu_pool.physical_index_by_uuid[uuid]}:{uuid}" for uuid in lease.uuids)
+            if lease is not None and self.gpu_pool is not None
+            else "none"
+        )
+        print(f"START {task.key} gpus={gpu_assignments}", flush=True)
+        if lease is not None:
+            for case in task.cases:
+                print(f"ASSIGN {case.nodeid} gpus={gpu_assignments}", flush=True)
         try:
             scope = SupervisedTaskScope.start(
                 task.key,
@@ -270,7 +281,6 @@ class SuiteRunner:
                 self.retained_leases.append(lease)
             raise
         self.active[task.key] = RunningTask(task, directory, scope, lease)
-        print(f"START {task.key}")
 
     def collect_completed_tasks(self) -> tuple[TaskOutcome, ...]:
         """Poll every active scope and release only proven-empty task leases."""

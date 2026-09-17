@@ -89,6 +89,10 @@ The package runner performs these steps:
 5. Parse JUnit and E2E artifacts, evaluate declared serving-graph groups, and
    retain logs under `.xpool-cache/test-runs/`.
 
+Task start and case assignment lines identify leased physical GPU indices and
+UUIDs. GPU pytest logs show case-level progress; CTest's per-test log records
+its assigned GPU UUID or `none`.
+
 `xtest clean` explicitly removes inactive historical results. It keeps the
 newest 20 inactive entries by default; use `--keep N`, `--all`, and
 `--dry-run` to select or preview another cleanup. Concurrent active runs are

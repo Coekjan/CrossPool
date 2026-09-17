@@ -310,6 +310,7 @@ def test_suite_runner_completes_e2e_stage_after_ordinary_failure(
 def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     starts: list[tuple[str, list[str], dict[str, str]]] = []
     poll_counts = {"test-wide-a": 2, "test-wide-b": 0, "test-small": 0}
@@ -371,6 +372,10 @@ def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
     )
 
     assert runner.run() == 0
+    output = capsys.readouterr().out
+    assert "gpus=0:GPU-a,1:GPU-b" in output
+    assert "gpus=2:GPU-c" in output
+    assert "ASSIGN tests/suites/integration/test_small.py::test-small gpus=2:GPU-c" in output
     task_starts = starts
     assert tuple(case_name(command) for _, command, _ in task_starts) == (
         "test-wide-a",
@@ -383,6 +388,7 @@ def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
         "GPU-a,GPU-b",
     )
     assert all("--strict-requirements" in command for _, command, _ in task_starts)
+    assert all("-v" in command for _, command, _ in task_starts)
     assert all(any(argument.startswith("--basetemp=") for argument in command) for _, command, _ in task_starts)
     assert all(any(argument.startswith("--junitxml=") for argument in command) for _, command, _ in task_starts)
     assert all(
@@ -585,6 +591,7 @@ class FakeScope:
 class FakeGpuPool:
     def __init__(self, uuids: tuple[str, ...]) -> None:
         self.uuids = uuids
+        self.physical_index_by_uuid = {uuid: index for index, uuid in enumerate(uuids)}
         self.available = list(uuids)
         self.active: set[tests.harness.runner.gpu.GpuLease] = set()
         self.closed = False
