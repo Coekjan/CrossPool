@@ -174,10 +174,6 @@ class InstanceFfnProfile(FabricModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    model_config_digest: str = Field(
-        pattern=r"^[0-9a-f]{64}$",
-        description="SHA-256 identity of the source model config.",
-    )
     payload_dtype: Annotated[torch.dtype, WithJsonSchema({"type": "string"})] = Field(
         description="Hidden-state dtype exchanged through the Fabric."
     )

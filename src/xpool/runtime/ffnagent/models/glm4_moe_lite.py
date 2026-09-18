@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import typing
-from collections.abc import Mapping
 
 import torch
 import triton
@@ -171,38 +170,30 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
         cls,
         *,
         model_id: str,
-        model_config: Mapping[str, object],
-        model_config_digest: str,
+        model_config: architecture.FfnSourceConfig,
     ) -> ffn.FfnModelSpec:
         """Compile GLM main layers and corrected-sigmoid routing semantics."""
 
-        architecture.require_family_profile(
-            model_config,
-            architecture_name="Glm4MoeLiteForCausalLM",
-            model_type="glm4_moe_lite",
-            dtype_field="dtype",
-        )
-        explicit_frequency = model_config.get("moe_layer_freq")
-        if explicit_frequency is not None and (
-            not isinstance(explicit_frequency, int) or isinstance(explicit_frequency, bool) or explicit_frequency != 1
-        ):
+        model_config.validate_family_profile(model_type="glm4_moe_lite", dtype_field="dtype")
+        explicit_frequency = model_config.optional("moe_layer_freq", int, allow_none=True)
+        if explicit_frequency is not None and explicit_frequency != 1:
             raise ValueError("explicit moe_layer_freq must equal the GLM family constant 1")
-        hidden_size = architecture.require_integer(model_config, "hidden_size", minimum=1)
-        layer_count = architecture.require_integer(model_config, "num_hidden_layers", minimum=1)
-        intermediate_size = architecture.require_integer(model_config, "intermediate_size", minimum=1)
-        expert_intermediate_size = architecture.require_integer(model_config, "moe_intermediate_size", minimum=1)
-        routed_expert_count = architecture.require_integer(model_config, "n_routed_experts", minimum=1)
-        shared_expert_count = architecture.require_integer(model_config, "n_shared_experts", minimum=0)
-        routed_topk = architecture.require_integer(model_config, "num_experts_per_tok", minimum=1)
-        first_moe_layer = architecture.require_integer(model_config, "first_k_dense_replace", minimum=0)
-        expert_group_count = architecture.require_integer(model_config, "n_group", minimum=1)
-        selected_expert_group_count = architecture.require_integer(model_config, "topk_group", minimum=1)
-        if architecture.require_string(model_config, "topk_method") != "noaux_tc":
+        hidden_size = model_config.get("hidden_size", int, ge=1)
+        layer_count = model_config.get("num_hidden_layers", int, ge=1)
+        intermediate_size = model_config.get("intermediate_size", int, ge=1)
+        expert_intermediate_size = model_config.get("moe_intermediate_size", int, ge=1)
+        routed_expert_count = model_config.get("n_routed_experts", int, ge=1)
+        shared_expert_count = model_config.get("n_shared_experts", int, ge=0)
+        routed_topk = model_config.get("num_experts_per_tok", int, ge=1)
+        first_moe_layer = model_config.get("first_k_dense_replace", int, ge=0)
+        expert_group_count = model_config.get("n_group", int, ge=1)
+        selected_expert_group_count = model_config.get("topk_group", int, ge=1)
+        if model_config.get("topk_method", str) != "noaux_tc":
             raise ValueError("topk_method must equal 'noaux_tc'")
         if expert_group_count != 1 or selected_expert_group_count != 1:
             raise ValueError("first-production GLM routing requires n_group == topk_group == 1")
-        renormalize = architecture.require_boolean(model_config, "norm_topk_prob")
-        routed_scaling_factor = architecture.require_positive_number(model_config, "routed_scaling_factor")
+        renormalize = model_config.get("norm_topk_prob", bool)
+        routed_scaling_factor = model_config.get("routed_scaling_factor", float, gt=0)
 
         layers: list[ffn.FfnLayerSpec] = []
         for layer_id in range(layer_count):
@@ -243,7 +234,6 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
         return ffn.FfnModelSpec(
             model_id=model_id,
             architecture_name=cls.architecture_name,
-            model_config_digest=model_config_digest,
             hidden_size=hidden_size,
             activation=ffn.ActivationKind.SILU,
             layers=tuple(layers),

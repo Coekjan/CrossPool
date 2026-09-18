@@ -95,8 +95,7 @@ class DeviceMemoryEstimator:
             if model.id != spec.model_id:
                 raise ValueError(f"device-memory Model {index} does not follow configured order")
             if (
-                spec.model_config_digest != profile.model_config_digest
-                or profile.payload_dtype not in (torch.bfloat16, torch.float16)
+                profile.payload_dtype not in (torch.bfloat16, torch.float16)
                 or spec.hidden_size != profile.hidden_size
                 or tuple((layer.layer_id, layer.kind) for layer in spec.layers)
                 != tuple((layer.layer_id, layer.kind) for layer in profile.layers)

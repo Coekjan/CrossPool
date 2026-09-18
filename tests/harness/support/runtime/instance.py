@@ -183,7 +183,6 @@ def ffn_profile() -> InstanceFfnProfile:
     """Return the minimal valid FFN Profile used by instance runtime tests."""
 
     return InstanceFfnProfile(
-        model_config_digest="a" * 64,
         payload_dtype=torch.bfloat16,
         hidden_size=4,
         layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.DENSE),),

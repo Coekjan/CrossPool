@@ -74,9 +74,12 @@ Projection.
 The SGLang adapter replaces supported decoder FFN modules with a shim module,
 filters their FFN tensors from attention-side loading, and preserves the model's
 attention-side behavior. Model adapters are discovered automatically and are
-split by model family. A model adapter owns architecture extraction, checkpoint
+split by model family. A model adapter receives a strict `FfnSourceConfig` view
+of the parsed `config.json` object and owns architecture extraction, checkpoint
 key mapping, activation selection, routing function selection, and reference
-binding for that family.
+binding for that family. The resulting `FfnModelSpec.digest()` identifies the
+compiled FFN semantics; the source JSON bytes are not carried as a separate
+contract field.
 
 Outer graph mode is an attention-side concept. Eager, Decode Full, and Prefill
 Breakable graph modes all invoke the same FFN data-plane protocol.

@@ -128,11 +128,6 @@ class FfnModelSpec(FfnModel):
 
     model_id: str = Field(strict=True, min_length=1, description="Configured model identity.")
     architecture_name: str = Field(strict=True, min_length=1, description="Selected FFN Model Adapter identity.")
-    model_config_digest: str = Field(
-        strict=True,
-        pattern=r"^[0-9a-f]{64}$",
-        description="SHA-256 identity of the source config.json bytes.",
-    )
     hidden_size: int = Field(strict=True, ge=1, description="Model hidden-state width in elements.")
     activation: ActivationKind = Field(description="Gated activation shared by all model FFN layers.")
     layers: tuple[FfnLayerSpec, ...] = Field(

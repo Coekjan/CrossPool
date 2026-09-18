@@ -277,7 +277,7 @@ def test_plan_waits_for_every_model_while_transport_publication_is_incremental()
     )
     plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
 
-    assert [instance.ffn_profile.model_config_digest for instance in plan.instance_plans] == ["a" * 64, "a" * 64]
+    assert [instance.ffn_profile.hidden_size for instance in plan.instance_plans] == [4, 4]
     assert request(app, "GET", "/ready").json()["transport_ready"] is False
 
 

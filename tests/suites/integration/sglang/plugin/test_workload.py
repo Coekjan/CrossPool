@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from dataclasses import replace
 from pathlib import Path
 
@@ -36,11 +35,8 @@ def test_ffn_profile_includes_only_enabled_graph_capacities(tmp_path: Path) -> N
         args,
         max_running_requests=16,
     )
-    config_bytes = (model_binding.model_path / "config.json").read_bytes()
-
     profile = derive_instance_ffn_profile(runner.as_model_runner(), model_binding)
 
-    assert profile.model_config_digest == hashlib.sha256(config_bytes).hexdigest()
     assert profile.payload_dtype is torch.float16
     assert profile.hidden_size == 2048
     assert profile.layers == (

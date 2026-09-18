@@ -38,7 +38,6 @@ def test_plan_materialization_selects_only_local_layers(
     spec = FfnModelSpec(
         model_id="model",
         architecture_name="Qwen3ForCausalLM",
-        model_config_digest="a" * 64,
         hidden_size=4,
         activation=ActivationKind.SILU,
         layers=(
@@ -74,7 +73,6 @@ def test_plan_materialization_selects_only_local_layers(
             FabricInstancePlan(
                 instance_id="model",
                 ffn_profile=InstanceFfnProfile(
-                    model_config_digest=spec.model_config_digest,
                     payload_dtype=torch.bfloat16,
                     hidden_size=4,
                     layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.DENSE),),

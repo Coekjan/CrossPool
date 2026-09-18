@@ -140,7 +140,6 @@ def ffn_profile() -> InstanceFfnProfile:
     """Return one valid rank-independent FFN Profile for client requests."""
 
     return InstanceFfnProfile(
-        model_config_digest="a" * 64,
         payload_dtype=torch.bfloat16,
         hidden_size=4,
         layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.DENSE),),

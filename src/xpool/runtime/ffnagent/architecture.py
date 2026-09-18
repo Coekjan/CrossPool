@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import math
 import pathlib
-import re
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import TypeVar, cast
 
 import torch
 
@@ -17,7 +17,89 @@ from xpool.runtime.ffnagent.weights import MoeRouterWeights
 from xpool.utils.discovery import discover_concrete_subclasses
 
 MODELS_PACKAGE = "xpool.runtime.ffnagent.models"
-MAIN_FFN_KEY_PATTERN = re.compile(r"^model\.layers\.(?P<layer_id>\d+)\.mlp(?:\.|$)")
+CONFIG_FIELD_MISSING = object()
+T = TypeVar("T")
+
+
+@dataclass(frozen=True, slots=True)
+class FfnSourceConfig:
+    """Strict access boundary for one parsed model ``config.json`` object."""
+
+    values: Mapping[str, object]
+
+    @property
+    def architecture_name(self) -> str:
+        """Return the sole nonempty architecture name declared by the source config."""
+
+        architectures = self.get("architectures", list)
+        if len(architectures) != 1 or not isinstance(architectures[0], str) or not architectures[0]:
+            raise ValueError("architectures must be a one-element array containing a nonempty string")
+        return cast(str, architectures[0])
+
+    def get(
+        self,
+        field_name: str,
+        expected_type: type[T],
+        *,
+        gt: int | float | None = None,
+        ge: int | float | None = None,
+        lt: int | float | None = None,
+        le: int | float | None = None,
+    ) -> T:
+        """Read one required source field with strict type and numeric constraints."""
+
+        expected_name = (
+            "integer" if expected_type is int else "number" if expected_type is float else expected_type.__name__
+        )
+        value = self.values.get(field_name, CONFIG_FIELD_MISSING)
+        if value is CONFIG_FIELD_MISSING:
+            raise ValueError(f"{field_name} must be a JSON {expected_name}")
+        if expected_type is int:
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(f"{field_name} must be a JSON integer")
+        elif expected_type is float:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError(f"{field_name} must be a finite JSON number")
+            value = float(value)
+        elif not isinstance(value, expected_type):
+            raise ValueError(f"{field_name} must be a JSON {expected_name}")
+
+        if any(bound is not None for bound in (gt, ge, lt, le)):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise ValueError(f"{field_name} must be numeric to apply bounds")
+            if gt is not None and value <= gt:
+                raise ValueError(f"{field_name} must be greater than {gt}")
+            if ge is not None and value < ge:
+                raise ValueError(f"{field_name} must be greater than or equal to {ge}")
+            if lt is not None and value >= lt:
+                raise ValueError(f"{field_name} must be less than {lt}")
+            if le is not None and value > le:
+                raise ValueError(f"{field_name} must be less than or equal to {le}")
+        return cast(T, value)
+
+    def optional(self, field_name: str, expected_type: type[T], *, allow_none: bool = False) -> T | None:
+        """Read an optional source field, preserving missing and null semantics."""
+
+        if field_name not in self.values:
+            return None
+        if self.values[field_name] is None:
+            if allow_none:
+                return None
+            expected_name = (
+                "integer" if expected_type is int else "number" if expected_type is float else expected_type.__name__
+            )
+            raise ValueError(f"{field_name} must be a JSON {expected_name}")
+        return self.get(field_name, expected_type)
+
+    def validate_family_profile(self, *, model_type: str, dtype_field: str) -> None:
+        """Validate common model type, activation, and source dtype fields."""
+
+        if self.get("model_type", str) != model_type:
+            raise ValueError(f"model_type must equal {model_type!r}")
+        if self.get("hidden_act", str) != "silu":
+            raise ValueError("hidden_act must equal 'silu'")
+        if self.get(dtype_field, str) != "bfloat16":
+            raise ValueError(f"{dtype_field} must equal 'bfloat16'")
 
 
 class FfnModelAdapter(ABC):
@@ -31,8 +113,7 @@ class FfnModelAdapter(ABC):
         cls,
         *,
         model_id: str,
-        model_config: Mapping[str, object],
-        model_config_digest: str,
+        model_config: FfnSourceConfig,
     ) -> ffn.FfnModelSpec:
         """Compile a parsed model configuration without filesystem access."""
 
@@ -117,9 +198,8 @@ def load(*, model_id: str, model_path: pathlib.Path) -> ffn.FfnModelSpec:
     try:
         config_path = model_path / "config.json"
         config_bytes = config_path.read_bytes()
-        model_config_digest = hashlib.sha256(config_bytes).hexdigest()
-        model_config = checkpoint.parse_json_object(config_bytes, source=config_path)
-        architecture_name = require_single_architecture(model_config)
+        model_config = FfnSourceConfig(checkpoint.parse_json_object(config_bytes, source=config_path))
+        architecture_name = model_config.architecture_name
 
         adapter = adapters_by_architecture().get(architecture_name)
         if adapter is None:
@@ -127,17 +207,12 @@ def load(*, model_id: str, model_path: pathlib.Path) -> ffn.FfnModelSpec:
         spec = adapter.compile(
             model_id=model_id,
             model_config=model_config,
-            model_config_digest=model_config_digest,
         )
-        if (
-            spec.model_id != model_id
-            or spec.architecture_name != architecture_name
-            or spec.model_config_digest != model_config_digest
-        ):
+        if spec.model_id != model_id or spec.architecture_name != architecture_name:
             raise ValueError("FFN Architecture Adapter returned inconsistent model identity")
 
         key_view = checkpoint.read_checkpoint_key_view(model_path)
-        validate_checkpoint_coverage(
+        checkpoint.validate_ffn_coverage(
             spec,
             key_view,
             allow_trailing_ffn_layers=architecture_name == "Glm4MoeLiteForCausalLM",
@@ -145,80 +220,6 @@ def load(*, model_id: str, model_path: pathlib.Path) -> ffn.FfnModelSpec:
         return spec
     except Exception as error:
         raise RuntimeError(f"failed to compile FFN model {model_id!r} at {model_path}: {error}") from error
-
-
-def require_single_architecture(model_config: Mapping[str, object]) -> str:
-    """Return the one strict architecture name in a parsed model config."""
-
-    architectures = model_config.get("architectures")
-    if (
-        not isinstance(architectures, list)
-        or len(architectures) != 1
-        or not isinstance(architectures[0], str)
-        or not architectures[0]
-    ):
-        raise ValueError("architectures must be a one-element array containing a nonempty string")
-    return architectures[0]
-
-
-def require_family_profile(
-    model_config: Mapping[str, object],
-    *,
-    architecture_name: str,
-    model_type: str,
-    dtype_field: str,
-) -> None:
-    """Validate common architecture, model type, activation, and BF16 fields."""
-
-    if require_single_architecture(model_config) != architecture_name:
-        raise ValueError(f"architecture must equal {architecture_name!r}")
-    if require_string(model_config, "model_type") != model_type:
-        raise ValueError(f"model_type must equal {model_type!r}")
-    if require_string(model_config, "hidden_act") != "silu":
-        raise ValueError("hidden_act must equal 'silu'")
-    if require_string(model_config, dtype_field) != "bfloat16":
-        raise ValueError(f"{dtype_field} must equal 'bfloat16'")
-
-
-def require_integer(
-    model_config: Mapping[str, object],
-    field_name: str,
-    *,
-    minimum: int,
-) -> int:
-    """Read one JSON integer field with an inclusive lower bound."""
-
-    value = model_config.get(field_name)
-    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
-        raise ValueError(f"{field_name} must be a JSON integer greater than or equal to {minimum}")
-    return value
-
-
-def require_boolean(model_config: Mapping[str, object], field_name: str) -> bool:
-    """Read one required JSON Boolean field."""
-
-    value = model_config.get(field_name)
-    if not isinstance(value, bool):
-        raise ValueError(f"{field_name} must be a JSON Boolean")
-    return value
-
-
-def require_string(model_config: Mapping[str, object], field_name: str) -> str:
-    """Read one required nonempty JSON string field."""
-
-    value = model_config.get(field_name)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{field_name} must be a nonempty JSON string")
-    return value
-
-
-def require_positive_number(model_config: Mapping[str, object], field_name: str) -> float:
-    """Read one finite positive JSON number field."""
-
-    value = model_config.get(field_name)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-        raise ValueError(f"{field_name} must be a finite positive JSON number")
-    return float(value)
 
 
 def gated_checkpoint_keys(prefix: str) -> ffn.GatedFfnCheckpointKeys:
@@ -229,32 +230,3 @@ def gated_checkpoint_keys(prefix: str) -> ffn.GatedFfnCheckpointKeys:
         up_weight_key=f"{prefix}.up_proj.weight",
         down_weight_key=f"{prefix}.down_proj.weight",
     )
-
-
-def validate_checkpoint_coverage(
-    spec: ffn.FfnModelSpec,
-    key_view: Mapping[str, pathlib.Path],
-    *,
-    allow_trailing_ffn_layers: bool,
-) -> None:
-    """Require exact family-owned FFN keys for every main decoder layer."""
-
-    expected_by_layer = {layer.layer_id: set(ffn.checkpoint_keys_for_layer(layer)) for layer in spec.layers}
-    all_checkpoint_keys = set(key_view)
-    for layer_id, expected_keys in expected_by_layer.items():
-        prefix = f"model.layers.{layer_id}.mlp."
-        actual_keys = {key for key in all_checkpoint_keys if key.startswith(prefix)}
-        if actual_keys != expected_keys:
-            missing = sorted(expected_keys - actual_keys)
-            extra = sorted(actual_keys - expected_keys)
-            raise ValueError(f"FFN checkpoint namespace for layer {layer_id} differs: missing={missing}, extra={extra}")
-
-    if allow_trailing_ffn_layers:
-        return
-    trailing_keys = []
-    for key in all_checkpoint_keys:
-        match = MAIN_FFN_KEY_PATTERN.match(key)
-        if match is not None and int(match.group("layer_id")) not in expected_by_layer:
-            trailing_keys.append(key)
-    if trailing_keys:
-        raise ValueError(f"checkpoint contains FFN keys outside main decoder layers: {sorted(trailing_keys)}")

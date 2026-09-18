@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 from collections.abc import Callable, Sequence
@@ -358,9 +357,7 @@ def derive_instance_ffn_profile(
         label="prefill CUDA graph",
     )
 
-    model_config_path = binding.model_path / "config.json"
     return InstanceFfnProfile(
-        model_config_digest=hashlib.sha256(model_config_path.read_bytes()).hexdigest(),
         payload_dtype=payload_dtype,
         hidden_size=hidden_sizes.pop(),
         layers=layers,

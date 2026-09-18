@@ -120,7 +120,6 @@ def instance_registration_view(*, instance_id: str, rank: int) -> dict[str, obje
             "atn_dp_size": 1,
         },
         "ffn_profile": {
-            "model_config_digest": "a" * 64,
             "payload_dtype": "bfloat16",
             "hidden_size": 4,
             "layers": [{"layer_id": 0, "kind": 1}],

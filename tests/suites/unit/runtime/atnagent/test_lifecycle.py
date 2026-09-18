@@ -175,7 +175,6 @@ def test_participant_report_commits_only_after_daemon_acknowledgement(monkeypatc
     )
     agent = create_atnagent(config, cuda_device=0)
     profile = InstanceFfnProfile(
-        model_config_digest="a" * 64,
         payload_dtype=torch.bfloat16,
         hidden_size=4,
         layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.DENSE),),
@@ -220,7 +219,6 @@ def test_post_join_value_error_is_reported_as_control_failure(monkeypatch: pytes
     )
     agent = create_atnagent(config, cuda_device=0)
     profile = InstanceFfnProfile(
-        model_config_digest="a" * 64,
         payload_dtype=torch.bfloat16,
         hidden_size=4,
         layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.DENSE),),
@@ -264,7 +262,6 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
     )
     agent = create_atnagent(config, cuda_device=0)
     profile = InstanceFfnProfile(
-        model_config_digest="a" * 64,
         payload_dtype=torch.bfloat16,
         hidden_size=4,
         layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.DENSE),),

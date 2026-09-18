@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 import torch
 
 from xpool import ffn
@@ -93,32 +91,25 @@ class Qwen3MoeAdapter(architecture.MoeFfnModelAdapter):
         cls,
         *,
         model_id: str,
-        model_config: Mapping[str, object],
-        model_config_digest: str,
+        model_config: architecture.FfnSourceConfig,
     ) -> ffn.FfnModelSpec:
         """Compile all main Qwen3-MoE decoder layers and routing semantics."""
 
-        architecture.require_family_profile(
-            model_config,
-            architecture_name="Qwen3MoeForCausalLM",
-            model_type="qwen3_moe",
-            dtype_field="torch_dtype",
-        )
-        if architecture.require_integer(model_config, "decoder_sparse_step", minimum=1) != 1:
+        model_config.validate_family_profile(model_type="qwen3_moe", dtype_field="torch_dtype")
+        if model_config.get("decoder_sparse_step", int, ge=1) != 1:
             raise ValueError("decoder_sparse_step must equal 1")
-        mlp_only_layers = model_config.get("mlp_only_layers")
+        mlp_only_layers = model_config.optional("mlp_only_layers", list)
         if not isinstance(mlp_only_layers, list) or mlp_only_layers:
             raise ValueError("mlp_only_layers must be an empty JSON array")
-        hidden_size = architecture.require_integer(model_config, "hidden_size", minimum=1)
-        layer_count = architecture.require_integer(model_config, "num_hidden_layers", minimum=1)
-        expert_intermediate_size = architecture.require_integer(model_config, "moe_intermediate_size", minimum=1)
-        routed_expert_count = architecture.require_integer(model_config, "num_experts", minimum=1)
-        routed_topk = architecture.require_integer(model_config, "num_experts_per_tok", minimum=1)
-        renormalize = architecture.require_boolean(model_config, "norm_topk_prob")
+        hidden_size = model_config.get("hidden_size", int, ge=1)
+        layer_count = model_config.get("num_hidden_layers", int, ge=1)
+        expert_intermediate_size = model_config.get("moe_intermediate_size", int, ge=1)
+        routed_expert_count = model_config.get("num_experts", int, ge=1)
+        routed_topk = model_config.get("num_experts_per_tok", int, ge=1)
+        renormalize = model_config.get("norm_topk_prob", bool)
         return ffn.FfnModelSpec(
             model_id=model_id,
             architecture_name=cls.architecture_name,
-            model_config_digest=model_config_digest,
             hidden_size=hidden_size,
             activation=ffn.ActivationKind.SILU,
             layers=tuple(

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-
 import torch
 
 from xpool import ffn
@@ -158,7 +156,6 @@ def calibration_corpus_spec(member: str) -> ffn.FfnModelSpec:
     return ffn.FfnModelSpec(
         model_id=member,
         architecture_name=architecture_names[member],
-        model_config_digest=hashlib.sha256(f"calibration:{member}".encode()).hexdigest(),
         hidden_size=hidden_size,
         activation=ffn.ActivationKind.SILU,
         layers=layers,
@@ -195,7 +192,6 @@ def build_instance_profile(spec: ffn.FfnModelSpec, *, group_sum_complete: bool) 
     """Project one Calibration Corpus Spec into the fixed 4K profiling Profile."""
 
     return InstanceFfnProfile(
-        model_config_digest=spec.model_config_digest,
         payload_dtype=torch.bfloat16,
         hidden_size=spec.hidden_size,
         layers=tuple(InstanceFfnLayerProfile(layer_id=layer.layer_id, kind=layer.kind) for layer in spec.layers),

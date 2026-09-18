@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 import torch
 
 from xpool import ffn
@@ -93,36 +91,30 @@ class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
         cls,
         *,
         model_id: str,
-        model_config: Mapping[str, object],
-        model_config_digest: str,
+        model_config: architecture.FfnSourceConfig,
     ) -> ffn.FfnModelSpec:
         """Compile DeepSeek layer placement and routing semantics."""
 
-        architecture.require_family_profile(
-            model_config,
-            architecture_name="DeepseekV2ForCausalLM",
-            model_type="deepseek_v2",
-            dtype_field="torch_dtype",
-        )
-        hidden_size = architecture.require_integer(model_config, "hidden_size", minimum=1)
-        layer_count = architecture.require_integer(model_config, "num_hidden_layers", minimum=1)
-        intermediate_size = architecture.require_integer(model_config, "intermediate_size", minimum=1)
-        expert_intermediate_size = architecture.require_integer(model_config, "moe_intermediate_size", minimum=1)
-        routed_expert_count = architecture.require_integer(model_config, "n_routed_experts", minimum=1)
-        shared_expert_count = architecture.require_integer(model_config, "n_shared_experts", minimum=0)
-        routed_topk = architecture.require_integer(model_config, "num_experts_per_tok", minimum=1)
-        first_moe_layer = architecture.require_integer(model_config, "first_k_dense_replace", minimum=0)
-        moe_layer_frequency = architecture.require_integer(model_config, "moe_layer_freq", minimum=1)
-        expert_group_count = architecture.require_integer(model_config, "n_group", minimum=1)
-        selected_expert_group_count = architecture.require_integer(model_config, "topk_group", minimum=1)
-        if architecture.require_string(model_config, "scoring_func") != "softmax":
+        model_config.validate_family_profile(model_type="deepseek_v2", dtype_field="torch_dtype")
+        hidden_size = model_config.get("hidden_size", int, ge=1)
+        layer_count = model_config.get("num_hidden_layers", int, ge=1)
+        intermediate_size = model_config.get("intermediate_size", int, ge=1)
+        expert_intermediate_size = model_config.get("moe_intermediate_size", int, ge=1)
+        routed_expert_count = model_config.get("n_routed_experts", int, ge=1)
+        shared_expert_count = model_config.get("n_shared_experts", int, ge=0)
+        routed_topk = model_config.get("num_experts_per_tok", int, ge=1)
+        first_moe_layer = model_config.get("first_k_dense_replace", int, ge=0)
+        moe_layer_frequency = model_config.get("moe_layer_freq", int, ge=1)
+        expert_group_count = model_config.get("n_group", int, ge=1)
+        selected_expert_group_count = model_config.get("topk_group", int, ge=1)
+        if model_config.get("scoring_func", str) != "softmax":
             raise ValueError("scoring_func must equal 'softmax'")
-        if architecture.require_string(model_config, "topk_method") != "greedy":
+        if model_config.get("topk_method", str) != "greedy":
             raise ValueError("topk_method must equal 'greedy'")
         if expert_group_count != 1 or selected_expert_group_count != 1:
             raise ValueError("first-production DeepSeek routing requires n_group == topk_group == 1")
-        renormalize = architecture.require_boolean(model_config, "norm_topk_prob")
-        routed_scaling_factor = architecture.require_positive_number(model_config, "routed_scaling_factor")
+        renormalize = model_config.get("norm_topk_prob", bool)
+        routed_scaling_factor = model_config.get("routed_scaling_factor", float, gt=0)
 
         layers: list[ffn.FfnLayerSpec] = []
         for layer_id in range(layer_count):
@@ -163,7 +155,6 @@ class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
         return ffn.FfnModelSpec(
             model_id=model_id,
             architecture_name=cls.architecture_name,
-            model_config_digest=model_config_digest,
             hidden_size=hidden_size,
             activation=ffn.ActivationKind.SILU,
             layers=tuple(layers),

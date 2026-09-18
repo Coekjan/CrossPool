@@ -138,7 +138,6 @@ def ffn_profile(
     """Return one strict FFN profile suitable for SGLang plugin tests."""
 
     return InstanceFfnProfile(
-        model_config_digest="a" * 64,
         payload_dtype=torch.float16,
         hidden_size=hidden_size,
         layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.DENSE),),

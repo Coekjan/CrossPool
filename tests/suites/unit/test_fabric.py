@@ -27,7 +27,6 @@ def profile(payload_dtype: torch.dtype = torch.bfloat16) -> InstanceFfnProfile:
     """Build one valid rank-independent FFN Profile."""
 
     return InstanceFfnProfile(
-        model_config_digest="a" * 64,
         payload_dtype=payload_dtype,
         hidden_size=4,
         layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.DENSE),),

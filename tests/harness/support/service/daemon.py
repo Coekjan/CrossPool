@@ -194,7 +194,6 @@ def ffn_model_spec(*, model_id: str = TEST_MODEL_ID, hidden_size: int = 4) -> di
     return {
         "model_id": model_id,
         "architecture_name": "Qwen3ForCausalLM",
-        "model_config_digest": "a" * 64,
         "hidden_size": hidden_size,
         "activation": 1,
         "layers": [
@@ -216,7 +215,6 @@ def ffn_profile(*, hidden_size: int = 4) -> dict[str, object]:
     """Return one valid rank-independent FFN Profile payload."""
 
     return {
-        "model_config_digest": "a" * 64,
         "payload_dtype": "bfloat16",
         "hidden_size": hidden_size,
         "layers": [{"layer_id": 0, "kind": 1}],

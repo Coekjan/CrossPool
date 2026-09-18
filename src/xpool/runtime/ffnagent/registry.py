@@ -462,12 +462,9 @@ class FfnExecutionRegistry:
             if len(model_weights) != len(model_plan.layers) or len(model_spec.layers) != len(model_plan.layers):
                 raise ValueError("Model Spec, layer weights, and Model Plan layers are not co-indexed")
             profile = instance_plan.ffn_profile
-            if (
-                profile.model_config_digest != model_spec.model_config_digest
-                or profile.hidden_size != model_spec.hidden_size
-                or tuple((layer.layer_id, layer.kind) for layer in profile.layers)
-                != tuple((layer.layer_id, layer.kind) for layer in model_spec.layers)
-            ):
+            if profile.hidden_size != model_spec.hidden_size or tuple(
+                (layer.layer_id, layer.kind) for layer in profile.layers
+            ) != tuple((layer.layer_id, layer.kind) for layer in model_spec.layers):
                 raise ValueError("Instance Profile disagrees with the co-indexed Model Spec")
             capacities = execution.derive_payload_row_capacities(
                 max(profile.decode_payload_row_capacity, profile.prefill_payload_row_capacity)

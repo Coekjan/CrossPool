@@ -85,7 +85,6 @@ def execution_model_specs(
             ffn.FfnModelSpec(
                 model_id=f"{execution_kind.name.lower()}-{instance_index}",
                 architecture_name=("Qwen3ForCausalLM" if execution_kind is LayerKind.DENSE else "Qwen3MoeForCausalLM"),
-                model_config_digest="1" * 64,
                 hidden_size=EXECUTION_HIDDEN_SIZE,
                 activation=ffn.ActivationKind.SILU,
                 layers=tuple(layers),
@@ -119,7 +118,6 @@ def execution_fabric_plan(
     if intermediate_size % ffn_tp_size:
         raise ValueError("qualification FFN width must divide evenly across FfnAgents")
     profile = InstanceFfnProfile(
-        model_config_digest="1" * 64,
         payload_dtype=payload_dtype,
         hidden_size=EXECUTION_HIDDEN_SIZE,
         layers=tuple(InstanceFfnLayerProfile(layer_id=ordinal, kind=execution_kind) for ordinal in range(layer_count)),
