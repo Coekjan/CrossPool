@@ -30,8 +30,8 @@ XPOOL_DEVICE_FN void fill_failure_output(const cooperative_groups::thread_block 
   xpool::utils::cooperative::fill(group, cuda::std::span{output, element_count}, static_cast<Scalar>(NAN));
 }
 
-// Execute one synchronous Instance-side mailbox transaction without
-// host progress, preserving graph-capture-compatible addresses and control flow.
+// Execute one synchronous Instance-side mailbox transaction on the device;
+// graph capture preserves its addresses and control flow.
 template <typename Scalar>
 XPOOL_KERNEL_FN void instance_transport_kernel(ArenaView arena, const Scalar *hidden_input, Scalar *hidden_output,
                                                std::size_t hidden_numel, std::size_t payload_rows,

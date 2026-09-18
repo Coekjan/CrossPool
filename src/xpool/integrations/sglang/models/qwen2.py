@@ -36,7 +36,7 @@ class XpoolQwen2MLP(FfnShimModule, Qwen2MLP):
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
     ) -> None:
-        """Initialize only the CrossPool shim state without FFN weights."""
+        """Initialize CrossPool shim state while SGLang retains the FFN weights."""
 
         if hidden_act != "silu":
             raise ValueError(f"Unsupported activation: {hidden_act}. Only silu is supported for now.")

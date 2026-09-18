@@ -6,10 +6,10 @@ allocation, prefix-cache contents, and eviction order. CrossPool owns stable
 virtual storage, the allocator's admitted prefix, generation-scoped capacity
 coordination, and physical map/unmap operations.
 
-Elastic pooling is always present in the CrossPool SGLang integration. It is
-not a shared KV cache: one Instance cannot address, reuse, or inspect another
-Instance's KV contents. Reclamation may evict reclaimable prefix-cache suffixes
-through SGLang before their physical backing is removed.
+Elastic pooling is always present in the CrossPool SGLang integration. Each
+Instance keeps independent logical KV contents and prefix-cache ownership;
+CrossPool shares only physical backing. Reclamation may evict reclaimable
+prefix-cache suffixes through SGLang before their physical backing is removed.
 
 ## Capacity model
 
@@ -19,9 +19,9 @@ mapped physical prefix may change.
 
 A **KV Page Bundle** is one rank-local compound mapping unit. It covers the same
 row interval across every local attention layer and K/V component. Its byte
-size therefore depends on that model and rank's KV geometry; bundle counts are
-comparable inside one Capacity Group, while physical accounting always uses
-each partition's own `bundle_bytes`.
+size therefore depends on that model and rank's KV geometry. Bundle counts are
+comparable inside one Capacity Group; physical accounting uses each
+partition's own `bundle_bytes`.
 
 A **KV Capacity Group** is `(instance_id, atn_dp_rank)`. Every TP rank in the
 group receives the same operation target and switches to the same
@@ -38,8 +38,7 @@ future attention compute admission and is not part of this memory model.
 Each partition registers immutable geometry: bundle bytes and capacity, minimum
 backed bundles, token capacity, CUDA mapping granularity, row bytes, tokens per
 row, and token page size. CrossPool derives the usable logical token prefix from
-that geometry; the daemon does not assume one model-independent byte-to-token
-conversion.
+that geometry, so the daemon can account for each model's byte-to-token ratio.
 
 ## Storage and allocator integration
 
@@ -80,17 +79,18 @@ revision: zero means unpublished, odd means the leader is updating its payload
 and deadline, and nonzero even means committed. A reader accepts the payload
 and deadline only between two matching even revision reads. The encoded
 deadline distinguishes resolved demand from an active absolute monotonic
-deadline. Channel storage is never reset or reused by a later Generation.
+deadline. Channel storage belongs to one Generation for its entire lifetime.
 
 A command is one immutable group-local sequence and absolute bundle target.
-Each partition maps missing growth backing before voting, but does not expose
-the larger logical prefix until every TP rank is ready. For reclaim, each
+Each partition maps missing growth backing before voting. The larger logical
+prefix becomes visible only after every TP rank is ready. For reclaim, each
 partition selects currently reclaimable SGLang cache suffix nodes at its
 pre-planning boundary. If any partition is not ready, all keep the old logical
 capacity and continue ordinary scheduling; the next iteration may retry with
 a fresh selection. New Prefill waits during reclaim, while already admitted
-chunked Prefill and running Decode can progress. No admitted request is killed
-to satisfy reclaim, and a live suffix does not change the command target.
+chunked Prefill and running Decode can progress. Reclaim waits for admitted
+work to finish; admitted requests are never killed. A live suffix remains
+outside the command target.
 
 An all-ready vote makes every rank switch before its next batch planning.
 Reclaim then evicts the selected cache nodes and waits for prior GPU users
@@ -98,8 +98,8 @@ before physical unmap. Every partition publishes terminal completion; the
 daemon retires the operation only after all sequence-correlated completions.
 TP-one groups switch without a distributed vote. Startup uses the same switch
 contract after Graph capture, but obtains its initial command by channel
-polling rather than the service-time TP request broadcast. No unfinished
-operation is superseded.
+polling rather than the service-time TP request broadcast. The daemon
+serializes unfinished operations before issuing the next command.
 
 The TP leader also publishes the latest persistent **KV Capacity Demand**:
 one concrete Prefill request or blocked Decode batch couples its absolute
@@ -110,9 +110,9 @@ completion before the first Decode token, plus `tbt_ms`. These scheduler-local
 timestamps do not include API handling, tokenization, or request IPC. A group
 publishes its earliest-deadline unresolved witness with the completed capacity
 operation under which it was evaluated. No requested value means demand
-resolved. Re-reading does not consume demand, and applying capacity does not
-clear it; scheduling must evaluate the new capacity before publishing feedback
-for that operation.
+resolved. Re-reading leaves demand unchanged, and applying capacity leaves the
+demand record intact until scheduling evaluates the new capacity and publishes
+feedback for that operation.
 
 ## Lifecycle
 
@@ -142,9 +142,9 @@ Startup follows the Generation lifecycle:
 
 During service, each SGLang scheduler iteration receives its DP group's command
 through SGLang's existing TP broadcast. Before ordinary batch planning, each
-rank with an unapplied command participates in its TP readiness vote; ordinary
-no-command and paused iterations do not vote. An unready vote retains the old
-logical capacity while ordinary scheduling continues.
+rank with an unapplied command participates in its TP readiness vote. Idle and
+paused iterations skip the vote. An unready vote retains the old logical
+capacity while ordinary scheduling continues.
 Authoritative Prefill or Decode admission failures update the leader's demand.
 During reclaim, new Prefill waits while already admitted work can finish; when
 drain completes, waiting requests are made eligible for ordinary scheduling
@@ -157,10 +157,9 @@ and stable group index. If none can issue an operation, it considers
 predeadline borrowers in deadline order only when their physical pools are
 disjoint from every eligible overdue borrower's pools. Groups without active demand are
 preferred as donors; when all usable donors have demand, later deadlines and
-more recent grants are preferred. No donor crosses its immutable floor.
-Deadline ordering does not guarantee SLO satisfaction or bounded reclaim time:
-the policy does not preempt admitted work, and a live suffix can delay physical
-release.
+more recent grants are preferred. Each donor retains its immutable floor.
+Deadline ordering prioritizes work; admitted work remains non-preemptive, so a
+live suffix can delay physical release.
 
 One serialized funding attempt gathers the complete byte shortfall for a
 concrete demand witness from unassigned pool bytes and, if necessary, multiple
@@ -171,9 +170,8 @@ the daemon revalidates the exact borrower sequence, target, and deadline before
 continuing; stale attempts release their newly unassigned bytes to normal
 arbitration. While a donor operation is pending, another group may grow
 directly from already unassigned bytes only on pools disjoint from both the
-pending borrower and donor; no second donor attempt starts. A completed
-borrower growth, not command publication or donor reclaim, advances its grant
-order.
+pending borrower and donor. The daemon allows one donor attempt at a time. Only
+completed borrower growth advances its grant order.
 
 While an operation is outstanding, every affected physical pool charges the
 larger of the starting and target backing. Reclaimed bytes are not credited
@@ -192,29 +190,29 @@ occur on the SGLang scheduler thread.
 Shutdown first stops KV users and synchronizes the device. The Instance closes
 its channel attachment, drops pool views, unmaps its backed prefix, and releases
 the virtual range. The daemon retires and unlinks the KV Control Channel with its
-Fabric Generation. Participant loss is generation-fatal; no recovery or stale
-channel reuse path exists.
+Fabric Generation. Participant loss ends the Generation; a later Generation
+creates a fresh channel.
 
 ## Operational evidence
 
 The daemon emits low-frequency `INFO` records after authoritative transitions:
-pool frozen, growth requested, and reclaim requested. It keeps polling,
-repeated demand, unavailable donor scans, per-request rejection, per-rank
-command receipt, and per-bundle VMM work silent. Logs are diagnostic evidence,
-not a protocol or correctness API.
+pool frozen, growth requested, and reclaim requested. Polling, repeated demand,
+unavailable donor scans, per-request rejection, per-rank command receipt, and
+per-bundle VMM work stay below the operational log level. Logs are diagnostic
+evidence, not a protocol or correctness API.
 
 | Event | Principal fields | Meaning |
 | --- | --- | --- |
 | `kv capacity pool frozen` | `generation`, `device`, `capacity_bytes`, `floor_bytes` | The post-capture physical pool is fixed. |
-| `kv capacity growth requested` | group identity, start and target bundles, command sequence | The complete persistent demand target was funded and issued. |
-| `kv capacity reclaim requested` | borrower and donor identity, donor start and target bundles, command sequence | A donor received a fixed smaller target; reclamation has not necessarily completed. |
+| `kv capacity growth requested` | group, start/target bundles, command | Full demand target funded and issued. |
+| `kv capacity reclaim requested` | borrower/donor, start/target bundles, command | Donor target fixed; partition retirement follows. |
 
 The exact split between native, integration, ordinary serving, and dedicated
 Elastic KV evidence is owned by [Qualification](qualification.md).
 
-Qualification cases describe evidence, not a dtype or hardware allowlist. The
-integration rejects modes that replace the required physical layout or logical
-prefix-cache seam, including unified-memory or alternate KV layouts, KV
-offload/disaggregation, disabled or non-Unified Radix caches, non-Python Unified
-TreeCore, and overlapping startup weight loading. Lack of qualification alone
-does not reject an otherwise structurally compatible configuration.
+Qualification cases provide evidence rather than define a dtype or hardware
+allowlist. The integration accepts configurations whose physical layout and
+logical prefix-cache seam match the contract. Unified-memory or alternate KV
+layouts, KV offload/disaggregation, disabled or non-Unified Radix caches,
+non-Python Unified TreeCore, and overlapping startup weight loading require a
+different integration seam.

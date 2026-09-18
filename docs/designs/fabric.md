@@ -22,8 +22,8 @@ counts and raw maximum payload and routing-element capacities.
 
 Python bindings accept and return `torch.dtype`; the binding seam converts it
 to and from `c10::ScalarType`. Transport and Fabric layouts retain that native
-type and checked `payload_row_bytes` geometry, so there is no CrossPool-owned
-payload-dtype enum or second Device dtype-to-size mapping.
+type and checked `payload_row_bytes` geometry, so native scalar types own dtype
+size and layout arithmetic.
 
 AtnAgent and FfnAgent code use role-specific views over the same storage. Views
 change legal access and interpretation; they do not create duplicate buffers or

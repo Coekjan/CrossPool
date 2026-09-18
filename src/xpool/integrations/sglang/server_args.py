@@ -36,17 +36,17 @@ class ServerArgRule:
 
 
 def validate_sglang_server_args() -> None:
-    """Reject SGLang runtime modes not represented in the CrossPool shim ABI yet.
+    """Validate SGLang runtime modes against the CrossPool shim ABI.
 
     Raises:
-        RuntimeError: If any configured SGLang feature can surface a forward or
-            memory-management mode not represented by the current CrossPool shim ABI.
+        RuntimeError: If any configured SGLang feature selects a forward or
+            memory-management mode outside the current CrossPool shim ABI.
     """
 
     unsupported = tuple(rule.label for rule in SGLANG_SERVER_ARG_RULES if not rule.supported())
     if unsupported:
         joined = ", ".join(unsupported)
-        raise RuntimeError(f"xpool SGLang plugin does not support these SGLang features yet: {joined}")
+        raise RuntimeError(f"xpool SGLang plugin does not support these SGLang features: {joined}")
 
 
 SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (

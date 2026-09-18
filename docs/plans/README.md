@@ -1,9 +1,8 @@
 # CrossPool Roadmap
 
-This document maps long-term candidate workstreams and their relationships. It
-is neither a description of the current system nor an active implementation
-plan. Listing a workstream does not accept its target architecture or commit the
-project to implementing it.
+This document maps long-term candidate workstreams and their relationships.
+Current architecture lives under `docs/designs/`; accepted implementation
+plans live under `docs/plans/<task>/README.md`.
 
 Accepted changes that need a decision-complete target design receive a separate
 `docs/plans/<task>/README.md`. Owners, status, priority, schedules, and progress

@@ -1,13 +1,12 @@
 # Devkit
 
-Devkit observes real production execution through typed Hook Points. It does
-not replace Transport, Fabric, or FFN computation.
+Devkit observes real production execution through typed Hook Points. Transport,
+Fabric, and FFN computation remain production responsibilities.
 
 Debug configuration is process-global and immutable after native
-initialization. Native owners read the installed value directly rather than
-copying Debug policy into runtime state, adapters, or Kernel arguments. The
-configuration contains only Transport, Fabric, Graph, and FFN Routing Observer
-options.
+initialization. Native owners read the installed value directly; Debug policy
+stays out of runtime state, adapters, and Kernel arguments. The configuration
+contains Transport, Fabric, Graph, and FFN Routing Observer options.
 
 Each Observer records evidence from the real execution path and owns
 process-local storage. Observer state is never stored in a Transport or Fabric
@@ -33,15 +32,15 @@ Host and Device call sites use the neutral typed surface:
 Point::hooks(Point::Context{...});
 ```
 
-A production call site names only its owning Point and does not branch on a
-concrete Observer. Host and Device adapters are explicit compile-visible
-catalogs. There is no runtime registry, priority, dynamic plugin ABI, handler
-storage, interception, mutation, fallback, or alternate execution.
+A production call site names only its owning Point. Host and Device adapters
+form an explicit compile-visible catalog. Hook Points provide observation; the
+production path owns control flow and execution selection.
 
-Removing an Observe call leaves the surrounding execution readable and
-complete. Collective Device Points are reached by every participating CTA
-thread; adapters that need only one observation select thread zero themselves,
-while an Observer that copies a collective payload may use the complete CTA.
+Observe calls are additive, so the surrounding production code remains readable
+and complete without them. Collective Device Points are reached by every
+participating CTA thread; adapters that need only one observation select thread
+zero themselves, while an Observer that copies a collective payload may use the
+complete CTA.
 
 ## Protocol and Graph evidence
 
@@ -57,7 +56,8 @@ records do not infer either fact.
 Routing evidence follows the collective `RoutingMetadataPublished` event after
 the production payload and identity are published. Graph evidence records
 Primary captures and installed Lane Graphs at their owning lifecycle Points.
-Observers never replace execution, provide readiness, or mutate Graph topology.
+Observers record evidence; runtime lifecycle and Graph topology remain owned by
+production execution.
 Native Graph snapshots expose CUDA node kinds as underlying integers; the
 Python Graph Observer resolves official cuda-python enum names only when
 constructing its JSON presentation.

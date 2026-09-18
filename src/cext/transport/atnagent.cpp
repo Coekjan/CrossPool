@@ -49,9 +49,9 @@ AtnAgentRuntime::Resident::Resident(c10::DeviceIndex cuda_device, std::span<cons
     state_ = static_cast<ResidentState *>(state_allocation);
     C10_CUDA_CHECK(cudaMemset(state_, 0, sizeof(ResidentState)));
 
-    // The control stream owns host-to-device lifecycle publication; the
-    // resident stream owns the long-running kernel. Keeping them separate lets
-    // drain remain asynchronous without ordering shutdown behind the resident.
+    // The control stream owns host-to-device lifecycle publication, while the
+    // resident stream owns the long-running kernel. Separate streams keep drain
+    // asynchronous while the resident kernel continues.
     control_stream_ = xpool::utils::device::OwnedCudaStream::create();
     resident_stream_ = xpool::utils::device::OwnedCudaStream::create();
     launch_resident_kernel(arenas_, fabric_arena, state_, resident_stream_.get());

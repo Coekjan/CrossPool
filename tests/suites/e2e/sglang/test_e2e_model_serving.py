@@ -36,7 +36,7 @@ def test_e2e_model_serving(
     tmp_path: Path,
     task_artifact_dir: Path | None,
 ) -> None:
-    """Prove installed serving without cross-mode token parity."""
+    """Prove installed serving for the selected graph mode."""
 
     run_serving_case(
         case,

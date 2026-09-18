@@ -38,41 +38,40 @@ routing semantics. Startup selects immutable launch configuration and Graph
 Capture executes the Expert kernels.
 
 Any temporary adaptation of SGLang global arguments is scoped and
-unconditionally restored. No SGLang runtime object, callable, or state is
-retained by an Execution Registry, GraphTemplate, Plan, native Projection, or
-CrossPool global. Expanding this dependency seam requires an accepted design change;
-the current implementation has no provider hierarchy, backend registry,
-fallback, copied upstream kernel, or request-time selection.
+unconditionally restored. Retained execution state is CrossPool-owned. The
+current seam calls the selected SGLang operator and configuration modules
+directly, without a provider hierarchy or fallback dispatch. Expanding this
+dependency seam requires an accepted design change.
 
 Model adapters select Router functions directly. Qwen3-MoE,
-DeepSeek-V2-Lite, and GLM preserve their upstream routing mathematics.
-CrossPool-owned Triton routing is used only where upstream exposes no reusable
-standalone operation with the required semantics.
+DeepSeek-V2-Lite, and GLM preserve their upstream routing mathematics. The
+adapter uses an upstream standalone routing operation when its semantics match;
+otherwise it supplies the required CrossPool-owned Triton routing.
 
 GLM owns a local biased-sigmoid TopK kernel with configuration-driven routed K
 and Expert count. Padded Experts are excluded from selection; equal biased
 scores prefer higher Expert IDs. This is an explicit local tie policy, not a
 guarantee of Torch TopK ordering. Numerical acceptance against the independent
 reference, rather than kernel identity with the serving engine, qualifies it.
-The kernel reuses the FP32 logits workspace to preserve stored-score rounding
-and normalizes selected weights without dividing by zero. The preceding gate
-GEMM regenerates logits on every execution. Shared-Expert finalization remains
-separate, and no capture-owned temporary allocation is introduced.
+The kernel reuses the FP32 logits workspace to preserve stored-score rounding,
+normalizes selected weights with an explicit zero guard, and regenerates logits
+through the preceding gate GEMM on every execution. Shared-Expert finalization
+remains separate, and temporary storage stays outside Graph ownership.
 
 GLM converts Router inputs into caller-owned FP32 workspace before its FP32
 matrix multiplication. Only this conversion uses local `torch.compile` during
 pre-capture warmup, producing a kernel compatible with declared-address Graph
-parameterization without maintaining a handwritten conversion kernel. This
-does not enable serving-engine whole-model compilation or relax native
-parameter checks. Input conversion and logits share the accounted Router
-workspace; payload and Expert arithmetic retain their admitted precision.
+parameterization. Serving-engine whole-model compilation remains outside this
+seam, and native parameter checks remain in force. Input conversion and logits
+share the accounted Router workspace; payload and Expert arithmetic retain
+their admitted precision.
 
 The Router Owner finalizes Routing Metadata in Lane storage. A successor Kernel
 publishes the fixed-capacity payload and `RoutingMetadataReady` identity to the
 selected FFN TP ranks. Consumers validate the Invocation Key and Executor Lease
 before using their copies. Routing publication is required protocol behavior;
-the FFN Routing Observer records optional evidence from the same immutable data
-and never provides readiness or rewires the Lane Graph.
+the FFN Routing Observer records optional evidence from the same immutable data.
+Readiness and Lane Graph topology remain production responsibilities.
 
 Dense, MoE, Router workspace, captured input and output, and resident weights
 use the effective BF16 or FP16 dtype except where model mathematics requires

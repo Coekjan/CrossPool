@@ -32,13 +32,13 @@ def test_cleanup_retains_newest_inactive_runs(tmp_path: Path) -> None:
     assert (tmp_path / run_ids[2]).is_dir()
 
 
-def test_cleanup_removes_legacy_and_symlink_entries_without_touching_active_runs(tmp_path: Path) -> None:
+def test_cleanup_removes_unrecognized_and_symlink_entries_without_touching_active_runs(tmp_path: Path) -> None:
     store = tests.harness.runner.results.TestResultStore(tmp_path)
     completed = store.start("20260727-100000-1-1")
     completed.complete()
     active = store.start("20260727-100001-1-2")
-    legacy = tmp_path / "20260724T192347.527844Z-1527645"
-    legacy.mkdir()
+    unrecognized = tmp_path / "20260724T192347.527844Z-1527645"
+    unrecognized.mkdir()
     external = tmp_path.parent / "external-results"
     external.mkdir()
     symlink = tmp_path / "old-results-link"
@@ -46,11 +46,11 @@ def test_cleanup_removes_legacy_and_symlink_entries_without_touching_active_runs
 
     cleanup = store.cleanup(keep_runs=0)
 
-    assert set(cleanup.removable) == {completed.directory, legacy, symlink}
+    assert set(cleanup.removable) == {completed.directory, unrecognized, symlink}
     assert cleanup.retained == ()
     assert cleanup.active == (active.directory,)
     assert not completed.directory.exists()
-    assert not legacy.exists()
+    assert not unrecognized.exists()
     assert not symlink.exists()
     assert external.is_dir()
     assert active.directory.is_dir()

@@ -18,8 +18,8 @@ arena's uint32 representation by one block-wide cooperative transform; every
 participant observes completion before request publication.
 
 Decode and Prefill use the same Transport protocol. They differ only in live
-row count and the smallest configured capacity that contains it. Protocol
-records do not carry an enclosing Graph mode.
+row count and the smallest configured capacity that contains it. SGLang owns
+the enclosing Graph mode; Transport records carry mailbox state only.
 
 The AtnAgent Transport Resident is one cooperative grid with exactly one
 256-thread block owning each Transport arena. Transport-to-Fabric input copy,

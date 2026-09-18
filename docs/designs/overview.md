@@ -31,19 +31,19 @@ Concrete model IDs with qualification suites are listed in
 additional compatible architectures, but readiness claims require direct
 evidence for each new family.
 
-GPU model names and interconnect labels do not define a hardware allowlist.
-An untested topology is not excluded solely for lack of qualification, nor is
-it guaranteed to work: the selected kernels, CUDA Graph features, and memory
-access paths must be available on the deployment. Environment compatibility
-checks for optional memory calibration restrict reuse of that profile, not
-deployment to a fixed GPU model; see [Control Plane](control-plane.md#memory-admission).
+Qualification covers tested topologies. Other topologies require direct
+evidence after confirming that their kernels, CUDA Graph features, and memory
+access paths are available. Optional memory profiles follow their own
+environment-compatibility checks; they do not define a GPU model allowlist. See
+[Control Plane](control-plane.md#memory-admission).
 
-The current implementation excludes cross-host IB, expert parallelism, Unary FFN,
-same-Instance concurrent FFN requests, service-time placement changes, model
-migration, rolling updates, mixed-ABI generations, and request-time fallback.
-Except for the explicitly reserved `scheduler.atn_concurrency` setting described
-in [Control Plane](control-plane.md), no dormant types or configuration switches
-are retained for these features.
+The supported deployment uses one host, a fixed generation, static placement,
+and one active FFN invocation per Instance at a time. Cross-host IB, expert
+parallelism, Unary FFN, service-time placement changes, model migration,
+rolling updates, mixed-ABI generations, and request-time fallback require a
+separate accepted design and qualification before they become supported
+capabilities. The `scheduler.atn_concurrency` setting remains reserved for
+future attention admission as described in [Control Plane](control-plane.md).
 
 ### Process roles
 
@@ -146,9 +146,8 @@ numerical, or acceptance contracts. Ruff owns Python docstring shape, Doxygen
 owns Native declaration coverage and markup, and clang-format owns Native
 include grouping and comment layout.
 
-The current implementation contains real Dense and MoE FFN execution,
-true-TP weight ownership, Device-resident Transport and Fabric progress,
-per-Lane GraphExec ownership, static placement, memory admission, elastic
-attention-side KV backing, and SGLang serving integration. It contains no
-alternate debug execution, request-time fallback, compatibility alias, or
-mixed-ABI path.
+The current implementation provides real Dense and MoE FFN execution, true-TP
+weight ownership, Device-resident Transport and Fabric progress, per-Lane
+GraphExec ownership, static placement, memory admission, elastic
+attention-side KV backing, and SGLang serving integration. These capabilities
+share one generation-scoped ABI and serving path.

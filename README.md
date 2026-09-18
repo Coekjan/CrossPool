@@ -133,21 +133,21 @@ For each setting, supported sources take precedence in this order:
 3. The TOML file selected by `XPOOL_CONFIG`
 4. Defaults
 
-Not every setting accepts every source. Use the command's `--help` for
+Each setting declares its accepted sources. Use the command's `--help` for
 available CLI overrides and `.env.example` for common environment overrides.
-Debug controls are environment-only, not TOML entries; for example, use
-`XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE`, not a `[debug.graph_observer]` table.
+Debug controls use their registered environment variables. For example, set
+`XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE`; debug settings have no TOML section.
 
 The following is a selected TOML configuration overview, not a complete
 reference:
 
 | Setting | Purpose |
 | --- | --- |
-| `daemon.host` / `daemon.port` | Selects the local control-plane address, not the SGLang serving address. |
+| `daemon.host` / `daemon.port` | Selects the local control-plane address; SGLang serving uses its own listener. |
 | `vendor.model_base_uri` | Sets the absolute local model root. |
 | `models[].id` / `models[].path` | Identifies a model and optionally overrides its absolute local weight path. |
 | `models[].ffn_tp_size` | Fixes the model's FFN tensor-parallel width; omission uses the number of FfnAgents. |
-| `scheduler.slo` / `models[].slo` | Sets required default scheduler-local TTFT/TBT targets in milliseconds, with an optional complete per-model override for Elastic KV arbitration. |
+| `scheduler.slo` / `models[].slo` | Sets default TTFT/TBT targets; models may override both for Elastic KV arbitration. |
 | `atn.devices` / `ffn.devices` | Assigns attention-side and FFN-side CUDA devices. |
 | `scheduler.ffn_concurrency` | Sets the Executor Lane count, not a row or token budget. |
 | `scheduler.ffn_policy` | Selects `fifo` or `random` admission. |
@@ -165,11 +165,11 @@ cannot share a device. All processes must use the same CUDA device numbering.
 Each `[[models]]` entry selects local weights: an explicit `path` takes
 precedence; otherwise the path is `vendor.model_base_uri / id`. For example,
 `id = "Qwen/Qwen3-14B"` below `/srv/models` resolves to
-`/srv/models/Qwen/Qwen3-14B`. These settings do not download weights. Pass the
-same resolved path to SGLang's `--model-path`.
+`/srv/models/Qwen/Qwen3-14B`. These settings select existing local weights.
+Pass the same resolved path to SGLang's `--model-path`.
 
 Run `uv run xpool config dump` to inspect resolved values and their sources as
-JSON. It reads the selected configuration; it does not generate a TOML template.
+JSON. Use `configs/xpool.example.toml` as the TOML template.
 
 The [Control Plane design](docs/designs/control-plane.md#configuration-and-integration)
 owns configuration semantics and validation contracts.
@@ -178,16 +178,17 @@ Memory calibration is optional: leave `ffn.device_memory_calibration` unset to
 use analytic admission. To generate a profile, set it to an absolute output
 path and run `uv run xpool memory-profile` with MPS running and the daemon and
 serving processes stopped. The profiler uses a fixed model-independent corpus
-and does not load the configured model weights. At startup, an explicitly
-configured profile must exist and match the deployment environment; missing,
-malformed, or incompatible profiles fail rather than silently falling back.
+and runs without loading the configured model weights. At startup, an
+explicitly configured profile must exist and match the deployment environment;
+startup reports missing, malformed, or incompatible profiles.
 
 ## SGLang Integration
 
 Adapters are selected from the model architecture declared in `config.json`.
-Model IDs provide configuration identity and path resolution rather than acting
-as an adapter allowlist. See [Supported Models](docs/supported-models.md) for
-concrete model IDs with qualification suites. The
+Model IDs identify configured weights and their paths. Adapter selection comes
+from the model architecture in `config.json`. See [Supported
+Models](docs/supported-models.md) for concrete model IDs with qualification
+suites. The
 [shared SGLang E2E manifest](tests/harness/sglang/manifest.toml) owns routine
 serving and topology workloads; per-model numerical and graph cases live in
 their optional model suites.

@@ -1,7 +1,7 @@
 # Quick Start: Qwen3-0.6B on Two GPUs
 
 This guide starts one SGLang Instance with one attention GPU and one FFN GPU.
-It exercises real CrossPool FFN execution, not a loopback path. Use a Linux
+It exercises CrossPool FFN execution through the serving path. Use a Linux
 host meeting the [repository requirements](../../README.md#requirements),
 with the `Qwen/Qwen3-0.6B` checkpoint already stored locally. The two GPUs
 must be available to CUDA IPC, NVSHMEM, and the externally managed CUDA MPS

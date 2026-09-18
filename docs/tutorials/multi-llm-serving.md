@@ -99,9 +99,9 @@ curl -sS http://127.0.0.1:31000/generate \
 
 The two Instances keep separate logical KV contents and prefix caches while
 sharing the attention GPU's physical KV Capacity Pool. Their model-specific
-FFN weight shards coexist on the FFN GPU. This smoke check proves concurrent
-two-model startup and inference on those two GPU roles; it does not exercise or
-measure dynamic KV-capacity borrowing.
+FFN weight shards coexist on the FFN GPU. This smoke topology covers concurrent
+two-model startup and inference on those two GPU roles. Dynamic KV-capacity
+borrowing is covered by the dedicated Elastic KV qualification.
 
 Stop both SGLang processes first, then the AtnAgent and FfnAgent, and finally
 the daemon. Stop MPS only after every CUDA client using its controller has

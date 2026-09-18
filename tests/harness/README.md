@@ -81,7 +81,7 @@ validation where possible so a failed request remains diagnosable.
 
 `xtest clean` owns explicit retention cleanup. It keeps the newest 20 inactive
 entries by default and accepts `--keep N`, `--all`, and `--dry-run`. Active
-runs are protected by locks; legacy entries are cleanup candidates because the
+runs are protected by locks; unrecognized entries are cleanup candidates because the
 result root is dedicated test storage. Run creation and cleanup resolve the
 result root once and serialize through `.cleanup.lock` before acquiring or
 probing any `.run.lock`. The result root or one of its parents may be a symbolic

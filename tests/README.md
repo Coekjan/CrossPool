@@ -70,8 +70,9 @@ pytest session preflights `xpool.native` and the sole `xpool.ops.ffn_shim`
 dispatcher registration. CTest CUDA cases declare one CTest GPU resource and
 perform their own MPS preflight.
 
-A missing or ABI-incompatible native extension is a session failure, including
-for Unit-only sessions, never a resource skip. E2E tests run without strict mode
+A missing or ABI-incompatible native extension fails the session, including
+Unit-only sessions. Resource markers handle unavailable external resources.
+E2E tests run without strict mode
 when all declared and derived requirements are available. Each task materializes
 a private config from `XPOOL_CONFIG` and its selected case models, without
 waiting for unrelated configured models. All serving E2E cases use the shared
@@ -102,7 +103,7 @@ GPU indices and UUIDs. Terminal lines report task elapsed time and available
 per-case JUnit durations on subsequent lines. CTest records each native case's
 GPU assignment and duration separately.
 
-`xtest clean` explicitly removes inactive historical results. It keeps the
+`xtest clean` explicitly removes inactive test results. It keeps the
 newest 20 inactive entries by default; use `--keep N`, `--all`, and
 `--dry-run` to select or preview another cleanup. Concurrent active runs are
 never removed.
@@ -112,9 +113,8 @@ It contains the exact public `/generate` request and response and is written
 before HTTP-status and token-shape validation. JUnit describes case outcome,
 `*.duration.json` records timing and resolved graph mode. Explicit Models
 qualification compares Eager and Decode Full token output plus Eager and
-Prefill Breakable logits. Routine E2E instead proves installed serving,
-observed graph structure, and transport/fabric behavior without repeating
-per-model numerical parity.
+Prefill Breakable logits. Model suites own numerical parity; routine E2E owns
+installed serving, observed graph structure, and Transport/Fabric behavior.
 
 ## Commands
 

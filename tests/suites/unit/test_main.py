@@ -126,7 +126,7 @@ def test_clean_defaults_to_twenty_retained_runs(tmp_path, monkeypatch: pytest.Mo
     monkeypatch.setattr(tests.cli, "REPOSITORY_ROOT", tmp_path)
     result_root = tmp_path / ".xpool-cache" / "test-runs"
     for index in range(21):
-        entry = result_root / f"legacy-{index:02d}"
+        entry = result_root / f"unrecognized-{index:02d}"
         entry.mkdir(parents=True)
         os.utime(entry, ns=(index + 1, index + 1))
 
@@ -137,7 +137,7 @@ def test_clean_defaults_to_twenty_retained_runs(tmp_path, monkeypatch: pytest.Mo
 def test_clean_applies_explicit_dry_run_and_all(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tests.cli, "REPOSITORY_ROOT", tmp_path)
     result_root = tmp_path / ".xpool-cache" / "test-runs"
-    entries = tuple(result_root / f"legacy-{index}" for index in range(3))
+    entries = tuple(result_root / f"unrecognized-{index}" for index in range(3))
     for entry in entries:
         entry.mkdir(parents=True)
 

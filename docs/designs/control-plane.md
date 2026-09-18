@@ -11,22 +11,22 @@ Runtime configuration flows through `xpool.config`. Entry points install one
 process-global configuration and business logic reads that configuration rather
 than caching selected values elsewhere. CLI values override allowlisted
 environment variables, which override TOML, which overrides registry defaults.
-This ordering applies only to sources allowed by the individual setting;
-it does not make every setting configurable through all three input surfaces.
-Model paths are resolved through `XpoolConfig.model_path_of`.
+Each setting declares which of these sources it accepts.
+Model paths are resolved from the configured model entries and vendor model
+base.
 
 Required settings without defaults fail fast. Deployment settings live in TOML
 with selected CLI and environment overrides; `.env` supplies process environment
 settings such as `XPOOL_CONFIG` and `SGLANG_PLUGINS` and optional diagnostics.
 Every accepted `XPOOL_*` variable is declared in the config registry, and unknown
-names produce a warning. Debug settings have nested
-in-process names such as `debug.graph_observer.enable`, but accept only their
-registered environment variables and defaults, not TOML input. For example,
-Graph Observer uses `XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE` and
+names produce a warning. Debug settings have nested in-process names such as
+`debug.graph_observer.enable`; their registered environment variables and
+defaults are the accepted sources. For example, Graph Observer uses
+`XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE` and
 `XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR`.
 
-`ModelConfig.path` is the schema's explicit override, not a runtime lookup API.
-Machine-local paths belong in ignored `*.local.toml` files.
+`ModelConfig.path` is the schema's explicit path override. Machine-local paths
+belong in ignored `*.local.toml` files.
 
 Every process receives the same effective configuration. The daemon compares
 declared process identity and topology against that configuration during
@@ -47,19 +47,17 @@ non-KV allocations and already mapped bootstrap backing.
 
 `scheduler.slo` supplies required positive, finite `ttft_ms` and `tbt_ms`
 targets for Elastic KV arbitration. A model may replace both targets with a
-complete `models[].slo` value; partial overrides and request-level SLOs are
-not accepted. These targets measure scheduler-local Prefill and Decode timing,
-not client-observed HTTP latency. The pinned SGLang scheduler provides timing
-observations but no typed per-request TTFT/TBT objective; its request priority
-is an ordering hint, not a latency target. See
+complete `models[].slo` value; overrides must be complete and request-level
+SLOs are outside this interface. These targets use scheduler-local Prefill and
+Decode timing rather than client-observed HTTP latency. The pinned SGLang
+scheduler provides timing observations and request priority, but no typed
+per-request TTFT/TBT objective. Priority remains an ordering hint. See
 [Elastic KV-cache Pooling](elastic-kv-cache.md) for the demand and deadline
 contract.
 
 `scheduler.atn_concurrency` is retained as an explicitly reserved attention-side
-compute-admission budget. Elastic KV-cache capacity does not consume it: the
-setting still has no runtime effect, and no current placement, readiness, or
-performance claim depends on its value. A future attention scheduler must
-settle the budget's owner and resource unit before making it operational.
+compute-admission budget. The current runtime ignores it; future attention
+admission will define its owner and resource unit before making it operational.
 
 The core runtime contains engine-neutral model, topology, transport, execution,
 and failure values. Serving-engine runtime imports, hooks, objects, and
@@ -67,9 +65,8 @@ compatibility behavior remain under `xpool.integrations.sglang`. The integration
 translates SGLang state into CrossPool-owned values before crossing the core seam.
 One explicitly bounded implementation exception permits the FfnAgent operator
 module to use the pinned SGLang distribution's low-level Expert kernel and
-configuration-selection modules. No serving-engine type or retained state
-crosses that exception into a core API, Plan, Registry, GraphTemplate, or native
-Projection.
+configuration-selection modules. Core APIs, Plans, Registries, GraphTemplates,
+and native Projections retain CrossPool-owned values only.
 
 The SGLang adapter replaces supported decoder FFN modules with a shim module,
 filters their FFN tensors from attention-side loading, and preserves the model's
@@ -83,8 +80,7 @@ contract field.
 
 Outer graph mode is an attention-side concept. Eager, Decode Full, and Prefill
 Breakable graph modes all invoke the same FFN data-plane protocol.
-FfnAgent execution is always graph-backed and does not receive an outer graph
-mode field.
+FfnAgent execution is always graph-backed; SGLang owns the outer graph mode.
 
 Fabric Executable is the earlier data-plane barrier that permits Instance
 Ranks to attach Transport while their serving schedulers are still starting.
@@ -123,12 +119,13 @@ first entry and final clearance of each global warning aggregated by
 
 One daemon-authored `FabricPlan` describes a stopped-world Fabric generation.
 It contains global participant counts, executor lane count, scheduler policy,
-ordered model plans, and ordered Instance plans. It contains no live CUDA
-objects or process-local addresses.
+ordered model plans, and ordered Instance plans. Native processes create live
+CUDA objects and process-local addresses after retaining the plan.
 
 `FfnModelSpec` is the model-source contract. It contains ordered gated Dense or
 MoE layer semantics, intrinsic dimensions, activation and routing behavior,
-and checkpoint identities. It contains no placement or device state.
+and checkpoint identities. Generation planning resolves placement and device
+state separately.
 
 `InstanceFfnProfile` is the serving Instance declaration. It contains the
 runtime payload dtype, hidden size, ordered layer projection, and decode and
@@ -136,11 +133,10 @@ prefill row capacities observed at the shim boundary. Python represents the
 payload element type with `torch.dtype`. Its control-plane JSON field uses the
 canonical unqualified Torch dtype name and restores any dtype exposed by the
 installed Torch build. `InstanceFfnProfile` alone owns this lossless wire
-mapping; it does not decide whether the current FFN implementation can execute
-the dtype. Serving integration preparation and native execution boundaries
-reject unsupported execution dtypes. In-process consumers see only
-`torch.dtype`; no shared dtype-name adapter or CrossPool dtype value type is
-introduced.
+mapping. Serving integration preparation and native execution boundaries
+decide whether the current FFN implementation can execute the dtype. In-process
+consumers see only `torch.dtype`; dtype-name conversion remains local to the
+profile boundary.
 
 `FfnModelPlan` is the generation-static FFN realization. It assigns one
 execution group to every layer and retains only semantics needed to materialize
@@ -152,7 +148,8 @@ result-delivery requirements. Model and Instance plans are co-indexed by
 `instance_index`; request lookup uses `(instance_index, layer_ordinal)`.
 
 Elastic KV memory has a separate control seam. Instance registrations carry
-immutable, model-derived partition geometry; they do not carry live capacity.
+immutable, model-derived partition geometry. Live capacity is coordinated by
+the separate Elastic KV control seam.
 One Generation-scoped daemon policy freezes each attention GPU's physical pool
 after Graph capture and coordinates persistent quantified demand, immutable
 group capacity operations, TP readiness votes, and terminal partition completions
@@ -161,14 +158,13 @@ prefix-cache ownership. See [Elastic KV-cache Pooling](elastic-kv-cache.md).
 
 `xpool::fabric::ArenaProjection` is the minimal native join projection derived
 from the plan. Native layout code derives byte geometry, offsets, and local
-views from that projection and the ABI. Debug capacities are neither Plan nor
-arena-layout inputs; the owning Devkit adapter allocates its process-local
-storage directly.
+views from that projection and the ABI. Debug capacities belong to the owning
+Devkit adapter, which allocates its process-local storage directly.
 
 ## Placement
 
 Placement is computed once before the generation starts. Every layer receives
-one FfnAgent execution group; no TP weight is replicated outside that group.
+one FfnAgent execution group; its TP weights stay within that group.
 The optimizer respects device memory admission, TP width, group topology, and
 model-layer order.
 
@@ -208,12 +204,12 @@ Calibrated Overhead Envelope. The peak across those stages is the predicted
 peak. An explicit operator device-memory margin is added once after that peak;
 it is not part of the estimator and cannot repair estimator underprediction.
 
-The analytic estimator works without prior profiling. An optional calibration
+The analytic estimator works with no prior profiling. An optional calibration
 file supplies a device-local correction learned from a synthetic, model-neutral
 corpus. With no `ffn.device_memory_calibration` path configured, admission uses
 analytic estimation alone. An explicitly configured profile must be readable,
-valid, and compatible with the deployment; otherwise startup fails rather than
-falling back to analytic estimation. The compatibility checks compare recorded
+valid, and compatible with the deployment; startup reports a profile error
+when those conditions fail. The compatibility checks compare recorded
 software, configuration, MPS, and per-FfnAgent GPU evidence. They constrain
 profile reuse, not the set of GPU models on which CrossPool may run.
 
@@ -221,9 +217,10 @@ The `xpool memory-profile` command produces calibration evidence. A profile
 records local GPU and software identity, fitted coefficients, observed and
 predicted allocation values, and the Calibrated Overhead Envelope. The fitter
 adds one empirically derived Device Observation Quantum to each grouped
-residual target and absorbs that correction into the fitted coefficients; the
-quantum is neither a Profile field nor an operator margin. A Profile does not
-contain model weights or require one deployed model layout.
+residual target and absorbs that correction into the fitted coefficients. The
+quantum belongs to the fitting procedure; it is separate from Profile fields
+and the operator margin. A Profile records allocation behavior and remains
+model-neutral.
 
 Checkpoint files may be read concurrently. Host buffers may use pinned memory,
 and independent tensor copies may use multiple CUDA streams. Device-side

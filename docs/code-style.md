@@ -47,6 +47,10 @@ Documentation gates cover supported declarations, not every implementation
 parameter. They must not require ceremonial parameter, return-value, override,
 or helper descriptions merely to satisfy a coverage rule.
 
+Write current behavior in direct, positive sentences. Use negative wording when
+the prohibited behavior is itself the contract; avoid stacking `not`, `no`,
+`without`, `neither`, or `nor` in one explanation.
+
 Runtime logs are low-frequency operational records, not a second protocol or
 trace stream. Keep messages and field names lowercase, include process identity
 relevant to the event owner explicitly, and write runtime logs to stderr while

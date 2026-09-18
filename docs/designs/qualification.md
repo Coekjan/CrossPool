@@ -10,14 +10,14 @@ Dtype-specific component coverage exercises BF16 and FP16 weight conversion,
 Dense and MoE operator execution, captured Graph replay, and native TP1/TP>1
 delivery. It compares both admitted dtypes with an FP32 reference using the
 existing numerical policy. Routine end-to-end serving uses the effective dtype
-resolved for its two small Qwen deployments; it does not duplicate the component
-dtype matrix for each model.
+resolved for its two small Qwen deployments; component dtype coverage remains
+owned by the component suites.
 
 Numerical qualification compares each supported model, using one admitted TP
 realization, with an independent SGLang FFN reference. Shared native topology
 cases exercise other TP cardinalities with the same topology-test logic and an
-unsharded reference. These evidence surfaces are orthogonal; qualification does
-not duplicate every model across every topology.
+unsharded reference. These evidence surfaces are orthogonal: model suites own
+model semantics while shared topology suites own delivery cardinalities.
 
 Serving graph qualification has two verdicts. Decode compares Eager and Decode
 Full token IDs. Prefill compares Eager and Prefill Breakable first-prefill
@@ -28,10 +28,11 @@ not a correctness requirement.
 Routine serving E2E proves installed HTTP completion, graph-mode startup and
 observed Graph structure, and Transport and Fabric behavior with Qwen3-0.6B
 and Qwen2.5-0.5B. Explicit per-model suites own independent FFN numerical
-reference and serving graph comparisons, including qualified MoE models. They
-are not part of the ordinary suite but remain required when their adapter or
-numerical behavior changes. The [test architecture](../../tests/README.md)
-owns suite selection commands and case placement.
+reference and serving graph comparisons, including qualified MoE models. The
+ordinary suite owns installed serving for the two small Qwen deployments;
+model suites own their explicit qualification whenever an adapter or numerical
+contract changes. The [test architecture](../../tests/README.md) owns suite
+selection commands and case placement.
 
 ## Topology evidence
 
@@ -77,17 +78,17 @@ The 16-MiB quantum is qualification positioning resolution, not permitted
 underprediction or a production margin. Any underprediction reopens the
 estimator rather than increasing a hidden or default margin.
 
-Resource qualification runners remain throwaway evidence tools, not production
-modules, reusable test harnesses, or permanent test cases. A resource
-qualification is rerun only after memory-estimator, allocation, admission, or
-qualified-environment changes. Numerical qualification is rerun only after FFN
-mathematics, operators, model adapters, or admitted dtypes change. Performance
-measurements are report-only diagnostics while the system is incomplete; they
-do not define readiness or regression gates.
-Do not add production compatibility aliases, alternate execution paths, or new
-telemetry solely to keep a stale runner working. If the required evidence is not
-observable through the accepted public and Devkit boundaries, stop for design
-review instead of widening the product surface implicitly.
+Resource qualification runners are evidence-only tools. Production modules,
+reusable test harnesses, and permanent test cases own the runtime contracts
+they exercise. A resource qualification is rerun only after memory-estimator,
+allocation, admission, or qualified-environment changes. Numerical
+qualification is rerun only after FFN mathematics, operators, model adapters,
+or admitted dtypes change. Performance measurements are report-only diagnostics
+while the system is incomplete; they do not define readiness or regression
+gates. Required evidence must remain observable through the accepted public and
+Devkit boundaries; a missing observation is a design-review input. Production
+interfaces, alternate execution paths, and telemetry follow the accepted
+qualification design rather than adapting a runner around an absent boundary.
 
 Elastic KV qualification follows the same evidence ownership. Native tests
 prove the process-shared KV Control Channel. Integration tests prove physical
@@ -96,12 +97,12 @@ command, and daemon-policy behavior. Ordinary subprocess serving E2E proves
 mandatory Elastic KV startup across its graph-mode matrix. The dedicated
 Elastic KV E2E observes prefix-cache hit loss after peer pressure, renewed
 hits after repopulation, and concurrent request completion by both models on
-the same GPU under Decode Full plus Prefill Breakable. It does not directly
-observe capacity commands, terminal completions, or physical map/unmap; native
-and integration tests own those contracts. Operational logs are diagnostics
-and are not a correctness assertion surface. Qualified model,
-dtype, graph, and topology cases do not form a runtime allowlist: only a known
-structural incompatibility at the SGLang memory or cache seam is rejected.
+the same GPU under Decode Full plus Prefill Breakable. Native and integration
+tests own capacity commands, terminal completions, and physical map/unmap.
+Operational logs are diagnostics rather than a correctness assertion surface.
+Qualification cases provide evidence rather than an adapter allowlist. Runtime
+compatibility follows the SGLang memory and cache contract, with structural
+incompatibility at that seam determining rejection.
 
 Memory underprediction or memory-pressure startup failure invalidates that
 qualification result. Preserve the affected case, measured deviation, and raw
@@ -112,9 +113,9 @@ requires a design decision.
 
 ## Acceptance and invalidation
 
-No alternate debug execution or test-only responder counts as FFN evidence.
-Derived-plan checks never replace observer evidence where actual graph or
-protocol behavior is the subject of qualification.
+FFN qualification uses installed serving execution. Derived-plan checks remain
+supplemental; observer evidence is authoritative when graph or protocol
+behavior is the subject of qualification.
 
 During implementation, run focused checks for each affected boundary. Commit
 hooks are a separate check of the submitted changes; a resource-eligible suite
