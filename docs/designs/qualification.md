@@ -9,9 +9,9 @@ suite placement and developer commands live in
 Dtype-specific component coverage exercises BF16 and FP16 weight conversion,
 Dense and MoE operator execution, captured Graph replay, and native TP1/TP>1
 delivery. It compares both admitted dtypes with an FP32 reference using the
-existing numerical policy. The four-model end-to-end matrix continues to use
-the effective dtype resolved for those configured model deployments; it is not
-duplicated solely to repeat the component dtype matrix.
+existing numerical policy. Routine end-to-end serving uses the effective dtype
+resolved for its two small Qwen deployments; it does not duplicate the component
+dtype matrix for each model.
 
 Numerical qualification compares each supported model, using one admitted TP
 realization, with an independent SGLang FFN reference. Shared native topology
@@ -24,6 +24,14 @@ Full token IDs. Prefill compares Eager and Prefill Breakable first-prefill
 logits with full-distribution forward KL while the Graph Observer proves that
 Breakable execution actually occurred. Prefill token identity is diagnostic,
 not a correctness requirement.
+
+Routine serving E2E proves installed HTTP completion, graph-mode startup and
+observed Graph structure, and Transport and Fabric behavior with Qwen3-0.6B
+and Qwen2.5-0.5B. Explicit per-model suites own independent FFN numerical
+reference and serving graph comparisons, including qualified MoE models. They
+are not part of the ordinary suite but remain required when their adapter or
+numerical behavior changes. The [test architecture](../../tests/README.md)
+owns suite selection commands and case placement.
 
 ## Topology evidence
 

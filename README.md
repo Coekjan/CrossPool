@@ -107,112 +107,16 @@ Python NVSHMEM bindings are not required.
 
 ## Quick Start
 
-Clone the repository and create machine-local configuration files:
-
-```bash
-git clone ${REPO_URL}
-cd xpool
-cp .env.example .env
-cp configs/xpool.example.toml configs/dev.local.toml
-```
-
-For this minimal two-GPU example, edit `configs/dev.local.toml` to retain only
-the `Qwen/Qwen3-14B` model, set `atn.devices = [0]` and `ffn.devices = [1]`,
-and set `vendor.model_base_uri` to the directory containing the `Qwen/`
-subdirectory. Edit `.env` so `XPOOL_CONFIG` points to that file and configure
-host-unique `CUDA_MPS_PIPE_DIRECTORY` and `CUDA_MPS_LOG_DIRECTORY` paths under
-`/tmp/xpool-mps-$(id -u)`. Expand the command in a shell before writing the
-absolute paths into `.env`; dotenv does not execute shell substitutions. Keep
-`SGLANG_PLUGINS=xpool`. Both files are ignored by Git.
-
-Install the complete development environment and rebuild the native extension:
-
-```bash
-export UV_ENV_FILE="$PWD/.env"
-uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool
-uv run xpool config dump
-```
-
-Create the MPS directories configured in `.env`, then start the controller with
-every GPU visible to PyTorch clients. Keep these paths identical to the values
-in `.env`.
-
-```bash
-mkdir -p "/tmp/xpool-mps-$(id -u)"/{pipe,log}
-CUDA_VISIBLE_DEVICES="$(nvidia-smi --query-gpu=uuid --format=csv,noheader | paste -sd, -)" \
-  uv run nvidia-cuda-mps-control -d
-printf 'get_default_active_thread_percentage\n' | uv run nvidia-cuda-mps-control
-```
-
-MPS starts its server lazily when the first CUDA client connects. The controller
-must cover every GPU enumerated by those clients; UUIDs avoid ordinal remapping.
-
-Start the CrossPool processes from separate terminals in the repository root. All
-terminals must use the same configuration and GPU ordinal space; do not remap
-`CUDA_VISIBLE_DEVICES` independently for each process.
-
-```bash
-# Terminal 1: control plane.
-export UV_ENV_FILE="$PWD/.env"
-uv run xpool daemon serve
-```
-
-```bash
-# Terminal 2: attention-side transport participant.
-export UV_ENV_FILE="$PWD/.env"
-uv run xpool atnagent --cuda-device 0
-```
-
-```bash
-# Terminal 3: FFN execution participant.
-export UV_ENV_FILE="$PWD/.env"
-uv run xpool ffnagent --cuda-device 1
-```
-
-After the Agents have registered, start the configured model through the pinned
-SGLang CLI. `MODEL_PATH` must resolve to the same model selected by
-`configs/dev.local.toml`.
-
-```bash
-# Terminal 4: SGLang Instance.
-export UV_ENV_FILE="$PWD/.env"
-MODEL_PATH=/absolute/path/to/models/Qwen/Qwen3-14B
-uv run sglang serve \
-  --model-path "$MODEL_PATH" \
-  --host 127.0.0.1 \
-  --port 30000
-```
-
-Wait for CrossPool's System Ready verdict and the SGLang HTTP endpoint, then send
-one request through the real FFN path. `xpool daemon check` checks the former;
-its success does not imply that the public HTTP endpoint is healthy.
-
-```bash
-export UV_ENV_FILE="$PWD/.env"
-until uv run xpool daemon check; do sleep 1; done
-until curl --fail --silent --show-error --max-time 5 http://127.0.0.1:30000/health; do sleep 1; done
-
-curl -sS http://127.0.0.1:30000/generate \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "text": "Explain pooled GPU execution in one sentence.",
-    "sampling_params": {"temperature": 0, "max_new_tokens": 32}
-  }'
-```
-
-Stop SGLang first, then the AtnAgent and FfnAgent processes, and finally the
-daemon. Stop the MPS controller only after every CUDA client has exited:
-
-```bash
-printf 'quit\n' | uv run nvidia-cuda-mps-control
-```
+Follow the [two-GPU Qwen3-0.6B quick start](docs/tutorials/quick-start.md) to
+configure a local checkpoint, start MPS and the four serving roles, send an HTTP
+request through real FFN execution, and shut everything down in order.
 
 ## Configuration
 
 Start from [`configs/xpool.example.toml`](configs/xpool.example.toml) for
 editable deployment settings and [`.env.example`](.env.example) for process
 environment settings. Keep machine-local paths in an ignored `*.local.toml`
-file and load `.env` into uv commands with `UV_ENV_FILE`, as in Quick Start.
+file and load `.env` into uv commands with `UV_ENV_FILE`, as in the quick start.
 
 Bootstrap environment variables are separate from the TOML schema:
 
@@ -282,10 +186,11 @@ malformed, or incompatible profiles fail rather than silently falling back.
 
 Adapters are selected from the model architecture declared in `config.json`.
 Model IDs provide configuration identity and path resolution rather than acting
-as an adapter allowlist. Current qualification covers Qwen3, DeepSeek-V2-Lite,
-GLM-4.7-Flash, and Qwen3-MoE. The
-[SGLang E2E manifest](tests/harness/sglang/manifest.toml) is the authoritative
-source for serving, numerical, topology, and graph-mode cases.
+as an adapter allowlist. See [Supported Models](docs/supported-models.md) for
+concrete model IDs with qualification suites. The
+[shared SGLang E2E manifest](tests/harness/sglang/manifest.toml) owns routine
+serving and topology workloads; per-model numerical and graph cases live in
+their optional model suites.
 
 ## Validation and Development
 

@@ -26,10 +26,10 @@ The supported production boundary is:
   retaining BF16; and
 - gated Dense and MoE decoder FFN layers.
 
-The four qualification model families are dense Qwen3, Qwen3-MoE,
-DeepSeek-V2-Lite, and GLM-4.7-Flash. Model adapters may support additional
-compatible architectures, but readiness claims require direct evidence for
-each new family.
+Concrete model IDs with qualification suites are listed in
+[Supported Models](../supported-models.md). Model adapters may support
+additional compatible architectures, but readiness claims require direct
+evidence for each new family.
 
 GPU model names and interconnect labels do not define a hardware allowlist.
 An untested topology is not excluded solely for lack of qualification, nor is
