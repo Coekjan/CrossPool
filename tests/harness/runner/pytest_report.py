@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import xml.etree.ElementTree
 from dataclasses import dataclass
 from enum import StrEnum
@@ -30,6 +31,7 @@ class PytestCaseReport:
     nodeid: str
     status: PytestCaseStatus
     detail: str | None
+    elapsed_seconds: float | None = None
 
     @classmethod
     def from_element(cls, nodeid: str, element: xml.etree.ElementTree.Element) -> PytestCaseReport:
@@ -45,8 +47,15 @@ class PytestCaseReport:
             raise ValueError(f"JUnit testcase {nodeid!r} contains unknown elements: {unknown}")
         if len(outcomes) > 1:
             raise ValueError(f"JUnit testcase {nodeid!r} contains multiple outcomes")
+        elapsed_raw = element.get("time")
+        try:
+            elapsed_seconds = float(elapsed_raw) if elapsed_raw is not None else None
+        except ValueError as error:
+            raise ValueError(f"JUnit testcase {nodeid!r} has invalid elapsed time") from error
+        if elapsed_seconds is not None and (not math.isfinite(elapsed_seconds) or elapsed_seconds < 0):
+            raise ValueError(f"JUnit testcase {nodeid!r} has invalid elapsed time")
         if not outcomes:
-            return cls(nodeid=nodeid, status=PytestCaseStatus.PASSED, detail=None)
+            return cls(nodeid=nodeid, status=PytestCaseStatus.PASSED, detail=None, elapsed_seconds=elapsed_seconds)
         outcome = outcomes[0]
         detail = outcome.get("message") or (outcome.text or "").strip() or None
         if outcome.tag == "skipped":
@@ -54,8 +63,8 @@ class PytestCaseReport:
                 raise ValueError(f"JUnit testcase {nodeid!r} contains prohibited pytest.xfail outcome")
             if detail is None:
                 raise ValueError(f"JUnit skipped testcase {nodeid!r} has no reason")
-            return cls(nodeid=nodeid, status=PytestCaseStatus.SKIPPED, detail=detail)
-        return cls(nodeid=nodeid, status=PytestCaseStatus.FAILED, detail=detail)
+            return cls(nodeid=nodeid, status=PytestCaseStatus.SKIPPED, detail=detail, elapsed_seconds=elapsed_seconds)
+        return cls(nodeid=nodeid, status=PytestCaseStatus.FAILED, detail=detail, elapsed_seconds=elapsed_seconds)
 
 
 @dataclass(frozen=True, slots=True)

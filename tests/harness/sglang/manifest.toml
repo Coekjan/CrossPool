@@ -2,178 +2,104 @@
 ttft_ms = 1000
 tbt_ms = 50
 
-[models.qwen3_14b]
-model_id = "Qwen/Qwen3-14B"
+[[models]]
+model_id = "Qwen/Qwen3-0.6B"
 architecture = "Qwen3ForCausalLM"
 
-[models.deepseek_v2_lite]
-model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
-architecture = "DeepseekV2ForCausalLM"
-
-[models.glm4_7_flash]
-model_id = "zai-org/GLM-4.7-Flash"
-architecture = "Glm4MoeLiteForCausalLM"
-
-[models.qwen3_30b_a3b]
-model_id = "Qwen/Qwen3-30B-A3B"
-architecture = "Qwen3MoeForCausalLM"
+[[models]]
+model_id = "Qwen/Qwen2.5-0.5B"
+architecture = "Qwen2ForCausalLM"
 
 [[model_serving_cases]]
-id = "deepseek-v2-lite-tp1-dp1-f1-e1"
-models = [{ model = "deepseek_v2_lite", atn_tp_size = 1, atn_dp_size = 1 }]
+id = "qwen3-0-6b-tp1-dp1-f1-e1"
+models = [{ model_id = "Qwen/Qwen3-0.6B", atn_tp_size = 1, atn_dp_size = 1 }]
 ffnagent_count = 1
 executor_lane_count = 1
-graph_modes = ["eager", "decode-full", "prefill-breakable"]
-estimated_duration_seconds = 600
-timeout_seconds = 3600
+graph_modes = ["decode-full", "prefill-breakable"]
+estimated_duration_seconds = 300
+timeout_seconds = 1800
 transport_record_capacity = 32768
 fabric_record_capacity = 32768
 
 [[model_serving_cases]]
-id = "deepseek-v2-lite-tp1-dp2-f1-e1"
-models = [{ model = "deepseek_v2_lite", atn_tp_size = 1, atn_dp_size = 2 }]
+id = "qwen3-0-6b-tp2-dp1-f1-e1"
+models = [{ model_id = "Qwen/Qwen3-0.6B", atn_tp_size = 2, atn_dp_size = 1 }]
 ffnagent_count = 1
 executor_lane_count = 1
-graph_modes = ["eager", "decode-full"]
-estimated_duration_seconds = 800
-timeout_seconds = 3600
+graph_modes = ["decode-full", "prefill-breakable"]
+estimated_duration_seconds = 360
+timeout_seconds = 1800
 transport_record_capacity = 32768
 fabric_record_capacity = 32768
 
 [[model_serving_cases]]
-id = "qwen3-14b-tp1-dp1-f1-e1"
-models = [{ model = "qwen3_14b", atn_tp_size = 1, atn_dp_size = 1 }]
+id = "qwen2-5-0-5b-tp1-dp1-f1-e1"
+models = [{ model_id = "Qwen/Qwen2.5-0.5B", atn_tp_size = 1, atn_dp_size = 1 }]
 ffnagent_count = 1
 executor_lane_count = 1
-graph_modes = ["eager", "decode-full", "prefill-breakable"]
-estimated_duration_seconds = 600
-timeout_seconds = 3600
+graph_modes = ["decode-full", "prefill-breakable"]
+estimated_duration_seconds = 300
+timeout_seconds = 1800
 transport_record_capacity = 32768
 fabric_record_capacity = 32768
 
 [[model_serving_cases]]
-id = "qwen3-14b-tp2-dp1-f1-e1"
-models = [{ model = "qwen3_14b", atn_tp_size = 2, atn_dp_size = 1 }]
+id = "qwen2-5-0-5b-tp2-dp1-f1-e1"
+models = [{ model_id = "Qwen/Qwen2.5-0.5B", atn_tp_size = 2, atn_dp_size = 1 }]
 ffnagent_count = 1
 executor_lane_count = 1
-graph_modes = ["eager", "decode-full", "prefill-breakable"]
-estimated_duration_seconds = 700
-timeout_seconds = 3600
+graph_modes = ["decode-full", "prefill-breakable"]
+estimated_duration_seconds = 360
+timeout_seconds = 1800
 transport_record_capacity = 32768
 fabric_record_capacity = 32768
 
 [[model_serving_cases]]
-id = "deepseek-qwen-tp1-dp1-f2-e2"
+id = "qwen2-qwen3-tp1-dp1-f2-e2"
 models = [
-  { model = "deepseek_v2_lite", atn_tp_size = 1, atn_dp_size = 1 },
-  { model = "qwen3_14b", atn_tp_size = 1, atn_dp_size = 1 },
+  { model_id = "Qwen/Qwen2.5-0.5B", atn_tp_size = 1, atn_dp_size = 1 },
+  { model_id = "Qwen/Qwen3-0.6B", atn_tp_size = 1, atn_dp_size = 1 },
 ]
 ffnagent_count = 2
 executor_lane_count = 2
-estimated_duration_seconds = 1200
+estimated_duration_seconds = 600
 timeout_seconds = 3600
 transport_record_capacity = 32768
 fabric_record_capacity = 32768
 
 [model_serving_cases.elastic_kv]
-prefix_model = "qwen3_14b"
-prefix_tokens = 4500
-pressure_model = "deepseek_v2_lite"
-pressure_tokens = 15000
-atn_device_memory_utilization = 0.485
+prefix_model_id = "Qwen/Qwen2.5-0.5B"
+prefix_tokens = 20000
+pressure_model_id = "Qwen/Qwen3-0.6B"
+pressure_tokens = 10000
+atn_device_memory_utilization = 0.25
 
 [[model_serving_cases]]
-id = "deepseek-qwen-tp2-dp1-f2-e2"
+id = "qwen2-qwen3-tp2-dp1-f2-e2"
 models = [
-  { model = "deepseek_v2_lite", atn_tp_size = 2, atn_dp_size = 1 },
-  { model = "qwen3_14b", atn_tp_size = 2, atn_dp_size = 1 },
+  { model_id = "Qwen/Qwen2.5-0.5B", atn_tp_size = 2, atn_dp_size = 1 },
+  { model_id = "Qwen/Qwen3-0.6B", atn_tp_size = 2, atn_dp_size = 1 },
 ]
 ffnagent_count = 2
 executor_lane_count = 2
-estimated_duration_seconds = 1400
-timeout_seconds = 3600
-transport_record_capacity = 32768
-fabric_record_capacity = 32768
-
-[model_serving_cases.elastic_kv]
-prefix_model = "qwen3_14b"
-prefix_tokens = 4500
-pressure_model = "deepseek_v2_lite"
-pressure_tokens = 15000
-atn_device_memory_utilization = 0.404
-
-[[model_serving_cases]]
-id = "glm4-7-flash-tp1-dp1-f2-e1"
-models = [{ model = "glm4_7_flash", atn_tp_size = 1, atn_dp_size = 1 }]
-ffnagent_count = 2
-executor_lane_count = 1
-graph_modes = ["eager", "decode-full", "prefill-breakable"]
 estimated_duration_seconds = 700
 timeout_seconds = 3600
 transport_record_capacity = 32768
 fabric_record_capacity = 32768
 
-[[model_serving_cases]]
-id = "qwen3-30b-a3b-tp1-dp1-f2-e1"
-models = [{ model = "qwen3_30b_a3b", atn_tp_size = 1, atn_dp_size = 1 }]
-ffnagent_count = 2
-executor_lane_count = 1
-graph_modes = ["eager", "decode-full", "prefill-breakable"]
-estimated_duration_seconds = 800
-timeout_seconds = 3600
-transport_record_capacity = 32768
-fabric_record_capacity = 32768
-
-[[ffn_numerical_cases]]
-id = "qwen3-14b-ffn-numerical"
-model_placement = { model = "qwen3_14b", atn_tp_size = 1, atn_dp_size = 1 }
-layer_ids = [0, 39]
-input_matrix = { seed = 17, row_counts = [1, 32, 4096] }
-ffnagent_count = 2
-executor_lane_count = 1
-ffn_tp_size = 2
-estimated_duration_seconds = 600
-timeout_seconds = 1800
-
-[[ffn_numerical_cases]]
-id = "deepseek-v2-lite-ffn-numerical"
-model_placement = { model = "deepseek_v2_lite", atn_tp_size = 1, atn_dp_size = 1 }
-layer_ids = [0, 1, 26]
-input_matrix = { seed = 17, row_counts = [1, 32, 4096] }
-ffnagent_count = 2
-executor_lane_count = 1
-ffn_tp_size = 2
-estimated_duration_seconds = 600
-timeout_seconds = 1800
-
-[[ffn_numerical_cases]]
-id = "glm4-7-flash-ffn-numerical"
-model_placement = { model = "glm4_7_flash", atn_tp_size = 1, atn_dp_size = 1 }
-layer_ids = [0, 1, 46]
-input_matrix = { seed = 17, row_counts = [1, 32, 4096] }
-ffnagent_count = 2
-executor_lane_count = 1
-ffn_tp_size = 2
-estimated_duration_seconds = 900
-timeout_seconds = 1800
-
-[[ffn_numerical_cases]]
-id = "qwen3-30b-a3b-ffn-numerical"
-model_placement = { model = "qwen3_30b_a3b", atn_tp_size = 1, atn_dp_size = 1 }
-layer_ids = [0, 47]
-input_matrix = { seed = 17, row_counts = [1, 32, 4096] }
-ffnagent_count = 2
-executor_lane_count = 1
-ffn_tp_size = 2
-estimated_duration_seconds = 900
-timeout_seconds = 1800
+[model_serving_cases.elastic_kv]
+prefix_model_id = "Qwen/Qwen2.5-0.5B"
+prefix_tokens = 32000
+pressure_model_id = "Qwen/Qwen3-0.6B"
+pressure_tokens = 8000
+atn_device_memory_utilization = 0.263
 
 [[ffn_topology_cases]]
 id = "single-rank-delivery"
 atnagent_count = 1
 ffnagent_count = 1
 executor_lane_count = 1
-instances = [{ model = "qwen3_14b", layer_ordinal = 0, atn_tp_size = 1, atn_dp_size = 1, ffn_tp_size = 1 }]
+instances = [{ model_id = "Qwen/Qwen3-0.6B", layer_ordinal = 0, atn_tp_size = 1, atn_dp_size = 1, ffn_tp_size = 1 }]
 requests = [
   { instance_index = 0, forward_mode = "decode", dp_rank_payload_rows = [1], output_requirement = "per_rank_complete" },
   { instance_index = 0, forward_mode = "decode", dp_rank_payload_rows = [1], output_requirement = "group_sum_complete" },
@@ -188,7 +114,7 @@ id = "group-sum-direct-partial"
 atnagent_count = 4
 ffnagent_count = 2
 executor_lane_count = 1
-instances = [{ model = "deepseek_v2_lite", layer_ordinal = 1, atn_tp_size = 1, atn_dp_size = 4, ffn_tp_size = 2 }]
+instances = [{ model_id = "Qwen/Qwen3-0.6B", layer_ordinal = 0, atn_tp_size = 1, atn_dp_size = 4, ffn_tp_size = 2 }]
 requests = [
   { instance_index = 0, forward_mode = "decode", dp_rank_payload_rows = [1, 0, 0, 0], output_requirement = "group_sum_complete" },
   { instance_index = 0, forward_mode = "prefill", dp_rank_payload_rows = [32, 32, 32, 32], output_requirement = "group_sum_complete" },
@@ -201,7 +127,7 @@ id = "odd-tp-single-complete"
 atnagent_count = 2
 ffnagent_count = 3
 executor_lane_count = 1
-instances = [{ model = "qwen3_30b_a3b", layer_ordinal = 0, atn_tp_size = 1, atn_dp_size = 1, ffn_tp_size = 3 }]
+instances = [{ model_id = "Qwen/Qwen3-0.6B", layer_ordinal = 0, atn_tp_size = 1, atn_dp_size = 1, ffn_tp_size = 3 }]
 requests = [
   { instance_index = 0, forward_mode = "decode", dp_rank_payload_rows = [1], output_requirement = "group_sum_complete" },
   { instance_index = 0, forward_mode = "prefill", dp_rank_payload_rows = [128], output_requirement = "group_sum_complete" },
@@ -214,7 +140,7 @@ id = "subgroup-replicated-complete"
 atnagent_count = 2
 ffnagent_count = 4
 executor_lane_count = 1
-instances = [{ model = "glm4_7_flash", layer_ordinal = 1, atn_tp_size = 1, atn_dp_size = 2, ffn_tp_size = 2 }]
+instances = [{ model_id = "Qwen/Qwen2.5-0.5B", layer_ordinal = 0, atn_tp_size = 1, atn_dp_size = 2, ffn_tp_size = 2 }]
 requests = [
   { instance_index = 0, forward_mode = "decode", dp_rank_payload_rows = [1, 0], output_requirement = "per_rank_complete" },
   { instance_index = 0, forward_mode = "prefill", dp_rank_payload_rows = [64, 64], output_requirement = "per_rank_complete" },
@@ -228,8 +154,8 @@ atnagent_count = 2
 ffnagent_count = 4
 executor_lane_count = 2
 instances = [
-  { model = "qwen3_30b_a3b", layer_ordinal = 0, atn_tp_size = 1, atn_dp_size = 2, ffn_tp_size = 4 },
-  { model = "qwen3_14b", layer_ordinal = 0, atn_tp_size = 1, atn_dp_size = 2, ffn_tp_size = 2 },
+  { model_id = "Qwen/Qwen3-0.6B", layer_ordinal = 0, atn_tp_size = 1, atn_dp_size = 2, ffn_tp_size = 4 },
+  { model_id = "Qwen/Qwen2.5-0.5B", layer_ordinal = 0, atn_tp_size = 1, atn_dp_size = 2, ffn_tp_size = 2 },
 ]
 requests = [
   { instance_index = 0, forward_mode = "decode", dp_rank_payload_rows = [1, 0], output_requirement = "group_sum_complete" },

@@ -15,11 +15,10 @@ E2E_MANIFEST_PATH = Path(__file__).with_name("manifest.toml")
 
 
 class E2eModel(BaseModel):
-    """One named model available to declarative E2E cases."""
+    """One model available to declarative E2E cases."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    alias: str = Field(min_length=1)
     model_id: str = Field(min_length=1)
     architecture: str = Field(min_length=1)
 
@@ -29,7 +28,7 @@ class E2eModelPlacement(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    model: str = Field(min_length=1)
+    model_id: str = Field(min_length=1)
     atn_tp_size: int = Field(gt=0)
     atn_dp_size: int = Field(gt=0)
 
@@ -53,9 +52,9 @@ class E2eElasticKvWorkload(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    prefix_model: str = Field(min_length=1)
+    prefix_model_id: str = Field(min_length=1)
     prefix_tokens: int = Field(gt=0)
-    pressure_model: str = Field(min_length=1)
+    pressure_model_id: str = Field(min_length=1)
     pressure_tokens: int = Field(gt=0)
     atn_device_memory_utilization: float = Field(gt=0.0, lt=1.0)
 
@@ -82,17 +81,17 @@ class E2eServingCase(BaseModel):
 
         if not self.models:
             raise ValueError("E2E serving case models must be nonempty")
-        aliases = tuple(placement.model for placement in self.models)
-        if len(aliases) != len(set(aliases)):
-            raise ValueError("E2E serving case model aliases must be unique")
+        model_ids = tuple(placement.model_id for placement in self.models)
+        if len(model_ids) != len(set(model_ids)):
+            raise ValueError("E2E serving case model IDs must be unique")
         topologies = {(placement.atn_tp_size, placement.atn_dp_size) for placement in self.models}
         if len(topologies) != 1:
             raise ValueError("every E2E model must use the same attention topology")
         if self.elastic_kv is not None:
             if self.graph_modes:
                 raise ValueError("E2E elastic KV workload owns its graph mode")
-            workload_models = {self.elastic_kv.prefix_model, self.elastic_kv.pressure_model}
-            if len(workload_models) != 2 or not workload_models <= set(aliases):
+            workload_models = {self.elastic_kv.prefix_model_id, self.elastic_kv.pressure_model_id}
+            if len(workload_models) != 2 or not workload_models <= set(model_ids):
                 raise ValueError("E2E elastic KV workload requires two distinct models from its serving case")
         elif not self.graph_modes or len(self.graph_modes) != len(set(self.graph_modes)):
             raise ValueError("ordinary E2E serving case graph_modes must be nonempty and unique")
@@ -170,7 +169,7 @@ class E2eFfnTopologyInstance(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    model: str = Field(min_length=1)
+    model_id: str = Field(min_length=1)
     layer_ordinal: int = Field(ge=0)
     atn_tp_size: int = Field(gt=0)
     atn_dp_size: int = Field(gt=0)
@@ -216,9 +215,9 @@ class E2eFfnTopologyCase(BaseModel):
 
         if not self.instances or not self.requests:
             raise ValueError("FFN topology instances and requests must be nonempty")
-        aliases = tuple(instance.model for instance in self.instances)
-        if len(aliases) != len(set(aliases)):
-            raise ValueError("FFN topology model aliases must be unique")
+        model_ids = tuple(instance.model_id for instance in self.instances)
+        if len(model_ids) != len(set(model_ids)):
+            raise ValueError("FFN topology model IDs must be unique")
         for instance in self.instances:
             if instance.atn_tp_size * instance.atn_dp_size > self.atnagent_count:
                 raise ValueError("FFN topology Instance attention width exceeds the AtnAgent fleet")
@@ -242,14 +241,13 @@ class E2eFfnTopologyCase(BaseModel):
 
 
 class E2eManifest(BaseModel):
-    """Complete model catalog and E2E workload matrix."""
+    """Shared model catalog, serving workloads, and FFN topology workloads."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     models: tuple[E2eModel, ...]
     serving_slo: LatencySloConfig
     model_serving_cases: tuple[E2eServingCase, ...]
-    ffn_numerical_cases: tuple[E2eFfnNumericalCase, ...]
     ffn_topology_cases: tuple[E2eFfnTopologyCase, ...]
 
     @classmethod
@@ -258,55 +256,34 @@ class E2eManifest(BaseModel):
 
         with path.open("rb") as manifest_file:
             raw = tomllib.load(manifest_file)
-        models = raw.get("models")
-        if isinstance(models, dict):
-            raw["models"] = [
-                {"alias": alias, **value} if isinstance(value, dict) else {"alias": alias, "value": value}
-                for alias, value in models.items()
-            ]
         return cls.model_validate(raw)
 
     @model_validator(mode="after")
     def validate_manifest(self) -> Self:
-        """Require unique identities and resolvable case model aliases."""
+        """Require unique identities and resolvable case model IDs."""
 
         if not self.models:
             raise ValueError("E2E manifest models must be nonempty")
-        aliases = tuple(model.alias for model in self.models)
         model_ids = tuple(model.model_id for model in self.models)
-        if len(aliases) != len(set(aliases)):
-            raise ValueError("E2E manifest model aliases must be unique")
         if len(model_ids) != len(set(model_ids)):
             raise ValueError("E2E manifest model IDs must be unique")
-        cases = (
-            *self.model_serving_cases,
-            *self.ffn_numerical_cases,
-            *self.ffn_topology_cases,
-        )
-        if not all(
-            (
-                self.model_serving_cases,
-                self.ffn_numerical_cases,
-                self.ffn_topology_cases,
-            )
-        ):
+        cases = (*self.model_serving_cases, *self.ffn_topology_cases)
+        if not self.model_serving_cases or not self.ffn_topology_cases:
             raise ValueError("E2E manifest workload tables must be nonempty")
         case_ids = tuple(case.id for case in cases)
         if len(case_ids) != len(set(case_ids)):
             raise ValueError("E2E manifest case IDs must be unique")
-        known_aliases = set(aliases)
-        referenced_aliases = {placement.model for case in self.model_serving_cases for placement in case.models}
-        referenced_aliases.update(case.model_placement.model for case in self.ffn_numerical_cases)
-        referenced_aliases.update(instance.model for case in self.ffn_topology_cases for instance in case.instances)
-        unknown_aliases = sorted(referenced_aliases - known_aliases)
-        if unknown_aliases:
-            raise ValueError(f"E2E manifest references unknown model aliases: {unknown_aliases}")
-        numerical_aliases = tuple(case.model_placement.model for case in self.ffn_numerical_cases)
-        if sorted(numerical_aliases) != sorted(known_aliases):
-            raise ValueError("every E2E catalog model must occur in exactly one FFN numerical case")
+        known_model_ids = set(model_ids)
+        referenced_model_ids = {placement.model_id for case in self.model_serving_cases for placement in case.models}
+        referenced_model_ids.update(
+            instance.model_id for case in self.ffn_topology_cases for instance in case.instances
+        )
+        unknown_model_ids = sorted(referenced_model_ids - known_model_ids)
+        if unknown_model_ids:
+            raise ValueError(f"E2E manifest references unknown model IDs: {unknown_model_ids}")
         return self
 
-    def model(self, alias: str) -> E2eModel:
-        """Return one catalog model by its validated alias."""
+    def model(self, model_id: str) -> E2eModel:
+        """Return one catalog model by its validated full ID."""
 
-        return next(model for model in self.models if model.alias == alias)
+        return next(model for model in self.models if model.model_id == model_id)

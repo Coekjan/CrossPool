@@ -6,19 +6,20 @@ from collections.abc import Callable
 from pathlib import Path
 
 from tests.harness.runner.network import TcpEndpointConflict
-from tests.harness.sglang.manifest import E2eManifest, E2eServingCase
+from tests.harness.sglang.manifest import E2eModel, E2eServingCase
 from tests.harness.sglang.serving.attempt import ProbeAttempt, ProbeRun
 from tests.harness.sglang.serving.graph import SglangGraphSettings
 from tests.harness.sglang.serving.server import SglangServerProcess, SglangServerResult
-from xpool.config import XpoolConfig
+from xpool.config import LatencySloConfig, XpoolConfig
 
 PROBE_ATTEMPTS = 3
 
 
 def run_probe(
-    manifest: E2eManifest,
     case: E2eServingCase,
     *,
+    models: tuple[E2eModel, ...],
+    serving_slo: LatencySloConfig,
     base_config: XpoolConfig,
     graph_settings: SglangGraphSettings,
     workdir: Path,
@@ -29,11 +30,12 @@ def run_probe(
     conflicts: list[TcpEndpointConflict] = []
     for attempt_number in range(1, PROBE_ATTEMPTS + 1):
         attempt = ProbeAttempt(
-            manifest,
-            case,
-            base_config,
-            graph_settings,
-            workdir / f"attempt-{attempt_number}",
+            case=case,
+            models=models,
+            serving_slo=serving_slo,
+            base_config=base_config,
+            graph_settings=graph_settings,
+            workdir=workdir / f"attempt-{attempt_number}",
         )
         try:
             return attempt.run(workload)

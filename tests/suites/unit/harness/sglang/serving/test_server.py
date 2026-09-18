@@ -30,17 +30,17 @@ from xpool.config import XpoolConfig
     ("model", "settings", "enable_dp_attention"),
     [
         (
-            E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 1, 1),
+            E2eLaunchModel("organization/model", "SyntheticForCausalLM", 1, 1),
             SglangGraphSettings("disabled", "disabled"),
             False,
         ),
         (
-            E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 1, 1),
+            E2eLaunchModel("organization/model", "SyntheticForCausalLM", 1, 1),
             SglangGraphSettings("disabled", "breakable"),
             False,
         ),
         (
-            E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 1, 2),
+            E2eLaunchModel("organization/model", "SyntheticForCausalLM", 1, 2),
             SglangGraphSettings("disabled", "breakable"),
             True,
         ),
@@ -128,7 +128,7 @@ def test_server_startup_blocker_rejects_invalid_owned_tcp_store_peer() -> None:
         ),
     )
     server = SglangServerProcess(
-        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 1, 2),
+        model=E2eLaunchModel("organization/model", "SyntheticForCausalLM", 1, 2),
         owner=owner,
         endpoint=family,
         host=family.host,
@@ -153,7 +153,7 @@ def test_server_startup_blocker_ignores_peer_outside_owned_family() -> None:
         ),
     )
     server = SglangServerProcess(
-        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 1, 2),
+        model=E2eLaunchModel("organization/model", "SyntheticForCausalLM", 1, 2),
         owner=owner,
         endpoint=family,
         host=family.host,
@@ -180,7 +180,7 @@ def test_server_health_records_tcp_store_blocker_as_terminal_evidence(
         ),
     )
     server = SglangServerProcess(
-        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 1, 2),
+        model=E2eLaunchModel("organization/model", "SyntheticForCausalLM", 1, 2),
         owner=owner,
         endpoint=family,
         host=family.host,
@@ -214,7 +214,7 @@ def test_server_health_records_early_exit_before_raising() -> None:
         ),
     )
     server = SglangServerProcess(
-        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 1, 1),
+        model=E2eLaunchModel("organization/model", "SyntheticForCausalLM", 1, 1),
         owner=owner,
         endpoint=family,
         host=family.host,
@@ -244,7 +244,7 @@ def test_server_close_owns_only_process_resources(monkeypatch: pytest.MonkeyPatc
         ),
     )
     server = SglangServerProcess(
-        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 1, 1),
+        model=E2eLaunchModel("organization/model", "SyntheticForCausalLM", 1, 1),
         owner=owner,
         endpoint=family,
         host=family.host,
@@ -277,7 +277,7 @@ def test_server_close_signals_only_live_leader_on_orderly_path(monkeypatch: pyte
         ),
     )
     server = SglangServerProcess(
-        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 1, 1),
+        model=E2eLaunchModel("organization/model", "SyntheticForCausalLM", 1, 1),
         owner=owner,
         endpoint=family,
         host=family.host,
@@ -309,7 +309,7 @@ def test_server_close_falls_back_to_process_group_after_timeout(monkeypatch: pyt
         ),
     )
     server = SglangServerProcess(
-        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 1, 1),
+        model=E2eLaunchModel("organization/model", "SyntheticForCausalLM", 1, 1),
         owner=owner,
         endpoint=family,
         host=family.host,
@@ -346,7 +346,7 @@ def test_server_result_reads_resolved_modes_and_exact_output_ids(
         metadata={"rid": "xpool-serving-graph-organization-model"},
     )
     server = SglangServerProcess(
-        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 1, 1),
+        model=E2eLaunchModel("organization/model", "SyntheticForCausalLM", 1, 1),
         owner=cast(OwnedProcessGroup, SimpleNamespace(name="sglang-test")),
         endpoint=SglangEndpointFamily("127.0.0.1", 19_000, 19_001, 19_002, 1),
         host="127.0.0.1",
@@ -384,7 +384,7 @@ def test_server_result_rejects_boolean_token_ids(tmp_path: Path, monkeypatch: py
     }
     monkeypatch.setattr(tests.harness.sglang.serving.server.httpx, "Client", lambda **kwargs: FakeClient(responses))
     server = SglangServerProcess(
-        model=E2eLaunchModel("model", "organization/model", "SyntheticForCausalLM", 1, 1),
+        model=E2eLaunchModel("organization/model", "SyntheticForCausalLM", 1, 1),
         owner=cast(OwnedProcessGroup, SimpleNamespace(name="sglang-test")),
         endpoint=SglangEndpointFamily("127.0.0.1", 19_000, 19_001, 19_002, 1),
         host="127.0.0.1",
@@ -447,7 +447,7 @@ def server_launch(tmp_path: Path) -> E2eLaunch:
     )
     return E2eLaunch(
         case_id="server",
-        models=(E2eLaunchModel("model", model_id, "SyntheticForCausalLM", 1, 1),),
+        models=(E2eLaunchModel(model_id, "SyntheticForCausalLM", 1, 1),),
         config=config,
         config_path=tmp_path / "xpool.toml",
         environment=MappingProxyType({}),

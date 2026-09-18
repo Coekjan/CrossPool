@@ -84,6 +84,7 @@ class TestStage(StrEnum):
     UNIT = "unit"
     INTEGRATION = "integration"
     E2E = "e2e"
+    MODELS = "models"
 
     @classmethod
     def from_path(cls, path: str) -> Self:

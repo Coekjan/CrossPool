@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import sys
 import sysconfig
+import time
+import xml.etree.ElementTree
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +20,8 @@ from tests.harness.runner.gpu import GpuPool
 from tests.harness.runner.supervisor import SupervisedTaskScope, TaskCompletionKind
 
 CTEST_SUITE_TIMEOUT_SECONDS = 1800.0
+LOGGER = logging.getLogger("xtest.ctest")
+GPU_ASSIGNMENT_PATTERN = re.compile(r"GPU ASSIGNMENT gpus=([^\s]+)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +93,9 @@ class CtestSuite:
             "--parallel",
             str(len(gpu_pool.uuids)),
         ]
+        gpu_assignments = ",".join(f"{gpu_pool.physical_index_by_uuid[uuid]}:{uuid}" for uuid in gpu_pool.uuids)
+        LOGGER.info("cext gpus=%s", gpu_assignments, extra={"status": "RUNNING"})
+        started_at = time.monotonic()
         completion = SupervisedTaskScope.run(
             "ctest",
             command,
@@ -95,13 +104,44 @@ class CtestSuite:
             log_path=log_path,
             timeout_seconds=CTEST_SUITE_TIMEOUT_SECONDS,
         )
-        if sentinel_path.exists():
-            return CtestRunResult(2, log_path, junit_path)
-        if not junit_path.is_file():
-            return CtestRunResult(2, log_path, junit_path)
-        if completion.kind is not TaskCompletionKind.EXITED:
-            return CtestRunResult(2, log_path, junit_path)
-        return CtestRunResult(0 if completion.returncode == 0 else 1, log_path, junit_path)
+        if sentinel_path.exists() or not junit_path.is_file() or completion.kind is not TaskCompletionKind.EXITED:
+            result_code = 2
+        else:
+            result_code = 0 if completion.returncode == 0 else 1
+        LOGGER.info(
+            "cext gpus=%s elapsed=%.3fs code=%s log=%s junit=%s",
+            gpu_assignments,
+            time.monotonic() - started_at,
+            result_code,
+            log_path,
+            junit_path,
+            extra={"status": "PASSED" if result_code == 0 else "FAILED"},
+        )
+        if junit_path.is_file():
+            for case_name, case_gpu, elapsed in ctest_case_timings(junit_path, gpu_pool.physical_index_by_uuid):
+                LOGGER.info("  %s gpus=%s elapsed=%s", case_name, case_gpu, elapsed)
+        return CtestRunResult(result_code, log_path, junit_path)
+
+
+def ctest_case_timings(path: Path, physical_index_by_uuid: Mapping[str, int]) -> tuple[tuple[str, str, str], ...]:
+    """Read native case timing and the launcher's GPU assignment from JUnit."""
+
+    root = xml.etree.ElementTree.parse(path).getroot()
+    cases = []
+    for element in root.iter("testcase"):
+        output = element.findtext("system-out") or ""
+        assignment = GPU_ASSIGNMENT_PATTERN.search(output)
+        gpu = assignment.group(1) if assignment else "unavailable"
+        if gpu in physical_index_by_uuid:
+            gpu = f"{physical_index_by_uuid[gpu]}:{gpu}"
+        cases.append(
+            (
+                element.get("name", "unnamed"),
+                gpu,
+                element.get("time", "unavailable"),
+            )
+        )
+    return tuple(cases)
 
 
 def ctest_gpu_id(uuid: str) -> str:

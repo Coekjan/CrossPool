@@ -7,7 +7,7 @@ MODELS_PACKAGE = "xpool.runtime.ffnagent.models"
 
 
 def test_ffn_model_adapter_discovery_is_stable_and_module_owned() -> None:
-    """Discovery returns only the four concrete family compilers in stable order."""
+    """Discovery returns the concrete family compilers in stable order."""
 
     modules = walk_package_modules(MODELS_PACKAGE)
     adapters = discover_concrete_subclasses(MODELS_PACKAGE, FfnModelAdapter)
@@ -15,6 +15,7 @@ def test_ffn_model_adapter_discovery_is_stable_and_module_owned() -> None:
     assert tuple(module.name for module in modules) == (
         "xpool.runtime.ffnagent.models.deepseek_v2",
         "xpool.runtime.ffnagent.models.glm4_moe_lite",
+        "xpool.runtime.ffnagent.models.qwen2",
         "xpool.runtime.ffnagent.models.qwen3",
         "xpool.runtime.ffnagent.models.qwen3_moe",
     )

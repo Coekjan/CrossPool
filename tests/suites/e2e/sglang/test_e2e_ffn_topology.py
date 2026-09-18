@@ -1,4 +1,4 @@
-"""Installed real-FFN topology and delivery qualification."""
+"""SGLang-referenced real-FFN topology and delivery qualification."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ FFN_TOPOLOGY_INPUT_SEED = 17
 def case_parameter(case: E2eFfnTopologyCase) -> ParameterSet:
     """Attach manifest-derived resources to one topology world."""
 
-    model_ids = tuple(MANIFEST.model(instance.model).model_id for instance in case.instances)
+    model_ids = tuple(instance.model_id for instance in case.instances)
     return pytest.param(
         case,
         id=case.id,
@@ -83,7 +83,7 @@ def test_e2e_ffn_topology(
     """Prove real placement, delivery, scheduling, MPS, and numerical output."""
 
     deadline = time.monotonic() + case.timeout_seconds
-    models = tuple(MANIFEST.model(instance.model) for instance in case.instances)
+    models = tuple(MANIFEST.model(instance.model_id) for instance in case.instances)
     task_config = e2e_base_config.model_copy(update={"models": [ModelConfig(id=model.model_id) for model in models]})
     model_specs = tuple(
         architecture.load(model_id=model.model_id, model_path=task_config.model_path_of(model.model_id))
@@ -252,7 +252,6 @@ def materialize_instance_specs(
             if case.requests[ordinal].forward_mode == "prefill"
         )
         profile = InstanceFfnProfile(
-            model_config_digest=model_spec.model_config_digest,
             payload_dtype=torch.bfloat16,
             hidden_size=model_spec.hidden_size,
             layers=tuple(

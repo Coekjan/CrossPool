@@ -34,7 +34,7 @@ SUSTAINED_REQUEST_COUNT = 4
 def case_parameter(case: E2eServingCase) -> ParameterSet:
     """Attach the resources required by one elastic KV serving case."""
 
-    model_ids = tuple(MANIFEST.model(placement.model).model_id for placement in case.models)
+    model_ids = tuple(placement.model_id for placement in case.models)
     marks = [
         pytest.mark.requires_cuda(min_devices=case.required_gpu_count),
         pytest.mark.requires_config,
@@ -100,12 +100,23 @@ def test_e2e_elastic_kv(
         with ThreadPoolExecutor(max_workers=len(servers)) as executor:
             results = tuple(executor.map(SglangServerProcess.result, servers, repeat(request_barrier)))
 
-        by_alias = {server.model.alias: server for server in servers}
-        prefix_server = by_alias[workload.prefix_model]
-        pressure_server = by_alias[workload.pressure_model]
+        by_model_id = {server.model.model_id: server for server in servers}
+        prefix_server = by_model_id[workload.prefix_model_id]
+        pressure_server = by_model_id[workload.pressure_model_id]
+        response = httpx.get(f"{pressure_server.url()}/server_info", timeout=HTTP_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        server_info = response.json()
+        max_input_tokens = server_info.get("max_req_input_len") if isinstance(server_info, dict) else None
+        if (
+            not isinstance(max_input_tokens, int)
+            or isinstance(max_input_tokens, bool)
+            or max_input_tokens <= NEW_TOKENS
+        ):
+            raise AssertionError(f"SGLang returned invalid max_req_input_len: {max_input_tokens!r}")
+        pressure_tokens = min(workload.pressure_tokens, max_input_tokens - NEW_TOKENS)
         initial, expected_output_ids = generate(prefix_server, "xpool-elastic-kv-fill", workload.prefix_tokens)
         hit, hit_output_ids = generate(prefix_server, "xpool-elastic-kv-hit", workload.prefix_tokens)
-        generate(pressure_server, "xpool-elastic-kv-pressure", workload.pressure_tokens)
+        generate(pressure_server, "xpool-elastic-kv-pressure", pressure_tokens)
         after_pressure, after_pressure_output_ids = generate(
             prefix_server,
             "xpool-elastic-kv-after-pressure",
@@ -125,7 +136,7 @@ def test_e2e_elastic_kv(
         with ThreadPoolExecutor(max_workers=2) as pressure_executor:
             futures = (
                 pressure_executor.submit(sustain, "prefix-pressure", prefix_server, workload.prefix_tokens),
-                pressure_executor.submit(sustain, "peer-pressure", pressure_server, workload.pressure_tokens),
+                pressure_executor.submit(sustain, "peer-pressure", pressure_server, pressure_tokens),
             )
             completed = tuple(future.result() for future in futures)
 
@@ -141,6 +152,7 @@ def test_e2e_elastic_kv(
                     "after_pressure": after_pressure,
                     "hit": hit,
                     "initial": initial,
+                    "pressure_tokens": pressure_tokens,
                     "repopulated": repopulated,
                 },
                 sort_keys=True,
@@ -149,8 +161,9 @@ def test_e2e_elastic_kv(
         return results
 
     run = run_probe(
-        MANIFEST,
         case,
+        models=tuple(MANIFEST.model(placement.model_id) for placement in case.models),
+        serving_slo=MANIFEST.serving_slo,
         base_config=e2e_base_config,
         graph_settings=SglangGraphSettings(decode_backend="full", prefill_backend="breakable"),
         workdir=tmp_path,

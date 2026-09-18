@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterable
 
 import torch
-from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.model_executor.model_runner import ModelRunner
-from sglang.srt.models.qwen3 import Qwen3ForCausalLM, Qwen3MLP
+from sglang.srt.models.qwen3 import Qwen3ForCausalLM
 from sglang.srt.plugins.hook_registry import HookType
 from transformers import Qwen3Config
 
@@ -18,36 +16,8 @@ from xpool.integrations.sglang.adapter import (
     model_runner_architectures,
 )
 from xpool.integrations.sglang.hooks.registry import SglangHook
-from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError
+from xpool.integrations.sglang.models.qwen2 import XpoolQwen2MLP
 from xpool.native.ffn import LayerKind
-
-LAYER_PREFIX_PATTERN = re.compile(r"^model\.layers\.(?P<layer_id>\d+)\.mlp$")
-
-
-class XpoolQwen3MLP(FfnShimModule, Qwen3MLP):
-    """Parameter-free replacement for one dense Qwen3 MLP."""
-
-    def __init__(
-        self,
-        hidden_size: int,
-        intermediate_size: int,
-        hidden_act: str,
-        quant_config: QuantizationConfig | None = None,
-        prefix: str = "",
-    ) -> None:
-        """Initialize only the CrossPool shim state without allocating FFN weights."""
-
-        if hidden_act != "silu":
-            raise ValueError(f"Unsupported activation: {hidden_act}. Only silu is supported for now.")
-        match = LAYER_PREFIX_PATTERN.search(prefix)
-        if match is None:
-            raise ShimUnavailableError(f"xpool Qwen3 dense MLP shim cannot derive layer id from prefix {prefix!r}")
-        FfnShimModule.__init__(
-            self,
-            layer_id=int(match.group("layer_id")),
-            hidden_size=hidden_size,
-            layer_kind=LayerKind.DENSE,
-        )
 
 
 class Qwen3ShimAdapter(SglangShimAdapter):
@@ -61,7 +31,7 @@ class Qwen3ShimAdapter(SglangShimAdapter):
         return (
             SglangHook(
                 target="sglang.srt.models.qwen3.Qwen3MLP",
-                handler=XpoolQwen3MLP,
+                handler=XpoolQwen2MLP,
                 kind=HookType.REPLACE,
             ),
             SglangHook(
@@ -91,7 +61,7 @@ class Qwen3ShimAdapter(SglangShimAdapter):
         shims = self.require_ffn_shims(
             model,
             expected_layer_kinds=(LayerKind.DENSE,) * layer_count,
-            allowed_shim_types=(XpoolQwen3MLP,),
+            allowed_shim_types=(XpoolQwen2MLP,),
         )
         self.require_full_mlp_boundaries(model, shims, allow_reduce_scatter=False)
 

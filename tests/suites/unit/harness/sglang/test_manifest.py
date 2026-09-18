@@ -37,14 +37,14 @@ def test_manifest_rejects_unknown_fields(tmp_path: Path) -> None:
 ttft_ms = 1000
 tbt_ms = 50
 
-[models.synthetic]
+[[models]]
 model_id = "organization/model"
 architecture = "SyntheticForCausalLM"
 unknown = true
 
 [[model_serving_cases]]
 id = "synthetic"
-models = [{ model = "synthetic", atn_tp_size = 1, atn_dp_size = 1 }]
+models = [{ model_id = "organization/model", atn_tp_size = 1, atn_dp_size = 1 }]
 ffnagent_count = 1
 executor_lane_count = 1
 graph_modes = ["eager"]
@@ -64,7 +64,7 @@ fabric_record_capacity = 1
 def test_serving_case_allows_fewer_executors_than_ffnagents() -> None:
     case = E2eServingCase(
         id="shared-executor",
-        models=(E2eModelPlacement(model="synthetic", atn_tp_size=1, atn_dp_size=1),),
+        models=(E2eModelPlacement(model_id="organization/model", atn_tp_size=1, atn_dp_size=1),),
         ffnagent_count=2,
         executor_lane_count=1,
         graph_modes=(SglangGraphMode.EAGER,),
@@ -80,7 +80,7 @@ def test_serving_case_allows_fewer_executors_than_ffnagents() -> None:
 
 def test_model_placement_rejects_combined_attention_tp_by_dp() -> None:
     with pytest.raises(ValidationError, match="combined attention TP-by-DP"):
-        E2eModelPlacement(model="synthetic", atn_tp_size=2, atn_dp_size=2)
+        E2eModelPlacement(model_id="organization/model", atn_tp_size=2, atn_dp_size=2)
 
 
 def test_ffn_input_matrix_rejects_unordered_rows() -> None:
@@ -92,21 +92,21 @@ def test_serving_case_rejects_heterogeneous_attention_topology() -> None:
     with pytest.raises(ValidationError, match="same attention topology"):
         serving_case(
             models=(
-                E2eModelPlacement(model="first", atn_tp_size=1, atn_dp_size=1),
-                E2eModelPlacement(model="second", atn_tp_size=2, atn_dp_size=1),
+                E2eModelPlacement(model_id="organization/first", atn_tp_size=1, atn_dp_size=1),
+                E2eModelPlacement(model_id="organization/second", atn_tp_size=2, atn_dp_size=1),
             )
         )
 
 
 def test_serving_case_graph_modes_belong_to_the_matching_test_path() -> None:
     models = (
-        E2eModelPlacement(model="first", atn_tp_size=1, atn_dp_size=1),
-        E2eModelPlacement(model="second", atn_tp_size=1, atn_dp_size=1),
+        E2eModelPlacement(model_id="organization/first", atn_tp_size=1, atn_dp_size=1),
+        E2eModelPlacement(model_id="organization/second", atn_tp_size=1, atn_dp_size=1),
     )
     workload = E2eElasticKvWorkload(
-        prefix_model="first",
+        prefix_model_id="organization/first",
         prefix_tokens=1,
-        pressure_model="second",
+        pressure_model_id="organization/second",
         pressure_tokens=1,
         atn_device_memory_utilization=0.5,
     )

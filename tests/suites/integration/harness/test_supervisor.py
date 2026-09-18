@@ -317,7 +317,9 @@ def test_suite_runner_cancellation_reaps_each_supervisor_through_its_scope(tmp_p
             log_path=directory / "task.log",
             timeout_seconds=60,
         )
-        runner.active[task.key] = tests.harness.runner.suite.RunningTask(task, directory, scope, None)
+        runner.active[task.key] = tests.harness.runner.suite.RunningTask(
+            task, directory, scope, None, gpu_assignments="none", started_at=time.monotonic()
+        )
 
     runner.cancel_active_tasks()
 

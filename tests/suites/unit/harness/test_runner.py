@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import xml.etree.ElementTree
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import cast
 import pytest
 
 import tests.harness.runner.artifact
+import tests.harness.runner.console
 import tests.harness.runner.gpu
 import tests.harness.runner.plan
 import tests.harness.runner.pytest_report
@@ -31,6 +33,16 @@ from tests.harness.sglang.serving.graph import SglangGraphMode
 from xpool.mps import MpsProbeResult
 
 
+def test_task_formatter_colors_only_status_on_tty() -> None:
+    record = logging.LogRecord("xtest.runner", logging.INFO, __file__, 1, "case elapsed=1.0s", (), None)
+    record.status = "PASSED"
+
+    assert tests.harness.runner.console.TaskFormatter(color=False).format(record) == "PASSED case elapsed=1.0s"
+    assert tests.harness.runner.console.TaskFormatter(color=True).format(record) == (
+        "\x1b[32mPASSED\x1b[0m case elapsed=1.0s"
+    )
+
+
 def test_compiler_builds_stage_tasks_with_exact_gpu_batching() -> None:
     cpu_requirements = requirements()
     gpu_one = requirements(cuda_count=1, requires_mps=True)
@@ -46,6 +58,12 @@ def test_compiler_builds_stage_tasks_with_exact_gpu_batching() -> None:
             case("tests/suites/integration/test_other.py", "test_other", requirements=gpu_one, estimate=2),
             case("tests/suites/e2e/test_e2e_model.py", "test_model[eager]", requirements=gpu_two, estimate=30),
             case("tests/suites/e2e/test_e2e_model.py", "test_model[full]", requirements=gpu_two, estimate=40),
+            case(
+                "tests/suites/models/Qwen/Qwen3-0.6B/test_model.py",
+                "test_model[full]",
+                requirements=gpu_two,
+                estimate=50,
+            ),
         )
     )
 
@@ -59,8 +77,9 @@ def test_compiler_builds_stage_tasks_with_exact_gpu_batching() -> None:
         tests.harness.runner.plan.TestStage.INTEGRATION,
         tests.harness.runner.plan.TestStage.E2E,
         tests.harness.runner.plan.TestStage.E2E,
+        tests.harness.runner.plan.TestStage.MODELS,
     )
-    assert tuple(len(task.cases) for task in tasks) == (2, 1, 2, 1, 1, 1, 1)
+    assert tuple(len(task.cases) for task in tasks) == (2, 1, 2, 1, 1, 1, 1, 1)
     assert tasks[0].key == "unit"
     assert tasks[0].estimated_duration_seconds == 30
     assert tasks[0].timeout_seconds == 30
@@ -310,7 +329,7 @@ def test_suite_runner_completes_e2e_stage_after_ordinary_failure(
 def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     starts: list[tuple[str, list[str], dict[str, str]]] = []
     poll_counts = {"test-wide-a": 2, "test-wide-b": 0, "test-small": 0}
@@ -371,11 +390,13 @@ def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
         gpu_pool=cast(GpuPool, fake_pool),
     )
 
-    assert runner.run() == 0
-    output = capsys.readouterr().out
+    with caplog.at_level("INFO", logger="xtest.runner"):
+        assert runner.run() == 0
+    output = caplog.text
     assert "gpus=0:GPU-a,1:GPU-b" in output
     assert "gpus=2:GPU-c" in output
-    assert "ASSIGN tests/suites/integration/test_small.py::test-small gpus=2:GPU-c" in output
+    assert "PASSED" in tuple(getattr(record, "status", None) for record in caplog.records)
+    assert "tests/suites/integration/test_small.py::test-small elapsed=0.250s" in output
     task_starts = starts
     assert tuple(case_name(command) for _, command, _ in task_starts) == (
         "test-wide-a",
@@ -643,7 +664,9 @@ def write_pytest_junit(command: list[str], path: Path, *, failed: bool = False) 
     )
     for index, nodeid in enumerate(nodeids):
         classname, name = tests.harness.runner.pytest_report.PytestTaskReport.junit_identity(nodeid)
-        testcase = xml.etree.ElementTree.SubElement(suite, "testcase", {"classname": classname, "name": name})
+        testcase = xml.etree.ElementTree.SubElement(
+            suite, "testcase", {"classname": classname, "name": name, "time": "0.25"}
+        )
         if failed and index == 0:
             xml.etree.ElementTree.SubElement(testcase, "failure", {"message": "assertion failed"})
     root = xml.etree.ElementTree.Element("testsuites", {"name": "pytest tests"})

@@ -12,9 +12,9 @@ test infrastructure; they must not import collected modules from
    records their resource markers and scheduling metadata.
 2. `runner/plan.py` validates that metadata and builds the typed suite plan.
 3. `runner/task.py` groups compatible cases into independently supervised
-   tasks. `tests/cli.py` executes CTest and then creates a `SuiteRunner`
-   for Unit, Integration, and E2E in that order, admitting E2E only after
-   Integration succeeds.
+   tasks. `tests/cli.py` chooses serving-engine files before collection,
+   executes CTest, then creates a `SuiteRunner` for Unit, Integration, E2E,
+   and explicitly selected Models in that order.
 4. GPU tasks are ordered by GPU count and estimated duration, then backfilled
    over idle devices. CPU tasks use the same supervision boundary without a GPU
    lease.

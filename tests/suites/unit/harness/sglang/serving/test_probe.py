@@ -12,12 +12,6 @@ import tests.harness.sglang.serving.probe
 from tests.harness.native.cluster import XpoolCluster
 from tests.harness.runner.network import TcpEndpointConflict, TcpEndpointReservation
 from tests.harness.sglang.manifest import (
-    E2eFfnInputMatrix,
-    E2eFfnNumericalCase,
-    E2eFfnTopologyCase,
-    E2eFfnTopologyInstance,
-    E2eFfnTopologyRequest,
-    E2eManifest,
     E2eModel,
     E2eModelPlacement,
     E2eServingCase,
@@ -30,14 +24,17 @@ from tests.harness.sglang.serving.probe import run_probe
 from tests.harness.sglang.serving.server import SglangServerProcess, SglangServerResult
 from xpool.config import LatencySloConfig, XpoolConfig
 
+PROBE_MODEL = E2eModel(model_id="model-a", architecture="SyntheticForCausalLM")
+PROBE_SLO = LatencySloConfig(ttft_ms=1000, tbt_ms=50)
+
 
 def test_probe_retries_only_complete_endpoint_conflicts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workdirs: list[Path] = []
     expected = cast(ProbeRun, object())
 
     class Attempt:
-        def __init__(self, *args: object) -> None:
-            workdirs.append(cast(Path, args[4]))
+        def __init__(self, **kwargs: object) -> None:
+            workdirs.append(cast(Path, kwargs["workdir"]))
 
         def run(self, workload: object = None) -> ProbeRun:
             assert workload is None
@@ -48,8 +45,9 @@ def test_probe_retries_only_complete_endpoint_conflicts(tmp_path: Path, monkeypa
     monkeypatch.setattr(tests.harness.sglang.serving.probe, "ProbeAttempt", Attempt)
 
     result = run_probe(
-        probe_manifest(),
         probe_case(),
+        models=(PROBE_MODEL,),
+        serving_slo=PROBE_SLO,
         base_config=probe_launch(tmp_path).config,
         graph_settings=SglangGraphSettings("disabled", "disabled"),
         workdir=tmp_path / "run",
@@ -63,7 +61,7 @@ def test_probe_does_not_retry_non_conflict_failure(tmp_path: Path, monkeypatch: 
     attempts = 0
 
     class Attempt:
-        def __init__(self, *args: object) -> None:
+        def __init__(self, **kwargs: object) -> None:
             pass
 
         def run(self, workload: object = None) -> ProbeRun:
@@ -76,8 +74,9 @@ def test_probe_does_not_retry_non_conflict_failure(tmp_path: Path, monkeypatch: 
 
     with pytest.raises(AssertionError, match="startup failure"):
         run_probe(
-            probe_manifest(),
             probe_case(),
+            models=(PROBE_MODEL,),
+            serving_slo=PROBE_SLO,
             base_config=probe_launch(tmp_path).config,
             graph_settings=SglangGraphSettings("disabled", "disabled"),
             workdir=tmp_path / "run",
@@ -237,11 +236,12 @@ def test_attempt_terminal_paths_cleanup_classify_and_release_endpoints(
 def probe_attempt(tmp_path: Path) -> ProbeAttempt:
     launch = probe_launch(tmp_path)
     return ProbeAttempt(
-        probe_manifest(),
-        probe_case(),
-        launch.config,
-        SglangGraphSettings("disabled", "disabled"),
-        tmp_path / "attempt",
+        case=probe_case(),
+        models=(PROBE_MODEL,),
+        serving_slo=PROBE_SLO,
+        base_config=launch.config,
+        graph_settings=SglangGraphSettings("disabled", "disabled"),
+        workdir=tmp_path / "attempt",
     )
 
 
@@ -261,7 +261,7 @@ def probe_launch(tmp_path: Path) -> E2eLaunch:
     )
     return E2eLaunch(
         case_id="probe",
-        models=(E2eLaunchModel("model", "model-a", "SyntheticForCausalLM", 1, 1),),
+        models=(E2eLaunchModel("model-a", "SyntheticForCausalLM", 1, 1),),
         config=config,
         config_path=config_path,
         environment=MappingProxyType({"XPOOL_CONFIG": str(config_path)}),
@@ -269,56 +269,10 @@ def probe_launch(tmp_path: Path) -> E2eLaunch:
     )
 
 
-def probe_manifest() -> E2eManifest:
-    model = E2eModel(
-        alias="model",
-        model_id="model-a",
-        architecture="SyntheticForCausalLM",
-    )
-    case = probe_case()
-    numerical = E2eFfnNumericalCase(
-        id="probe-numerical",
-        model_placement=case.models[0],
-        layer_ids=(0,),
-        input_matrix=E2eFfnInputMatrix(seed=17, row_counts=(1,)),
-        ffnagent_count=1,
-        executor_lane_count=1,
-        ffn_tp_size=1,
-        estimated_duration_seconds=1,
-        timeout_seconds=1,
-    )
-    topology = E2eFfnTopologyCase(
-        id="probe-topology",
-        atnagent_count=1,
-        ffnagent_count=1,
-        executor_lane_count=1,
-        instances=(
-            E2eFfnTopologyInstance(model="model", layer_ordinal=0, atn_tp_size=1, atn_dp_size=1, ffn_tp_size=1),
-        ),
-        requests=(
-            E2eFfnTopologyRequest(
-                instance_index=0,
-                forward_mode="decode",
-                dp_rank_payload_rows=(1,),
-                output_requirement="per_rank_complete",
-            ),
-        ),
-        estimated_duration_seconds=1,
-        timeout_seconds=1,
-    )
-    return E2eManifest(
-        models=(model,),
-        serving_slo=LatencySloConfig(ttft_ms=1000, tbt_ms=50),
-        model_serving_cases=(case,),
-        ffn_numerical_cases=(numerical,),
-        ffn_topology_cases=(topology,),
-    )
-
-
 def probe_case() -> E2eServingCase:
     return E2eServingCase(
         id="probe",
-        models=(E2eModelPlacement(model="model", atn_tp_size=1, atn_dp_size=1),),
+        models=(E2eModelPlacement(model_id=PROBE_MODEL.model_id, atn_tp_size=1, atn_dp_size=1),),
         ffnagent_count=1,
         executor_lane_count=1,
         graph_modes=(SglangGraphMode.EAGER,),

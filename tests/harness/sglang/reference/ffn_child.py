@@ -14,6 +14,7 @@ SUPPORTED_MODEL_CLASSES = frozenset(
     {
         "DeepseekV2ForCausalLM",
         "Glm4MoeLiteForCausalLM",
+        "Qwen2ForCausalLM",
         "Qwen3ForCausalLM",
         "Qwen3MoeForCausalLM",
     }
@@ -161,7 +162,7 @@ def run_ffn_reference_rank(
         if type(model).__name__ not in SUPPORTED_MODEL_CLASSES:
             raise RuntimeError(f"unsupported FFN reference model class: {type(model).__name__}")
         model.eval()
-        # The pinned loader returns one of four unrelated concrete model classes.
+        # The pinned loader returns unrelated concrete model classes.
         typed_model = typing.cast(typing.Any, model)
 
         for case in job.cases:

@@ -22,13 +22,16 @@ public behavior is broken, replace it with a behavior test.
   Unit tests may construct immutable bound values when native operations are
   mocked and the subject is a pure Python projection; importing a bound value
   type alone does not require Integration placement.
-- `tests/suites/integration/` owns cross-module, pinned-SGLang, native binding,
+- `tests/suites/integration/` owns cross-module, serving-engine, native binding,
   component CUDA, daemon, CLI, and real process-management contracts.
-- `tests/suites/e2e/` owns installed `xpool` and `sglang serve` workflows,
-  model weights, HTTP inference, graph evidence, observer traces, token parity,
-  multi-model concurrency, and shutdown.
+- `tests/suites/e2e/` owns routine installed `xpool` and `sglang serve`
+  workflows, small-model weights, HTTP inference, observed graph structure,
+  observer traces, multi-model concurrency, and shutdown.
 - `tests/suites/cext/` owns C++/CUDA value, layout, protocol, scheduler,
   resident-kernel, trace, and utility behavior through CTest/GTest.
+- `tests/suites/models/<model-id>/` owns optional real-checkpoint numerical and
+  cross-graph qualification, including token or logit comparison. Engine-specific
+  files use names such as `test_sglang_model_qualification.py`.
 - `tests/harness/` contains reusable collection, scheduling, process, GPU,
   native, and SGLang infrastructure. Harness modules are not test suites and
   must not import collected test modules.
@@ -36,9 +39,12 @@ public behavior is broken, replace it with a behavior test.
 Place a test at the lowest layer that can observe its public behavior. Shared
 setup belongs in a focused harness module or an explicitly imported fixture;
 do not create implicit fixture dependencies through directory `conftest.py`
-imports. E2E files use `test_e2e_*.py` names. Model IDs, topology matrices,
-trace capacities, graph modes, and test-only KV limits belong in
-`tests/harness/sglang/manifest.toml`, not Python test code.
+imports. Put engine-owned Integration and E2E files under an engine-named
+directory; do not mix their cases with engine-neutral files. E2E files use
+`test_e2e_*.py` names. Shared model IDs, topology matrices, trace capacities,
+graph modes, and test-only KV limits belong in
+`tests/harness/sglang/manifest.toml`. Concrete-model numerical and serving
+qualification cases belong as typed constants in their model suite modules.
 
 Keep common and subsystem-specific fixtures separate so each fixture owns one
 coherent reset boundary. Use pinned SGLang concrete types, such as `ServerArgs`,
@@ -67,9 +73,9 @@ perform their own MPS preflight.
 A missing or ABI-incompatible native extension is a session failure, including
 for Unit-only sessions, never a resource skip. E2E tests run without strict mode
 when all declared and derived requirements are available. Each task materializes
-a private config from `XPOOL_CONFIG` and its selected manifest models, without
-waiting for unrelated configured models. All serving E2E cases use the manifest's
-shared `serving_slo` rather than external scheduler or model SLO values.
+a private config from `XPOOL_CONFIG` and its selected case models, without
+waiting for unrelated configured models. All serving E2E cases use the shared
+manifest's `serving_slo` rather than external scheduler or model SLO values.
 
 Graph-mode acceptance criteria belong to
 [Qualification](../docs/designs/qualification.md#numerical-and-graph-evidence).
@@ -83,16 +89,18 @@ The package runner performs these steps:
    test plan from pytest metadata.
 2. Acquire one pool from startup `CUDA_VISIBLE_DEVICES` only when selected
    cases require GPUs, then prove every visible device works through MPS.
-3. Run CTest, Unit, Integration, and E2E in canonical order. GPU work is sorted
+3. Run CTest, Unit, Integration, E2E, and any explicitly selected Models in
+   canonical order. GPU work is sorted
    by resource count and estimated duration and backfilled across idle GPUs.
 4. Run each Python GPU task in a `SupervisedTaskScope`; release its lease only
    after the complete descendant process domain is reaped.
 5. Parse JUnit and E2E artifacts, evaluate declared serving-graph groups, and
    retain logs under `.xpool-cache/test-runs/`.
 
-Task start and case assignment lines identify leased physical GPU indices and
-UUIDs. GPU pytest logs show case-level progress; CTest's per-test log records
-its assigned GPU UUID or `none`.
+Task `RUNNING` and terminal `PASSED` or `FAILED` lines identify leased physical
+GPU indices and UUIDs. Terminal lines report task elapsed time and available
+per-case JUnit durations on subsequent lines. CTest records each native case's
+GPU assignment and duration separately.
 
 `xtest clean` explicitly removes inactive historical results. It keeps the
 newest 20 inactive entries by default; use `--keep N`, `--all`, and
@@ -102,10 +110,11 @@ never removed.
 Each E2E SGLang server writes a versionless `*.inference.json` beside its log.
 It contains the exact public `/generate` request and response and is written
 before HTTP-status and token-shape validation. JUnit describes case outcome,
-`*.duration.json` records timing and resolved graph mode. Serving-graph
-artifacts compare Eager and Decode Full token output plus Eager and Prefill
-Breakable logits, while observer files prove internal graph and
-transport/fabric behavior.
+`*.duration.json` records timing and resolved graph mode. Explicit Models
+qualification compares Eager and Decode Full token output plus Eager and
+Prefill Breakable logits. Routine E2E instead proves installed serving,
+observed graph structure, and transport/fabric behavior without repeating
+per-model numerical parity.
 
 ## Commands
 
@@ -116,13 +125,16 @@ does not parse dotenv files.
 ```bash
 if [ -f .env ]; then export UV_ENV_FILE="$PWD/.env"; fi
 
-# Complete resource-eligible repository suite.
+# Routine resource-eligible repository suite; model qualification is opt-in.
 uv run xtest run
 
 # One or more canonical stages.
 uv run xtest run --suite unit
 uv run xtest run --suite cext --suite integration
 uv run xtest run --suite e2e --strict-requirements
+uv run xtest run --suite integration --suite e2e --integration=sglang
+uv run xtest run --suite Qwen/Qwen3-0.6B --integration=sglang
+uv run xtest run --suite models --strict-requirements
 
 # Explicit durable-result cleanup; default is --keep 20.
 uv run xtest clean --dry-run
@@ -137,6 +149,11 @@ uv run pytest tests/suites/integration/native/test_transport_lifecycle.py -s
 Use `pytest --collect-only` to inspect concrete parameterized cases. Build and
 install the native extension with the repository's canonical uv/scikit-build
 command before running native or E2E tests.
+
+`--integration` filters engine-owned files in the selected Integration, E2E,
+and Models suites before pytest imports them; engine-neutral tests remain.
+Omitting it selects all integrations. Currently `sglang` is the only accepted
+value. The file-level filter cannot be combined with explicit pytest selectors.
 
 ## Verification And Commit Hooks
 

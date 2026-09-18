@@ -12,16 +12,15 @@ from types import MappingProxyType
 import tomli_w
 
 from tests.harness.native.cluster import XpoolClusterLaunch
-from tests.harness.sglang.manifest import E2eManifest, E2eServingCase
+from tests.harness.sglang.manifest import E2eModel, E2eServingCase
 from tests.harness.sglang.serving.graph import SglangGraphMode, SglangGraphSettings
-from xpool.config import FfnSchedulingPolicy, XpoolConfig
+from xpool.config import FfnSchedulingPolicy, LatencySloConfig, XpoolConfig
 
 
 @dataclass(frozen=True, slots=True)
 class E2eLaunchModel:
     """One fully resolved model placement for a materialized E2E attempt."""
 
-    alias: str
     model_id: str
     architecture: str
     atn_tp_size: int
@@ -38,9 +37,10 @@ class E2eLaunch(XpoolClusterLaunch):
 
 
 def materialize(
-    manifest: E2eManifest,
     case: E2eServingCase,
     *,
+    models: tuple[E2eModel, ...],
+    serving_slo: LatencySloConfig,
     base_config: XpoolConfig,
     workdir: Path,
     daemon_port: int,
@@ -50,19 +50,21 @@ def materialize(
 
     if daemon_port <= 0:
         raise ValueError("E2E daemon_port must be positive")
+    if len(models) != len(case.models) or any(
+        model.model_id != placement.model_id for model, placement in zip(models, case.models, strict=True)
+    ):
+        raise ValueError("E2E models must match case placements in order")
     model_base_uri = base_config.vendor.model_base_uri
     if model_base_uri is None:
         raise ValueError("E2E requires vendor.model_base_uri in the external XPOOL_CONFIG")
     launch_models = tuple(
         E2eLaunchModel(
-            alias=model.alias,
             model_id=model.model_id,
             architecture=model.architecture,
             atn_tp_size=placement.atn_tp_size,
             atn_dp_size=placement.atn_dp_size,
         )
-        for placement in case.models
-        for model in (manifest.model(placement.model),)
+        for model, placement in zip(models, case.models, strict=True)
     )
     for model in launch_models:
         validate_model_architecture(model, model_base_uri / model.model_id)
@@ -75,7 +77,7 @@ def materialize(
         "atn_concurrency": len(case.models),
         "ffn_concurrency": case.executor_lane_count,
         "ffn_policy": base_config.scheduler.ffn_policy.value,
-        "slo": manifest.serving_slo.model_dump(),
+        "slo": serving_slo.model_dump(),
     }
     if base_config.scheduler.ffn_policy is FfnSchedulingPolicy.RANDOM:
         scheduler["ffn_random_seed"] = base_config.scheduler.ffn_random_seed

@@ -16,13 +16,13 @@ import httpx
 from tests.harness.native.cluster import CONTROL_PLANE_HTTP_TIMEOUT_SECONDS, XpoolCluster, daemon_url
 from tests.harness.native.readiness import ReadinessEvidence, ReadinessTimeout
 from tests.harness.runner.network import TcpEndpointConflict, TcpEndpointReservation, TcpPortSpace
-from tests.harness.sglang.manifest import E2eManifest, E2eServingCase
+from tests.harness.sglang.manifest import E2eModel, E2eServingCase
 from tests.harness.sglang.serving.alignment import ServingGraphArtifact, TokenOutput
 from tests.harness.sglang.serving.endpoints import SglangEndpointFamilyLease
 from tests.harness.sglang.serving.graph import GraphEvent, SglangGraphSettings, read_graph_events
 from tests.harness.sglang.serving.launch import E2eLaunch, materialize, model_id_slug
 from tests.harness.sglang.serving.server import SglangServerProcess, SglangServerResult
-from xpool.config import XpoolConfig
+from xpool.config import LatencySloConfig, XpoolConfig
 from xpool.service.wire import ReadinessSnapshot
 
 PROBE_TIMEOUT_SECONDS = 30 * 60
@@ -111,8 +111,9 @@ def wait_for_system_readiness(launch: E2eLaunch, servers: list[SglangServerProce
 class ProbeAttempt:
     """Own every resource acquired by one non-reusable E2E attempt."""
 
-    manifest: E2eManifest
     case: E2eServingCase
+    models: tuple[E2eModel, ...]
+    serving_slo: LatencySloConfig
     base_config: XpoolConfig
     graph_settings: SglangGraphSettings
     workdir: Path
@@ -137,8 +138,9 @@ class ProbeAttempt:
                 )
             )
         launch = materialize(
-            self.manifest,
             self.case,
+            models=self.models,
+            serving_slo=self.serving_slo,
             base_config=self.base_config,
             workdir=self.workdir,
             daemon_port=self.daemon_endpoint.port,

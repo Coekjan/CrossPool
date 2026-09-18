@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
@@ -28,6 +29,7 @@ from tests.harness.runner.task import ExecutionTask, compile_execution_tasks
 from xpool.mps import probe_mps_controller
 
 SCHEDULER_POLL_INTERVAL_SECONDS = 0.05
+LOGGER = logging.getLogger("xtest.runner")
 
 
 class SuiteInfrastructureFailure(RuntimeError):
@@ -75,6 +77,8 @@ class RunningTask:
     directory: Path
     scope: SupervisedTaskScope
     lease: GpuLease | None
+    gpu_assignments: str
+    started_at: float
 
 
 class SuiteRunner:
@@ -138,10 +142,12 @@ class SuiteRunner:
                 return self.result_code(integration_code)
             e2e_code = self.run_stage(TestStage.E2E)
             self.report_stage(TestStage.E2E, e2e_code)
+            models_code = self.run_stage(TestStage.MODELS)
+            self.report_stage(TestStage.MODELS, models_code)
             artifact_results = self.artifact_group_results()
             self.report_artifact_groups(artifact_results)
             artifact_code = max((result.result_code for result in artifact_results), default=0)
-            return self.result_code(max(e2e_code, artifact_code))
+            return self.result_code(max(e2e_code, models_code, artifact_code))
         except (OSError, RuntimeError, ValueError) as error:
             print(f"xpool test infrastructure failure: {error}", file=sys.stderr)
             try:
@@ -258,11 +264,8 @@ class SuiteRunner:
             if lease is not None and self.gpu_pool is not None
             else "none"
         )
-        print(f"START {task.key} gpus={gpu_assignments}", flush=True)
-        if lease is not None:
-            for case in task.cases:
-                print(f"ASSIGN {case.nodeid} gpus={gpu_assignments}", flush=True)
         try:
+            started_at = time.monotonic()
             scope = SupervisedTaskScope.start(
                 task.key,
                 command,
@@ -280,7 +283,8 @@ class SuiteRunner:
             if lease is not None:
                 self.retained_leases.append(lease)
             raise
-        self.active[task.key] = RunningTask(task, directory, scope, lease)
+        self.active[task.key] = RunningTask(task, directory, scope, lease, gpu_assignments, started_at)
+        LOGGER.info("%s gpus=%s", task.key, gpu_assignments, extra={"status": "RUNNING"})
 
     def collect_completed_tasks(self) -> tuple[TaskOutcome, ...]:
         """Poll every active scope and release only proven-empty task leases."""
@@ -304,13 +308,24 @@ class SuiteRunner:
             self.outcomes[key] = outcome
             del self.active[key]
             completed.append(outcome)
-            status = "PASS" if outcome.result_code == 0 else "FAIL" if outcome.result_code == 1 else "ERROR"
+            status = "PASSED" if outcome.result_code == 0 else "FAILED"
             pytest_summary = outcome.report.summary() if outcome.report is not None else "pytest-report=unavailable"
-            print(
-                f"{status} {key} ({completion.kind.value}, returncode={completion.returncode}); "
-                f"{pytest_summary}; "
-                f"log={running.directory / 'pytest.log'} junit={running.directory / 'pytest.xml'}"
+            LOGGER.info(
+                "%s gpus=%s elapsed=%.3fs (%s, returncode=%s); %s; log=%s junit=%s",
+                key,
+                running.gpu_assignments,
+                time.monotonic() - running.started_at,
+                completion.kind.value,
+                completion.returncode,
+                pytest_summary,
+                running.directory / "pytest.log",
+                running.directory / "pytest.xml",
+                extra={"status": status},
             )
+            if outcome.report is not None:
+                for case in outcome.report.cases:
+                    duration = "unavailable" if case.elapsed_seconds is None else f"{case.elapsed_seconds:.3f}s"
+                    LOGGER.info("  %s elapsed=%s", case.nodeid, duration)
         return tuple(completed)
 
     def cancel_active_tasks(self) -> None:

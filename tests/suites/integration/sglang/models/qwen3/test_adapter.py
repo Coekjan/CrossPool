@@ -9,14 +9,12 @@ from transformers import Qwen3Config
 
 from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 from xpool.integrations.sglang.adapter import filter_decoder_ffn_weights
-from xpool.integrations.sglang.models.qwen3 import (
-    Qwen3ShimAdapter,
-    XpoolQwen3MLP,
-)
+from xpool.integrations.sglang.models.qwen2 import XpoolQwen2MLP
+from xpool.integrations.sglang.models.qwen3 import Qwen3ShimAdapter
 
 
-def qwen_shim(layer_id: int) -> XpoolQwen3MLP:
-    return XpoolQwen3MLP(
+def qwen_shim(layer_id: int) -> XpoolQwen2MLP:
+    return XpoolQwen2MLP(
         hidden_size=5120,
         intermediate_size=17408,
         hidden_act="silu",
@@ -39,7 +37,7 @@ def loaded_qwen_model(*, mlp_mode: ScatterMode = ScatterMode.FULL) -> Qwen3ForCa
 def test_qwen3_adapter_declares_dense_sglang_hooks() -> None:
     hooks = {(hook.target, hook.kind): hook.handler for hook in Qwen3ShimAdapter().hooks()}
 
-    assert hooks[("sglang.srt.models.qwen3.Qwen3MLP", HookType.REPLACE)] is XpoolQwen3MLP
+    assert hooks[("sglang.srt.models.qwen3.Qwen3MLP", HookType.REPLACE)] is XpoolQwen2MLP
     assert ("sglang.srt.models.qwen3.Qwen3ForCausalLM.load_weights", HookType.AROUND) in hooks
 
 

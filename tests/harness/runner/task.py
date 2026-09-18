@@ -65,8 +65,8 @@ def compile_execution_tasks(plan: TestPlan) -> tuple[ExecutionTask, ...]:
         tasks.append(build_task(task_key("integration-gpu", path, identity), tuple(cases)))
 
     for case in plan.cases:
-        if case.stage is TestStage.E2E:
-            tasks.append(build_task(task_key("e2e", case.nodeid, case.nodeid), (case,)))
+        if case.stage in {TestStage.E2E, TestStage.MODELS}:
+            tasks.append(build_task(task_key(case.stage.value, case.nodeid, case.nodeid), (case,)))
 
     keys = tuple(task.key for task in tasks)
     if len(keys) != len(set(keys)):

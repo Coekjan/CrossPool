@@ -1,4 +1,4 @@
-"""Independent four-model numerical evidence for installed real FFN execution."""
+"""Independent per-model numerical evidence for installed real FFN execution."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from _pytest.mark.structures import ParameterSet
 from tests.harness.native.ffn.protocol import FfnInstanceSpec, FfnInvocationSpec
 from tests.harness.native.ffn.topology import materialize_ffn_cluster_launch, run_ffn_topology
 from tests.harness.runner.network import TcpEndpointReservation, TcpPortSpace
-from tests.harness.sglang.manifest import E2E_MANIFEST_PATH, E2eFfnNumericalCase, E2eManifest
+from tests.harness.sglang.manifest import E2eFfnNumericalCase, E2eModel
 from tests.harness.sglang.reference.ffn import SglangFfnReferenceCase, SglangFfnReferenceRunner
 from tests.harness.support.ffn import (
     FFN_NUMERICAL_ARTIFACT_FILENAME,
@@ -39,16 +39,12 @@ from xpool.native.ffn import DpRowLayout, ForwardMode, OutputRequirement
 from xpool.runtime.ffnagent import architecture
 from xpool.runtime.transport import InstanceRankTransportProfile
 
-pytest_plugins = ("tests.harness.support.config",)
-
-MANIFEST = E2eManifest.load(E2E_MANIFEST_PATH)
 FFN_NUMERICAL_HARNESS_RESERVE_SECONDS = 120.0
 
 
-def case_parameter(case: E2eFfnNumericalCase) -> ParameterSet:
-    """Attach every manifest-derived resource requirement to one case."""
+def case_parameter(case: E2eFfnNumericalCase, *, model: E2eModel) -> ParameterSet:
+    """Attach every model and resource requirement to one case."""
 
-    model = MANIFEST.model(case.model_placement.model)
     return pytest.param(
         case,
         id=case.id,
@@ -63,19 +59,19 @@ def case_parameter(case: E2eFfnNumericalCase) -> ParameterSet:
     )
 
 
-@pytest.mark.parametrize("case", tuple(case_parameter(case) for case in MANIFEST.ffn_numerical_cases))
-def test_e2e_ffn_numerical(
+def run_numerical_case(
     case: E2eFfnNumericalCase,
     e2e_base_config: XpoolConfig,
     tmp_path: Path,
     task_artifact_dir: Path | None,
+    *,
+    model: E2eModel,
 ) -> None:
     """Compare installed true-TP2 FFN outputs with isolated original SGLang."""
 
     if case.timeout_seconds <= FFN_NUMERICAL_HARNESS_RESERVE_SECONDS:
         raise ValueError("FFN numerical timeout must exceed its exceptional cleanup reserve")
     deadline = time.monotonic() + case.timeout_seconds - FFN_NUMERICAL_HARNESS_RESERVE_SECONDS
-    model = MANIFEST.model(case.model_placement.model)
     model_base_uri = e2e_base_config.vendor.model_base_uri
     if model_base_uri is None:
         raise AssertionError("FFN numerical qualification requires vendor.model_base_uri")
@@ -147,7 +143,6 @@ def test_e2e_ffn_numerical(
                 )
             )
     ffn_profile = InstanceFfnProfile(
-        model_config_digest=model_spec.model_config_digest,
         payload_dtype=torch.bfloat16,
         hidden_size=model_spec.hidden_size,
         layers=tuple(InstanceFfnLayerProfile(layer_id=layer.layer_id, kind=layer.kind) for layer in model_spec.layers),

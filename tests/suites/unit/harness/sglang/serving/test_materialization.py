@@ -47,8 +47,9 @@ def test_materialize_writes_config_policy_and_sanitizes_environment(
     monkeypatch.setenv("SGLANG_GRPC_PORT", "12345")
 
     launch = materialize(
-        manifest,
         case,
+        models=tuple(manifest.model(placement.model_id) for placement in case.models),
+        serving_slo=manifest.serving_slo,
         base_config=base_config,
         workdir=tmp_path / "attempt",
         daemon_port=19810,
@@ -102,8 +103,9 @@ def test_materialize_enables_prefill_logit_observer_for_alignment_modes(
     base_config = base_e2e_config(manifest, tmp_path)
 
     launch = materialize(
-        manifest,
         case,
+        models=tuple(manifest.model(placement.model_id) for placement in case.models),
+        serving_slo=manifest.serving_slo,
         base_config=base_config,
         workdir=tmp_path / "attempt",
         daemon_port=19810,
@@ -118,7 +120,7 @@ def test_materialize_rejects_wrong_model_architecture(tmp_path: Path) -> None:
     manifest = E2eManifest.load(E2E_MANIFEST_PATH)
     case = manifest.model_serving_cases[0]
     base_config = base_e2e_config(manifest, tmp_path)
-    model = manifest.model(case.models[0].model)
+    model = manifest.model(case.models[0].model_id)
     model_base_uri = base_config.vendor.model_base_uri
     assert model_base_uri is not None
     config_path = model_base_uri / model.model_id / "config.json"
@@ -126,12 +128,29 @@ def test_materialize_rejects_wrong_model_architecture(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match=model.architecture):
         materialize(
-            manifest,
             case,
+            models=(model,),
+            serving_slo=manifest.serving_slo,
             base_config=base_config,
             workdir=tmp_path / "attempt",
             daemon_port=19810,
             graph_settings=case.graph_modes[0].settings(),
+        )
+
+
+def test_materialize_rejects_misaligned_models(tmp_path: Path) -> None:
+    manifest = E2eManifest.load(E2E_MANIFEST_PATH)
+    case = next(case for case in manifest.model_serving_cases if len(case.models) == 2)
+
+    with pytest.raises(ValueError, match="match case placements in order"):
+        materialize(
+            case,
+            models=manifest.models,
+            serving_slo=manifest.serving_slo,
+            base_config=base_e2e_config(manifest, tmp_path),
+            workdir=tmp_path / "attempt",
+            daemon_port=19810,
+            graph_settings=SglangGraphSettings(decode_backend="full", prefill_backend="breakable"),
         )
 
 
