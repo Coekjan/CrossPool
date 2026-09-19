@@ -52,7 +52,7 @@ SLOs are outside this interface. These targets use scheduler-local Prefill and
 Decode timing rather than client-observed HTTP latency. The pinned SGLang
 scheduler provides timing observations and request priority, but no typed
 per-request TTFT/TBT objective. Priority remains an ordering hint. See
-[Elastic KV-cache Pooling](elastic-kv-cache.md) for the demand and deadline
+[Elastic KV Cache Pooling](elastic-kv-cache.md) for the demand and deadline
 contract.
 
 `scheduler.atn_concurrency` is retained as an explicitly reserved attention-side
@@ -154,7 +154,7 @@ One Generation-scoped daemon policy freezes each attention GPU's physical pool
 after Graph capture and coordinates persistent quantified demand, immutable
 group capacity operations, TP readiness votes, and terminal partition completions
 through a host-local native channel. SGLang retains logical allocation and
-prefix-cache ownership. See [Elastic KV-cache Pooling](elastic-kv-cache.md).
+prefix-cache ownership. See [Elastic KV Cache Pooling](elastic-kv-cache.md).
 
 `xpool::fabric::ArenaProjection` is the minimal native join projection derived
 from the plan. Native layout code derives byte geometry, offsets, and local

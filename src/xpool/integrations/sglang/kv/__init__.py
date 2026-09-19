@@ -1,1 +1,1 @@
-"""Elastic KV-cache integration for the pinned SGLang runtime."""
+"""Elastic KV Cache integration for the pinned SGLang runtime."""

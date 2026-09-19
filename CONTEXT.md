@@ -12,6 +12,10 @@ Avoidance notes distinguish domain concepts in discussion and documentation.
 They do not prohibit citing existing implementation symbols by their actual
 names or require those symbols to be renamed.
 
+Use `KV Cache` or `KV` in documentation, comments, and docstrings. Keep the
+phrase as two title-cased words; never hyphenate it or lowercase its second
+word. Executable identifiers may use `kv_cache` or `kv`.
+
 **Instance**:
 A configured model-serving deployment whose SGLang workers share one identity
 and one Fabric Instance Plan.
@@ -45,17 +49,17 @@ public HTTP health check has succeeded for the current listener snapshot. It
 is not continuous availability monitoring or a Fabric lifecycle phase.
 _Avoid_: System ready, Fabric executable, serving monitor
 
-**Elastic KV-cache Pooling**:
+**Elastic KV Cache Pooling**:
 Attention-side capacity management that lends and reclaims physical KV memory
 among co-located Instance Ranks while preserving Instance isolation and
 SGLang's logical cache semantics. Reclamation may evict reclaimable cached
 suffixes before releasing their physical backing.
-_Avoid_: Shared KV cache, KV content sharing
+_Avoid_: Shared KV Cache, KV Cache content sharing
 
 **KV Capacity Pool**:
 The physical-memory capacity available for KV mappings across the Instance
 Ranks colocated on one attention GPU.
-_Avoid_: Global KV cache, KV tensor pool
+_Avoid_: Global KV Cache, KV tensor pool
 
 **KV Control Channel**:
 The daemon-owned, Fabric-Generation-scoped host-local control surface that

@@ -1,6 +1,6 @@
-# Elastic KV-cache Pooling
+# Elastic KV Cache Pooling
 
-CrossPool makes physical KV-cache backing on one attention GPU elastic across
+CrossPool makes physical KV Cache backing on one attention GPU elastic across
 co-located Instances. SGLang continues to own requests, logical token/page
 allocation, prefix-cache contents, and eviction order. CrossPool owns stable
 virtual storage, the allocator's admitted prefix, generation-scoped capacity

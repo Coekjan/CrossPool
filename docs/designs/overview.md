@@ -1,6 +1,6 @@
 # System Overview
 
-CrossPool separates attention and KV-cache execution from FFN weight residency and
+CrossPool separates attention and KV Cache execution from FFN weight residency and
 computation. The current deployment runs both roles on one host under CUDA
 MPS. Multiple models may share every GPU assigned to a role; no model owns a
 device exclusively.
@@ -55,11 +55,11 @@ not initialize CUDA or join NVSHMEM. Fabric UID creation is its only
 business-level native operation.
 
 Each serving Instance rank runs inside SGLang. It owns request scheduling,
-attention, logical KV-cache and prefix-cache semantics, outer CUDA Graph
+attention, logical KV Cache and prefix-cache semantics, outer CUDA Graph
 selection, output processing, and one rank-local Transport attachment.
 CrossPool supplies stable elastic physical backing and coordinates capacity
 across co-located Instances as described in
-[Elastic KV-cache Pooling](elastic-kv-cache.md). The Instance invokes the sole
+[Elastic KV Cache Pooling](elastic-kv-cache.md). The Instance invokes the sole
 tensor API, `xpool.ops.ffn_shim`.
 
 Each AtnAgent owns one configured CUDA device, rank-local CUDA IPC Transport

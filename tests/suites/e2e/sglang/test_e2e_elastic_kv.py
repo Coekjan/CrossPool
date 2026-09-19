@@ -1,4 +1,4 @@
-"""Cross-Instance elastic KV-cache serving evidence."""
+"""Cross-Instance elastic KV Cache serving evidence."""
 
 from __future__ import annotations
 
