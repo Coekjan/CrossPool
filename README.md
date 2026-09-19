@@ -90,12 +90,12 @@ shows a complete two-GPU setup.
 
 ## SGLang Integration
 
-Adapters are selected from the model architecture declared in `config.json`;
-model IDs identify configured weights and their paths. See [Supported Models](docs/supported-models.md)
-for concrete model IDs with qualification suites. The
-[shared SGLang E2E manifest](tests/harness/sglang/manifest.toml) owns routine
-serving and topology workloads; per-model numerical and graph cases live in
-their optional model suites.
+CrossPool integrates with SGLang through architecture-discovered adapters. The
+model architecture in `config.json` selects the adapter, while the configured
+model ID resolves its weights. SGLang continues to own request scheduling,
+attention, KV Cache, and output processing; CrossPool adds the shared FFN
+execution path and elastic physical KV Cache backing. See
+[Supported Models](docs/supported-models.md) for currently qualified model IDs.
 
 ## Validation and Development
 
