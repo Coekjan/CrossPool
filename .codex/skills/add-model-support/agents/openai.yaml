@@ -1,0 +1,4 @@
+interface:
+  display_name: "Add Model Support"
+  short_description: "Add and qualify one configured model"
+  default_prompt: "Use $add-model-support to add and qualify support for a locally configured model."
