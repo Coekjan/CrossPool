@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from math import prod
+from time import monotonic
 from typing import cast
 
 import torch
@@ -13,6 +15,8 @@ import xpool.native
 from xpool import ffn
 from xpool.fabric import DenseFfnLayerPlan, FabricPlan, FabricRole, MoeFfnLayerPlan
 from xpool.runtime.ffnagent import architecture, execution, operators, weights
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -563,6 +567,7 @@ class FfnExecutionRegistry:
 
         # One Primary/Control pair discovers weight bindings
         # for every compatible signature while retaining representative owners.
+        capture_started_at = monotonic()
         captures = []
         capture_weight_pairs: dict[
             execution.ExecutionSignature,
@@ -589,6 +594,16 @@ class FfnExecutionRegistry:
                 captures.append(capture_moe_signature(signature, primary_weights, control_probe))
             else:
                 raise AssertionError("Execution Signature and representative weights disagree")
+        logger.info(
+            "graph templates captured device=%s signature_count=%s dense_count=%s moe_count=%s "
+            "row_capacities=%s elapsed=%.3fs",
+            torch.cuda.current_device(),
+            len(signatures),
+            sum(isinstance(signature, execution.DenseFfnExecutionSignature) for signature in signatures),
+            sum(isinstance(signature, execution.MoeFfnExecutionSignature) for signature in signatures),
+            sorted({signature.payload_row_capacity for signature in signatures}),
+            monotonic() - capture_started_at,
+        )
 
         # Native installation synchronously consumes captures and Lane Graphs
         # retain the selected service weight storage.
@@ -596,5 +611,13 @@ class FfnExecutionRegistry:
             signatures=tuple(capture.projection for capture in captures),
             layers=tuple(native_layers),
         )
+        install_started_at = monotonic()
         xpool.native.ffnagent.install_execution(projection)
+        logger.info(
+            "execution installed device=%s layer_count=%s lane_count=%s elapsed=%.3fs",
+            torch.cuda.current_device(),
+            len(native_layers),
+            fabric_plan.executor_lane_count,
+            monotonic() - install_started_at,
+        )
         return cls(layer_weights=layer_weights)

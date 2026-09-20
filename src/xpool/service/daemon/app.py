@@ -142,8 +142,7 @@ def create_daemon() -> FastAPI:
                                 targets,
                             ):
                                 logger.info(
-                                    "serving healthy generation=%s instance_count=%s",
-                                    targets.generation.format(),
+                                    "serving healthy instance_count=%s",
                                     len(targets.listeners),
                                 )
                                 for instance_id, listener in targets.listeners:

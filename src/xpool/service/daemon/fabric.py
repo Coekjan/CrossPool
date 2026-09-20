@@ -29,6 +29,15 @@ from xpool.utils.procs import ProcUniqId
 
 logger = logging.getLogger(__name__)
 
+PRE_EXECUTABLE_PHASES = frozenset(
+    {
+        FabricGenerationPhase.PREPARING_JOIN,
+        FabricGenerationPhase.JOINING,
+        FabricGenerationPhase.PREPARING_EXECUTION,
+        FabricGenerationPhase.ACTIVATING,
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class FabricMembership:
@@ -196,12 +205,15 @@ class FabricGenerationState:
                 "conflict",
                 f"Fabric generation cannot transition from {self.phase.value} to {phase.value}",
             )
-        logger.info(
-            "generation phase changed generation=%s from=%s to=%s",
-            self.plan.generation.format(),
-            self.phase.value,
-            phase.value,
-        )
+        if self.phase in PRE_EXECUTABLE_PHASES:
+            logger.info(
+                "generation phase changed generation=%s from=%s to=%s",
+                self.plan.generation.format(),
+                self.phase.value,
+                phase.value,
+            )
+        else:
+            logger.info("generation phase changed from=%s to=%s", self.phase.value, phase.value)
         self.phase = phase
         self.phase_started_at = now
 
@@ -372,12 +384,15 @@ class FabricController:
             generation.record_invocation_failure(report.invocation_failure)
         if report.control_failure is not None:
             generation.record_control_failure(report.control_failure)
-        logger.debug(
-            "participant acknowledged pe=%s phase=%s generation=%s",
-            report.pe,
-            report.phase.value,
-            report.generation.format(),
-        )
+        if generation.phase in PRE_EXECUTABLE_PHASES:
+            logger.debug(
+                "participant acknowledged pe=%s phase=%s generation=%s",
+                report.pe,
+                report.phase.value,
+                report.generation.format(),
+            )
+        else:
+            logger.debug("participant acknowledged pe=%s phase=%s", report.pe, report.phase.value)
 
         if generation.control_failure is not None:
             self.abort(now=now)

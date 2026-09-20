@@ -392,6 +392,12 @@ class AtnAgent(Agent):
             ],
         )
         self.capacity_memory_published = False
+        logger.info(
+            "kv control attached device=%s pool=%s partition_count=%s",
+            self.cuda_device,
+            self.local_rank,
+            len(config.instances),
+        )
 
     def activate_fabric(self) -> None:
         """Launch transport kernels after collective Fabric join."""
@@ -417,7 +423,7 @@ class AtnAgent(Agent):
         self.control_channel.publish_device_memory(total_bytes, free_bytes)
         self.capacity_memory_published = True
         logger.info(
-            "kv capacity memory published device=%s total_bytes=%s free_bytes=%s",
+            "kv memory observed device=%s total_bytes=%s free_bytes=%s",
             self.cuda_device,
             total_bytes,
             free_bytes,

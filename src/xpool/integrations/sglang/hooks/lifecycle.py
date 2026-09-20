@@ -223,7 +223,7 @@ def after_model_runner_alloc_memory_pool[R](
         )
         runtime.instance_rank.attach_arena_from_daemon()
         logger.info(
-            "transport attached instance=%s rank=%s device=%s pid=%s",
+            "transport arena attached instance=%s rank=%s device=%s pid=%s",
             binding.instance_id,
             binding.worker_rank,
             binding.cuda_device,

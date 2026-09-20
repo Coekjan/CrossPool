@@ -195,17 +195,21 @@ creates a fresh channel.
 
 ## Operational evidence
 
-The daemon emits low-frequency `INFO` records after authoritative transitions:
-pool frozen, growth requested, and reclaim requested. Polling, repeated demand,
+The AtnAgent records successful KV Control Channel attachment and its one-shot
+post-capture memory observation. The daemon emits low-frequency `INFO` records
+after authoritative pool and capacity transitions. Polling, repeated demand,
 unavailable donor scans, per-request rejection, per-rank command receipt, and
 per-bundle VMM work stay below the operational log level. Logs are diagnostic
 evidence, not a protocol or correctness API.
 
 | Event | Principal fields | Meaning |
 | --- | --- | --- |
-| `kv capacity pool frozen` | `generation`, `device`, `capacity_bytes`, `floor_bytes` | The post-capture physical pool is fixed. |
-| `kv capacity growth requested` | group, start/target bundles, command | Full demand target funded and issued. |
-| `kv capacity reclaim requested` | borrower/donor, start/target bundles, command | Donor target fixed; partition retirement follows. |
+| `kv control attached` | device, pool, partition count | The AtnAgent attached its Generation-scoped control surface. |
+| `kv memory observed` | device, total bytes, free bytes | Graph Capture is complete and pool sizing has a stable memory observation. |
+| `kv pool frozen` | device, capacity bytes, floor bytes | The post-capture physical pool is fixed. |
+| `kv capacity initialized` | group, bundle transition, token transition | Every partition completed the initial group command. |
+| `kv capacity growth requested` | group, bundle transition, token transition | Unassigned pool bytes funded the full demand target. |
+| `kv capacity transfer requested` | donor and borrower transitions | A donor shrink target was fixed for one borrower's exact demand. |
 
 The exact split between native, integration, ordinary serving, and dedicated
 Elastic KV evidence is owned by [Qualification](qualification.md).

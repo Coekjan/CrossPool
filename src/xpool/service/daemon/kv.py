@@ -199,8 +199,7 @@ class KvCapacityPolicy:
             strict=True,
         ):
             logger.info(
-                "kv capacity pool frozen generation=%s device=%s capacity_bytes=%s floor_bytes=%s",
-                self.generation.format(),
+                "kv pool frozen device=%s capacity_bytes=%s floor_bytes=%s",
                 device,
                 capacity_bytes,
                 floor_bytes,
@@ -314,6 +313,7 @@ class KvCapacityPolicy:
 
     def retire_operations(
         self,
+        registrations: RegistrationBook,
         fabric: FabricGenerationState,
         completions: list[xpool.native.kv.KvCapacityCompletion | None],
     ) -> list[tuple[int, CapacityOperation]]:
@@ -334,7 +334,18 @@ class KvCapacityPolicy:
             self.active_bundles[group_index] = expected
             self.applied_sequences[group_index] = sequence
             self.operations[group_index] = None
-            if sequence != 1 and expected > operation.start_bundles:
+            if sequence == 1:
+                profile = self.group_profiles(registrations, fabric, instance_index, dp_rank)[0][1]
+                logger.info(
+                    "kv capacity initialized %s[dp=%s] (bundles: %s -> %s; tokens: %s -> %s)",
+                    fabric.plan.instance_plans[instance_index].instance_id,
+                    dp_rank,
+                    operation.start_bundles,
+                    expected,
+                    profile.usable_tokens(operation.start_bundles),
+                    profile.usable_tokens(expected),
+                )
+            elif expected > operation.start_bundles:
                 self.completed_grant_orders[group_index] = self.next_grant_order
                 self.next_grant_order += 1
             retired.append((group_index, operation))
@@ -472,15 +483,15 @@ class KvCapacityPolicy:
         if all(free[pool_index] >= byte_count for pool_index, byte_count in required.items()):
             self.publish_operation(attempt.borrower_index, attempt.target_bundles)
             self.funding_attempt = None
+            profile = self.group_profiles(registrations, fabric, borrower_instance, borrower_dp)[0][1]
             logger.info(
-                "kv capacity growth requested generation=%s instance=%s dp_rank=%s start_bundles=%s "
-                "target_bundles=%s command_sequence=%s",
-                self.generation.format(),
+                "kv capacity growth requested %s[dp=%s] (bundles: %s -> %s; tokens: %s -> %s)",
                 fabric.plan.instance_plans[borrower_instance].instance_id,
                 borrower_dp,
                 borrower_active,
                 attempt.target_bundles,
-                self.command_sequences[attempt.borrower_index],
+                profile.usable_tokens(borrower_active),
+                profile.usable_tokens(attempt.target_bundles),
             )
             return True
         short_pools = {
@@ -489,7 +500,7 @@ class KvCapacityPolicy:
             if byte_count > free[pool_index]
         }
 
-        candidates: list[tuple[tuple[int, int, int, int], int, int]] = []
+        candidates: list[tuple[tuple[int, int, int, int], int, int, int]] = []
         for donor_index, donor_instance, donor_dp in self.capacity_groups(fabric):
             if donor_index == attempt.borrower_index or donor_index in attempt.attempted_donors:
                 continue
@@ -532,6 +543,7 @@ class KvCapacityPolicy:
                         ),
                         donor_index,
                         target,
+                        donor_active,
                     )
                 )
 
@@ -539,23 +551,28 @@ class KvCapacityPolicy:
             self.funding_attempt = None
             return False
 
-        _, donor_index, target = min(candidates)
+        _, donor_index, target, donor_active = min(candidates)
         donor_instance, donor_dp = locations[donor_index]
-        donor_active = self.active_bundles[donor_index]
         self.publish_operation(donor_index, target)
         attempt.donor_index = donor_index
+        donor_profile = self.group_profiles(registrations, fabric, donor_instance, donor_dp)[0][1]
+        borrower_profile = self.group_profiles(registrations, fabric, borrower_instance, borrower_dp)[0][1]
         logger.info(
-            "kv capacity reclaim requested generation=%s borrower_instance=%s borrower_dp_rank=%s "
-            "donor_instance=%s donor_dp_rank=%s donor_start_bundles=%s donor_target_bundles=%s "
-            "command_sequence=%s",
-            self.generation.format(),
-            fabric.plan.instance_plans[borrower_instance].instance_id,
-            borrower_dp,
+            "kv capacity transfer requested %s[dp=%s] -> %s[dp=%s] "
+            "(donor bundles: %s -> %s; donor tokens: %s -> %s; "
+            "borrower bundles: %s -> %s; borrower tokens: %s -> %s)",
             fabric.plan.instance_plans[donor_instance].instance_id,
             donor_dp,
+            fabric.plan.instance_plans[borrower_instance].instance_id,
+            borrower_dp,
             donor_active,
             target,
-            self.command_sequences[donor_index],
+            donor_profile.usable_tokens(donor_active),
+            donor_profile.usable_tokens(target),
+            borrower_active,
+            attempt.target_bundles,
+            borrower_profile.usable_tokens(borrower_active),
+            borrower_profile.usable_tokens(attempt.target_bundles),
         )
         return True
 
@@ -581,6 +598,7 @@ class KvCapacityPolicy:
             self.freeze_pools(registrations, fabric, initial_backing, device_reports)
 
         retired = self.retire_operations(
+            registrations,
             fabric,
             self.channel.read_completions(),
         )
@@ -623,15 +641,15 @@ class KvCapacityPolicy:
                     )
                     if all(free[pool_index] >= byte_count for pool_index, byte_count in required.items()):
                         self.publish_operation(candidate_index, demand.requested_bundles)
+                        profile = self.group_profiles(registrations, fabric, candidate_instance, candidate_dp)[0][1]
                         logger.info(
-                            "kv capacity growth requested generation=%s instance=%s dp_rank=%s "
-                            "start_bundles=%s target_bundles=%s command_sequence=%s",
-                            self.generation.format(),
+                            "kv capacity growth requested %s[dp=%s] (bundles: %s -> %s; tokens: %s -> %s)",
                             fabric.plan.instance_plans[candidate_instance].instance_id,
                             candidate_dp,
                             active,
                             demand.requested_bundles,
-                            self.command_sequences[candidate_index],
+                            profile.usable_tokens(active),
+                            profile.usable_tokens(demand.requested_bundles),
                         )
                         return
                 return

@@ -175,19 +175,11 @@ class FfnAgent(Agent):
         if self.fabric_plan is None or self.layer_weights is None:
             raise AgentError("FFN execution preparation requires a retained Plan and weights")
         atnagent_count = sum(placement.role is FabricRole.ATNAGENT for placement in self.fabric_plan.pe_placements)
-        execution_started_at = monotonic()
         self.execution_registry = FfnExecutionRegistry.materialize(
             fabric_plan=self.fabric_plan,
             model_specs=self.registration.model_specs,
             ffnagent_index=self.fabric_pe() - atnagent_count,
             layer_weights=self.layer_weights,
-        )
-        logger.info(
-            "execution installed device=%s layer_count=%s lane_count=%s elapsed=%.3fs",
-            self.cuda_device,
-            sum(layer is not None for model_layers in self.layer_weights for layer in model_layers),
-            get_global_config().scheduler.ffn_concurrency,
-            monotonic() - execution_started_at,
         )
         self.layer_weights = None
 

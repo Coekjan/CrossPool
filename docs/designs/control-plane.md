@@ -114,6 +114,11 @@ remain authoritative for per-request, protocol, routing, and Graph evidence.
 The layer that terminates an operation owns its failure log. The daemon logs the
 first entry and final clearance of each global warning aggregated by
 `(kind, device)`; heartbeat clients do not duplicate unchanged warning state.
+Daemon startup records identify the Fabric Generation through the transition
+into `executable`. Later serving, capacity, quiesce, drain, finalize, and stop
+records omit that established context. Instance and Agent startup records name
+completed arena attachment, GraphTemplate capture, and native installation
+phases at their owning layer.
 
 ## Generation planning
 
