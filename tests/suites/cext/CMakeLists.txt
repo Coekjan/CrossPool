@@ -37,7 +37,6 @@ target_link_libraries(xpool_cext_header_compile
 )
 target_compile_features(xpool_cext_header_compile PRIVATE cxx_std_20)
 set_target_properties(xpool_cext_header_compile PROPERTIES
-  CUDA_ARCHITECTURES "${XPOOL_EFFECTIVE_CUDA_ARCHITECTURES}"
   CUDA_STANDARD 20
   CUDA_STANDARD_REQUIRED ON
   CUDA_SEPARABLE_COMPILATION ON
@@ -79,7 +78,6 @@ foreach(XPOOL_CEXT_TEST_SOURCE IN LISTS XPOOL_CEXT_TEST_SOURCES)
   target_include_directories("${XPOOL_CEXT_TEST_TARGET}" PRIVATE "${XPOOL_CEXT_TEST_DIR}")
   target_compile_features("${XPOOL_CEXT_TEST_TARGET}" PRIVATE cxx_std_20)
   set_target_properties("${XPOOL_CEXT_TEST_TARGET}" PROPERTIES
-    CUDA_ARCHITECTURES "${XPOOL_EFFECTIVE_CUDA_ARCHITECTURES}"
     CUDA_STANDARD 20
     CUDA_STANDARD_REQUIRED ON
     # Keep CTest launches inside the harness process boundary used by Python.

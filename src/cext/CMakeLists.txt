@@ -44,7 +44,6 @@ target_link_libraries(
 )
 target_compile_features(xpool_cext_core PRIVATE cxx_std_20)
 set_target_properties(xpool_cext_core PROPERTIES
-  CUDA_ARCHITECTURES "${XPOOL_EFFECTIVE_CUDA_ARCHITECTURES}"
   # NVSHMEM device symbols are resolved during the final CUDA device link.
   CUDA_SEPARABLE_COMPILATION ON
   CUDA_STANDARD 20
