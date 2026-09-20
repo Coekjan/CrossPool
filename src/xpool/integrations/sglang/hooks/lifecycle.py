@@ -202,7 +202,7 @@ def after_model_runner_alloc_memory_pool[R](
             rank=binding.worker_rank,
             transport=transport,
             ffn_profile=ffn_profile,
-            kv_capacity=pool.backing.partition_profile(),
+            kv_capacity=pool.backing.capacity_profile,
         )
         plan = runtime.instance_rank.wait_for_fabric_executable()
         channel_ref = runtime.instance_rank.client.kv_control_channel(plan.generation)

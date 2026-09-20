@@ -302,7 +302,7 @@ class CapacityReconciler:
         """Release to the floor, negotiate startup capacity, and expose the service ceiling."""
 
         torch.cuda.synchronize(model_runner.device)
-        self.active_bundles = self.backing.floor_bundles
+        self.active_bundles = self.backing.capacity_profile.floor_bundles
         self.allocator.set_token_capacity(self.backing.usable_tokens(self.active_bundles))
         self.backing.resize(self.active_bundles)
         self.request_pool.reset_aux_cache_allocator()

@@ -167,6 +167,8 @@ class AtnAgentRegistration(ProcessRef):
 class KvCapacityPartitionProfile(WireModel):
     """Immutable elastic KV geometry for one Instance rank partition."""
 
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     bundle_bytes: int = Field(ge=1, description="Physical bytes mapped or unmapped by one compound bundle.")
     bundle_capacity: int = Field(ge=1, le=2**32 - 1, description="Reserved compound-bundle capacity.")
     floor_bundles: int = Field(ge=1, le=2**32 - 1, description="Minimum always-backed bundle prefix.")
@@ -183,6 +185,16 @@ class KvCapacityPartitionProfile(WireModel):
         if self.floor_bundles > self.bundle_capacity:
             raise ValueError("KV floor bundles exceed bundle capacity")
         return self
+
+    def usable_tokens(self, bundle_count: int) -> int:
+        """Return the page-aligned token capacity covered by a bundle prefix."""
+
+        if not 0 <= bundle_count <= self.bundle_capacity:
+            raise ValueError("KV bundle count is outside its reservation")
+        backed_tokens = (
+            bundle_count * self.mapping_granularity_bytes // self.row_bytes * self.tokens_per_row - self.token_page_size
+        )
+        return min(self.token_capacity, max(0, backed_tokens)) // self.token_page_size * self.token_page_size
 
 
 class KvControlChannelRef(WireModel):

@@ -59,29 +59,33 @@ class KvVmmBacking:
         if math.prod(row_shape) * storage_dtype.itemsize != row_bytes:
             raise ValueError("xpool elastic kv descriptor row bytes disagree with its shape and dtype")
 
-        self.token_page_size = int(token_page_size)
-        self.mapping_granularity_bytes = get_device_granularity(device.index)
+        token_page_size = int(token_page_size)
+        mapping_granularity_bytes = get_device_granularity(device.index)
         layer_count = len(descriptors) // buffers_per_layer
-        self.row_bytes = row_bytes
-        self.tokens_per_row = int(first.tokens_per_row)
-        self.token_capacity = rows * self.tokens_per_row - self.token_page_size
-        if self.token_capacity <= 0:
+        tokens_per_row = int(first.tokens_per_row)
+        token_capacity = rows * tokens_per_row - token_page_size
+        if token_capacity <= 0:
             raise ValueError("xpool elastic kv reservation does not contain a usable token page")
 
-        component_span_bytes = rows * self.row_bytes
-        self.bundle_capacity = (
-            align_up(component_span_bytes, self.mapping_granularity_bytes) // self.mapping_granularity_bytes
-        )
-        self.bundle_bytes = self.mapping_granularity_bytes * len(descriptors)
-        bootstrap_rows = (self.token_page_size + self.tokens_per_row - 1) // self.tokens_per_row
-        self.floor_bundles = max(
+        component_span_bytes = rows * row_bytes
+        bundle_capacity = align_up(component_span_bytes, mapping_granularity_bytes) // mapping_granularity_bytes
+        bundle_bytes = mapping_granularity_bytes * len(descriptors)
+        bootstrap_rows = (token_page_size + tokens_per_row - 1) // tokens_per_row
+        floor_bundles = max(
             1,
-            (bootstrap_rows * self.row_bytes + self.mapping_granularity_bytes - 1) // self.mapping_granularity_bytes,
+            (bootstrap_rows * row_bytes + mapping_granularity_bytes - 1) // mapping_granularity_bytes,
         )
-        if self.floor_bundles > self.bundle_capacity:
-            raise ValueError("xpool elastic kv bootstrap floor exceeds its reservation")
-
-        self.reserved_bytes = self.bundle_capacity * self.bundle_bytes
+        self.capacity_profile = KvCapacityPartitionProfile(
+            bundle_bytes=bundle_bytes,
+            bundle_capacity=bundle_capacity,
+            floor_bundles=floor_bundles,
+            token_capacity=token_capacity,
+            mapping_granularity_bytes=mapping_granularity_bytes,
+            row_bytes=row_bytes,
+            tokens_per_row=tokens_per_row,
+            token_page_size=token_page_size,
+        )
+        self.reserved_bytes = bundle_capacity * bundle_bytes
         self.base = 0
         self.backed_bundles = 0
         self.raw_storage: torch.Tensor | None = None
@@ -94,7 +98,7 @@ class KvVmmBacking:
                 check_drv(
                     driver.cuMemAddressReserve(
                         self.reserved_bytes,
-                        self.mapping_granularity_bytes,
+                        mapping_granularity_bytes,
                         0,
                         0,
                     ),
@@ -124,65 +128,51 @@ class KvVmmBacking:
                     for layer in range(layer_count)
                 ]
                 self.allocation_properties = allocation_properties
-                self.resize(self.floor_bundles)
+                self.resize(floor_bundles)
             except BaseException:
                 self.close()
                 raise
 
-    def partition_profile(self) -> KvCapacityPartitionProfile:
-        """Project immutable backing geometry into the Instance registration value."""
-
-        return KvCapacityPartitionProfile(
-            bundle_bytes=self.bundle_bytes,
-            bundle_capacity=self.bundle_capacity,
-            floor_bundles=self.floor_bundles,
-            token_capacity=self.token_capacity,
-            mapping_granularity_bytes=self.mapping_granularity_bytes,
-            row_bytes=self.row_bytes,
-            tokens_per_row=self.tokens_per_row,
-            token_page_size=self.token_page_size,
-        )
-
     def usable_tokens(self, bundle_count: int) -> int:
         """Return the page-aligned allocator capacity safely covered by a bundle prefix."""
 
-        if not 0 <= bundle_count <= self.bundle_capacity:
-            raise ValueError("xpool elastic kv bundle count is outside its reservation")
-        backed_tokens = (
-            bundle_count * self.mapping_granularity_bytes // self.row_bytes * self.tokens_per_row - self.token_page_size
-        )
-        return min(self.token_capacity, max(0, backed_tokens)) // self.token_page_size * self.token_page_size
+        return self.capacity_profile.usable_tokens(bundle_count)
 
     def required_bundles(self, token_count: int) -> int:
         """Return the smallest compound-bundle count covering ``token_count`` tokens."""
 
         if token_count < 0:
             raise ValueError("xpool elastic kv token demand must be nonnegative")
-        required_rows = math.ceil((token_count + self.token_page_size) / self.tokens_per_row)
-        return math.ceil(required_rows * self.row_bytes / self.mapping_granularity_bytes)
+        profile = self.capacity_profile
+        required_rows = math.ceil((token_count + profile.token_page_size) / profile.tokens_per_row)
+        return math.ceil(required_rows * profile.row_bytes / profile.mapping_granularity_bytes)
 
     def resize(self, bundle_count: int) -> None:
         """Map or unmap complete tail bundles until the physical prefix reaches ``bundle_count``."""
 
-        if not self.floor_bundles <= bundle_count <= self.bundle_capacity:
+        profile = self.capacity_profile
+        if not profile.floor_bundles <= bundle_count <= profile.bundle_capacity:
             raise ValueError("xpool elastic kv bundle count is outside its service range")
         if self.base == 0:
             raise RuntimeError("xpool elastic kv backing is closed")
 
         while self.backed_bundles < bundle_count:
-            address = self.base + self.backed_bundles * self.bundle_bytes
+            address = self.base + self.backed_bundles * profile.bundle_bytes
             handle = check_drv(
-                driver.cuMemCreate(self.bundle_bytes, self.allocation_properties, 0),
+                driver.cuMemCreate(profile.bundle_bytes, self.allocation_properties, 0),
                 "cuMemCreate(xpool kv bundle)",
             )
             mapped = False
             try:
-                check_drv(driver.cuMemMap(address, self.bundle_bytes, 0, handle, 0), "cuMemMap(xpool kv bundle)")
+                check_drv(
+                    driver.cuMemMap(address, profile.bundle_bytes, 0, handle, 0),
+                    "cuMemMap(xpool kv bundle)",
+                )
                 mapped = True
                 check_drv(
                     driver.cuMemSetAccess(
                         address,
-                        self.bundle_bytes,
+                        profile.bundle_bytes,
                         self.access_descriptors,
                         len(self.access_descriptors),
                     ),
@@ -192,15 +182,15 @@ class KvVmmBacking:
                 handle = None
             except BaseException:
                 if mapped:
-                    check_drv(driver.cuMemUnmap(address, self.bundle_bytes), "cuMemUnmap(xpool kv rollback)")
+                    check_drv(driver.cuMemUnmap(address, profile.bundle_bytes), "cuMemUnmap(xpool kv rollback)")
                 if handle is not None:
                     check_drv(driver.cuMemRelease(handle), "cuMemRelease(xpool kv rollback)")
                 raise
             self.backed_bundles += 1
 
         while self.backed_bundles > bundle_count:
-            address = self.base + (self.backed_bundles - 1) * self.bundle_bytes
-            check_drv(driver.cuMemUnmap(address, self.bundle_bytes), "cuMemUnmap(xpool kv bundle)")
+            address = self.base + (self.backed_bundles - 1) * profile.bundle_bytes
+            check_drv(driver.cuMemUnmap(address, profile.bundle_bytes), "cuMemUnmap(xpool kv bundle)")
             self.backed_bundles -= 1
 
     def close(self) -> None:
@@ -210,9 +200,10 @@ class KvVmmBacking:
             return
         self.tensors.clear()
         self.raw_storage = None
+        bundle_bytes = self.capacity_profile.bundle_bytes
         while self.backed_bundles:
-            address = self.base + (self.backed_bundles - 1) * self.bundle_bytes
-            check_drv(driver.cuMemUnmap(address, self.bundle_bytes), "cuMemUnmap(xpool kv close)")
+            address = self.base + (self.backed_bundles - 1) * bundle_bytes
+            check_drv(driver.cuMemUnmap(address, bundle_bytes), "cuMemUnmap(xpool kv close)")
             self.backed_bundles -= 1
         check_drv(driver.cuMemAddressFree(self.base, self.reserved_bytes), "cuMemAddressFree(xpool kv)")
         self.base = 0

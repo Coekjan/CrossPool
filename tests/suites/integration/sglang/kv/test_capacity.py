@@ -32,7 +32,7 @@ TEST_SLO = LatencySloConfig(ttft_ms=1000, tbt_ms=50)
 class FakeBacking:
     """Minimal compound backing used by reconciliation tests."""
 
-    floor_bundles = 1
+    capacity_profile = SimpleNamespace(floor_bundles=1)
 
     def __init__(self, backed_bundles: int = 2) -> None:
         self.backed_bundles = backed_bundles

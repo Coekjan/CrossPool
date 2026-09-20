@@ -44,7 +44,7 @@ class FakeElasticPool(ElasticMHATokenToKVPool):
     """Concrete elastic-pool witness for lifecycle tests."""
 
     def __init__(self) -> None:
-        self.backing = cast(KvVmmBacking, SimpleNamespace(partition_profile=kv_capacity_profile))
+        self.backing = cast(KvVmmBacking, SimpleNamespace(capacity_profile=kv_capacity_profile()))
 
     def close(self) -> None:
         """Release no resources because this witness allocates none."""
