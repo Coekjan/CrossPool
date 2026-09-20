@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a reproducible CrossPool defect
+title: "[Bug] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is broken, and what impact does it have?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest reliable sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the CrossPool revision, Python, CUDA, GPU, driver, and serving-engine versions.
+    validations:
+      required: true
+  - type: textarea
+    id: model_topology
+    attributes:
+      label: Model and topology
+      description: Include model IDs, TP/DP sizes, devices, and the relevant configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Attach the smallest relevant log excerpt or artifact. Remove secrets first.

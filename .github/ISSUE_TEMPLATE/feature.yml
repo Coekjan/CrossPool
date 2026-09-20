@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose a CrossPool capability or improvement
+title: "[Feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete limitation or user problem should be solved?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable behavior, not a preferred implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: Note compatibility, hardware, topology, or operational constraints.
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation
+      description: What evidence would demonstrate that the request is complete?
