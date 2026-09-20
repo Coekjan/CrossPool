@@ -1,7 +1,5 @@
 [build-system]
 requires = [
-    "cmake==4.3.2",
-    "ninja>=1.13.0",
     "pybind11-stubgen==2.5.5",
     "scikit-build-core>=0.11",
     "torch==2.13.0",
@@ -60,10 +58,10 @@ dev = [
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 override-dependencies = ["nvidia-nvshmem-cu13==3.7.2"]
 package = true
-prerelease = "if-necessary-or-explicit"
+prerelease = "if-necessary"
 python-downloads = "automatic"
 python-preference = "only-managed"
-required-version = ">=0.11.19"
+required-version = ">=0.12.17"
 
 [tool.scikit-build]
 build-dir = "build/{wheel_tag}"

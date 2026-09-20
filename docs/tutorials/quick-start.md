@@ -12,10 +12,16 @@ controller.
 From the repository root, create ignored machine-local files:
 
 ```bash
+uv --version
+nvcc --version
 cp .env.example .env
 cp configs/xpool.example.toml configs/dev.local.toml
 nvidia-smi --query-gpu=index,uuid,name --format=csv
 ```
+
+The first two commands must report uv 0.12.17 or newer and CUDA Toolkit 13.2.
+The Python environment supplies CMake and Ninja during the native build, while
+the CUDA compiler remains a host prerequisite.
 
 Choose two GPU UUIDs from the last command, in attention-then-FFN order. In
 `.env`, keep `XPOOL_CONFIG=configs/dev.local.toml` and

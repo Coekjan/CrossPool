@@ -59,7 +59,7 @@ and readiness contracts.
 ## Requirements
 
 - Linux on x86-64
-- [uv](https://docs.astral.sh/uv/) 0.11.19 or newer
+- [uv](https://docs.astral.sh/uv/) 0.12.17 or newer
 - An uv-managed Python 3.12 interpreter
 - CUDA Toolkit 13.2 and CCCL 3.2
 - NVIDIA GPUs able to execute the selected kernels and CUDA graphs, with CUDA
@@ -68,11 +68,12 @@ and readiness contracts.
 - An externally managed CUDA MPS controller for runtime and GPU validation
 - Local model weights for serving and model-dependent validation
 
-The native extension is built through uv and scikit-build-core. CUDA bindings,
-Torch, SGLang, and the NVIDIA NVSHMEM runtime are direct project dependencies.
-uv uses the interpreter pinned in `.python-version` with managed Python
-downloads enabled. NVSHMEM runs through the native C++/CUDA implementation;
-Python NVSHMEM bindings are not required.
+The native extension is built through uv and scikit-build-core, which obtains
+suitable CMake and Ninja versions when needed. The system CUDA Toolkit provides
+the native compiler and CCCL. CUDA bindings, Torch, SGLang, and the NVIDIA
+NVSHMEM runtime are direct project dependencies. uv uses the interpreter pinned
+in `.python-version` with managed Python downloads enabled. NVSHMEM runs through
+the native C++/CUDA implementation; Python NVSHMEM bindings are not required.
 
 ## Quick Start
 
