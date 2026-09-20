@@ -1,20 +1,9 @@
 include_guard(GLOBAL)
 
-set(XPOOL_LEGACY_CUDA_ARCHITECTURES
-  "75-real;80-real;86-real;87-real;89-real;90-real;100-real;103-real;110-real;120-real;121-real;121-virtual"
-)
 set(XPOOL_CUDA_ARCHITECTURES
-  "75-real;80-real;89-real;90-real;100-real;120-real"
+  "80-real;89-real;90-real;100-real;120-real"
   CACHE STRING "CUDA architectures supported by the bundled NVSHMEM device archive"
 )
-# Rewrite the former release default once so existing CMake caches adopt the
-# architecture set supported by the bundled NVSHMEM device archive.
-if(XPOOL_CUDA_ARCHITECTURES STREQUAL XPOOL_LEGACY_CUDA_ARCHITECTURES)
-  set(XPOOL_CUDA_ARCHITECTURES
-    "75-real;80-real;89-real;90-real;100-real;120-real"
-    CACHE STRING "CUDA architectures supported by the bundled NVSHMEM device archive" FORCE
-  )
-endif()
 set(XPOOL_EFFECTIVE_CUDA_ARCHITECTURES "${XPOOL_CUDA_ARCHITECTURES}")
 set(CMAKE_CUDA_ARCHITECTURES
   "${XPOOL_EFFECTIVE_CUDA_ARCHITECTURES}"
