@@ -14,10 +14,10 @@ from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.runtime_context import get_context, get_parallel
-from sglang.srt.server_args import ServerArgs
 
 import xpool.integrations.sglang.kv.capacity
 import xpool.native
+from tests.harness.support.sglang.fakes import ServerArgs
 from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.config import LatencySloConfig
 from xpool.integrations.sglang.kv.allocator import ElasticTokenToKVPoolAllocator

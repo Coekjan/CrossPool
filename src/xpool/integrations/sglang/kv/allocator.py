@@ -101,7 +101,6 @@ class ElasticPagedTokenToKVPoolAllocator(PagedTokenToKVPoolAllocator):
     """Paged allocator that retains but withholds free suffix page IDs."""
 
     free_pages: torch.Tensor
-    release_pages: torch.Tensor
 
     def __init__(
         self,
@@ -131,17 +130,15 @@ class ElasticPagedTokenToKVPoolAllocator(PagedTokenToKVPoolAllocator):
             self.withheld_pages = self.withheld_pages[self.withheld_pages > new_pages]
             super()._release_page_ids(admitted)
         elif new_pages < old_pages:
+            self.merge_and_sort_free()
             free_pages = self.free_pages
-            release_pages = self.release_pages
             self.withheld_pages = torch.cat(
                 (
                     self.withheld_pages,
                     free_pages[free_pages > new_pages],
-                    release_pages[release_pages > new_pages],
                 )
             )
             self.free_pages = free_pages[free_pages <= new_pages]
-            self.release_pages = release_pages[release_pages <= new_pages]
         self.token_capacity = token_capacity
 
     def _release_page_ids(self, *page_ids: torch.Tensor) -> None:
@@ -163,7 +160,7 @@ class ElasticPagedTokenToKVPoolAllocator(PagedTokenToKVPoolAllocator):
             raise ValueError("xpool kv token capacity is outside its reservation")
         target_pages = token_capacity // self.page_size
         return free_suffix_is_complete(
-            (self.free_pages, self.release_pages, self.withheld_pages),
+            (self.get_all_free_pages(), self.withheld_pages),
             target_pages,
             self.reserved_token_capacity // self.page_size,
         )

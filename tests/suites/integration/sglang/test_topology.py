@@ -6,10 +6,9 @@ from pathlib import Path
 
 import pytest
 from sglang.srt.runtime_context import get_context
-from sglang.srt.server_args import ServerArgs
 
 import xpool.integrations.sglang.topology
-from tests.harness.support.sglang.fakes import server_args
+from tests.harness.support.sglang.fakes import ServerArgs, server_args
 from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.config import ConfigError, TopologyError
 from xpool.integrations.sglang.topology import (

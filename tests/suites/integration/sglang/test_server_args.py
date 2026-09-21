@@ -6,12 +6,11 @@ import pytest
 from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.runtime_context import get_context, get_exec, publish
-from sglang.srt.server_args import ServerArgs
 from transformers import Qwen3Config
 
 import xpool.integrations.sglang.hooks.lifecycle
 from tests.harness.support.config import reset_global_config
-from tests.harness.support.sglang.fakes import FakeModelRunner, server_args
+from tests.harness.support.sglang.fakes import FakeModelRunner, ServerArgs, server_args
 from tests.harness.support.sglang.plugin import FakeAdapter, reset_plugin_required_hook_targets
 from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.integrations.sglang.server_args import validate_sglang_server_args
@@ -94,6 +93,7 @@ def test_global_server_arg_gate_allows_grpc_beside_http() -> None:
             "Decode CUDA Graph Backend",
         ),
         ({"attn_cp_size": 2}, "Attention Context Parallelism"),
+        ({"enable_prefill_cp": True}, "Prefill Context Parallelism"),
         (
             {
                 "cuda_graph_config": CudaGraphConfig(

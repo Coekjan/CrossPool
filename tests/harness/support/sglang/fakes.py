@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import torch
 from sglang.srt.distributed.parallel_state_wrapper import ParallelState
@@ -13,11 +13,14 @@ from sglang.srt.layers.dp_attention import DpPaddingMode
 from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.model_executor.model_runner import ModelRunner
-from sglang.srt.server_args import ServerArgs
+from sglang.srt.server_args import ServerArgs as SglangServerArgs
 from torch import nn
 from transformers import PretrainedConfig
 
 from xpool.integrations.sglang.adapter import SglangInstanceRankRuntime
+
+# SGLang builds this msgspec Struct at runtime, beyond static type inference.
+ServerArgs = cast(Any, SglangServerArgs)
 
 
 def fake_hf_config() -> PretrainedConfig:

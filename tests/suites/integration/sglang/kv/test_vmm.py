@@ -8,6 +8,7 @@ import torch
 from sglang.srt.layers.radix_attention import RadixAttention
 
 import xpool.integrations.sglang.kv.vmm
+from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.integrations.sglang.kv.pool import ElasticMHATokenToKVPool, ElasticMLATokenToKVPool
 from xpool.integrations.sglang.kv.vmm import KvVmmBacking
 from xpool.service.wire import KvCapacityPartitionProfile
@@ -134,6 +135,7 @@ def test_mha_pool_preserves_views_across_reversible_bundle_mapping() -> None:
 
 
 @pytest.mark.requires_cuda()
+@pytest.mark.usefixtures(published_sglang_config.__name__)
 def test_mla_pool_writes_compound_strided_views() -> None:
     pool = ElasticMLATokenToKVPool(2048, 1, torch.float16, 512, 64, 2, "cuda", False)
     try:

@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 import sglang.srt.mem_cache.allocation
 import torch
+from sglang.srt.managers.io_struct import AbortReq
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch
 from sglang.srt.managers.schedule_policy import AddReqResult
 from sglang.srt.managers.scheduler import Scheduler
@@ -31,6 +32,7 @@ from tests.harness.support.config import install_test_config, reset_global_confi
 from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.config import LatencySloConfig, XpoolConfig
 from xpool.integrations.sglang.hooks.kv import (
+    CapacityRequestReceiver,
     ElasticPrefillAdder,
     after_check_decode_mem,
     after_pool_stats,
@@ -101,6 +103,17 @@ def test_pinned_sglang_kv_seams_match() -> None:
     validate_kv_seams()
 
 
+def test_capacity_request_receiver_forwards_local_requests() -> None:
+    local_requests = cast(list[AbortReq], [object()])
+    receiver = SimpleNamespace(recv_requests=lambda *, local_reqs: local_reqs)
+    wrapped = CapacityRequestReceiver(
+        cast(SchedulerRequestReceiver, receiver),
+        cast(CapacityReconciler, object()),
+    )
+
+    assert wrapped.recv_requests(local_requests) is local_requests
+
+
 def test_elastic_prefill_adder_uses_active_prefix_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     adder = ElasticPrefillAdder.__new__(ElasticPrefillAdder)
     adder.token_to_kv_pool_allocator = SimpleNamespace(available_size=lambda: 7, token_capacity=12)
@@ -169,8 +182,13 @@ def test_idle_capacity_command_is_received_and_completed() -> None:
         completed_sequence=1,
     )
 
-    def broadcast(receiver: SchedulerRequestReceiver, values: list[object] | None) -> list[object]:
+    def broadcast(
+        receiver: SchedulerRequestReceiver,
+        values: list[object] | None,
+        local_values: list[object] | None,
+    ) -> list[object]:
         assert values is not None
+        assert local_values is None
         return values
 
     with capacity_reconciler_scope(reconciler):
@@ -192,13 +210,12 @@ def test_idle_scheduler_enters_capacity_planning(event_loop: Callable[[Scheduler
     class IdleScheduler:
         gracefully_exit = False
         _engine_paused = False
-        request_receiver = SimpleNamespace(recv_requests=lambda: [])
         running_batch = None
         last_batch = None
         is_generation = False
 
-        def process_input_requests(self, requests: list[object]) -> None:
-            assert requests == []
+        def ingest_requests(self) -> None:
+            pass
 
         def get_next_batch_to_run(self, **kwargs: object) -> SimpleNamespace:
             planning_calls.append(None)
@@ -220,10 +237,12 @@ def test_paused_scheduler_does_not_enter_capacity_planning(event_loop: Callable[
     class PausedScheduler:
         gracefully_exit = False
         _engine_paused = True
-        request_receiver = SimpleNamespace(recv_requests=lambda: [])
 
-        def process_input_requests(self, requests: list[object]) -> None:
+        def ingest_requests(self) -> None:
             self.gracefully_exit = True
+
+        def _record_scheduler_state_for_paused_engine(self) -> None:
+            pass
 
         def get_next_batch_to_run(self, **kwargs: object) -> None:
             pytest.fail("paused iteration entered capacity planning")

@@ -12,6 +12,7 @@ import pytest
 
 from tests.harness.support.config import install_test_config, reset_global_config, synthetic_config
 from xpool import ffn
+from xpool.config import XpoolConfig
 from xpool.fabric import FabricPlan, FabricRole
 from xpool.memory import FfnMemoryCalibrationCoefficients, MemoryCalibrationGpu
 from xpool.mps import MpsProbeResult
@@ -133,6 +134,15 @@ def test_profile_ffn_memory_runs_fixed_complete_fleet_matrix(
     assert profile.environment.ffnagent_gpus == (gpu(0), gpu(1))
     assert profile.ffn.minimum_held_out_headroom_bytes == 7
     assert profile.ffn.coefficients == coefficients
+
+
+def test_profile_world_config_preserves_required_scheduler_slo(tmp_path: Path) -> None:
+    source = synthetic_config(ffn_cuda_devices=(1, 2))
+    path = tmp_path / "world.toml"
+
+    runner.write_world_config(path, source, "C0a")
+
+    assert XpoolConfig.from_file(path).scheduler.slo == source.scheduler.slo
 
 
 def test_coordinate_matrix_omits_unreachable_dense_tp2() -> None:

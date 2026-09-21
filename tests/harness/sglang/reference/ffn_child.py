@@ -80,7 +80,7 @@ def run_ffn_reference_rank(
     import torch.distributed
 
     torch.cuda.set_device(tensor_parallel_rank)
-    server_args = sglang.srt.server_args.ServerArgs(
+    server_args = typing.cast(typing.Any, sglang.srt.server_args.ServerArgs)(
         model_path=str(job.model_path),
         skip_tokenizer_init=True,
         trust_remote_code=False,

@@ -5,12 +5,13 @@ import json
 from pathlib import Path
 
 import pytest
-from sglang.srt.server_args import DP_ATTENTION_HANDSHAKE_PORT_DELTA, ZMQ_TCP_PORT_DELTA, PortArgs, ServerArgs
+from sglang.srt.server_args import DP_ATTENTION_HANDSHAKE_PORT_DELTA, ZMQ_TCP_PORT_DELTA, PortArgs
 
 from tests.harness.runner.child import PythonChildProcess
 from tests.harness.runner.network import TcpPortSpace
 from tests.harness.runner.supervisor import prepare_task_supervision
 from tests.harness.sglang.serving.endpoints import SglangEndpointFamilyLease, probe_namespace_lock
+from tests.harness.support.sglang.fakes import ServerArgs
 
 
 def test_pinned_sglang_resolves_explicit_grpc_root(

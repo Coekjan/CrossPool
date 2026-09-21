@@ -231,6 +231,7 @@ def write_world_config(path: Path, source: XpoolConfig, coordinate: str) -> None
             "atn_concurrency": 1,
             "ffn_concurrency": source.scheduler.ffn_concurrency,
             "ffn_policy": "fifo",
+            "slo": source.scheduler.slo.model_dump(mode="python"),
         },
         "atn": {"devices": source.atn.devices},
         "ffn": {

@@ -11,6 +11,7 @@ from inspect import signature
 
 import torch
 from sglang.srt.beam_search.batch_tail import beam_retraction_order
+from sglang.srt.managers.io_struct import AbortReq
 from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, retract_all
 from sglang.srt.managers.schedule_policy import CLIP_MAX_NEW_TOKENS, AddReqResult, PrefillAdder
 from sglang.srt.managers.scheduler import Scheduler
@@ -84,11 +85,11 @@ class CapacityRequestReceiver:
     receiver: SchedulerRequestReceiver
     reconciler: CapacityReconciler
 
-    def recv_requests(self) -> list[object]:
+    def recv_requests(self, local_reqs: list[AbortReq] | None = None) -> list[object]:
         """Delegate one receive iteration inside the reconciler scope."""
 
         with capacity_reconciler_scope(self.reconciler):
-            return self.receiver.recv_requests()
+            return self.receiver.recv_requests(local_reqs=local_reqs)
 
 
 class ElasticPrefillAdder(PrefillAdder):
@@ -136,7 +137,11 @@ def compute_kv_reservation_budget(
     return int(torch.cuda.get_device_properties(configurator.device).total_memory * utilization)
 
 
-def compute_post_capture_kv_resize(model_runner: ModelRunner) -> PostCaptureKVResize:
+def compute_post_capture_kv_resize(
+    model_runner: ModelRunner,
+    *,
+    draft_runners: tuple[ModelRunner, ...] = (),
+) -> PostCaptureKVResize:
     """Finalize elastic backing through the runner-owned capacity reconciler."""
 
     runtime = SglangInstanceRankRuntime.require(model_runner)
@@ -159,16 +164,17 @@ def after_scheduler_init_request_receiver(result: None, scheduler: Scheduler) ->
 
 
 def around_request_broadcast(
-    original_fn: Callable[[SchedulerRequestReceiver, list[object] | None], list[object]],
+    original_fn: Callable[[SchedulerRequestReceiver, list[object] | None, list[object] | None], list[object]],
     receiver: SchedulerRequestReceiver,
     recv_reqs: list[object] | None,
+    local_reqs: list[object] | None = None,
 ) -> list[object]:
     """Carry coherent capacity commands through SGLang's request broadcast."""
 
     reconciler = current_capacity_reconciler()
     if recv_reqs is not None:
         recv_reqs.append(KvCapacityCommandBatch(tuple(reconciler.channel.read_commands())))
-    requests = original_fn(receiver, recv_reqs)
+    requests = original_fn(receiver, recv_reqs, local_reqs)
     markers = [
         (index, request) for index, request in enumerate(requests) if isinstance(request, KvCapacityCommandBatch)
     ]
@@ -333,10 +339,10 @@ def validate_kv_seams() -> None:
 
     expected_parameters = (
         (KVCacheConfigurator._profile_available_bytes, ("self", "pre_model_load_memory")),
-        (sglang_compute_post_capture_kv_resize, ("model_runner",)),
+        (sglang_compute_post_capture_kv_resize, ("model_runner", "draft_runners")),
         (Scheduler.init_request_receiver, ("self",)),
         (PagedTokenToKVPoolAllocator._release_page_ids, ("self", "page_ids")),
-        (SchedulerRequestReceiver._broadcast_reqs_across_ranks, ("self", "recv_reqs")),
+        (SchedulerRequestReceiver._broadcast_reqs_across_ranks, ("self", "recv_reqs", "local_reqs")),
         (Scheduler.get_next_batch_to_run, ("self", "running_batch", "last_batch")),
         (PrefillAdder.add_one_req, ("self", "req", "has_chunked_req", "truncation_align_size")),
         (ScheduleBatch.check_decode_mem, ("self", "selected_indices")),

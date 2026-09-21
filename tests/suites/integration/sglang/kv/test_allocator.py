@@ -53,17 +53,13 @@ def test_paged_allocator_routes_freed_suffix_pages_through_page_ids() -> None:
     assert allocator.withheld_size() == 4
 
 
-def test_capacity_growth_preserves_upstream_sorting_containers() -> None:
+def test_capacity_growth_restores_withheld_slots_when_sorting() -> None:
     token_allocator = ElasticTokenToKVPoolAllocator(8, torch.float16, "cpu", cast(KVCache, object()), True)
     token_allocator.set_token_capacity(4)
     token_allocator.set_token_capacity(6)
-    assert token_allocator.release_pages is not None
-    assert token_allocator.release_pages.tolist() == [5, 6]
     assert token_allocator.alloc(6).tolist() == [1, 2, 3, 4, 5, 6]
 
     paged_allocator = ElasticPagedTokenToKVPoolAllocator(16, 4, torch.float16, "cpu", cast(KVCache, object()), True)
     paged_allocator.set_token_capacity(8)
     paged_allocator.set_token_capacity(12)
-    assert paged_allocator.release_pages is not None
-    assert paged_allocator.release_pages.tolist() == [3]
     assert paged_allocator.alloc(12).tolist() == list(range(4, 16))

@@ -7,10 +7,9 @@ import pytest
 import torch
 from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
 from sglang.srt.runtime_context import get_context
-from sglang.srt.server_args import ServerArgs
 from torch import nn
 
-from tests.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner, server_args
+from tests.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner, ServerArgs, server_args
 from tests.harness.support.sglang.plugin import binding
 from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.fabric import InstanceFfnLayerProfile

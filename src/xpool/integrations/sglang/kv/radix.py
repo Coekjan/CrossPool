@@ -76,7 +76,7 @@ def select_suffix_reclaim_nodes(
     if blocked:
         return None
 
-    free_pages = torch.cat((allocator.free_pages, allocator.release_pages, allocator.withheld_pages))
+    free_pages = torch.cat((allocator.get_all_free_pages(), allocator.withheld_pages))
     covered = [free_pages, *selected_pages]
     suffix_pages = torch.unique(torch.cat(covered))
     covered_count = int(torch.count_nonzero(suffix_pages > target_page).item())
