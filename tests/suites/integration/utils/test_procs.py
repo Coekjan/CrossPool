@@ -11,12 +11,11 @@ from xpool.utils.procs import PROCESS_KILL_WAIT_S, ProcUniqId
 
 
 def test_process_identity_treats_unreaped_zombie_as_not_alive() -> None:
-    process = subprocess.Popen(
-        command("sleep", seconds=0.1),
-    )
+    process = subprocess.Popen(command("sleep", seconds=60))
     process_id = ProcUniqId(process.pid)
     try:
-        time.sleep(0.2)
+        process.kill()
+        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
         assert not process_id.is_alive()
     finally:
         process.wait(timeout=5.0)

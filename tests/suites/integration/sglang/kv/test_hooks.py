@@ -143,17 +143,30 @@ def test_allocation_after_suffix_reclaim_evicts_active_cache() -> None:
     assert allocator.withheld_size() == 4
 
 
-def test_request_broadcast_carries_and_consumes_capacity_commands() -> None:
+def test_idle_capacity_command_is_received_and_completed() -> None:
     command = xpool.native.kv.KvCapacityCommand(sequence=2, target_bundles=4)
-    channel = SimpleNamespace(read_commands=lambda: [command])
+    completions: list[xpool.native.kv.KvCapacityCompletion] = []
+    channel = SimpleNamespace(read_commands=lambda: [command], publish_completion=completions.append)
+    resized: list[int] = []
+    backing = SimpleNamespace(backed_bundles=2, usable_tokens=lambda bundles: bundles * 4)
+
+    def resize(bundle_count: int) -> None:
+        resized.append(bundle_count)
+        backing.backed_bundles = bundle_count
+
+    backing.resize = resize
+    capacities: list[int] = []
     reconciler = CapacityReconciler(
         channel=cast(xpool.native.kv.InstanceControlChannel, channel),
         command_index=0,
-        backing=cast(KvVmmBacking, object()),
-        allocator=cast(ElasticTokenToKVPoolAllocator, object()),
-        request_pool=cast(ReqToTokenPool, object()),
+        backing=cast(KvVmmBacking, backing),
+        allocator=cast(ElasticTokenToKVPoolAllocator, SimpleNamespace(set_token_capacity=capacities.append)),
+        request_pool=cast(ReqToTokenPool, SimpleNamespace(reset_aux_cache_allocator=lambda: None)),
         instance_rank=cast(InstanceRankRuntime, object()),
         slo=LatencySloConfig(ttft_ms=1000, tbt_ms=50),
+        active_bundles=2,
+        applied_sequence=1,
+        completed_sequence=1,
     )
 
     def broadcast(receiver: SchedulerRequestReceiver, values: list[object] | None) -> list[object]:
@@ -161,10 +174,45 @@ def test_request_broadcast_carries_and_consumes_capacity_commands() -> None:
         return values
 
     with capacity_reconciler_scope(reconciler):
-        requests = around_request_broadcast(broadcast, cast(SchedulerRequestReceiver, object()), ["request"])
+        requests = around_request_broadcast(broadcast, cast(SchedulerRequestReceiver, object()), [])
+    with get_parallel().override(attn_tp_rank=0, attn_tp_size=1):
+        reconciler.begin_scheduling(cast(Scheduler, SimpleNamespace(running_batch=None)))
 
-    assert requests == ["request"]
+    assert requests == []
     assert reconciler.command is command
+    assert resized == [4]
+    assert capacities == [16]
+    assert [(completion.sequence, completion.backed_bundles) for completion in completions] == [(2, 4)]
+
+
+@pytest.mark.parametrize("event_loop", [Scheduler.event_loop_normal, Scheduler.event_loop_overlap])
+def test_idle_scheduler_enters_capacity_planning(event_loop: Callable[[Scheduler], None]) -> None:
+    planning_calls: list[None] = []
+
+    class IdleScheduler:
+        gracefully_exit = False
+        _engine_paused = False
+        request_receiver = SimpleNamespace(recv_requests=lambda: [])
+        running_batch = None
+        last_batch = None
+        is_generation = False
+
+        def process_input_requests(self, requests: list[object]) -> None:
+            assert requests == []
+
+        def get_next_batch_to_run(self, **kwargs: object) -> SimpleNamespace:
+            planning_calls.append(None)
+            return SimpleNamespace(running_batch=None, batch_to_run=None)
+
+        def is_disable_overlap_for_batch(self, batch: object, last_batch: object) -> bool:
+            return False
+
+        def on_idle(self) -> None:
+            self.gracefully_exit = True
+
+    event_loop(cast(Scheduler, IdleScheduler()))
+
+    assert planning_calls == [None]
 
 
 @pytest.mark.parametrize("event_loop", [Scheduler.event_loop_normal, Scheduler.event_loop_overlap])

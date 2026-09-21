@@ -142,9 +142,11 @@ Startup follows the Generation lifecycle:
 
 During service, each SGLang scheduler iteration receives its DP group's command
 through SGLang's existing TP broadcast. Before ordinary batch planning, each
-rank with an unapplied command participates in its TP readiness vote. Idle and
-paused iterations skip the vote. An unready vote retains the old logical
-capacity while ordinary scheduling continues.
+rank with an unapplied command participates in its TP readiness vote. A live,
+unpaused scheduler continues these iterations while idle, so capacity commands
+progress without inference requests. Paused iterations skip the vote. An
+unready vote retains the old logical capacity while ordinary scheduling
+continues.
 Authoritative Prefill or Decode admission failures update the leader's demand.
 During reclaim, new Prefill waits while already admitted work can finish; when
 drain completes, waiting requests are made eligible for ordinary scheduling
