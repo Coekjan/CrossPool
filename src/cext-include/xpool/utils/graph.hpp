@@ -36,7 +36,10 @@ struct KernelNodeArgument {
 /// Owned Host snapshot of one CUDA Graph Kernel Node's launch schema and arguments.
 class KernelNodeParameters {
 public:
-  /// Read one Kernel Node's complete launch schema and argument bytes.
+  /// Read one Kernel Node's complete launch schema from exactly one CUDA
+  /// parameter transport and normalize it into owned argument bytes.
+  /// \throws c10::Error when the transport, packed options, or packed argument
+  /// layout is invalid.
   [[nodiscard]] static KernelNodeParameters read(cudaGraphNode_t node);
 
   /// Compare launch identity and argument geometry without comparing values.
@@ -51,7 +54,8 @@ public:
   /// Return immutable owned arguments.
   [[nodiscard]] std::span<const KernelNodeArgument> arguments() const { return arguments_; }
 
-  /// Apply the retained launch schema and current argument values to a Kernel Node.
+  /// Apply the retained launch schema and current values through CUDA's
+  /// pointer-array parameter transport.
   void apply(cudaGraphNode_t node) const;
 
 private:

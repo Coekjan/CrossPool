@@ -85,6 +85,25 @@ cudaGraphNode_t add_conditional_node(cudaGraph_t graph, cudaGraphConditionalHand
   return node;
 }
 
+std::span<const std::byte> packed_kernel_parameters(void **extra) {
+  auto *buffer = static_cast<const std::byte *>(nullptr);
+  auto size = std::size_t{0};
+  auto has_size = false;
+  for (auto **option = extra; *option != CU_LAUNCH_PARAM_END; option += 2) {
+    if (*option == CU_LAUNCH_PARAM_BUFFER_POINTER) {
+      buffer = static_cast<const std::byte *>(option[1]);
+    } else if (*option == CU_LAUNCH_PARAM_BUFFER_SIZE) {
+      TORCH_CHECK(option[1] != nullptr, "xpool CUDA Graph packed parameter buffer has no size value");
+      size = *static_cast<const std::size_t *>(option[1]);
+      has_size = true;
+    } else {
+      TORCH_CHECK(false, "xpool CUDA Graph Kernel Node uses an unsupported extra option");
+    }
+  }
+  TORCH_CHECK(buffer != nullptr && has_size, "xpool CUDA Graph Kernel Node has incomplete packed parameters");
+  return {buffer, size};
+}
+
 } // namespace
 
 std::uintptr_t KernelNodeArgument::read_address(std::size_t byte_offset) const {
@@ -104,8 +123,10 @@ void KernelNodeArgument::write_address(std::size_t byte_offset, std::uintptr_t a
 KernelNodeParameters KernelNodeParameters::read(cudaGraphNode_t node) {
   auto parameters = CUDA_KERNEL_NODE_PARAMS{};
   C10_CUDA_DRIVER_CHECK(cuGraphKernelNodeGetParams(node, &parameters));
-  TORCH_CHECK(parameters.kernelParams != nullptr && parameters.extra == nullptr,
-              "xpool CUDA Graph Kernel Node uses unsupported parameter transport");
+  const auto pointer_array = parameters.kernelParams != nullptr;
+  const auto packed_buffer = parameters.extra != nullptr;
+  TORCH_CHECK(pointer_array != packed_buffer, "xpool CUDA Graph Kernel Node uses invalid parameter transport");
+  const auto packed = packed_buffer ? packed_kernel_parameters(parameters.extra) : std::span<const std::byte>{};
   auto count = std::size_t{0};
   if (parameters.func != nullptr) {
     C10_CUDA_DRIVER_CHECK(cuFuncGetParamCount(parameters.func, &count));
@@ -130,7 +151,13 @@ KernelNodeParameters KernelNodeParameters::read(cudaGraphNode_t node) {
       C10_CUDA_DRIVER_CHECK(cuKernelGetParamInfo(parameters.kern, index, &offset, &size));
     }
     auto bytes = std::vector<std::byte>(size);
-    std::memcpy(bytes.data(), parameters.kernelParams[index], size);
+    if (pointer_array) {
+      std::memcpy(bytes.data(), parameters.kernelParams[index], size);
+    } else {
+      TORCH_CHECK(offset <= packed.size() && size <= packed.size() - offset,
+                  "xpool CUDA Graph packed parameter buffer is smaller than its Kernel argument layout");
+      std::memcpy(bytes.data(), packed.data() + offset, size);
+    }
     result.arguments_.push_back(KernelNodeArgument{.offset_bytes = offset, .bytes = std::move(bytes)});
   }
   return result;

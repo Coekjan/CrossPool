@@ -105,9 +105,10 @@ the embedded Primary Kernel Nodes into Device-updatable nodes. Before each
 execution, the Lane Graph binds the selected Layer's resident addresses without
 mutating Graph topology. Generic Host-side CUDA Graph construction,
 conditional-node creation, topology comparison, Kernel parameter storage, and
-dependency splicing belong to `xpool::utils::graph`; FFN resource matching,
-Routing Publication placement, and Lane topology remain in
-`xpool::ffnagent`.
+dependency splicing belong to `xpool::utils::graph`. Kernel parameter storage
+normalizes CUDA pointer-array and packed-buffer transports into the same owned
+logical arguments. FFN resource matching, Routing Publication placement, and
+Lane topology remain in `xpool::ffnagent`.
 
 Different Executor Lanes own different GraphExec instances even when they share
 one GraphTemplate. A GraphExec is never launched concurrently with itself.
