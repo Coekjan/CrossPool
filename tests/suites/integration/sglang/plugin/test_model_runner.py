@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -8,7 +9,9 @@ import pytest
 import torch
 from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
+from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
 from sglang.srt.model_executor.model_runner import ModelRunner
+from sglang.srt.runtime_context import get_context, get_exec, pre_capture_activation_reserve_mb
 
 import xpool.config
 import xpool.integrations.sglang.hooks.lifecycle
@@ -38,6 +41,15 @@ from xpool.service.wire import KvControlChannelRef, ServingListener
 pytestmark = pytest.mark.usefixtures(
     reset_global_config.__name__, reset_plugin_required_hook_targets.__name__, published_sglang_config.__name__
 )
+
+
+@pytest.fixture(autouse=True)
+def fake_cuda_device_properties(monkeypatch: pytest.MonkeyPatch, published_sglang_config: None) -> Iterator[None]:
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: SimpleNamespace(total_memory=100_000))
+    with get_context().override_server_args(
+        cuda_graph_config=get_exec().graph.cuda_graph_config, chunked_prefill_size=4096
+    ):
+        yield
 
 
 class FakeElasticPool(ElasticMHATokenToKVPool):
@@ -168,9 +180,23 @@ path = "{unrelated_model_path}"
     assert runner.xpool_runtime.binding.instance_id == "test/model"
 
 
+@pytest.mark.parametrize(
+    ("max_running_requests", "mem_fraction_static", "decode_backend", "activation_limited"),
+    [
+        (32, 0.96, "full", False),
+        (64, 0.96, "full", True),
+        (64, 0.8, "full", False),
+        (64, 0.96, "disabled", False),
+    ],
+    ids=["captured-decode", "eager-decode-gap", "larger-base-reserve", "eager-only"],
+)
 def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    max_running_requests: int,
+    mem_fraction_static: float,
+    decode_backend: str,
+    activation_limited: bool,
 ) -> None:
     events: list[str] = []
     installs: list[tuple[str, int]] = []
@@ -180,6 +206,12 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     listeners: list[ServingListener] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
+    runner.max_running_requests = max_running_requests
+    runner.mem_fraction_static = mem_fraction_static
+    device_total_bytes = 40 << 30
+    monkeypatch.setattr(
+        torch.cuda, "get_device_properties", lambda device: SimpleNamespace(total_memory=device_total_bytes)
+    )
     install_fake_elastic_kv(runner)
     configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path, model_slo=(800, 40))
     monkeypatch.setattr(
@@ -231,10 +263,12 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         transport: InstanceRankTransportProfile,
         ffn_profile: object,
         kv_capacity: object,
+        atn_runtime_headroom_bytes: int,
     ) -> FakeInstanceRuntime:
         registrations.append((instance_id, rank, transport.payload_row_capacity))
         profiles.append(ffn_profile)
         assert kv_capacity == kv_capacity_profile()
+        assert atn_runtime_headroom_bytes == expected_headroom_bytes
         installs.append((instance_id, rank))
         events.append("start_instance")
         return FakeInstanceRuntime()
@@ -269,9 +303,21 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         "validate_after_load",
     ]
 
-    pool_result = xpool.integrations.sglang.hooks.lifecycle.after_model_runner_alloc_memory_pool(
-        None, runner.as_model_runner()
-    )
+    with get_context().override_server_args(
+        cuda_graph_config=CudaGraphConfig(decode=PhaseConfig(backend=decode_backend, max_bs=32)),
+        chunked_prefill_size=4096,
+        tp_size=1,
+        pp_size=1,
+        disaggregation_mode="null",
+    ):
+        expected_headroom_bytes = (
+            int(pre_capture_activation_reserve_mb(device_total_bytes / (1 << 20)) * (1 << 20))
+            if activation_limited
+            else int(device_total_bytes * (1 - mem_fraction_static))
+        )
+        pool_result = xpool.integrations.sglang.hooks.lifecycle.after_model_runner_alloc_memory_pool(
+            None, runner.as_model_runner()
+        )
     scheduler = Scheduler.__new__(Scheduler)
     scheduler.tp_worker = SimpleNamespace(model_runner=runner.as_model_runner())
     scheduler.server_args = runner.server_args

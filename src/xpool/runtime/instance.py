@@ -259,6 +259,7 @@ class InstanceRankRuntime:
         transport: InstanceRankTransportProfile,
         ffn_profile: InstanceFfnProfile,
         kv_capacity: KvCapacityPartitionProfile,
+        atn_runtime_headroom_bytes: int,
     ) -> InstanceRankRuntime:
         """Construct and transactionally start one runner-owned runtime.
 
@@ -268,6 +269,8 @@ class InstanceRankRuntime:
             transport: Transport geometry declared by this rank.
             ffn_profile: Rank-independent FFN execution contract.
             kv_capacity: Immutable elastic KV reservation geometry.
+            atn_runtime_headroom_bytes: Attention runtime memory reserved outside
+                the elastic KV Capacity Pool.
 
         Returns:
             Registered runtime with a running heartbeat worker. Transport
@@ -282,7 +285,7 @@ class InstanceRankRuntime:
 
         runtime = cls(instance_id=instance_id, rank=rank)
         try:
-            runtime.start_runtime(transport, ffn_profile, kv_capacity)
+            runtime.start_runtime(transport, ffn_profile, kv_capacity, atn_runtime_headroom_bytes)
         except Exception:
             runtime.close()
             raise
@@ -293,17 +296,14 @@ class InstanceRankRuntime:
         transport: InstanceRankTransportProfile,
         ffn_profile: InstanceFfnProfile,
         kv_capacity: KvCapacityPartitionProfile,
+        atn_runtime_headroom_bytes: int,
     ) -> None:
-        """Register this instance rank and start its heartbeat transactionally."""
+        """Register this Instance Rank's runtime contracts and start its heartbeat."""
 
-        if self.registration is not None:
-            self.expect_transport(transport)
-            if self.registration.ffn_profile != ffn_profile:
-                raise InstanceRankError("instance runtime is already registered with a different ffn_profile")
-            if self.registration.kv_capacity != kv_capacity:
-                raise InstanceRankError("instance runtime is already registered with different kv capacity geometry")
+        was_registered = self.registration is not None
+        self.register_runtime(transport, ffn_profile, kv_capacity, atn_runtime_headroom_bytes)
+        if was_registered:
             return
-        self.register_runtime(transport, ffn_profile, kv_capacity)
         try:
             self.start_heartbeat_worker()
         except Exception:
@@ -318,8 +318,9 @@ class InstanceRankRuntime:
         transport: InstanceRankTransportProfile,
         ffn_profile: InstanceFfnProfile,
         kv_capacity: KvCapacityPartitionProfile,
+        atn_runtime_headroom_bytes: int,
     ) -> None:
-        """Register this instance rank with the daemon."""
+        """Register this Instance Rank's Transport, FFN, KV, and headroom contracts."""
 
         if self.registration is not None:
             self.expect_transport(transport)
@@ -327,6 +328,10 @@ class InstanceRankRuntime:
                 raise InstanceRankError("instance runtime is already registered with a different ffn_profile")
             if self.registration.kv_capacity != kv_capacity:
                 raise InstanceRankError("instance runtime is already registered with different kv capacity geometry")
+            if self.registration.atn_runtime_headroom_bytes != atn_runtime_headroom_bytes:
+                raise InstanceRankError(
+                    "instance runtime is already registered with different attention runtime headroom"
+                )
             return
         registration = InstanceRankRegistration(
             instance_id=self.instance_id,
@@ -336,6 +341,7 @@ class InstanceRankRuntime:
             transport=transport,
             ffn_profile=ffn_profile,
             kv_capacity=kv_capacity,
+            atn_runtime_headroom_bytes=atn_runtime_headroom_bytes,
         )
         self.client.register_instance(registration)
         self.registration = registration

@@ -121,6 +121,24 @@ def test_started_instance_rejects_different_transport(monkeypatch: pytest.Monkey
         transport=transport_attributes(),
         ffn_profile=ffn_profile(),
         kv_capacity=kv_capacity_profile(),
+        atn_runtime_headroom_bytes=0,
     )
     with pytest.raises(InstanceRankError, match="different transport"):
-        instance.start_runtime(changed_transport, ffn_profile(), kv_capacity_profile())
+        instance.start_runtime(changed_transport, ffn_profile(), kv_capacity_profile(), 0)
+
+
+def test_started_instance_rejects_different_runtime_headroom(monkeypatch: pytest.MonkeyPatch) -> None:
+    instance = runtime_instance(runtime_config(), monkeypatch)
+    instance.registration = InstanceRankRegistration(
+        instance_id=instance.instance_id,
+        rank=instance.rank,
+        abi_version=ABI_VERSION,
+        pid=instance.process_ref.pid,
+        transport=transport_attributes(),
+        ffn_profile=ffn_profile(),
+        kv_capacity=kv_capacity_profile(),
+        atn_runtime_headroom_bytes=1024,
+    )
+
+    with pytest.raises(InstanceRankError, match="different attention runtime headroom"):
+        instance.start_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile(), 2048)

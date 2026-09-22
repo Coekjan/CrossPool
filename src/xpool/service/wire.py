@@ -254,6 +254,10 @@ class InstanceRankRegistration(InstanceRankRef):
     kv_capacity: KvCapacityPartitionProfile = Field(
         description="Immutable elastic KV geometry agreed by every rank in one capacity group.",
     )
+    atn_runtime_headroom_bytes: int = Field(
+        ge=0,
+        description="Immutable attention runtime memory headroom declared by this instance rank.",
+    )
 
 
 class ServingListener(WireModel):

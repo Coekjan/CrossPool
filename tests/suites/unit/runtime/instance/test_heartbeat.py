@@ -69,7 +69,7 @@ def test_instance_deregister_stops_heartbeat_worker(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(xpool.runtime.instance, "XpoolClient", FakeXpoolClient)
 
     instance = runtime_instance(config, monkeypatch)
-    instance.register_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile())
+    instance.register_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile(), 0)
     instance.arena_handle = transport_arena()
     instance.start_heartbeat_worker()
     heartbeat_worker = instance.heartbeat_worker
@@ -86,11 +86,6 @@ def test_instance_deregister_stops_heartbeat_worker(monkeypatch: pytest.MonkeyPa
 def test_instance_start_registers_heartbeat_without_attaching_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     config = runtime_config()
     events: list[str] = []
-    monkeypatch.setattr(
-        InstanceRankRuntime,
-        "register_runtime",
-        lambda self, transport, resolved, kv_capacity: events.append("register"),
-    )
     monkeypatch.setattr(InstanceRankRuntime, "start_heartbeat_worker", lambda self: events.append("heartbeat"))
     monkeypatch.setattr(
         InstanceRankRuntime,
@@ -99,7 +94,9 @@ def test_instance_start_registers_heartbeat_without_attaching_transport(monkeypa
     )
 
     instance = runtime_instance(config, monkeypatch)
-    instance.start_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile())
+    monkeypatch.setattr(instance.client, "register_instance", lambda registration: events.append("register"))
+    instance.start_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile(), 0)
+    instance.start_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile(), 0)
 
     assert events == ["register", "heartbeat"]
 
@@ -115,7 +112,7 @@ def test_instance_start_deregisters_when_heartbeat_start_fails(monkeypatch: pyte
     monkeypatch.setattr(
         InstanceRankRuntime,
         "register_runtime",
-        lambda self, transport, resolved, kv_capacity: events.append("register"),
+        lambda self, transport, resolved, kv_capacity, headroom: events.append("register"),
     )
     monkeypatch.setattr(InstanceRankRuntime, "start_heartbeat_worker", fail_heartbeat)
     monkeypatch.setattr(InstanceRankRuntime, "attach_arena_from_daemon", lambda self: events.append("attach"))
@@ -124,7 +121,7 @@ def test_instance_start_deregisters_when_heartbeat_start_fails(monkeypatch: pyte
 
     with pytest.raises(RuntimeError, match="heartbeat failed"):
         instance = runtime_instance(config, monkeypatch)
-        instance.start_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile())
+        instance.start_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile(), 0)
 
     assert events == ["register", "heartbeat", "deregister"]
 

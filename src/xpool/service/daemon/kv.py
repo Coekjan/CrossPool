@@ -151,32 +151,53 @@ class KvCapacityPolicy:
 
         config = get_global_config()
         pool_capacities: list[int] = []
-        pool_floor_bytes: list[int] = []
         for pool_index, device_report in enumerate(device_reports):
             if device_report is None:
                 raise RuntimeError("kv capacity pool freezing requires every device-memory report")
             already_mapped_bytes = 0
             floor_bytes = 0
+            runtime_headroom_bytes = 0
             for instance_index, instance_plan in enumerate(fabric.plan.instance_plans):
                 partition_index = instance_index * config.atn_world_size + pool_index
                 backed_bundles = initial_backing[partition_index]
                 if backed_bundles is None:
                     raise RuntimeError("kv capacity pool freezing requires every partition backing report")
-                profile = self.partition(registrations, instance_plan.instance_id, pool_index).kv_capacity
+                registration = self.partition(registrations, instance_plan.instance_id, pool_index)
+                profile = registration.kv_capacity
                 already_mapped_bytes += profile.bundle_bytes * backed_bundles
                 floor_bytes += profile.bundle_bytes * profile.floor_bundles
+                runtime_headroom_bytes += registration.atn_runtime_headroom_bytes
 
-            non_kv_used_bytes = device_report.total_bytes - device_report.free_bytes - already_mapped_bytes
-            physical_pool_bytes = (
-                int(device_report.total_bytes * config.atn.device_memory_utilization) - non_kv_used_bytes
+            available_kv_bytes = device_report.free_bytes + already_mapped_bytes
+            utilization_margin_bytes = device_report.total_bytes - int(
+                device_report.total_bytes * config.atn.device_memory_utilization
             )
+            required_reserve_bytes = max(utilization_margin_bytes, runtime_headroom_bytes)
+            physical_pool_bytes = available_kv_bytes - required_reserve_bytes
             if physical_pool_bytes < floor_bytes:
                 raise RuntimeError(
                     f"attention device {config.atn.devices[pool_index]} cannot retain all elastic kv floors: "
+                    f"total_bytes={device_report.total_bytes} free_bytes={device_report.free_bytes} "
+                    f"bootstrap_kv_bytes={already_mapped_bytes} "
+                    f"utilization_margin_bytes={utilization_margin_bytes} "
+                    f"runtime_headroom_bytes={runtime_headroom_bytes} "
                     f"pool_bytes={physical_pool_bytes} floor_bytes={floor_bytes}"
                 )
+            logger.info(
+                "kv pool frozen device=%s total_bytes=%s free_bytes=%s bootstrap_kv_bytes=%s "
+                "utilization_margin_bytes=%s runtime_headroom_bytes=%s reserve_bytes=%s "
+                "capacity_bytes=%s floor_bytes=%s",
+                config.atn.devices[pool_index],
+                device_report.total_bytes,
+                device_report.free_bytes,
+                already_mapped_bytes,
+                utilization_margin_bytes,
+                runtime_headroom_bytes,
+                required_reserve_bytes,
+                physical_pool_bytes,
+                floor_bytes,
+            )
             pool_capacities.append(physical_pool_bytes)
-            pool_floor_bytes.append(floor_bytes)
         self.pool_capacity_bytes = tuple(pool_capacities)
 
         for group_index, instance_index, dp_rank in self.capacity_groups(fabric):
@@ -191,19 +212,6 @@ class KvCapacityPolicy:
             ceiling = self.service_ceiling(registrations, fabric, instance_index, dp_rank)
             self.service_ceilings[group_index] = ceiling
             self.channel.publish_service_ceiling(group_index, ceiling)
-
-        for device, capacity_bytes, floor_bytes in zip(
-            config.atn.devices,
-            pool_capacities,
-            pool_floor_bytes,
-            strict=True,
-        ):
-            logger.info(
-                "kv pool frozen device=%s capacity_bytes=%s floor_bytes=%s",
-                device,
-                capacity_bytes,
-                floor_bytes,
-            )
 
     def initial_target(
         self,

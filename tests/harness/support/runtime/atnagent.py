@@ -128,6 +128,7 @@ def instance_registration_view(*, instance_id: str, rank: int) -> dict[str, obje
             "group_sum_complete_admitted": False,
         },
         "kv_capacity": kv_capacity_profile().model_dump(mode="json"),
+        "atn_runtime_headroom_bytes": 0,
     }
 
 

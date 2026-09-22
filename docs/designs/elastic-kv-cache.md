@@ -31,9 +31,21 @@ prefix-cache, and capacity state.
 
 A **KV Capacity Pool** is the physical byte budget available across all
 Instance partitions on one attention GPU. It is frozen once after Graph capture
-from the configured device-memory utilization, observed device memory, and
-already mapped bootstrap backing. `scheduler.atn_concurrency` is reserved for
-future attention compute admission and is not part of this memory model.
+from the configured device-memory utilization, observed device memory,
+already mapped bootstrap backing, and the summed runtime headroom declared by
+the GPU's Instance Ranks. The larger of the configured utilization margin and
+that runtime headroom remains outside the pool. `scheduler.atn_concurrency` is
+reserved for future attention compute admission and is not part of this memory
+model.
+
+The SGLang integration enables upstream post-capture KV sizing before
+configuration resolution. Each Instance Rank derives its Attention Runtime
+Headroom from device capacity and the complement of the resolved
+`mem_fraction_static`. When enabled Decode Graph coverage is smaller than an
+explicit or model-derived `max_running_requests`, the rank keeps the larger of
+that base headroom and SGLang's eager-activation reserve. SGLang retains
+ownership of model eligibility for post-capture sizing; CrossPool does not
+override it. The daemon sums the resulting immutable declarations per GPU.
 
 Each partition registers immutable geometry: bundle bytes and capacity, minimum
 backed bundles, token capacity, CUDA mapping granularity, row bytes, tokens per
@@ -130,9 +142,10 @@ Startup follows the Generation lifecycle:
    allocator and backing to the bootstrap floor, publishes capture completion,
    and waits for an initial command.
 6. After all local captures complete, each AtnAgent publishes its sole device
-   memory observation. The daemon freezes every physical pool, publishes each
-   group's immutable service ceiling, then issues floor-first initial
-   operations sequentially.
+   memory observation. The daemon freezes every physical pool against both the
+   utilization limit and registered runtime headroom, publishes each group's
+   immutable service ceiling, then issues floor-first initial operations
+   sequentially.
 7. Each rank waits for its initial command and service ceiling, participates
    in the common readiness vote, switches its logical prefix, and publishes
    completion before continuing scheduler construction. The all-rank
@@ -208,7 +221,7 @@ evidence, not a protocol or correctness API.
 | --- | --- | --- |
 | `kv control attached` | device, pool, partition count | The AtnAgent attached its Generation-scoped control surface. |
 | `kv memory observed` | device, total bytes, free bytes | Graph Capture is complete and pool sizing has a stable memory observation. |
-| `kv pool frozen` | device, capacity bytes, floor bytes | The post-capture physical pool is fixed. |
+| `kv pool frozen` | device, total/free/bootstrap bytes, utilization/runtime/reserve/capacity/floor bytes | The post-capture pool is fixed after both reserve bounds. |
 | `kv capacity initialized` | group, bundle transition, token transition | Every partition completed the initial group command. |
 | `kv capacity growth requested` | group, bundle transition, token transition | Unassigned pool bytes funded the full demand target. |
 | `kv capacity transfer requested` | donor and borrower transitions | A donor shrink target was fixed for one borrower's exact demand. |

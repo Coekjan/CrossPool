@@ -41,9 +41,18 @@ policy. Loader parallelism lives under `ffn.loader`; solver parallelism and its
 whole-solve deadline live directly under `ffn.placement`.
 
 `atn.device_memory_utilization` defines the maximum share of each attention
-GPU that the post-capture Elastic KV Capacity Pool may retain. The daemon
-applies it to the AtnAgent's observed total memory after accounting for
-non-KV allocations and already mapped bootstrap backing.
+GPU that the post-capture Elastic KV Capacity Pool may retain. Available KV
+bytes are the AtnAgent's observed free bytes plus already mapped bootstrap
+backing. The daemon subtracts the larger of the configured unused-memory
+margin and the summed Attention Runtime Headroom declared by co-located
+Instance Ranks; it does not add those reserves together.
+
+When an SGLang Instance has no resolved `max_running_requests` value and Decode
+Graph is enabled, the integration defaults request concurrency to the resolved
+Decode Graph `max_bs`. Explicit and model-derived values remain authoritative;
+eager Decode receives no graph-derived default. This keeps ordinary Decode
+within captured coverage and avoids reserving eager-Decode activation memory
+for an otherwise unused upstream concurrency default.
 
 `scheduler.slo` supplies required positive, finite `ttft_ms` and `tbt_ms`
 targets for Elastic KV arbitration. A model may replace both targets with a

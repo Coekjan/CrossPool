@@ -45,6 +45,7 @@ def test_instance_register_rejects_unknown_instance() -> None:
             transport=transport_attributes(),
             ffn_profile=ffn_profile(),
             kv_capacity=kv_capacity_profile(),
+            atn_runtime_headroom_bytes=0,
         )
 
 
@@ -64,13 +65,14 @@ def test_instance_register_publishes_proc_uniq_id(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(xpool.runtime.instance, "XpoolClient", FakeXpoolClient)
     instance = runtime_instance(config, monkeypatch)
-    instance.register_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile())
+    instance.register_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile(), 1024)
 
     assert registrations
     payload = registrations[0].model_dump(mode="json")
     assert payload["abi_version"] == ABI_VERSION
     assert isinstance(payload["pid"], int)
     assert payload["transport"] == transport_attributes().model_dump(mode="json")
+    assert payload["atn_runtime_headroom_bytes"] == 1024
     assert "create_time" not in payload
 
 
@@ -105,6 +107,7 @@ def test_instance_deregister_detaches_before_publishing_departure(
         transport=transport_attributes(),
         ffn_profile=ffn_profile(),
         kv_capacity=kv_capacity_profile(),
+        atn_runtime_headroom_bytes=0,
     )
     events: list[str] = []
     monkeypatch.setattr(instance, "stop_failure_monitor", lambda: events.append("stop_monitor"))
@@ -130,6 +133,7 @@ def test_instance_start_does_not_cleanup_when_registration_fails(monkeypatch: py
         transport: InstanceRankTransportProfile,
         resolved: object,
         kv_capacity: object,
+        atn_runtime_headroom_bytes: int,
     ) -> None:
         events.append("register")
         raise RuntimeError("register failed")
@@ -144,6 +148,7 @@ def test_instance_start_does_not_cleanup_when_registration_fails(monkeypatch: py
             transport=transport_attributes(),
             ffn_profile=ffn_profile(),
             kv_capacity=kv_capacity_profile(),
+            atn_runtime_headroom_bytes=0,
         )
 
     assert events == ["register", "deregister"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from sglang.srt.environ import envs
 from sglang.srt.plugins.hook_registry import HookRegistry
 
 from xpool.config import init_global_config
@@ -14,6 +15,7 @@ def install() -> None:
     """Discover and install every CrossPool hook in an SGLang process."""
 
     try:
+        envs.SGLANG_ENABLE_POST_CAPTURE_KV_SIZING.set(True)
         init_global_config()
         hooks = discover_sglang_hooks()
         for hook in hooks:

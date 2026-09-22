@@ -3,13 +3,19 @@ from __future__ import annotations
 from importlib.metadata import entry_points
 
 import pytest
+from sglang.srt.arg_groups import overrides
+from sglang.srt.environ import envs
+from sglang.srt.model_executor.cuda_graph_config import Backend, CudaGraphConfig, PhaseConfig
 from sglang.srt.plugins.hook_registry import HookRegistry, HookType
+from sglang.srt.server_args import ServerArgs
 
 import tests.harness.support.sglang.plugin
 import xpool.integrations.sglang.plugin
 from tests.harness.support.config import reset_global_config
+from tests.harness.support.sglang.fakes import server_args as make_server_args
 from tests.harness.support.sglang.plugin import reset_plugin_required_hook_targets
 from xpool.integrations.sglang.adapter import SglangCudaPlacement
+from xpool.integrations.sglang.hooks.lifecycle import around_runtime_context_publish
 from xpool.integrations.sglang.hooks.registry import SglangHook, discover_sglang_hooks
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, reset_plugin_required_hook_targets.__name__)
@@ -46,6 +52,42 @@ def test_hook_discovery_collects_kv_lifecycle_and_model_hooks() -> None:
     assert "sglang.srt.mem_cache.memory_pool.MHATokenToKVPool" in targets
     assert "sglang.srt.model_executor.model_runner.ModelRunner.load_model" in targets
     assert "sglang.srt.models.qwen3.Qwen3MLP" in targets
+    assert "sglang.srt.runtime_context.publish" in targets
+
+
+@pytest.mark.parametrize(
+    ("configured", "backend", "expected"),
+    [
+        (None, Backend.FULL, 32),
+        (64, Backend.FULL, 64),
+        (None, Backend.DISABLED, None),
+    ],
+    ids=["graph-default", "configured", "eager"],
+)
+def test_runtime_context_publish_defaults_request_concurrency_to_decode_graph(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: int | None,
+    backend: str,
+    expected: int | None,
+) -> None:
+    server_args = make_server_args(max_running_requests=configured)
+    overrides.declare_resolution(
+        server_args,
+        "test Decode Graph configuration",
+        cuda_graph_config=CudaGraphConfig(decode=PhaseConfig(backend=backend, max_bs=32)),
+    )
+    monkeypatch.setattr(ServerArgs, "resolve_once", lambda self: None)
+
+    def publish(args: object, *, role: str, hf_config: object | None) -> str:
+        assert args is server_args
+        assert role == "scheduler"
+        assert hf_config is None
+        return "published"
+
+    result = around_runtime_context_publish(publish, server_args, role="scheduler")
+
+    assert result == "published"
+    assert overrides.resolution_result(server_args, "max_running_requests") == expected
 
 
 def test_plugin_applies_discovered_hooks_with_pinned_sglang_registry(
@@ -57,6 +99,16 @@ def test_plugin_applies_discovered_hooks_with_pinned_sglang_registry(
     HookRegistry.apply_hooks()
 
     assert tests.harness.support.sglang.plugin.minimal_config() == "patched"
+
+
+def test_plugin_enables_upstream_post_capture_sizing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_hook(monkeypatch, "tests.harness.support.sglang.plugin.minimal_config")
+
+    xpool.integrations.sglang.plugin.install()
+
+    assert envs.SGLANG_ENABLE_POST_CAPTURE_KV_SIZING.get() is True
 
 
 def test_plugin_apply_hooks_guard_fails_closed_with_pinned_sglang_registry(

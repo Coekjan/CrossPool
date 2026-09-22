@@ -125,6 +125,27 @@ def test_daemon_accepts_matching_effective_config() -> None:
     assert response.content == b""
 
 
+def test_instance_registration_rejects_negative_runtime_headroom() -> None:
+    app = create_app(synthetic_config())
+    registration = instance_registration()
+    registration["atn_runtime_headroom_bytes"] = -1
+
+    response = request(app, "POST", "/instance/register", json=registration)
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+def test_instance_reregistration_rejects_different_runtime_headroom() -> None:
+    app = create_app(synthetic_config())
+    registration = instance_registration(atn_runtime_headroom_bytes=1024)
+    assert request(app, "POST", "/instance/register", json=registration).status_code == HTTPStatus.NO_CONTENT
+    registration["atn_runtime_headroom_bytes"] = 2048
+
+    response = request(app, "POST", "/instance/register", json=registration)
+
+    assert response.status_code == HTTPStatus.CONFLICT
+
+
 def test_daemon_reports_all_effective_config_differences() -> None:
     config = synthetic_config()
     app = create_app(config)

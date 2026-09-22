@@ -70,6 +70,7 @@ def capacity_policy_world(
     *,
     atn_tp_size: int = 1,
     atn_dp_size: int = 1,
+    runtime_headroom_by_instance: dict[str, int] | None = None,
 ) -> tuple[ControlPlane, FabricGenerationState]:
     atn_world_size = atn_tp_size * atn_dp_size
     config = XpoolConfig.from_mapping(
@@ -100,6 +101,7 @@ def capacity_policy_world(
                 atn_tp_size=atn_tp_size,
                 atn_dp_rank=rank // atn_tp_size,
                 atn_dp_size=atn_dp_size,
+                atn_runtime_headroom_bytes=(runtime_headroom_by_instance or {}).get(instance_id, 0),
             )
             profile = kv_capacity_profile().model_copy(update={"bundle_bytes": bundle_bytes})
             registration["kv_capacity"] = profile.model_dump(mode="json")
@@ -191,6 +193,65 @@ def test_initial_policy_freezes_pools_and_waits_for_every_tp_completion() -> Non
     policy.step(control.registrations, fabric)
     assert policy.active_bundles[0] == 8
     assert policy.operations[0] is None
+
+
+@pytest.mark.parametrize(
+    ("runtime_headroom_bytes", "expected_capacity_bytes"),
+    [(1000, 49_096), (10_000, 44_096)],
+    ids=["utilization-margin", "runtime-headroom"],
+)
+def test_pool_freeze_keeps_larger_reserve(
+    runtime_headroom_bytes: int,
+    expected_capacity_bytes: int,
+) -> None:
+    control, fabric = capacity_policy_world(
+        {"model": 4096},
+        runtime_headroom_by_instance={"model": runtime_headroom_bytes},
+    )
+    channel = FakeDaemonControlChannel(pool_count=1, slot_count=1)
+    policy = KvCapacityPolicy(
+        generation=fabric.plan.generation,
+        channel=cast(xpool.native.kv.DaemonControlChannel, channel),
+    )
+
+    policy.step(control.registrations, fabric)
+
+    assert policy.pool_capacity_bytes == (expected_capacity_bytes,)
+
+
+def test_pool_freeze_sums_same_device_instance_headroom() -> None:
+    control, fabric = capacity_policy_world(
+        {"a": 4096, "b": 4096},
+        runtime_headroom_by_instance={"a": 6000, "b": 7000},
+    )
+    channel = FakeDaemonControlChannel(pool_count=1, slot_count=2)
+    policy = KvCapacityPolicy(
+        generation=fabric.plan.generation,
+        channel=cast(xpool.native.kv.DaemonControlChannel, channel),
+    )
+
+    policy.step(control.registrations, fabric)
+
+    assert policy.pool_capacity_bytes == (45_192,)
+
+
+def test_pool_freeze_rejects_runtime_headroom_that_displaces_floors() -> None:
+    control, fabric = capacity_policy_world({"model": 4096}, runtime_headroom_by_instance={"model": 52_000})
+    channel = FakeDaemonControlChannel(pool_count=1, slot_count=1)
+    policy = KvCapacityPolicy(
+        generation=fabric.plan.generation,
+        channel=cast(xpool.native.kv.DaemonControlChannel, channel),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"total_bytes=100000 free_bytes=50000 bootstrap_kv_bytes=4096 "
+            r"utilization_margin_bytes=5000 runtime_headroom_bytes=52000 "
+            r"pool_bytes=2096 floor_bytes=4096"
+        ),
+    ):
+        policy.step(control.registrations, fabric)
 
 
 def test_capacity_channel_discovery_is_generation_scoped() -> None:
@@ -296,19 +357,21 @@ def test_inverse_donor_order_prefers_the_later_active_deadline(monkeypatch: pyte
 
 
 def test_multiple_donors_fund_one_complete_growth_without_overlapping_bytes() -> None:
-    control, fabric = capacity_policy_world({"borrower": 4096, "donor-a": 4096, "donor-b": 4096})
+    control, fabric = capacity_policy_world({"borrower": 8192, "donor-a": 4096, "donor-b": 12288})
     channel = FakeDaemonControlChannel(pool_count=1, slot_count=3)
     policy = service_policy(
         control,
         fabric,
         channel,
         active_by_group={0: 1, 1: 3, 2: 3},
-        pool_capacity_bytes=8 * 4096,
+        pool_capacity_bytes=65536,
     )
     channel.demands[0] = demand(1, 6, 100)
 
     policy.step(control.registrations, fabric)
-    assert policy.pool_free_bytes(control.registrations, fabric) == [4096]
+    assert policy.pool_free_bytes(control.registrations, fabric) == [8192]
+    assert channel.commands[-1][0] == 1
+    assert channel.commands[-1][1].target_bundles == 1
     complete_operation(policy, fabric, channel, 1)
     policy.step(control.registrations, fabric)
     assert channel.commands[-1][0] == 2

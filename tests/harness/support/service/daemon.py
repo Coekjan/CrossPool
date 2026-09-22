@@ -135,6 +135,7 @@ def instance_registration(
     atn_tp_size: int = 1,
     atn_dp_rank: int = 0,
     atn_dp_size: int = 1,
+    atn_runtime_headroom_bytes: int = 0,
     pid: int | None = None,
 ) -> dict[str, object]:
     pid = process_pid(pid)
@@ -152,6 +153,7 @@ def instance_registration(
         ),
         "ffn_profile": ffn_profile(),
         "kv_capacity": kv_capacity_profile().model_dump(mode="json"),
+        "atn_runtime_headroom_bytes": atn_runtime_headroom_bytes,
     }
 
 

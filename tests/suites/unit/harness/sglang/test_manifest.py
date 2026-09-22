@@ -107,7 +107,6 @@ def test_serving_case_graph_modes_belong_to_the_matching_test_path() -> None:
         prefix_model_id="organization/first",
         prefix_tokens=1,
         pressure_model_id="organization/second",
-        pressure_tokens=1,
         atn_device_memory_utilization=0.5,
     )
     with pytest.raises(ValidationError, match="ordinary E2E serving case graph_modes"):

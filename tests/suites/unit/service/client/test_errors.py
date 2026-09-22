@@ -81,6 +81,7 @@ def test_client_rejects_registration_after_config_conflict(
                         transport=transport_attributes(),
                         ffn_profile=ffn_profile(),
                         kv_capacity=kv_capacity_profile(),
+                        atn_runtime_headroom_bytes=0,
                     )
                 )
     finally:

@@ -113,7 +113,7 @@ def test_e2e_elastic_kv(
             or max_input_tokens <= NEW_TOKENS
         ):
             raise AssertionError(f"SGLang returned invalid max_req_input_len: {max_input_tokens!r}")
-        pressure_tokens = min(workload.pressure_tokens, max_input_tokens - NEW_TOKENS)
+        pressure_tokens = max_input_tokens - NEW_TOKENS
         initial, expected_output_ids = generate(prefix_server, "xpool-elastic-kv-fill", workload.prefix_tokens)
         hit, hit_output_ids = generate(prefix_server, "xpool-elastic-kv-hit", workload.prefix_tokens)
         generate(pressure_server, "xpool-elastic-kv-pressure", pressure_tokens)

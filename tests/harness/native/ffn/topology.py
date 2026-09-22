@@ -273,6 +273,7 @@ def run_ffn_instance(connection: Connection, spec: FfnInstanceSpec) -> None:
         transport=spec.transport,
         ffn_profile=spec.ffn_profile,
         kv_capacity=kv_capacity_profile(),
+        atn_runtime_headroom_bytes=0,
     )
     try:
         plan = runtime.wait_for_fabric_executable()

@@ -32,6 +32,7 @@ def reset_plugin_required_hook_targets(
 ) -> Iterator[None]:
     apply_hooks = HookRegistry.__dict__["apply_hooks"]
     HookRegistry.reset()
+    monkeypatch.setenv("SGLANG_ENABLE_POST_CAPTURE_KV_SIZING", "false")
     monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.bootstrap, "init", lambda cuda_device, role: None)
     monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.devkit, "install", lambda package=None: None)
     monkeypatch.setattr(xpool.integrations.sglang.plugin, "discover_sglang_hooks", lambda: ())

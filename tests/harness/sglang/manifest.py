@@ -55,7 +55,6 @@ class E2eElasticKvWorkload(BaseModel):
     prefix_model_id: str = Field(min_length=1)
     prefix_tokens: int = Field(gt=0)
     pressure_model_id: str = Field(min_length=1)
-    pressure_tokens: int = Field(gt=0)
     atn_device_memory_utilization: float = Field(gt=0.0, lt=1.0)
 
 

@@ -26,6 +26,20 @@ One SGLang worker process within an Instance, owning rank-local attention
 execution and one Transport attachment.
 _Avoid_: InstanceRankRuntime rank, Instance process
 
+**Prefill Context Parallelism**:
+The SGLang execution mode that partitions Prefill token rows among attention
+context-parallel ranks for attention computation. SGLang may preserve those
+rank-local rows or gather them before an FFN boundary, depending on the model,
+communicator, and expert-dispatch path.
+_Avoid_: Attention TP, Decode Context Parallelism
+
+**Decode Context Parallelism**:
+The SGLang execution mode that partitions Decode KV positions within a
+tensor-parallel group and combines partial attention results. It is distinct
+from Prefill token-row partitioning and does not by itself define a new FFN
+row partition.
+_Avoid_: Prefill Context Parallelism, Decode TP
+
 **Fabric Executable**:
 A Fabric generation whose participants have activated their data-plane
 resources, allowing Instance Ranks to attach Transport. It does not imply that
@@ -60,6 +74,13 @@ _Avoid_: Shared KV Cache, KV Cache content sharing
 The physical-memory capacity available for KV mappings across the Instance
 Ranks colocated on one attention GPU.
 _Avoid_: Global KV Cache, KV tensor pool
+
+**Attention Runtime Headroom**:
+One Instance Rank's immutable byte budget for service-time attention memory
+kept outside its attention GPU's KV Capacity Pool. The daemon sums these
+declarations per GPU. It is distinct from the configured utilization margin
+and the one-time device-memory observation.
+_Avoid_: KV margin, live memory usage, free-memory report
 
 **KV Control Channel**:
 The daemon-owned, Fabric-Generation-scoped host-local control surface that

@@ -98,13 +98,21 @@ class InstanceRankId:
 class InstanceRankRegistrationState(CommonRegistration):
     """One live Instance-rank registration."""
 
-    __slots__ = ("abi_version", "ffn_profile", "instance", "kv_capacity", "transport")
+    __slots__ = (
+        "abi_version",
+        "atn_runtime_headroom_bytes",
+        "ffn_profile",
+        "instance",
+        "kv_capacity",
+        "transport",
+    )
 
     abi_version: int
     instance: InstanceRankId
     transport: InstanceRankTransportProfile
     ffn_profile: InstanceFfnProfile
     kv_capacity: KvCapacityPartitionProfile
+    atn_runtime_headroom_bytes: int
 
     def __init__(
         self,
@@ -115,6 +123,7 @@ class InstanceRankRegistrationState(CommonRegistration):
         transport: InstanceRankTransportProfile,
         ffn_profile: InstanceFfnProfile,
         kv_capacity: KvCapacityPartitionProfile,
+        atn_runtime_headroom_bytes: int,
         now: float,
     ) -> None:
         """Create one registration from the Instance rank's declared contract."""
@@ -125,6 +134,7 @@ class InstanceRankRegistrationState(CommonRegistration):
         self.transport = transport
         self.ffn_profile = ffn_profile
         self.kv_capacity = kv_capacity
+        self.atn_runtime_headroom_bytes = atn_runtime_headroom_bytes
 
     def key(self) -> InstanceRankId:
         """Return the configured Instance-rank key."""
@@ -143,6 +153,7 @@ class InstanceRankRegistrationState(CommonRegistration):
             or self.transport != candidate.transport
             or self.ffn_profile != candidate.ffn_profile
             or self.kv_capacity != candidate.kv_capacity
+            or self.atn_runtime_headroom_bytes != candidate.atn_runtime_headroom_bytes
         )
 
 
@@ -313,6 +324,7 @@ class RegistrationBook:
                 transport=registration.transport,
                 ffn_profile=registration.ffn_profile,
                 kv_capacity=registration.kv_capacity,
+                atn_runtime_headroom_bytes=registration.atn_runtime_headroom_bytes,
             )
             for registration in self.instances.values()
         ]

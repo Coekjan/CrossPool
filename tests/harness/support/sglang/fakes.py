@@ -85,6 +85,7 @@ class FakeModelRunner:
     gpu_id: int = 0
     ps: ParallelState = field(default_factory=ParallelState.trivial)
     max_running_requests: int = 1
+    mem_fraction_static: float = 0.9
     model: nn.Module | None = None
     token_to_kv_pool: object | None = None
     token_to_kv_pool_allocator: object | None = None

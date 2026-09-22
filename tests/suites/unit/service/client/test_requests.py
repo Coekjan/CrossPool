@@ -64,6 +64,7 @@ def test_participant_registration_follows_config_check(
                 transport=transport_attributes(),
                 ffn_profile=ffn_profile(),
                 kv_capacity=kv_capacity_profile(),
+                atn_runtime_headroom_bytes=0,
             )
             client.register_instance(registration)
             expected_path = "/instance/register"

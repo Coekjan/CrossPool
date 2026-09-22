@@ -441,6 +441,7 @@ def create_daemon() -> FastAPI:
                 transport=request.transport,
                 ffn_profile=request.ffn_profile,
                 kv_capacity=request.kv_capacity,
+                atn_runtime_headroom_bytes=request.atn_runtime_headroom_bytes,
                 now=monotonic(),
             ),
         )

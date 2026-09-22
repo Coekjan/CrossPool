@@ -14,6 +14,57 @@ from xpool.integrations.sglang.kv.vmm import KvVmmBacking
 from xpool.service.wire import KvCapacityPartitionProfile
 
 
+@pytest.mark.parametrize("memory_query_fails", [False, True], ids=["memory-reported", "memory-query-failed"])
+def test_bundle_allocation_failure_reports_physical_state(
+    monkeypatch: pytest.MonkeyPatch, memory_query_fails: bool
+) -> None:
+    backing = object.__new__(KvVmmBacking)
+    backing.capacity_profile = KvCapacityPartitionProfile(
+        bundle_bytes=2048,
+        bundle_capacity=2,
+        floor_bundles=1,
+        token_capacity=1,
+        mapping_granularity_bytes=2048,
+        row_bytes=2048,
+        tokens_per_row=1,
+        token_page_size=1,
+    )
+    backing.base = 4096
+    backing.allocation_properties = object()
+    backing.access_descriptors = [object()]
+    backing.backed_bundles = 1
+    backing.raw_storage = cast(torch.Tensor, SimpleNamespace(device=torch.device("cuda:0")))
+
+    failure = object()
+    allocation_error = RuntimeError("cuMemCreate(xpool kv bundle)")
+    monkeypatch.setattr(xpool.integrations.sglang.kv.vmm.driver, "cuMemCreate", lambda *args: failure)
+
+    def memory_info(device: torch.device) -> tuple[int, int]:
+        if memory_query_fails:
+            raise RuntimeError("memory query unavailable")
+        return 1024, 4096
+
+    monkeypatch.setattr(xpool.integrations.sglang.kv.vmm.torch.cuda, "mem_get_info", memory_info)
+
+    def check(result: object, message: str) -> object:
+        if result is failure:
+            raise allocation_error
+        return result
+
+    monkeypatch.setattr(xpool.integrations.sglang.kv.vmm, "check_drv", check)
+
+    with pytest.raises(RuntimeError) as raised:
+        backing.resize(2)
+    assert raised.value is allocation_error
+    assert backing.backed_bundles == 1
+    assert allocation_error.__notes__ == [
+        "target_bundles=2 backed_bundles=1 bundle_bytes=2048",
+        "CUDA memory query failed: memory query unavailable"
+        if memory_query_fails
+        else "free_bytes=1024 total_bytes=4096",
+    ]
+
+
 def test_partial_bundle_mapping_retains_actual_progress_for_close(monkeypatch: pytest.MonkeyPatch) -> None:
     backing = object.__new__(KvVmmBacking)
     backing.capacity_profile = KvCapacityPartitionProfile(

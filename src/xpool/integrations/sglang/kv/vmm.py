@@ -158,10 +158,24 @@ class KvVmmBacking:
 
         while self.backed_bundles < bundle_count:
             address = self.base + self.backed_bundles * profile.bundle_bytes
-            handle = check_drv(
-                driver.cuMemCreate(profile.bundle_bytes, self.allocation_properties, 0),
-                "cuMemCreate(xpool kv bundle)",
-            )
+            try:
+                handle = check_drv(
+                    driver.cuMemCreate(profile.bundle_bytes, self.allocation_properties, 0),
+                    "cuMemCreate(xpool kv bundle)",
+                )
+            except RuntimeError as error:
+                error.add_note(
+                    f"target_bundles={bundle_count} backed_bundles={self.backed_bundles} "
+                    f"bundle_bytes={profile.bundle_bytes}"
+                )
+                device = None if self.raw_storage is None else self.raw_storage.device
+                try:
+                    free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+                except RuntimeError as diagnostic_error:
+                    error.add_note(f"CUDA memory query failed: {diagnostic_error}")
+                else:
+                    error.add_note(f"free_bytes={free_bytes} total_bytes={total_bytes}")
+                raise
             mapped = False
             try:
                 check_drv(

@@ -9,13 +9,21 @@ from functools import partial
 from typing import Concatenate
 
 import torch
+from sglang.srt.arg_groups.overrides import declare_resolution, resolution_result
 from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 from sglang.srt.model_executor.cuda_graph_config import Backend, PhaseConfig
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.model_executor.pool_configurator import MemoryPoolConfig
 from sglang.srt.plugins.hook_registry import HookType
-from sglang.srt.runtime_context import get_exec, get_schedule, get_serving
+from sglang.srt.runtime_context import (
+    get_disagg,
+    get_exec,
+    get_schedule,
+    get_serving,
+    pre_capture_activation_reserve_mb,
+)
+from sglang.srt.server_args import ServerArgs
 
 from xpool import bootstrap, devkit
 from xpool.config import get_global_config
@@ -45,6 +53,7 @@ MODEL_RUNNER_LOAD_MODEL = "sglang.srt.model_executor.model_runner.ModelRunner.lo
 MODEL_RUNNER_ALLOC_MEMORY_POOL = "sglang.srt.model_executor.model_runner.ModelRunner.alloc_memory_pool"
 SCHEDULER_GET_INIT_INFO = "sglang.srt.managers.scheduler.Scheduler.get_init_info"
 SCHEDULER_RELEASE_HOST_RESOURCES = "sglang.srt.managers.scheduler.Scheduler.release_host_resources"
+RUNTIME_CONTEXT_PUBLISH = "sglang.srt.runtime_context.publish"
 SGLANG_DEVKIT_PACKAGE = "xpool.integrations.sglang.devkit"
 logger = logging.getLogger(__name__)
 
@@ -77,9 +86,38 @@ class LifecycleHookSet(SglangHookSet):
                     around_scheduler_release_host_resources,
                     HookType.AROUND,
                 ),
+                SglangHook(
+                    RUNTIME_CONTEXT_PUBLISH,
+                    around_runtime_context_publish,
+                    HookType.AROUND,
+                ),
             )
         )
         return tuple(hooks)
+
+
+def around_runtime_context_publish[R](
+    original_fn: Callable[..., R],
+    server_args: ServerArgs,
+    *,
+    role: str,
+    hf_config: object | None = None,
+) -> R:
+    """Default request concurrency to enabled Decode Graph coverage."""
+
+    server_args.resolve_once()
+    if resolution_result(server_args, "max_running_requests") is None:
+        graph_config = resolution_result(server_args, "cuda_graph_config")
+        if graph_config.decode.backend != Backend.DISABLED:
+            max_bs = graph_config.decode.max_bs
+            if not isinstance(max_bs, int) or isinstance(max_bs, bool) or max_bs <= 0:
+                raise RuntimeError("xpool requires positive Decode Graph max_bs to default max_running_requests")
+            declare_resolution(
+                server_args,
+                "xpool Decode Graph request concurrency",
+                max_running_requests=max_bs,
+            )
+    return original_fn(server_args, role=role, hf_config=hf_config)
 
 
 def around_model_runner_load_model[**P, R](
@@ -179,8 +217,8 @@ def after_model_runner_alloc_memory_pool[R](
             geometry cannot be derived, or instance runtime startup fails.
 
     Side Effects:
-        Initializes and attaches the process-global CrossPool instance transport
-        runtime.
+        Registers immutable attention runtime headroom, then initializes and
+        attaches the process-global CrossPool Instance runtime.
     """
 
     runtime = SglangInstanceRankRuntime.require(model_runner)
@@ -197,12 +235,26 @@ def after_model_runner_alloc_memory_pool[R](
         request_pool = model_runner.req_to_token_pool
         if not isinstance(request_pool, ReqToTokenPool):
             raise RuntimeError("xpool SGLang request pool is unavailable after memory-pool allocation")
+        device_total_bytes = torch.cuda.get_device_properties(binding.cuda_device).total_memory
+        atn_runtime_headroom_bytes = int(device_total_bytes * (1 - model_runner.mem_fraction_static))
+        decode_graph = get_exec().graph.cuda_graph_config.decode
+        if (
+            get_disagg().disaggregation_mode != "prefill"
+            and decode_graph.backend != Backend.DISABLED
+            and model_runner.max_running_requests > (decode_graph.max_bs or 0)
+        ):
+            # Batches outside captured Decode coverage need eager activation space.
+            atn_runtime_headroom_bytes = max(
+                atn_runtime_headroom_bytes,
+                int(pre_capture_activation_reserve_mb(device_total_bytes / (1 << 20)) * (1 << 20)),
+            )
         runtime.instance_rank = InstanceRankRuntime.start(
             instance_id=binding.instance_id,
             rank=binding.worker_rank,
             transport=transport,
             ffn_profile=ffn_profile,
             kv_capacity=pool.backing.capacity_profile,
+            atn_runtime_headroom_bytes=atn_runtime_headroom_bytes,
         )
         plan = runtime.instance_rank.wait_for_fabric_executable()
         channel_ref = runtime.instance_rank.client.kv_control_channel(plan.generation)
