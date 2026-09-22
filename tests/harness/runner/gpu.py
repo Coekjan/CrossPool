@@ -38,32 +38,8 @@ class GpuPool:
     def from_environment(cls) -> GpuPool:
         """Normalize the explicitly visible, externally exclusive GPU pool."""
 
-        raw_visibility = os.environ.get("CUDA_VISIBLE_DEVICES")
-        if raw_visibility is None or not raw_visibility.strip():
-            raise RuntimeError("GPU runner requires an explicit nonempty CUDA_VISIBLE_DEVICES")
-        entries = tuple(entry.strip() for entry in raw_visibility.split(","))
-        if any(not entry for entry in entries):
-            raise RuntimeError("CUDA_VISIBLE_DEVICES contains an empty GPU entry")
-        if any(entry.startswith("MIG-") or "/MIG-" in entry for entry in entries):
-            raise RuntimeError("GPU runner does not accept MIG identifiers")
-
         gpu_by_index = query_physical_gpus()
-        known_uuids = frozenset(gpu_by_index.values())
-        normalized: list[str] = []
-        unknown: list[str] = []
-        for entry in entries:
-            if entry in gpu_by_index:
-                normalized.append(gpu_by_index[entry])
-            elif entry in known_uuids:
-                normalized.append(entry)
-            else:
-                unknown.append(entry)
-        if unknown:
-            raise RuntimeError(f"CUDA_VISIBLE_DEVICES contains unknown physical GPUs: {tuple(unknown)}")
-        if len(normalized) != len(set(normalized)):
-            raise RuntimeError("CUDA_VISIBLE_DEVICES resolves to duplicate physical GPU UUIDs")
-
-        return cls(tuple(normalized), {uuid: int(index) for index, uuid in gpu_by_index.items()})
+        return cls(visible_gpu_uuids(gpu_by_index), {uuid: int(index) for index, uuid in gpu_by_index.items()})
 
     @property
     def available_count(self) -> int:
@@ -134,6 +110,67 @@ def query_physical_gpus() -> dict[str, str]:
     if not gpu_by_index:
         raise RuntimeError(f"{NVIDIA_SMI_COMMAND} returned no physical GPUs")
     return gpu_by_index
+
+
+def query_visible_gpu_total_memory_bytes() -> tuple[int, ...]:
+    """Return visible physical GPU capacities in caller-declared order."""
+
+    try:
+        result = subprocess.run(
+            [NVIDIA_SMI_COMMAND, "--query-gpu=index,uuid,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"failed to query physical GPU memory with {NVIDIA_SMI_COMMAND}: {exc}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+        raise RuntimeError(f"failed to query physical GPU memory with {NVIDIA_SMI_COMMAND}: {detail}")
+
+    gpu_by_index: dict[str, str] = {}
+    memory_by_uuid: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        fields = tuple(field.strip() for field in line.split(","))
+        if (
+            len(fields) != 3
+            or not fields[0].isdigit()
+            or not fields[1].startswith("GPU-")
+            or not fields[2].isdigit()
+            or int(fields[2]) <= 0
+        ):
+            raise RuntimeError(f"{NVIDIA_SMI_COMMAND} returned invalid physical GPU memory row: {line!r}")
+        index, uuid, memory_mib = fields
+        if index in gpu_by_index or uuid in memory_by_uuid:
+            raise RuntimeError(f"{NVIDIA_SMI_COMMAND} returned duplicate physical GPU memory row: {line!r}")
+        gpu_by_index[index] = uuid
+        memory_by_uuid[uuid] = int(memory_mib) * 1024 * 1024
+    if not gpu_by_index:
+        raise RuntimeError(f"{NVIDIA_SMI_COMMAND} returned no physical GPUs")
+    return tuple(memory_by_uuid[uuid] for uuid in visible_gpu_uuids(gpu_by_index))
+
+
+def visible_gpu_uuids(gpu_by_index: dict[str, str]) -> tuple[str, ...]:
+    """Resolve startup GPU selectors to unique physical UUIDs."""
+
+    raw_visibility = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if raw_visibility is None or not raw_visibility.strip():
+        raise RuntimeError("GPU runner requires an explicit nonempty CUDA_VISIBLE_DEVICES")
+    entries = tuple(entry.strip() for entry in raw_visibility.split(","))
+    if any(not entry for entry in entries):
+        raise RuntimeError("CUDA_VISIBLE_DEVICES contains an empty GPU entry")
+    if any(entry.startswith("MIG-") or "/MIG-" in entry for entry in entries):
+        raise RuntimeError("GPU runner does not accept MIG identifiers")
+
+    known_uuids = frozenset(gpu_by_index.values())
+    normalized = tuple(gpu_by_index.get(entry, entry) for entry in entries)
+    unknown = tuple(uuid for uuid in normalized if uuid not in known_uuids)
+    if unknown:
+        raise RuntimeError(f"CUDA_VISIBLE_DEVICES contains unknown physical GPUs: {unknown}")
+    if len(normalized) != len(set(normalized)):
+        raise RuntimeError("CUDA_VISIBLE_DEVICES resolves to duplicate physical GPU UUIDs")
+    return normalized
 
 
 def query_physical_gpu_links() -> dict[tuple[str, str], str]:

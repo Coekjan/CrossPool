@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import tests.harness.runner.gpu
 from tests.harness.sglang.manifest import E2E_MANIFEST_PATH, E2eManifest
 from tests.harness.sglang.serving.graph import SglangGraphMode, SglangGraphSettings
 from tests.harness.sglang.serving.launch import materialize
@@ -36,6 +37,11 @@ def test_materialize_writes_config_policy_and_sanitizes_environment(
     }
     for name, value in inherited.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setattr(
+        tests.harness.runner.gpu,
+        "query_visible_gpu_total_memory_bytes",
+        lambda: (40 * 1024**3, 40 * 1024**3, 40 * 1024**3),
+    )
     monkeypatch.setenv("XPOOL_DEBUG_TRANSPORT_OBSERVER_RECORD_CAPACITY", "1")
     monkeypatch.setenv("XPOOL_UNDECLARED_POLICY", "bad")
     monkeypatch.setenv("PYTHONPATH", "/untrusted/python")
@@ -66,7 +72,7 @@ def test_materialize_writes_config_policy_and_sanitizes_environment(
     }
     assert case.elastic_kv is not None
     assert raw["atn"] == {
-        "device_memory_utilization": case.elastic_kv.atn_device_memory_utilization,
+        "device_memory_utilization": case.elastic_kv.atn_device_memory_budget_bytes / (40 * 1024**3),
         "devices": [0],
     }
     assert raw["ffn"] == {"devices": [1, 2]}
@@ -83,6 +89,77 @@ def test_materialize_writes_config_policy_and_sanitizes_environment(
     assert launch.config.debug.fabric_observer.record_capacity == case.fabric_record_capacity
     assert not launch.config.debug.prefill_logit_observer.enable
     assert "XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE" not in launch.environment
+
+
+@pytest.mark.parametrize(
+    ("total_memory_bytes", "external_utilization", "expected_utilization"),
+    [
+        (40 * 1024**3, 0.9, 0.25),
+        (80 * 1024**3, 0.9, 0.125),
+        (40 * 1024**3, 0.1, 0.1),
+    ],
+)
+def test_materialize_elastic_kv_preserves_absolute_memory_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    total_memory_bytes: int,
+    external_utilization: float,
+    expected_utilization: float,
+) -> None:
+    manifest = E2eManifest.load(E2E_MANIFEST_PATH)
+    case = next(case for case in manifest.model_serving_cases if case.elastic_kv is not None)
+    monkeypatch.setattr(
+        tests.harness.runner.gpu,
+        "query_visible_gpu_total_memory_bytes",
+        lambda: (total_memory_bytes,) * case.required_gpu_count,
+    )
+
+    launch = materialize(
+        case,
+        models=tuple(manifest.model(placement.model_id) for placement in case.models),
+        serving_slo=manifest.serving_slo,
+        base_config=base_e2e_config(manifest, tmp_path, atn_device_memory_utilization=external_utilization),
+        workdir=tmp_path / "attempt",
+        daemon_port=19810,
+        graph_settings=SglangGraphSettings(decode_backend="full", prefill_backend="breakable"),
+    )
+
+    assert launch.config.atn.device_memory_utilization == pytest.approx(expected_utilization)
+
+
+@pytest.mark.parametrize(
+    ("visible_memory", "message"),
+    [
+        ((40 * 1024**3,), "requires 2 visible Attention GPUs"),
+        ((40 * 1024**3, 80 * 1024**3), "equal total memory"),
+    ],
+)
+def test_materialize_rejects_incompatible_elastic_kv_gpu_capacity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    visible_memory: tuple[int, ...],
+    message: str,
+) -> None:
+    manifest = E2eManifest.load(E2E_MANIFEST_PATH)
+    case = next(
+        case for case in manifest.model_serving_cases if case.elastic_kv is not None and case.atnagent_count == 2
+    )
+    monkeypatch.setattr(
+        tests.harness.runner.gpu,
+        "query_visible_gpu_total_memory_bytes",
+        lambda: visible_memory,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        materialize(
+            case,
+            models=tuple(manifest.model(placement.model_id) for placement in case.models),
+            serving_slo=manifest.serving_slo,
+            base_config=base_e2e_config(manifest, tmp_path),
+            workdir=tmp_path / "attempt",
+            daemon_port=19810,
+            graph_settings=SglangGraphSettings(decode_backend="full", prefill_backend="breakable"),
+        )
 
 
 @pytest.mark.parametrize(
@@ -154,7 +231,12 @@ def test_materialize_rejects_misaligned_models(tmp_path: Path) -> None:
         )
 
 
-def base_e2e_config(manifest: E2eManifest, tmp_path: Path) -> XpoolConfig:
+def base_e2e_config(
+    manifest: E2eManifest,
+    tmp_path: Path,
+    *,
+    atn_device_memory_utilization: float = 0.9,
+) -> XpoolConfig:
     model_base_uri = tmp_path / "models"
     for model in manifest.models:
         model_path = model_base_uri / model.model_id
@@ -167,7 +249,10 @@ def base_e2e_config(manifest: E2eManifest, tmp_path: Path) -> XpoolConfig:
         {
             "vendor": {"model_base_uri": str(model_base_uri)},
             "scheduler": {"slo": {"ttft_ms": 5000, "tbt_ms": 500}},
-            "atn": {"devices": [0]},
+            "atn": {
+                "devices": [0],
+                "device_memory_utilization": atn_device_memory_utilization,
+            },
             "ffn": {"devices": [1, 2]},
             "models": [{"id": "external/model-not-owned-by-tests"}],
         },

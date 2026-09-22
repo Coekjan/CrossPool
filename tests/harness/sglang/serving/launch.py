@@ -11,6 +11,7 @@ from types import MappingProxyType
 
 import tomli_w
 
+import tests.harness.runner.gpu
 from tests.harness.native.cluster import XpoolClusterLaunch
 from tests.harness.sglang.manifest import E2eModel, E2eServingCase
 from tests.harness.sglang.serving.graph import SglangGraphMode, SglangGraphSettings
@@ -81,6 +82,20 @@ def materialize(
     }
     if base_config.scheduler.ffn_policy is FfnSchedulingPolicy.RANDOM:
         scheduler["ffn_random_seed"] = base_config.scheduler.ffn_random_seed
+    atn_device_memory_utilization = base_config.atn.device_memory_utilization
+    if case.elastic_kv is not None:
+        visible_memory = tests.harness.runner.gpu.query_visible_gpu_total_memory_bytes()
+        atn_memory = visible_memory[: case.atnagent_count]
+        if len(atn_memory) != case.atnagent_count:
+            raise ValueError(
+                f"E2E elastic KV case requires {case.atnagent_count} visible Attention GPUs, got {len(atn_memory)}"
+            )
+        if len(set(atn_memory)) != 1:
+            raise ValueError("E2E elastic KV case requires Attention GPUs with equal total memory")
+        atn_device_memory_utilization = min(
+            atn_device_memory_utilization,
+            case.elastic_kv.atn_device_memory_budget_bytes / atn_memory[0],
+        )
     payload: dict[str, object] = {
         "daemon": {
             "host": base_config.daemon.host,
@@ -90,11 +105,7 @@ def materialize(
         "vendor": {"model_base_uri": str(model_base_uri)},
         "atn": {
             "devices": list(range(case.atnagent_count)),
-            "device_memory_utilization": (
-                base_config.atn.device_memory_utilization
-                if case.elastic_kv is None
-                else case.elastic_kv.atn_device_memory_utilization
-            ),
+            "device_memory_utilization": atn_device_memory_utilization,
         },
         "ffn": {"devices": list(range(case.atnagent_count, case.required_gpu_count))},
         "models": [{"id": model.model_id} for model in launch_models],

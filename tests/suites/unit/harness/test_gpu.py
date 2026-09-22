@@ -5,7 +5,7 @@ import subprocess
 import pytest
 
 import tests.harness.runner.gpu
-from tests.harness.runner.gpu import GpuPool
+from tests.harness.runner.gpu import GpuPool, query_visible_gpu_total_memory_bytes
 
 
 def test_pool_normalizes_ordinals_and_uuids_in_user_order(
@@ -21,6 +21,28 @@ def test_pool_normalizes_ordinals_and_uuids_in_user_order(
         assert pool.available_count == 3
     finally:
         pool.close()
+
+
+def test_visible_gpu_memory_normalizes_ordinals_and_uuids_in_user_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,GPU-a,1")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout="0, GPU-a, 40960\n1, GPU-b, 81920\n2, GPU-c, 122880\n",
+            stderr="",
+        ),
+    )
+
+    assert query_visible_gpu_total_memory_bytes() == (
+        122880 * 1024 * 1024,
+        40960 * 1024 * 1024,
+        81920 * 1024 * 1024,
+    )
 
 
 @pytest.mark.parametrize(

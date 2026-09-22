@@ -71,7 +71,7 @@ fabric_record_capacity = 32768
 prefix_model_id = "Qwen/Qwen2.5-0.5B"
 prefix_tokens = 20000
 pressure_model_id = "Qwen/Qwen3-0.6B"
-atn_device_memory_utilization = 0.25
+atn_device_memory_budget_bytes = 10737418240
 
 [[model_serving_cases]]
 id = "qwen2-qwen3-tp2-dp1-f2-e2"
@@ -90,7 +90,7 @@ fabric_record_capacity = 32768
 prefix_model_id = "Qwen/Qwen2.5-0.5B"
 prefix_tokens = 32000
 pressure_model_id = "Qwen/Qwen3-0.6B"
-atn_device_memory_utilization = 0.263
+atn_device_memory_budget_bytes = 11274289152
 
 [[ffn_topology_cases]]
 id = "single-rank-delivery"

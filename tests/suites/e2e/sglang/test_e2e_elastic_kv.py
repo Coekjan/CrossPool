@@ -46,14 +46,20 @@ def case_parameter(case: E2eServingCase) -> ParameterSet:
     return pytest.param(case, id=case.id, marks=marks)
 
 
-def generate(server: SglangServerProcess, request_id: str, token_count: int) -> tuple[int, tuple[int, ...]]:
+def generate(
+    server: SglangServerProcess,
+    request_id: str,
+    token_count: int,
+    *,
+    input_token_id: int = 1,
+) -> tuple[int, tuple[int, ...]]:
     """Run one deterministic request and return its cache hit and output IDs."""
 
     response = httpx.post(
         f"{server.url()}/generate",
         json={
             "rid": request_id,
-            "input_ids": [1] * token_count,
+            "input_ids": [input_token_id] * token_count,
             "sampling_params": {
                 "temperature": 0,
                 "max_new_tokens": NEW_TOKENS,
@@ -90,7 +96,7 @@ def test_e2e_elastic_kv(
     e2e_base_config: XpoolConfig,
     tmp_path: Path,
 ) -> None:
-    """Observe prefix hits, peer-pressure cache loss, and renewed hits."""
+    """Observe competing prefix hits, peer-pressure cache loss, and renewed hits."""
 
     workload = case.elastic_kv
     assert workload is not None
@@ -114,18 +120,62 @@ def test_e2e_elastic_kv(
         ):
             raise AssertionError(f"SGLang returned invalid max_req_input_len: {max_input_tokens!r}")
         pressure_tokens = max_input_tokens - NEW_TOKENS
-        initial, expected_output_ids = generate(prefix_server, "xpool-elastic-kv-fill", workload.prefix_tokens)
-        hit, hit_output_ids = generate(prefix_server, "xpool-elastic-kv-hit", workload.prefix_tokens)
-        generate(pressure_server, "xpool-elastic-kv-pressure", pressure_tokens)
-        after_pressure, after_pressure_output_ids = generate(
+        primary_initial, primary_expected_output_ids = generate(
             prefix_server,
-            "xpool-elastic-kv-after-pressure",
+            "xpool-elastic-kv-primary-fill",
             workload.prefix_tokens,
         )
-        repopulated, repopulated_output_ids = generate(
+        competing_initial, competing_expected_output_ids = generate(
             prefix_server,
-            "xpool-elastic-kv-repopulated",
+            "xpool-elastic-kv-competing-fill",
             workload.prefix_tokens,
+            input_token_id=2,
+        )
+        primary_hit, primary_hit_output_ids = generate(
+            prefix_server,
+            "xpool-elastic-kv-primary-hit",
+            workload.prefix_tokens,
+        )
+        competing_hit, competing_hit_output_ids = generate(
+            prefix_server,
+            "xpool-elastic-kv-competing-hit",
+            workload.prefix_tokens,
+            input_token_id=2,
+        )
+        generate(pressure_server, "xpool-elastic-kv-pressure", pressure_tokens)
+        primary_after_pressure, primary_after_pressure_output_ids = generate(
+            prefix_server,
+            "xpool-elastic-kv-primary-after-pressure",
+            workload.prefix_tokens,
+        )
+        competing_after_pressure, competing_after_pressure_output_ids = generate(
+            prefix_server,
+            "xpool-elastic-kv-competing-after-pressure",
+            workload.prefix_tokens,
+            input_token_id=2,
+        )
+
+        if primary_after_pressure < primary_hit:
+            restored_hit = primary_hit
+            restored_expected_output_ids = primary_expected_output_ids
+            restored_token_id = 1
+        elif competing_after_pressure < competing_hit:
+            restored_hit = competing_hit
+            restored_expected_output_ids = competing_expected_output_ids
+            restored_token_id = 2
+        else:
+            raise AssertionError("peer pressure did not reclaim either confirmed prefix")
+        _, restored_fill_output_ids = generate(
+            prefix_server,
+            "xpool-elastic-kv-restored-fill",
+            workload.prefix_tokens,
+            input_token_id=restored_token_id,
+        )
+        restored, restored_output_ids = generate(
+            prefix_server,
+            "xpool-elastic-kv-restored-hit",
+            workload.prefix_tokens,
+            input_token_id=restored_token_id,
         )
 
         def sustain(alias: str, server: SglangServerProcess, token_count: int) -> int:
@@ -140,20 +190,25 @@ def test_e2e_elastic_kv(
             )
             completed = tuple(future.result() for future in futures)
 
-        assert initial < hit
-        assert after_pressure < hit
-        assert repopulated == hit
+        assert primary_initial < primary_hit
+        assert competing_initial < competing_hit
+        assert restored == restored_hit
         assert completed == (SUSTAINED_REQUEST_COUNT, SUSTAINED_REQUEST_COUNT)
-        assert hit_output_ids == after_pressure_output_ids == repopulated_output_ids == expected_output_ids
+        assert primary_hit_output_ids == primary_after_pressure_output_ids == primary_expected_output_ids
+        assert competing_hit_output_ids == competing_after_pressure_output_ids == competing_expected_output_ids
+        assert restored_fill_output_ids == restored_output_ids == restored_expected_output_ids
         print(
             "XPOOL_ELASTIC_KV_CACHE="
             + json.dumps(
                 {
-                    "after_pressure": after_pressure,
-                    "hit": hit,
-                    "initial": initial,
+                    "competing_after_pressure": competing_after_pressure,
+                    "competing_hit": competing_hit,
+                    "competing_initial": competing_initial,
                     "pressure_tokens": pressure_tokens,
-                    "repopulated": repopulated,
+                    "primary_after_pressure": primary_after_pressure,
+                    "primary_hit": primary_hit,
+                    "primary_initial": primary_initial,
+                    "restored": restored,
                 },
                 sort_keys=True,
             )

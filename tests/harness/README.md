@@ -57,12 +57,14 @@ Supervisor is owner loss, not a normal cancellation mechanism.
 ## GPU And Endpoint Ownership
 
 `runner/gpu.py` derives the eligible pool once from startup
-`CUDA_VISIBLE_DEVICES` and normalizes it to physical UUIDs. The visible set is
+`CUDA_VISIBLE_DEVICES`, accepting physical ordinals or full GPU UUIDs, and
+normalizes it to physical UUIDs. UUID input is recommended with CUDA MPS because
+it preserves physical identity across visibility remapping. The visible set is
 an externally exclusive test allocation; the harness does not coordinate GPUs
-with another CrossPool invocation. Every selected device must pass serialized MPS
-preflight before GPU work starts. Within one run, a task sees only the UUIDs in
-its `GpuPool` lease, and that lease is released only after its complete process
-domain is proved empty.
+with another CrossPool invocation. Every selected device must pass serialized
+MPS preflight before GPU work starts. Within one run, a task sees only the UUIDs
+in its `GpuPool` lease, and that lease is released only after its complete
+process domain is proved empty.
 
 `runner/network.py` reserves endpoints by retaining a listener after a complete
 `bind -> listen -> local connect -> accept` qualification. SGLang helpers own
