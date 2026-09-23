@@ -4,7 +4,7 @@ CrossPool configuration is shared by the daemon, AtnAgents, FfnAgents, and
 SGLang Instances. Start from [`configs/xpool.example.toml`](../configs/xpool.example.toml)
 for deployment settings and [`.env.example`](../.env.example) for process
 environment settings. Keep machine-local paths in an ignored `*.local.toml`
-file and load `.env` into uv commands with `UV_ENV_FILE`.
+file and load `.env` into `uv run` commands with `UV_ENV_FILE`.
 
 The [Control Plane design](designs/control-plane.md#configuration-and-integration)
 defines configuration semantics and validation contracts. This page is the
@@ -34,6 +34,24 @@ Bootstrap environment variables are separate from the TOML schema:
 
 All processes in one deployment must use the same resolved configuration and
 CUDA device numbering.
+
+## Native build settings
+
+`uv sync` does not load `.env` through `UV_ENV_FILE`. Its native build uses
+CMake's default CUDA architecture list unless you pass a build setting. For an
+A100-only build, append this option to `uv sync`:
+
+```text
+--config-settings-package xpool:cmake.define.XPOOL_CUDA_ARCHITECTURES=80-real
+```
+
+Choose the architectures required by the selected GPUs; this is not a runtime
+configuration setting. To reuse the override across builds in one shell,
+including the pre-commit native-build hook, export
+`CMAKE_ARGS=-DXPOOL_CUDA_ARCHITECTURES=80-real` before running the commands.
+Without that export, the hook builds the default architecture list. See the
+[Quick Start installation step](tutorials/quick-start.md#install-and-start-mps)
+for a complete `uv sync` command.
 
 ## TOML overview
 

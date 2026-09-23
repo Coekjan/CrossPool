@@ -61,10 +61,22 @@ The resulting model path must contain `config.json`, for example
 Use the repository's uv-managed interpreter and pinned dependencies:
 
 ```bash
-export UV_ENV_FILE="$PWD/.env"
 uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool
+export UV_ENV_FILE="$PWD/.env"
 uv run xpool config dump
 ```
+
+`UV_ENV_FILE` loads `.env` for `uv run`, not for `uv sync`. The sync command
+builds for CMake's default CUDA architectures. If both selected GPUs are A100s,
+you can instead limit that build to their architecture:
+
+```bash
+uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool \
+  --config-settings-package xpool:cmake.define.XPOOL_CUDA_ARCHITECTURES=80-real
+```
+
+Select every required architecture when the GPUs differ; `80-real` is only the
+A100 example. The build option does not belong in `.env`.
 
 The config dump should show exactly one model and the selected attention and
 FFN device indices. Start MPS only if no controller already owns the selected

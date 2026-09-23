@@ -123,7 +123,7 @@ GPU lease, endpoint, and artifact ownership.
 CMake uses ccache for C, C++, and CUDA when available and no compiler launcher
 is already configured. To disable it for a build, add
 `--config-settings-package xpool:cmake.define.XPOOL_ENABLE_CCACHE=OFF`
-to the development-environment sync command above.
+to the [Quick Start sync command](docs/tutorials/quick-start.md#install-and-start-mps).
 
 ## Repository Guide
 
