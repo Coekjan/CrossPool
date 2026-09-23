@@ -30,11 +30,14 @@ combination requires its own accepted plan and qualification evidence.
 | Workstream | Class |
 | --- | --- |
 | Unified Timeline Observability | Platform Capability |
+| Live KV Cache Observability | Platform Capability |
 | Model Coverage | Product Capability |
+| Context Parallel Serving | Product Capability |
 | Serving-engine Coverage | Product Capability |
 | Cross-host Fabric | Product Capability |
 | Accelerator Portability | Product Capability |
 | Code Quality and Taste | Cross-cutting Practice |
+| Benchmark Workflows | Cross-cutting Practice |
 | Evaluation and Baselines | Cross-cutting Practice |
 
 ## Unified Timeline Observability
@@ -61,6 +64,23 @@ over existing Observer evidence, clock-alignment measurements, and an accepted
 active plan for Unified Timeline Observability. Continuous streaming, alerting,
 and a production monitoring service are outside this workstream.
 
+## Live KV Cache Observability
+
+- **Class:** Platform Capability.
+- **Outcome:** Provide `xpool top` to show live KV Cache occupancy by GPU and
+  model, with pool totals and each model's share clearly distinguished.
+- **Current seam:** Generation-scoped KV capacity accounting and the KV Control
+  Channel already track physical pool budgets and partition capacity.
+- **Requires:** A read-only live snapshot contract, a clear distinction between
+  physically backed bytes and logical token usage, and evidence that collection
+  does not disturb serving or capacity coordination.
+- **Benefits from:** Unified Timeline Observability, without depending on it.
+
+Research must identify which occupancy values are authoritative and which need
+new instrumentation. Candidate deliverables are a telemetry-source audit, a
+minimal terminal view, and an accepted active plan for `xpool top`. Operational
+logs are not a source for the live view.
+
 ## Model Coverage
 
 - **Class:** Product Capability.
@@ -79,6 +99,25 @@ focused implementation task. A model requiring Unary FFN, expert parallelism,
 quantization, a new Router, or a new operator first needs research for that
 missing capability. Candidate deliverables are one compatibility review,
 implementation, and qualification package per model family.
+
+## Context Parallel Serving
+
+- **Class:** Product Capability.
+- **Outcome:** Support SGLang Prefill and Decode Context Parallelism with a
+  context-parallel degree greater than one while preserving correct FFN row
+  ownership and Elastic KV Cache capacity semantics.
+- **Current seam:** SGLang integration rejects context-parallel execution; the
+  attention topology and FFN handoff currently use TP/DP rank geometry.
+- **Requires:** Current SGLang model and topology support evidence, a runnable
+  prototype, an accepted FFN row and KV Capacity Group contract, and numerical,
+  graph, and serving qualification.
+- **Benefits from:** Existing model-qualification and installed-serving harnesses.
+
+Research must establish rank-local FFN row shapes, KV Capacity Group membership,
+and graph behavior for a runnable Prefill and Decode Context Parallelism setup
+before changing CrossPool interfaces. Candidate deliverables are a SGLang
+support audit, a minimal installed-serving prototype, and a decision-complete
+active plan with per-model qualification.
 
 ## Serving-engine Coverage
 
@@ -164,6 +203,24 @@ Only findings that alter architecture or public contracts receive an active
 plan. This workstream does not add a second linter, include sorter, comment
 density rule, or source-text quality gate.
 
+## Benchmark Workflows
+
+- **Class:** Cross-cutting Practice.
+- **Outcome:** Provide `xbench` as the canonical benchmark runner alongside
+  `xtest`, with live progress and metrics and durable results in a consistent,
+  machine-readable format.
+- **Current seam:** `xtest` already manages test resources and artifacts;
+  existing serving and report-only performance runs provide benchmark inputs.
+- **Requires:** An accepted benchmark case and result contract covering workload,
+  environment, warmup, measurements, failures, and artifact ownership.
+- **Benefits from:** Reusing applicable `xtest` resource and process-lifecycle
+  mechanisms, and Unified Timeline Observability when available.
+
+Research should identify what can be shared with `xtest` without making
+benchmarks depend on test verdicts. Candidate deliverables are a minimal
+`xbench` prototype, a stable live-and-stored result shape, and an accepted
+active plan for benchmark execution and result retention.
+
 ## Evaluation and Baselines
 
 - **Class:** Cross-cutting Practice.
@@ -174,8 +231,8 @@ density rule, or source-text quality gate.
 - **Requires:** Explicit hardware, models, workloads, arrival process, memory
   budget, warmup, concurrency, SLOs, metrics, raw artifacts, and treatment of
   failed or incomplete runs.
-- **Benefits from:** Unified Timeline Observability and the Product Capability
-  being evaluated.
+- **Benefits from:** Benchmark Workflows, Unified Timeline Observability, and
+  the Product Capability being evaluated.
 
 Baseline classes include native SGLang and potentially vLLM, multi-model sharing
 systems such as MuxServe, KV-elastic systems such as kvcached, and CrossPool
