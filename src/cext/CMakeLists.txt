@@ -23,14 +23,16 @@ if(NOT XPOOL_CEXT_HEADERS)
 endif()
 
 add_library(xpool_abi INTERFACE)
+# CUDA Toolkit installations can bundle different NVSHMEM headers; the wheel's
+# headers must match the host and device libraries selected in XpoolDependencies.
+target_include_directories(xpool_abi
+  SYSTEM BEFORE INTERFACE ${XPOOL_NVSHMEM_INCLUDE_DIR}
+)
 target_include_directories(xpool_abi INTERFACE ${XPOOL_CEXT_INCLUDE_DIR})
 target_link_libraries(xpool_abi INTERFACE CCCL::libcudacxx)
 target_compile_features(xpool_abi INTERFACE cxx_std_20)
 
 add_library(xpool_cext_core STATIC ${XPOOL_CEXT_SOURCES} ${XPOOL_CEXT_HEADERS})
-target_include_directories(xpool_cext_core SYSTEM PRIVATE
-  ${CUDAToolkit_INCLUDE_DIRS}
-)
 target_link_libraries(
   xpool_cext_core
   PRIVATE

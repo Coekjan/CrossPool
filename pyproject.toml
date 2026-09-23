@@ -1,7 +1,7 @@
 [build-system]
 requires = [
     "pybind11-stubgen==2.5.5",
-    "scikit-build-core>=0.11",
+    "scikit-build-core==1.0.3",
     "torch==2.13.0",
 ]
 build-backend = "scikit_build_core.build"
@@ -49,7 +49,7 @@ dev = [
     "pytest>=9.1.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.15.17",
-    "scikit-build-core>=0.11",
+    "scikit-build-core==1.0.3",
     "tomli-w>=1.2.0",
     "ty>=0.0.49",
 ]

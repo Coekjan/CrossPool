@@ -146,6 +146,14 @@ numerical, or acceptance contracts. Ruff owns Python docstring shape, Doxygen
 owns Native declaration coverage and markup, and clang-format owns Native
 include grouping and comment layout.
 
+Native packaging keeps the compiled extension and generated PEP 561 stubs as
+distinct artifacts. Editable and wheel installs resolve `xpool.native` to the
+compiled extension while retaining the generated stubs for typing. The native
+build selects NVSHMEM headers from the same Python distribution as the linked
+NVSHMEM host and device libraries, ahead of unrelated Toolkit NVSHMEM headers;
+the CMake/scikit-build package boundary owns this module identity and header
+selection rather than a duplicate handwritten typing module.
+
 The current implementation provides real Dense and MoE FFN execution, true-TP
 weight ownership, Device-resident Transport and Fabric progress, per-Lane
 GraphExec ownership, static placement, memory admission, elastic

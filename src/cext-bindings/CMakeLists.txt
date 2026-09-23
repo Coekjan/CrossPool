@@ -20,9 +20,6 @@ Python3_add_library(
   ${XPOOL_CEXT_BINDING_SOURCES}
   ${XPOOL_CEXT_BINDING_HEADERS}
 )
-target_include_directories(xpool_cext SYSTEM PRIVATE
-  ${CUDAToolkit_INCLUDE_DIRS}
-)
 target_link_libraries(
   xpool_cext
   PRIVATE
