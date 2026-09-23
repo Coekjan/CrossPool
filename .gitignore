@@ -4,15 +4,16 @@ __pycache__/
 *.dylib
 *.dll
 
-.venv/
+.venv
+.xpool-cache
+src/xpool/native/
+
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
 .ty/
 .coverage
 .coverage.*
-.xpool-cache
-src/xpool/native/
 .env
 
 build/
