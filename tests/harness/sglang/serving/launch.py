@@ -17,6 +17,8 @@ from tests.harness.sglang.manifest import E2eModel, E2eServingCase
 from tests.harness.sglang.serving.graph import SglangGraphMode, SglangGraphSettings
 from xpool.config import FfnSchedulingPolicy, LatencySloConfig, XpoolConfig
 
+SERVING_OBSERVER_RECORD_CAPACITY = 32768
+
 
 @dataclass(frozen=True, slots=True)
 class E2eLaunchModel:
@@ -115,11 +117,10 @@ def materialize(
     environment = runtime_environment(
         config_path=config_path,
         observer_outdir=observer_outdir,
-        transport_record_capacity=case.transport_record_capacity,
-        fabric_record_capacity=case.fabric_record_capacity,
         prefill_logit_observer=(
-            SglangGraphMode.PREFILL_BREAKABLE in case.graph_modes
-            and graph_settings in {SglangGraphMode.EAGER.settings(), SglangGraphMode.PREFILL_BREAKABLE.settings()}
+            {SglangGraphMode.EAGER, SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE}.issubset(case.graph_modes)
+            and graph_settings
+            in {SglangGraphMode.EAGER.settings(), SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings()}
         ),
     )
     config = XpoolConfig.from_file(config_path, env=environment)
@@ -137,8 +138,6 @@ def runtime_environment(
     *,
     config_path: Path,
     observer_outdir: Path,
-    transport_record_capacity: int,
-    fabric_record_capacity: int,
     prefill_logit_observer: bool,
 ) -> dict[str, str]:
     """Return a sanitized process environment for the E2E runtime tree."""
@@ -168,10 +167,10 @@ def runtime_environment(
             "XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR": str(observer_outdir),
             "XPOOL_DEBUG_TRANSPORT_OBSERVER_ENABLE": "1",
             "XPOOL_DEBUG_TRANSPORT_OBSERVER_OUTDIR": str(observer_outdir),
-            "XPOOL_DEBUG_TRANSPORT_OBSERVER_RECORD_CAPACITY": str(transport_record_capacity),
+            "XPOOL_DEBUG_TRANSPORT_OBSERVER_RECORD_CAPACITY": str(SERVING_OBSERVER_RECORD_CAPACITY),
             "XPOOL_DEBUG_FABRIC_OBSERVER_ENABLE": "1",
             "XPOOL_DEBUG_FABRIC_OBSERVER_OUTDIR": str(observer_outdir),
-            "XPOOL_DEBUG_FABRIC_OBSERVER_RECORD_CAPACITY": str(fabric_record_capacity),
+            "XPOOL_DEBUG_FABRIC_OBSERVER_RECORD_CAPACITY": str(SERVING_OBSERVER_RECORD_CAPACITY),
         }
     )
     if prefill_logit_observer:

@@ -20,16 +20,18 @@ unsharded reference. These evidence surfaces are orthogonal: model suites own
 model semantics while shared topology suites own delivery cardinalities.
 
 Serving graph qualification has two verdicts. Decode compares Eager and Decode
-Full token IDs. Prefill compares Eager and Prefill Breakable first-prefill
-logits with full-distribution forward KL while the Graph Observer proves that
-Breakable execution actually occurred. Prefill token identity is diagnostic,
-not a correctness requirement.
+Full token IDs with eager prefill in both runs. Prefill compares Eager and the
+combined Decode Full plus Prefill Breakable mode's first-prefill logits with
+full-distribution forward KL while the Graph Observer proves that Breakable
+execution actually occurred. Prefill token identity is diagnostic, not a
+correctness requirement.
 
 Routine serving E2E proves installed HTTP completion, graph-mode startup and
 observed Graph structure, and Transport and Fabric behavior with Qwen3-0.6B
-and Qwen2.5-0.5B. Explicit per-model suites own independent FFN numerical
-reference and serving graph comparisons, including qualified MoE models. The
-ordinary suite owns installed serving for the two small Qwen deployments;
+and Qwen2.5-0.5B at attention TP1 and TP2 under the combined graph mode.
+Explicit per-model suites own independent FFN numerical reference and serving
+graph comparisons, including qualified MoE models. The ordinary suite owns
+installed serving for the two small Qwen deployments;
 model suites own their explicit qualification whenever an adapter or numerical
 contract changes. The [test architecture](../../tests/README.md) owns suite
 selection commands and case placement.
@@ -94,7 +96,7 @@ Elastic KV qualification follows the same evidence ownership. Native tests
 prove the process-shared KV Control Channel. Integration tests prove physical
 VMM behavior and CUDA Event ordering together with allocator, prefix-cache,
 command, and daemon-policy behavior. Ordinary subprocess serving E2E proves
-mandatory Elastic KV startup across its graph-mode matrix. The dedicated
+mandatory Elastic KV startup under the combined graph mode. The dedicated
 Elastic KV E2E observes prefix-cache hit loss after peer pressure, renewed
 hits after repopulation, and concurrent request completion by both models on
 the same GPU under Decode Full plus Prefill Breakable. Native and integration

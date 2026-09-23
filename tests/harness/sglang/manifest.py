@@ -70,8 +70,6 @@ class E2eServingCase(BaseModel):
     graph_modes: tuple[SglangGraphMode, ...] = ()
     estimated_duration_seconds: float = Field(gt=0)
     timeout_seconds: float = Field(gt=0)
-    transport_record_capacity: int = Field(gt=0)
-    fabric_record_capacity: int = Field(gt=0)
     elastic_kv: E2eElasticKvWorkload | None = None
 
     @model_validator(mode="after")

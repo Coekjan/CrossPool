@@ -109,7 +109,7 @@ def assert_serving_graph_alignment(
 
     eager_settings = SglangGraphMode.EAGER.settings()
     decode_full_settings = SglangGraphMode.DECODE_FULL.settings()
-    prefill_breakable_settings = SglangGraphMode.PREFILL_BREAKABLE.settings()
+    combined_settings = SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings()
     artifacts_by_settings = {artifact.graph_settings: artifact for artifact in artifacts}
     if len(artifacts_by_settings) != len(artifacts):
         raise AssertionError("serving graph alignment contains duplicate graph modes")
@@ -118,7 +118,7 @@ def assert_serving_graph_alignment(
     unexpected_settings = artifacts_by_settings.keys() - {
         eager_settings,
         decode_full_settings,
-        prefill_breakable_settings,
+        combined_settings,
     }
     if unexpected_settings:
         raise AssertionError(f"serving graph alignment contains unsupported graph settings: {unexpected_settings}")
@@ -144,16 +144,14 @@ def assert_serving_graph_alignment(
             f"decode output parity failed for {group}: expected {eager_outputs}, received {full_outputs}"
         )
 
-    if prefill_breakable_settings not in artifacts_by_settings:
+    if combined_settings not in artifacts_by_settings:
         if prefill_logits:
             raise AssertionError("serving graph group without Prefill Breakable must not contain prefill logits")
         return
     if len(eager_outputs) != 1:
-        raise AssertionError("Prefill Breakable serving graph alignment requires exactly one model")
-    if set(prefill_logits) != {eager_settings, prefill_breakable_settings}:
-        raise AssertionError(
-            "Prefill Breakable serving graph alignment requires exactly Eager and Prefill Breakable logits"
-        )
+        raise AssertionError("combined serving graph alignment requires exactly one model")
+    if set(prefill_logits) != {eager_settings, combined_settings}:
+        raise AssertionError("combined serving graph alignment requires exactly Eager and combined-mode logits")
     for settings, logits in prefill_logits.items():
         if logits.dtype is not torch.float32:
             raise AssertionError(f"prefill logits for {settings.id()} must use torch.float32")
@@ -162,7 +160,7 @@ def assert_serving_graph_alignment(
         if not torch.isfinite(logits).all():
             raise AssertionError(f"prefill logits for {settings.id()} must be finite")
     eager_log_probs = torch.nn.functional.log_softmax(prefill_logits[eager_settings], dim=-1)
-    breakable_log_probs = torch.nn.functional.log_softmax(prefill_logits[prefill_breakable_settings], dim=-1)
+    breakable_log_probs = torch.nn.functional.log_softmax(prefill_logits[combined_settings], dim=-1)
     prefill_kl_divergence = torch.nn.functional.kl_div(
         breakable_log_probs,
         eager_log_probs,
@@ -234,12 +232,13 @@ class ServingGraphAdapter:
                     for directory in artifact_directories
                 )
                 if any(
-                    artifact.graph_settings == SglangGraphMode.PREFILL_BREAKABLE.settings() for artifact in artifacts
+                    artifact.graph_settings == SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings()
+                    for artifact in artifacts
                 ):
                     for artifact, directory in zip(artifacts, artifact_directories, strict=True):
                         if artifact.graph_settings not in {
                             SglangGraphMode.EAGER.settings(),
-                            SglangGraphMode.PREFILL_BREAKABLE.settings(),
+                            SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings(),
                         }:
                             continue
                         tensors = load_file(directory / PREFILL_LOGITS_ARTIFACT_FILENAME, device="cpu")

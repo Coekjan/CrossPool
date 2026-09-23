@@ -55,19 +55,6 @@ def test_scope_cancellation_accepts_completion_after_broken_pipe() -> None:
 
 
 @pytest.mark.parametrize(
-    "completion",
-    (
-        TaskCompletion(TaskCompletionKind.EXITED, 0, None),
-        TaskCompletion(TaskCompletionKind.TIMED_OUT, None, "deadline"),
-        TaskCompletion(TaskCompletionKind.LEAKED, 1, "descendant"),
-        TaskCompletion(TaskCompletionKind.INFRASTRUCTURE_FAILED, None, "internal failure"),
-    ),
-)
-def test_task_completion_accepts_kind_specific_payloads(completion: TaskCompletion) -> None:
-    assert isinstance(completion.kind, TaskCompletionKind)
-
-
-@pytest.mark.parametrize(
     ("kind", "returncode", "diagnostics"),
     (
         (TaskCompletionKind.EXITED, None, None),

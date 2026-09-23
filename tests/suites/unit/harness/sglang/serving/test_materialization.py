@@ -10,7 +10,7 @@ import pytest
 import tests.harness.runner.gpu
 from tests.harness.sglang.manifest import E2E_MANIFEST_PATH, E2eManifest
 from tests.harness.sglang.serving.graph import SglangGraphMode, SglangGraphSettings
-from tests.harness.sglang.serving.launch import materialize
+from tests.harness.sglang.serving.launch import SERVING_OBSERVER_RECORD_CAPACITY, materialize
 from xpool.config import XpoolConfig
 
 
@@ -85,8 +85,8 @@ def test_materialize_writes_config_policy_and_sanitizes_environment(
     for name in ("PYTHONPATH", "LD_PRELOAD", "NCCL_DEBUG", "NVSHMEM_DEBUG", "HTTPS_PROXY", "HF_HOME"):
         assert name not in launch.environment
     assert "SGLANG_GRPC_PORT" not in launch.environment
-    assert launch.config.debug.transport_observer.record_capacity == case.transport_record_capacity
-    assert launch.config.debug.fabric_observer.record_capacity == case.fabric_record_capacity
+    assert launch.config.debug.transport_observer.record_capacity == SERVING_OBSERVER_RECORD_CAPACITY
+    assert launch.config.debug.fabric_observer.record_capacity == SERVING_OBSERVER_RECORD_CAPACITY
     assert not launch.config.debug.prefill_logit_observer.enable
     assert "XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE" not in launch.environment
 
@@ -167,7 +167,7 @@ def test_materialize_rejects_incompatible_elastic_kv_gpu_capacity(
     [
         (SglangGraphMode.EAGER, True),
         (SglangGraphMode.DECODE_FULL, False),
-        (SglangGraphMode.PREFILL_BREAKABLE, True),
+        (SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE, True),
     ],
 )
 def test_materialize_enables_prefill_logit_observer_for_alignment_modes(
@@ -176,7 +176,15 @@ def test_materialize_enables_prefill_logit_observer_for_alignment_modes(
     expected_enable: bool,
 ) -> None:
     manifest = E2eManifest.load(E2E_MANIFEST_PATH)
-    case = next(case for case in manifest.model_serving_cases if len(case.graph_modes) > 1)
+    case = manifest.model_serving_cases[0].model_copy(
+        update={
+            "graph_modes": (
+                SglangGraphMode.EAGER,
+                SglangGraphMode.DECODE_FULL,
+                SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE,
+            )
+        }
+    )
     base_config = base_e2e_config(manifest, tmp_path)
 
     launch = materialize(
@@ -191,6 +199,23 @@ def test_materialize_enables_prefill_logit_observer_for_alignment_modes(
 
     assert launch.config.debug.prefill_logit_observer.enable is expected_enable
     assert ("XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE" in launch.environment) is expected_enable
+
+
+def test_materialize_keeps_prefill_logit_observer_off_for_routine_serving(tmp_path: Path) -> None:
+    manifest = E2eManifest.load(E2E_MANIFEST_PATH)
+    case = manifest.model_serving_cases[0]
+
+    launch = materialize(
+        case,
+        models=tuple(manifest.model(placement.model_id) for placement in case.models),
+        serving_slo=manifest.serving_slo,
+        base_config=base_e2e_config(manifest, tmp_path),
+        workdir=tmp_path / "attempt",
+        daemon_port=19810,
+        graph_settings=case.graph_modes[0].settings(),
+    )
+
+    assert not launch.config.debug.prefill_logit_observer.enable
 
 
 def test_materialize_rejects_wrong_model_architecture(tmp_path: Path) -> None:

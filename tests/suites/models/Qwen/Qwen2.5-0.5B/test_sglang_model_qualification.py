@@ -43,11 +43,13 @@ SERVING_CASES: tuple[E2eServingCase, ...] = (
         models=(E2eModelPlacement(model_id=MODEL.model_id, atn_tp_size=1, atn_dp_size=1),),
         ffnagent_count=1,
         executor_lane_count=1,
-        graph_modes=(SglangGraphMode.EAGER, SglangGraphMode.DECODE_FULL, SglangGraphMode.PREFILL_BREAKABLE),
+        graph_modes=(
+            SglangGraphMode.EAGER,
+            SglangGraphMode.DECODE_FULL,
+            SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE,
+        ),
         estimated_duration_seconds=300,
         timeout_seconds=1800,
-        transport_record_capacity=32768,
-        fabric_record_capacity=32768,
     ),
 )
 

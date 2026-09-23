@@ -15,44 +15,36 @@ id = "qwen3-0-6b-tp1-dp1-f1-e1"
 models = [{ model_id = "Qwen/Qwen3-0.6B", atn_tp_size = 1, atn_dp_size = 1 }]
 ffnagent_count = 1
 executor_lane_count = 1
-graph_modes = ["decode-full", "prefill-breakable"]
+graph_modes = ["decode-full-prefill-breakable"]
 estimated_duration_seconds = 300
 timeout_seconds = 1800
-transport_record_capacity = 32768
-fabric_record_capacity = 32768
 
 [[model_serving_cases]]
 id = "qwen3-0-6b-tp2-dp1-f1-e1"
 models = [{ model_id = "Qwen/Qwen3-0.6B", atn_tp_size = 2, atn_dp_size = 1 }]
 ffnagent_count = 1
 executor_lane_count = 1
-graph_modes = ["decode-full", "prefill-breakable"]
+graph_modes = ["decode-full-prefill-breakable"]
 estimated_duration_seconds = 360
 timeout_seconds = 1800
-transport_record_capacity = 32768
-fabric_record_capacity = 32768
 
 [[model_serving_cases]]
 id = "qwen2-5-0-5b-tp1-dp1-f1-e1"
 models = [{ model_id = "Qwen/Qwen2.5-0.5B", atn_tp_size = 1, atn_dp_size = 1 }]
 ffnagent_count = 1
 executor_lane_count = 1
-graph_modes = ["decode-full", "prefill-breakable"]
+graph_modes = ["decode-full-prefill-breakable"]
 estimated_duration_seconds = 300
 timeout_seconds = 1800
-transport_record_capacity = 32768
-fabric_record_capacity = 32768
 
 [[model_serving_cases]]
 id = "qwen2-5-0-5b-tp2-dp1-f1-e1"
 models = [{ model_id = "Qwen/Qwen2.5-0.5B", atn_tp_size = 2, atn_dp_size = 1 }]
 ffnagent_count = 1
 executor_lane_count = 1
-graph_modes = ["decode-full", "prefill-breakable"]
+graph_modes = ["decode-full-prefill-breakable"]
 estimated_duration_seconds = 360
 timeout_seconds = 1800
-transport_record_capacity = 32768
-fabric_record_capacity = 32768
 
 [[model_serving_cases]]
 id = "qwen2-qwen3-tp1-dp1-f2-e2"
@@ -64,8 +56,6 @@ ffnagent_count = 2
 executor_lane_count = 2
 estimated_duration_seconds = 600
 timeout_seconds = 3600
-transport_record_capacity = 32768
-fabric_record_capacity = 32768
 
 [model_serving_cases.elastic_kv]
 prefix_model_id = "Qwen/Qwen2.5-0.5B"
@@ -83,8 +73,6 @@ ffnagent_count = 2
 executor_lane_count = 2
 estimated_duration_seconds = 700
 timeout_seconds = 3600
-transport_record_capacity = 32768
-fabric_record_capacity = 32768
 
 [model_serving_cases.elastic_kv]
 prefix_model_id = "Qwen/Qwen2.5-0.5B"

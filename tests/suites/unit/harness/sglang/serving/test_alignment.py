@@ -47,11 +47,11 @@ def test_serving_graph_alignment_compares_decode_tokens_and_prefill_distribution
         (
             artifact(SglangGraphMode.EAGER),
             artifact(SglangGraphMode.DECODE_FULL),
-            artifact(SglangGraphMode.PREFILL_BREAKABLE, (9, 8, 7)),
+            artifact(SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE, (9, 8, 7)),
         ),
         {
             SglangGraphMode.EAGER.settings(): eager_logits,
-            SglangGraphMode.PREFILL_BREAKABLE.settings(): breakable_logits,
+            SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings(): breakable_logits,
         },
     )
 
@@ -68,11 +68,11 @@ def test_serving_graph_alignment_rejects_prefill_distribution_divergence() -> No
             (
                 artifact(SglangGraphMode.EAGER),
                 artifact(SglangGraphMode.DECODE_FULL),
-                artifact(SglangGraphMode.PREFILL_BREAKABLE),
+                artifact(SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE),
             ),
             {
                 SglangGraphMode.EAGER.settings(): eager_logits,
-                SglangGraphMode.PREFILL_BREAKABLE.settings(): breakable_logits,
+                SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings(): breakable_logits,
             },
         )
 
@@ -89,11 +89,11 @@ def test_serving_graph_alignment_accepts_prefill_distribution_limit(monkeypatch:
         (
             artifact(SglangGraphMode.EAGER),
             artifact(SglangGraphMode.DECODE_FULL),
-            artifact(SglangGraphMode.PREFILL_BREAKABLE),
+            artifact(SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE),
         ),
         {
             SglangGraphMode.EAGER.settings(): logits,
-            SglangGraphMode.PREFILL_BREAKABLE.settings(): logits,
+            SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings(): logits,
         },
     )
 
@@ -107,12 +107,12 @@ def test_serving_graph_alignment_rejects_decode_token_mismatch() -> None:
 
 
 def test_serving_graph_alignment_requires_breakable_prefill_logits() -> None:
-    with pytest.raises(AssertionError, match="exactly Eager and Prefill Breakable"):
+    with pytest.raises(AssertionError, match="exactly Eager and combined-mode logits"):
         assert_serving_graph_alignment(
             (
                 artifact(SglangGraphMode.EAGER),
                 artifact(SglangGraphMode.DECODE_FULL),
-                artifact(SglangGraphMode.PREFILL_BREAKABLE),
+                artifact(SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE),
             ),
             {},
         )
@@ -122,7 +122,7 @@ def test_serving_graph_adapter_reads_breakable_group_artifacts(tmp_path: Path) -
     modes = (
         SglangGraphMode.EAGER,
         SglangGraphMode.DECODE_FULL,
-        SglangGraphMode.PREFILL_BREAKABLE,
+        SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE,
     )
     directories = tuple(tmp_path / mode.value for mode in modes)
     logits = torch.tensor([[1.0, 2.0, 3.0]], dtype=torch.float32)

@@ -223,7 +223,7 @@ def test_supervised_scope_owns_timeout_and_cleanup(tmp_path: Path) -> None:
     assert completion.kind is TaskCompletionKind.TIMED_OUT
 
 
-def test_supervised_scope_run_returns_after_closing_scope(tmp_path: Path) -> None:
+def test_supervised_scope_run_returns_exit_completion(tmp_path: Path) -> None:
     completion = SupervisedTaskScope.run(
         "serial-run",
         [*command("sleep", seconds=0.01)],
@@ -255,7 +255,6 @@ def test_supervisor_reports_local_failure_after_proving_scope_empty(tmp_path: Pa
     assert completion.returncode is None
     assert completion.diagnostics is not None
     assert "invalid command" in completion.diagnostics
-    assert completion.returncode is None
 
 
 def test_supervised_scope_cancels_multiple_tasks_before_closing(tmp_path: Path) -> None:

@@ -33,7 +33,7 @@ class SglangGraphMode(StrEnum):
 
     EAGER = "eager"
     DECODE_FULL = "decode-full"
-    PREFILL_BREAKABLE = "prefill-breakable"
+    DECODE_FULL_PREFILL_BREAKABLE = "decode-full-prefill-breakable"
 
     def settings(self) -> SglangGraphSettings:
         """Project this manifest value to concrete SGLang graph settings."""
@@ -43,8 +43,8 @@ class SglangGraphMode(StrEnum):
                 return SglangGraphSettings(decode_backend="disabled", prefill_backend="disabled")
             case SglangGraphMode.DECODE_FULL:
                 return SglangGraphSettings(decode_backend="full", prefill_backend="disabled")
-            case SglangGraphMode.PREFILL_BREAKABLE:
-                return SglangGraphSettings(decode_backend="disabled", prefill_backend="breakable")
+            case SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE:
+                return SglangGraphSettings(decode_backend="full", prefill_backend="breakable")
 
 
 def read_graph_events(outdir: Path) -> list[GraphEvent]:

@@ -87,8 +87,9 @@ binding for that family. The resulting `FfnModelSpec.digest()` identifies the
 compiled FFN semantics; the source JSON bytes are not carried as a separate
 contract field.
 
-Outer graph mode is an attention-side concept. Eager, Decode Full, and Prefill
-Breakable graph modes all invoke the same FFN data-plane protocol.
+Outer graph mode is an attention-side concept. Eager, Decode Full, and combined
+Decode Full plus Prefill Breakable modes all invoke the same FFN data-plane
+protocol.
 FfnAgent execution is always graph-backed; SGLang owns the outer graph mode.
 
 Fabric Executable is the earlier data-plane barrier that permits Instance

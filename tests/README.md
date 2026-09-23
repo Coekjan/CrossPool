@@ -41,10 +41,11 @@ setup belongs in a focused harness module or an explicitly imported fixture;
 do not create implicit fixture dependencies through directory `conftest.py`
 imports. Put engine-owned Integration and E2E files under an engine-named
 directory; do not mix their cases with engine-neutral files. E2E files use
-`test_e2e_*.py` names. Shared model IDs, topology matrices, trace capacities,
-graph modes, and test-only KV limits belong in
-`tests/harness/sglang/manifest.toml`. Concrete-model numerical and serving
-qualification cases belong as typed constants in their model suite modules.
+`test_e2e_*.py` names. Shared model IDs, topology matrices, graph modes, and
+test-only KV limits belong in `tests/harness/sglang/manifest.toml`. Observer
+record capacity belongs to the serving harness. Concrete-model numerical and
+serving qualification cases belong as typed constants in their model suite
+modules.
 
 Keep common and subsystem-specific fixtures separate so each fixture owns one
 coherent reset boundary. Use pinned SGLang concrete types, such as `ServerArgs`,
@@ -80,7 +81,8 @@ manifest's `serving_slo` rather than external scheduler or model SLO values.
 
 Graph-mode acceptance criteria belong to
 [Qualification](../docs/designs/qualification.md#numerical-and-graph-evidence).
-Keep Eager, Decode Full, and Prefill Breakable evidence distinct.
+Keep Eager, Decode Full, and combined Decode Full plus Prefill Breakable
+evidence distinct.
 
 ## Execution Flow
 
@@ -113,8 +115,9 @@ It contains the exact public `/generate` request and response and is written
 before HTTP-status and token-shape validation. JUnit describes case outcome,
 `*.duration.json` records timing and resolved graph mode. Explicit Models
 qualification compares Eager and Decode Full token output plus Eager and
-Prefill Breakable logits. Model suites own numerical parity; routine E2E owns
-installed serving, observed graph structure, and Transport/Fabric behavior.
+combined-mode first-prefill logits. Model suites own numerical parity; routine
+E2E owns installed serving, observed graph structure, and Transport/Fabric
+behavior.
 
 ## Commands
 

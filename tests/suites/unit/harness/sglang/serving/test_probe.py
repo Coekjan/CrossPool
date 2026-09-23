@@ -278,6 +278,4 @@ def probe_case() -> E2eServingCase:
         graph_modes=(SglangGraphMode.EAGER,),
         estimated_duration_seconds=1,
         timeout_seconds=1,
-        transport_record_capacity=1,
-        fabric_record_capacity=1,
     )

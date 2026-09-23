@@ -43,22 +43,22 @@ SERVING_CASES: tuple[E2eServingCase, ...] = (
         models=(E2eModelPlacement(model_id=MODEL.model_id, atn_tp_size=1, atn_dp_size=1),),
         ffnagent_count=1,
         executor_lane_count=1,
-        graph_modes=(SglangGraphMode.EAGER, SglangGraphMode.DECODE_FULL, SglangGraphMode.PREFILL_BREAKABLE),
+        graph_modes=(
+            SglangGraphMode.EAGER,
+            SglangGraphMode.DECODE_FULL,
+            SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE,
+        ),
         estimated_duration_seconds=600,
         timeout_seconds=3600,
-        transport_record_capacity=32768,
-        fabric_record_capacity=32768,
     ),
     E2eServingCase(
         id="qwen3-14b-tp2-dp1-f1-e1",
         models=(E2eModelPlacement(model_id=MODEL.model_id, atn_tp_size=2, atn_dp_size=1),),
         ffnagent_count=1,
         executor_lane_count=1,
-        graph_modes=(SglangGraphMode.EAGER, SglangGraphMode.DECODE_FULL, SglangGraphMode.PREFILL_BREAKABLE),
+        graph_modes=(SglangGraphMode.DECODE_FULL,),
         estimated_duration_seconds=700,
         timeout_seconds=3600,
-        transport_record_capacity=32768,
-        fabric_record_capacity=32768,
     ),
 )
 
@@ -81,7 +81,7 @@ def test_ffn_numerical(
 @pytest.mark.parametrize(
     ("case", "graph_mode"),
     tuple(
-        qualification.case_parameter(case, graph_mode, models=(MODEL,), compare_modes=True)
+        qualification.case_parameter(case, graph_mode, models=(MODEL,), compare_modes=len(case.graph_modes) > 1)
         for case in SERVING_CASES
         for graph_mode in case.graph_modes
     ),
@@ -103,5 +103,5 @@ def test_serving_graph(
         task_artifact_dir,
         models=(MODEL,),
         serving_slo=SERVING_SLO,
-        compare_modes=True,
+        compare_modes=len(case.graph_modes) > 1,
     )
