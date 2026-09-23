@@ -56,6 +56,9 @@ dev = [
 
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+exclude-dependencies = [
+    { package = { name = "sglang", version = "0.5.20" }, dependencies = ["sgl-deep-ep"] },
+]
 override-dependencies = [
     { package = { name = "torch", version = "2.13.0" }, dependencies = ["nvidia-nvshmem-cu13==3.7.2"] },
 ]

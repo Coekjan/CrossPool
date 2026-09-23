@@ -77,6 +77,13 @@ module to use the pinned SGLang distribution's low-level Expert kernel and
 configuration-selection modules. Core APIs, Plans, Registries, GraphTemplates,
 and native Projections retain CrossPool-owned values only.
 
+The supported SGLang path is non-expert-parallel: `ep_size` remains one and
+`moe_a2a_backend` remains `none`. CrossPool rejects DeepEP and other expert-
+parallel settings at this integration boundary. The uv-managed environment
+therefore excludes `sgl-deep-ep` from the pinned SGLang dependency graph; this
+is a resolver policy for the supported path, not support for arbitrary SGLang
+expert-parallel configurations or non-uv installers.
+
 The SGLang adapter replaces supported decoder FFN modules with a shim module,
 filters their FFN tensors from attention-side loading, and preserves the model's
 attention-side behavior. Model adapters are discovered automatically and are

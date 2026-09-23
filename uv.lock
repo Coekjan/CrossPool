@@ -10,6 +10,7 @@ supported-markers = [
 
 [manifest]
 overrides = [{ package = { name = "torch", version = "2.13.0" }, dependencies = [{ name = "nvidia-nvshmem-cu13", specifier = "==3.7.2" }] }]
+excludes = [{ package = { name = "sglang", version = "0.5.20" }, dependencies = ["sgl-deep-ep"] }]
 
 [[package]]
 name = "absl-py"
@@ -2119,18 +2120,6 @@ wheels = [
 ]
 
 [[package]]
-name = "sgl-deep-ep"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "nvidia-ml-py" },
-    { name = "torch" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e5/4d/eff6ebd61e34c4e617f1373a4ebc35a25b884cf54a4879664dfd6327c87d/sgl_deep_ep-0.1.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:63c90e60b5cbb63dac10ab62b432306c37ce2f7777ffb3f05bee765210a31c80", size = 15331145, upload-time = "2026-08-19T23:29:21.427Z" },
-]
-
-[[package]]
 name = "sgl-deep-gemm"
 version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2196,7 +2185,6 @@ dependencies = [
     { name = "scipy" },
     { name = "sentencepiece" },
     { name = "setproctitle" },
-    { name = "sgl-deep-ep" },
     { name = "sgl-deep-gemm" },
     { name = "sglang-kernel" },
     { name = "smg-grpc-servicer" },
