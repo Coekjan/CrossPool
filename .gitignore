@@ -11,7 +11,7 @@ __pycache__/
 .ty/
 .coverage
 .coverage.*
-.xpool-cache/
+.xpool-cache
 src/xpool/native/
 .env
 
