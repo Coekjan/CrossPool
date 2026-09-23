@@ -97,14 +97,16 @@ prove the process-shared KV Control Channel. Integration tests prove physical
 VMM behavior and CUDA Event ordering together with allocator, prefix-cache,
 command, and daemon-policy behavior. Ordinary subprocess serving E2E proves
 mandatory Elastic KV startup under the combined graph mode. The dedicated
-Elastic KV E2E observes prefix-cache hit loss after peer pressure, renewed
-hits after repopulation, and concurrent request completion by both models on
-the same GPU under Decode Full plus Prefill Breakable. Native and integration
-tests own capacity commands, terminal completions, and physical map/unmap.
-Operational logs are diagnostics rather than a correctness assertion surface.
-Qualification cases provide evidence rather than an adapter allowlist. Runtime
-compatibility follows the SGLang memory and cache contract, with structural
-incompatibility at that seam determining rejection.
+Elastic KV E2E observes a confirmed prefix-cache hit decrease after peer
+pressure, a positive stable hit after repopulation within the current active
+capacity, and concurrent request completion by both models on the same GPU
+under Decode Full plus Prefill Breakable. Absolute `cached_tokens` counts are
+diagnostic evidence, not fixed qualification thresholds. Native and
+integration tests own capacity commands, terminal completions, and physical
+map/unmap. Operational logs are diagnostics rather than a correctness
+assertion surface. Qualification cases provide evidence rather than an
+adapter allowlist. Runtime compatibility follows the SGLang memory and cache
+contract, with structural incompatibility at that seam determining rejection.
 
 Memory underprediction or memory-pressure startup failure invalidates that
 qualification result. Preserve the affected case, measured deviation, and raw

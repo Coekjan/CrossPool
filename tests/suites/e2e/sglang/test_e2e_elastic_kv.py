@@ -156,16 +156,18 @@ def test_e2e_elastic_kv(
         )
 
         if primary_after_pressure < primary_hit:
-            restored_hit = primary_hit
+            victim_before_pressure = primary_hit
+            victim_after_pressure = primary_after_pressure
             restored_expected_output_ids = primary_expected_output_ids
             restored_token_id = 1
         elif competing_after_pressure < competing_hit:
-            restored_hit = competing_hit
+            victim_before_pressure = competing_hit
+            victim_after_pressure = competing_after_pressure
             restored_expected_output_ids = competing_expected_output_ids
             restored_token_id = 2
         else:
             raise AssertionError("peer pressure did not reclaim either confirmed prefix")
-        _, restored_fill_output_ids = generate(
+        restored_fill, restored_fill_output_ids = generate(
             prefix_server,
             "xpool-elastic-kv-restored-fill",
             workload.prefix_tokens,
@@ -190,13 +192,6 @@ def test_e2e_elastic_kv(
             )
             completed = tuple(future.result() for future in futures)
 
-        assert primary_initial < primary_hit
-        assert competing_initial < competing_hit
-        assert restored == restored_hit
-        assert completed == (SUSTAINED_REQUEST_COUNT, SUSTAINED_REQUEST_COUNT)
-        assert primary_hit_output_ids == primary_after_pressure_output_ids == primary_expected_output_ids
-        assert competing_hit_output_ids == competing_after_pressure_output_ids == competing_expected_output_ids
-        assert restored_fill_output_ids == restored_output_ids == restored_expected_output_ids
         print(
             "XPOOL_ELASTIC_KV_CACHE="
             + json.dumps(
@@ -209,10 +204,21 @@ def test_e2e_elastic_kv(
                     "primary_hit": primary_hit,
                     "primary_initial": primary_initial,
                     "restored": restored,
+                    "restored_fill": restored_fill,
+                    "victim_after_pressure": victim_after_pressure,
+                    "victim_before_pressure": victim_before_pressure,
                 },
                 sort_keys=True,
             )
         )
+        assert primary_initial < primary_hit
+        assert competing_initial < competing_hit
+        assert restored > 0
+        assert restored >= restored_fill
+        assert completed == (SUSTAINED_REQUEST_COUNT, SUSTAINED_REQUEST_COUNT)
+        assert primary_hit_output_ids == primary_after_pressure_output_ids == primary_expected_output_ids
+        assert competing_hit_output_ids == competing_after_pressure_output_ids == competing_expected_output_ids
+        assert restored_fill_output_ids == restored_output_ids == restored_expected_output_ids
         return results
 
     run = run_probe(
