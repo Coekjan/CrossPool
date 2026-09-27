@@ -6,7 +6,7 @@ plans live under `docs/plans/<task>/README.md`.
 
 Accepted changes that need a decision-complete target design receive a separate
 `docs/plans/<task>/README.md`. Owners, status, priority, schedules, and progress
-belong in the team's external tracker rather than this repository.
+belong in the linked GitHub issues rather than this repository.
 
 The [design map](../designs/README.md) describes the implemented and accepted
 system. The root [domain glossary](../../CONTEXT.md) owns CrossPool terminology.
@@ -27,18 +27,29 @@ combination requires its own accepted plan and qualification evidence.
 
 ## Workstream map
 
-| Workstream | Class |
-| --- | --- |
-| Unified Timeline Observability | Platform Capability |
-| Live KV Cache Observability | Platform Capability |
-| Model Coverage | Product Capability |
-| Context Parallel Serving | Product Capability |
-| Serving-engine Coverage | Product Capability |
-| Cross-host Fabric | Product Capability |
-| Accelerator Portability | Product Capability |
-| Code Quality and Taste | Cross-cutting Practice |
-| Benchmark Workflows | Cross-cutting Practice |
-| Evaluation and Baselines | Cross-cutting Practice |
+| Workstream | Class | Discovery issue |
+| --- | --- | --- |
+| Unified Timeline Observability | Platform Capability | [#2](https://github.com/Coekjan/CrossPool/issues/2) |
+| Live KV Cache Observability | Platform Capability | [#3](https://github.com/Coekjan/CrossPool/issues/3) |
+| Model Coverage | Product Capability | [#4](https://github.com/Coekjan/CrossPool/issues/4) |
+| Context Parallel Serving | Product Capability | [#5](https://github.com/Coekjan/CrossPool/issues/5) |
+| Serving-engine Coverage | Product Capability | [#6](https://github.com/Coekjan/CrossPool/issues/6) |
+| Cross-host Fabric | Product Capability | [#7](https://github.com/Coekjan/CrossPool/issues/7) |
+| Accelerator Portability | Product Capability | [#8](https://github.com/Coekjan/CrossPool/issues/8) |
+| Code Quality and Taste | Cross-cutting Practice | Bounded tasks opened individually |
+| Benchmark Workflows | Cross-cutting Practice | [#9](https://github.com/Coekjan/CrossPool/issues/9) |
+| Evaluation and Baselines | Cross-cutting Practice | [#10](https://github.com/Coekjan/CrossPool/issues/10) |
+
+The linked issues define bounded initial discovery stages and recommended
+follow-on implementation routes. Closing a discovery issue records completed
+evidence and a reviewed recommendation; supported capabilities still require
+an accepted implementation and qualification. Research questions live in the
+issue descriptions. Independently deliverable tasks may become sub-issues
+once their scope is concrete.
+
+Discovery issues use `roadmap`, `research`, and the applicable `area:*` label.
+Native issue types remain unset because this repository does not support
+their assignment; no substitute type label is required.
 
 ## Unified Timeline Observability
 
