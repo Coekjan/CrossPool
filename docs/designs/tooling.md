@@ -86,12 +86,24 @@ the same portable deployments.
 decorators from [`xkit.declaration`](../../src/xpool-dev/xkit/declaration.py).
 They retain metadata on the original function without wrapping execution.
 Omitted parameter values bind catalogue cases; explicit Python values support
-source-owned parameterization. Test row callbacks produce native pytest
-parameters, leaving fixtures, marks and execution with pytest. Resources use
+source-owned case expansion. Test row callbacks produce native pytest
+parameters, leaving fixtures, marks and execution with pytest. Ordinary test
+input matrices use native `pytest.mark.parametrize`. Resources use
 [`ResourceRequirements`](../../src/xpool-dev/xkit/requirements.py), either static
-or returned by a callback receiving the concrete declared parameter values as
-keyword arguments. Registration performs no catalogue I/O, resource probing or
-configuration installation; callbacks receive neither fixtures nor workdirs.
+or returned by a callback receiving all concrete parameter values as keyword
+arguments, including native pytest parameterization. The shared value validates
+nonnegative integer CUDA counts, excluding booleans, and typed, unique Model IDs.
+MPS requires CUDA; local checkpoints require configuration. Registration performs
+no catalogue I/O, resource probing or configuration installation; callbacks
+receive neither fixtures nor workdirs.
+
+Repository-owned tests use function-level `xtest.requirements` for complete
+external-resource declarations. Module-level pytest policy owns fixtures,
+timeouts and other native marks. Case-dependent resources come from the owning
+case producer; the owned benchmark E2E binds its selected case to the serving
+suite's `requirements_of` with `functools.partial`.
+[Test Architecture](../../tests/README.md#requirements) owns authoring examples
+and resource policy.
 
 For graph comparisons, collection derives comparison coordinates from
 the declaring function's node ID and the original input index before expanding
@@ -107,8 +119,13 @@ deployments, not machine configuration or checkpoints. Actually collected
 catalogue-referenced modules must define exactly one catalogue-bound entry,
 including modules yielding no test items. Unselected source modules are not
 imported for this check. The initial inventory and later task recollection use
-the same absolute catalogue path. Resource callbacks become the existing pytest
-resource marks before marker deselection; ordinary pytest tests remain valid.
+the same absolute catalogue path. Each process evaluates a concrete item's
+resource declaration once before marker deselection and retains the typed value
+in that item's pytest stash. Test-plan construction and resource setup consume
+that value directly. The plugin registers and generates resource marks for
+native selectors; the function declaration owns resource policy. Initial
+collection and task recollection evaluate their own items independently.
+Tests without external-resource needs use ordinary pytest functions.
 
 `xbench list` and `run` share isolated source collection. Each selected module
 defines one synchronous catalogue-bound entry accepting `case` and `workdir`;
@@ -162,15 +179,31 @@ environment precedence follows
 [Control Plane](control-plane.md#configuration-and-integration). Machine paths,
 calibration and loader/placement policy belong to the complete runtime base.
 Matching Model IDs retain their configured checkpoint paths; new IDs use the
-vendor-root fallback. Preflight and execution use `model_path_of()` on the same
-assembled configuration. Serving tests, native qualification and owned benchmarks
-consume the deployment's complete topology and SLO. Elastic KV tests additionally
+vendor-root fallback. Assembly reads raw base TOML and merges explicit layers
+before defaults and registered overrides; an effective preflight configuration
+cannot replace that input without changing source precedence. Serving tests,
+native qualification and owned benchmarks consume the deployment's complete
+topology and SLO. Elastic KV tests additionally
 project a byte budget using the assigned attention GPUs' total memory.
 
+For a selected pytest item declaring configuration, resource setup resolves
+`XPOOL_CONFIG` with registered process-environment inputs once and retains one
+`ResolvedConfig`. Its checkpoint checks use that value's effective configuration;
+`e2e_base_config` returns the retained value and requires the test's configuration
+declaration. Each later item resolves its own base, and explicit `require_config()`
+calls always reload current file and environment inputs. File and environment
+changes do not implicitly refresh the retained base. The retained path supplies
+scene assembly; the effective configuration supplies base policy and checkpoint
+paths. The base is not installed as global runtime configuration; serving startup
+owns installation of the assembled runtime configuration.
+GPU, MPS and checkpoint availability are checked during selected-item setup.
+
 Both tools use `xkit.config.resolve_model_weights` to resolve a checkpoint through
-the configuration owner and require its directory and `config.json`. Pytest owns
-unavailable-resource and strict-requirement outcome translation. Before executing
-a nonempty benchmark workload, the runner enforces the source's declared local
+the configuration owner and return its path after requiring its directory and
+`config.json`; preflight checks availability, not checkpoint loading or integrity.
+Pytest checks its resolved base and owns unavailable-resource and strict-requirement
+outcome translation. Before executing a nonempty benchmark workload, the runner
+enforces the source's declared local
 configuration and checkpoint requirements. Owned execution checks its assembled
 effective configuration, preserving explicit base precedence. Client execution
 loads local configuration only when declared; external endpoints alone imply no

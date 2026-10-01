@@ -11,8 +11,8 @@ import tomli_w
 import xpool.config
 from xpool.config import XpoolConfig
 from xpool.model import ModelId
-from xtest.harness.runner.pytest_plugin import requirement_resolver_key
-from xtest.harness.runner.requirements import RequirementGuard, ResolvedConfig
+from xtest.harness.runner.pytest_plugin import resolved_config_key
+from xtest.harness.runner.requirements import ResolvedConfig
 
 TEST_MODEL_ID = ModelId("test/test-model")
 
@@ -41,15 +41,9 @@ def reset_global_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 @pytest.fixture
 def e2e_base_config(request: pytest.FixtureRequest) -> ResolvedConfig:
-    """Retain the complete base's input path for shared scene assembly."""
+    """Return setup's base; the test must declare configuration requirements."""
 
-    resolver = request.config.stash[requirement_resolver_key]
-    guard = RequirementGuard(
-        strict=request.config.getoption("--strict-requirements"),
-        skip=lambda reason: pytest.skip(reason),
-        fail=lambda reason: pytest.fail(reason, pytrace=False),
-    )
-    return guard.run(resolver.require_config)
+    return request.node.stash[resolved_config_key]
 
 
 def synthetic_config(

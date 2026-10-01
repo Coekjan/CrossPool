@@ -8,7 +8,7 @@ from tests import TEST_CATALOG_PATH
 
 import xtest.harness.runner.plan
 from xpool.model import ModelId
-from xtest.harness.support.config import TEST_MODEL_ID
+from xtest.harness.support.config import TEST_MODEL_ID, write_minimal_config
 
 pytest_plugins = ["pytester"]
 
@@ -190,24 +190,6 @@ def test_graph(case, graph_mode, request, tmp_path):
     assert "artifact groups must contain every expected case" in partial.stderr.str()
 
 
-def test_weights_marker_requires_config(pytester: pytest.Pytester) -> None:
-    pytester.makepyfile(
-        f"""
-        import pytest
-
-        @pytest.mark.requires_model_weights({str(TEST_MODEL_ID)!r})
-        def test_weights():
-            pass
-        """
-    )
-
-    result = pytester.runpytest(
-        "-p", "xtest.harness.runner.pytest_plugin", f"--xpool-test-catalog={TEST_CATALOG_PATH}", "--collect-only", "-q"
-    )
-
-    result.stderr.fnmatch_lines(["*requires_model_weights must be paired with requires_config*"])
-
-
 def test_missing_config_skips_by_default_and_fails_when_strict(
     pytester: pytest.Pytester,
     monkeypatch: pytest.MonkeyPatch,
@@ -259,22 +241,96 @@ def test_deselected_requirement_is_not_resolved(pytester: pytest.Pytester, monke
     result.assert_outcomes(passed=1, deselected=1)
 
 
-def test_mps_marker_rejects_arguments(pytester: pytest.Pytester) -> None:
-    pytester.makepyfile(
+def test_declared_resources_and_config_are_shared_through_plan_setup_and_fixtures(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other_model_id = ModelId("test/other-model")
+    model_paths = tuple(pytester.path / model_id.relative_path for model_id in (TEST_MODEL_ID, other_model_id))
+    for path in model_paths:
+        path.mkdir(parents=True)
+        (path / "config.json").write_text("{}", encoding="utf-8")
+    config_path = write_minimal_config(pytester.path / "xpool.toml", model_path=model_paths[0])
+    payload = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    payload["models"].append({"id": str(other_model_id), "path": str(model_paths[1])})
+    config_path.write_text(tomli_w.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
+    pytester.makeini("[pytest]\ntimeout = 15\n")
+    pytester.makeconftest(
         """
-        import pytest
+from unittest.mock import patch
 
-        @pytest.mark.requires_mps(True)
-        def test_mps():
-            pass
-        """
+import pytest
+
+import xtest.harness.runner.requirements
+from xpool.config import XpoolConfig
+
+observations_key = pytest.StashKey()
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtestloop(session):
+    with (
+        patch.object(XpoolConfig, "from_file", wraps=XpoolConfig.from_file) as reads,
+        patch.object(
+            xtest.harness.runner.requirements,
+            "resolve_model_weights",
+            wraps=xtest.harness.runner.requirements.resolve_model_weights,
+        ) as weights,
+    ):
+        session.config.stash[observations_key] = (reads, weights)
+        return (yield)
+
+@pytest.fixture
+def observations(request):
+    return request.config.stash[observations_key]
+"""
     )
+    directory = pytester.path / "tests/suites/integration"
+    directory.mkdir(parents=True)
+    program = directory / "test_configuration.py"
+    program.write_text(
+        f"""
+import os
 
-    result = pytester.runpytest(
-        "-p", "xtest.harness.runner.pytest_plugin", f"--xpool-test-catalog={TEST_CATALOG_PATH}", "--collect-only", "-q"
+import pytest
+import xtest
+from xkit import ResourceRequirements
+from xpool.model import ModelId
+from xtest.harness.support.config import TEST_MODEL_ID, e2e_base_config
+
+model_ids = (TEST_MODEL_ID, ModelId({str(other_model_id)!r}))
+evaluated_rows = []
+
+def resources(row):
+    evaluated_rows.append(row)
+    return ResourceRequirements(0, False, True, model_ids)
+
+@pytest.mark.parametrize("row", (0, 1))
+@xtest.requirements(resources)
+def test_configuration(row, e2e_base_config, observations):
+    reads, weights = observations
+    assert evaluated_rows == [0, 1]
+    assert reads.call_count == row + 1
+    assert reads.call_args.kwargs["env"] is os.environ
+    checks = weights.call_args_list[row * 2 : (row + 1) * 2]
+    assert tuple(call.args[1] for call in checks) == model_ids
+    assert all(call.args[0] is e2e_base_config.config for call in checks)
+""",
+        encoding="utf-8",
     )
-
-    result.stderr.fnmatch_lines(["*requires_mps accepts no arguments*"])
+    output = pytester.path / "plan.json"
+    result = pytester.runpytest_subprocess(
+        "-p",
+        "xtest.harness.runner.pytest_plugin",
+        f"--xpool-test-catalog={TEST_CATALOG_PATH}",
+        f"--xpool-test-plan={output}",
+        "--strict-requirements",
+        "-q",
+        str(program),
+    )
+    result.assert_outcomes(passed=2)
+    plan = xtest.harness.runner.plan.TestPlan.read(output)
+    assert len(plan.cases) == 2
+    assert all(case.requirements.model_ids == (TEST_MODEL_ID, other_model_id) for case in plan.cases)
 
 
 def test_collection_requires_complete_serving_graph_group(pytester: pytest.Pytester) -> None:

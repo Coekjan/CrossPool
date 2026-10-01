@@ -83,20 +83,49 @@ independent dimension once at its lowest observable boundary.
 
 ## Requirements
 
-Pytest resource markers are executable metadata:
+Repository-owned Python tests declare external resources on each function with
+`xtest.requirements`. Static declarations describe the function's complete needs:
 
-- `requires_cuda(min_devices=N)` requests `N` GPUs.
-- `requires_config` requires `XPOOL_CONFIG`.
-- `requires_mps` requires the externally managed CUDA MPS controller.
-- `requires_model_weights(model_id)` resolves weights through `XPOOL_CONFIG`.
+```python
+import xtest
 
-`xtest.requirements` provides the same resource declarations statically or through
-a callback returning `xkit.ResourceRequirements` for concrete parameter values.
-`xtest.parameterize` binds catalogue cases or explicit source values; optional
-row callbacks return native pytest parameters. Fixtures remain ordinary pytest
-fixtures. See the
-[serving test](suites/e2e/sglang/test_e2e_model_serving.py) and
+
+@xtest.requirements(cuda_count=2, requires_mps=True)
+def test_component() -> None:
+    ...
+```
+
+Use a callback returning `xkit.ResourceRequirements` when resources depend on
+concrete parameter values. Callbacks receive all collected parameter values as
+keyword arguments, including those supplied by native `pytest.mark.parametrize`;
+fixtures remain ordinary pytest fixtures. Local checkpoint declarations use typed
+`ModelId` values with `requires_config=True`. Derive case-dependent resources from
+the case owner. The [owned benchmark E2E](suites/e2e/xbench/sglang/test_e2e_owned.py)
+binds its selected case to the benchmark suite's existing requirements producer.
+
+Tests without external-resource needs require no empty declaration. Module-level
+`pytestmark` owns shared fixture, timeout and other native pytest policy;
+each test function declares its own complete resources. Ordinary input matrices
+use `pytest.mark.parametrize`. `xtest.parameterize` binds catalogue cases or
+expands source-owned case/graph inputs; optional row callbacks return native
+pytest parameters.
+See the [serving test](suites/e2e/sglang/test_e2e_model_serving.py) and
 [shared declaration contract](../docs/designs/tooling.md#catalogue-and-source-declarations).
+
+The pytest adapter evaluates each concrete item's declaration once before marker
+deselection and retains its typed resource value for preflight and test-plan
+construction. It generates marker metadata for native `-m` selectors:
+
+- `requires_cuda(min_devices=N)` selects tests requesting `N` GPUs.
+- `requires_config` selects tests requiring `XPOOL_CONFIG`.
+- `requires_mps` selects tests requiring the externally managed CUDA MPS controller.
+- `requires_model_weights(model_id)` selects tests requiring a local checkpoint.
+
+Tests using `e2e_base_config` must declare `requires_config=True`. The fixture and
+that item's checkpoint checks share the base resolved during resource setup.
+[Shared deployment configuration](../docs/designs/tooling.md#shared-deployment-configuration)
+owns its lifetime, environment inputs and assembly boundary.
+
 Synthetic tests reuse the typed `TEST_MODEL_ID` from
 `xtest.harness.support.config` unless a distinct identity is part of the behavior
 under test.
@@ -110,7 +139,7 @@ machine configuration, read checkpoints or probe GPUs. CTest CUDA cases declare
 one CTest GPU resource and perform their own MPS preflight.
 
 A missing or ABI-incompatible native extension fails the session, including
-Unit-only sessions. Resource markers handle unavailable external resources.
+Unit-only sessions. Resource preflight handles unavailable external resources.
 E2E tests run without strict mode
 when all declared and derived requirements are available. Each task materializes
 a private config from `XPOOL_CONFIG` and its selected case models, without

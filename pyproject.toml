@@ -85,14 +85,6 @@ wheel.packages = ["src/xpool"]
 addopts = ["--import-mode=importlib"]
 pythonpath = ["."]
 timeout = 300
-markers = [
-    "requires_config: requires an XpoolConfig supplied by XPOOL_CONFIG",
-    "requires_cuda(min_devices=1): requires visible CUDA devices",
-    "requires_mps: requires a responsive CUDA MPS controller",
-    "requires_model_weights(model_id): requires model weights resolved through XPOOL_CONFIG",
-    "estimated_duration(seconds): estimated runtime used by xtest run scheduling",
-    "serving_graph_group(name, expected_case_count): complete cross-task serving graph group",
-]
 testpaths = ["tests/suites"]
 
 [tool.ty.rules]

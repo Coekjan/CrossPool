@@ -34,7 +34,7 @@ the route boundary parses a `ModelId` before daemon lookup.
 path override or the vendor model base plus the identity's relative path.
 Portable deployments and tool catalogues select identities; the effective
 runtime configuration owns the machine-local checkpoint location. Preflight
-and launch use that same resolved configuration.
+and launch resolve checkpoints through this owner.
 
 Required settings without defaults fail fast. Deployment settings live in TOML
 with selected CLI and environment overrides; `.env` supplies process environment

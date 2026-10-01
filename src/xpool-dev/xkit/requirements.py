@@ -27,7 +27,7 @@ class ResourceRequirements:
     model_ids: tuple[ModelId, ...]
 
     def __post_init__(self) -> None:
-        if isinstance(self.cuda_count, bool) or self.cuda_count < 0:
+        if not isinstance(self.cuda_count, int) or isinstance(self.cuda_count, bool) or self.cuda_count < 0:
             raise ValueError("resource requirement cuda_count must be a nonnegative integer")
         if self.requires_mps and self.cuda_count == 0:
             raise ValueError("MPS resource requirements must also require CUDA")

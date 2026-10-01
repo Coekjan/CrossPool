@@ -36,6 +36,11 @@ def test_resource_record_retains_canonical_model_spelling() -> None:
     assert ResourceRequirements.from_raw(resources.raw()) == resources
 
 
+def test_resource_record_rejects_noninteger_cuda_count() -> None:
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        ResourceRequirements(1.5, False, False, ())  # ty: ignore[invalid-argument-type]
+
+
 def test_source_reference_uses_the_catalogues_sibling_suites_tree(tmp_path: Path) -> None:
     assert resolve_source_path(tmp_path / "tests/tests.toml", "e2e.sglang.test_serving") == (
         tmp_path / "tests/suites/e2e/sglang/test_serving.py"

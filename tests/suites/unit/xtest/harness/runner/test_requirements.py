@@ -5,12 +5,12 @@ import pytest
 
 from xpool.model import ModelId
 from xtest.harness.runner.requirements import (
-    CudaRequirement,
     RequirementGuard,
     RequirementMisconfigured,
     RequirementResolver,
     RequirementUnavailable,
 )
+from xtest.harness.support.config import TEST_MODEL_ID
 
 
 def write_config(path: Path, model_base_uri: Path) -> None:
@@ -21,6 +21,9 @@ def write_config(path: Path, model_base_uri: Path) -> None:
             (
                 "[vendor]",
                 f'model_base_uri = "{model_base_uri}"',
+                "",
+                "[logging]",
+                'level = "warning"',
                 "",
                 "[scheduler.slo]",
                 "ttft_ms = 1000",
@@ -43,7 +46,7 @@ def test_cuda_requirement_rejects_unavailable_cuda(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
 
     with pytest.raises(RequirementUnavailable, match="CUDA is not available"):
-        RequirementResolver().require_cuda(CudaRequirement())
+        RequirementResolver().require_cuda(1)
 
 
 def test_cuda_requirement_checks_count(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -51,9 +54,11 @@ def test_cuda_requirement_checks_count(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("torch.cuda.device_count", lambda: 2)
     resolver = RequirementResolver()
 
-    resolver.require_cuda(CudaRequirement(min_devices=2))
+    resolver.require_cuda(2)
     with pytest.raises(RequirementUnavailable, match="requires 3"):
-        resolver.require_cuda(CudaRequirement(min_devices=3))
+        resolver.require_cuda(3)
+    with pytest.raises(RequirementMisconfigured, match="at least 1"):
+        resolver.require_cuda(0)
 
 
 def test_mps_requirement_uses_controller_probe(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,31 +95,36 @@ def test_config_reload_observes_same_path_rewrite(tmp_path: Path, monkeypatch: p
     resolver = RequirementResolver()
 
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
+    monkeypatch.setenv("XPOOL_LOG_LEVEL", "debug")
     first = resolver.require_config()
     write_config(config_path, second_model_root)
+    monkeypatch.setenv("XPOOL_LOG_LEVEL", "error")
     second = resolver.require_config()
 
     assert first.config.vendor.model_base_uri == first_model_root
+    assert first.config.logging.level == "debug"
     assert second.path == config_path
     assert second.config.vendor.model_base_uri == second_model_root
+    assert second.config.logging.level == "error"
 
 
 def test_model_weights_require_directory_and_config_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     model_root = tmp_path / "models"
-    model_path = model_root / "test/model-a"
+    model_path = model_root / TEST_MODEL_ID.relative_path
     config_path = tmp_path / "xpool.toml"
     write_config(config_path, model_root)
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
     resolver = RequirementResolver()
+    config = resolver.require_config().config
 
     with pytest.raises(RequirementUnavailable, match="weight directory"):
-        resolver.require_model_weights(ModelId("test/model-a"))
+        resolver.require_model_weights(config, TEST_MODEL_ID)
     model_path.mkdir(parents=True)
     with pytest.raises(RequirementUnavailable, match=r"config\.json"):
-        resolver.require_model_weights(ModelId("test/model-a"))
+        resolver.require_model_weights(config, TEST_MODEL_ID)
     (model_path / "config.json").write_text("{}", encoding="utf-8")
 
-    assert resolver.require_model_weights(ModelId("test/model-a")).path == model_path
+    assert resolver.require_model_weights(config, TEST_MODEL_ID) == model_path
 
 
 def test_model_weights_resolve_explicit_path_and_unregistered_vendor_fallback(
@@ -133,8 +143,9 @@ def test_model_weights_resolve_explicit_path_and_unregistered_vendor_fallback(
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
 
     resolver = RequirementResolver()
-    assert resolver.require_model_weights(ModelId("manifest/model")).path == model_path
-    assert resolver.require_model_weights(ModelId("external/model-not-owned-by-tests")).path == custom_path
+    config = resolver.require_config().config
+    assert resolver.require_model_weights(config, ModelId("manifest/model")) == model_path
+    assert resolver.require_model_weights(config, ModelId("external/model-not-owned-by-tests")) == custom_path
 
 
 def test_requirement_guard_skips_unavailable_and_always_fails_misconfiguration() -> None:

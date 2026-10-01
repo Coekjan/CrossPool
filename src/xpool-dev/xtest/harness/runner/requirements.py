@@ -29,42 +29,25 @@ class RequirementMisconfigured(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ResolvedConfig:
-    """An E2E configuration and the environment path that supplied it."""
+    """A resolved development base and its source TOML path."""
 
     path: Path
     config: XpoolConfig
 
 
-@dataclass(frozen=True, slots=True)
-class ResolvedModelWeights:
-    """A model identifier and its validated local weight directory."""
-
-    model_id: ModelId
-    path: Path
-
-
-@dataclass(frozen=True, slots=True)
-class CudaRequirement:
-    """Minimum visible CUDA device count required by one selected test."""
-
-    min_devices: int = 1
-
-
 class RequirementResolver:
     """Resolve test resources without depending on pytest."""
 
-    def require_cuda(self, requirement: CudaRequirement) -> None:
+    def require_cuda(self, cuda_count: int) -> None:
         """Validate the visible CUDA device count."""
 
-        if requirement.min_devices < 1:
-            raise RequirementMisconfigured("requires_cuda min_devices must be at least 1")
+        if cuda_count < 1:
+            raise RequirementMisconfigured("required CUDA device count must be at least 1")
         if not torch.cuda.is_available():
             raise RequirementUnavailable("CUDA is not available")
         device_count = torch.cuda.device_count()
-        if device_count < requirement.min_devices:
-            raise RequirementUnavailable(
-                f"requires {requirement.min_devices} visible CUDA devices, found {device_count}"
-            )
+        if device_count < cuda_count:
+            raise RequirementUnavailable(f"requires {cuda_count} visible CUDA devices, found {device_count}")
 
     def require_mps(self) -> None:
         """Require the CUDA MPS controller selected by the process environment."""
@@ -74,7 +57,7 @@ class RequirementResolver:
             raise RequirementUnavailable(result.diagnostic)
 
     def require_config(self) -> ResolvedConfig:
-        """Load the E2E config named by the exact ``XPOOL_CONFIG`` variable."""
+        """Reload XPOOL_CONFIG with registered process-environment inputs."""
 
         configured_path = os.environ.get("XPOOL_CONFIG")
         if not configured_path:
@@ -86,20 +69,18 @@ class RequirementResolver:
         if not path.is_file():
             raise RequirementMisconfigured(f"XPOOL_CONFIG does not name a readable file: {path}")
         try:
-            resolved = ResolvedConfig(path=path, config=XpoolConfig.from_file(path))
+            resolved = ResolvedConfig(path=path, config=XpoolConfig.from_file(path, env=os.environ))
         except (OSError, ValueError, ValidationError) as exc:
             raise RequirementMisconfigured(f"invalid XPOOL_CONFIG file {path}: {exc}") from exc
         return resolved
 
-    def require_model_weights(self, model_id: ModelId) -> ResolvedModelWeights:
-        """Resolve selected model paths through the runtime configuration owner."""
+    def require_model_weights(self, config: XpoolConfig, model_id: ModelId) -> Path:
+        """Require a checkpoint using the caller's resolved base configuration."""
 
-        config = self.require_config().config
         try:
-            model_path = resolve_model_weights(config, model_id)
+            return resolve_model_weights(config, model_id)
         except ValueError as error:
             raise RequirementUnavailable(str(error)) from error
-        return ResolvedModelWeights(model_id=model_id, path=model_path)
 
 
 class RequirementGuard:

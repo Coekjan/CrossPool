@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
+from functools import partial
 from pathlib import Path
 from typing import cast
 
@@ -12,7 +13,6 @@ from _pytest.mark.structures import Mark, MarkDecorator, ParameterSet
 from xkit import ResourceRequirements
 from xkit.declaration import Parameterization
 from xkit.source import resolve_source_path
-from xpool.model import ModelId
 from xtest.harness.runner.artifact import ArtifactGroupRef
 from xtest.harness.runner.bootstrap import TestBootstrapError, ensure_test_native
 from xtest.harness.runner.plan import (
@@ -21,14 +21,16 @@ from xtest.harness.runner.plan import (
     TestStage,
 )
 from xtest.harness.runner.requirements import (
-    CudaRequirement,
     RequirementGuard,
     RequirementResolver,
+    ResolvedConfig,
 )
 from xtest.harness.sglang.catalog import E2eFfnTopologyCase, E2eServingCase, TestCatalog
 
 requirement_resolver_key = pytest.StashKey[RequirementResolver]()
 catalogue_key = pytest.StashKey[tuple[Path, TestCatalog]]()
+resource_requirements_key = pytest.StashKey[ResourceRequirements]()
+resolved_config_key = pytest.StashKey[ResolvedConfig]()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -68,10 +70,10 @@ def task_artifact_dir(request: pytest.FixtureRequest) -> Path | None:
 def pytest_configure(config: pytest.Config) -> None:
     """Create one resource resolver for the pytest session."""
 
-    config.addinivalue_line("markers", "requires_config: requires XPOOL_CONFIG")
-    config.addinivalue_line("markers", "requires_cuda(min_devices=1): requires CUDA resources")
-    config.addinivalue_line("markers", "requires_mps: requires a responsive CUDA MPS controller")
-    config.addinivalue_line("markers", "requires_model_weights(model_id): requires configured model weights")
+    config.addinivalue_line("markers", "requires_config: selects tests declaring local configuration")
+    config.addinivalue_line("markers", "requires_cuda(min_devices=1): selects tests declaring CUDA resources")
+    config.addinivalue_line("markers", "requires_mps: selects tests declaring CUDA MPS")
+    config.addinivalue_line("markers", "requires_model_weights(model_id): selects tests declaring local checkpoints")
     config.addinivalue_line("markers", "estimated_duration(seconds): estimated test runtime used by tests")
     config.addinivalue_line(
         "markers",
@@ -190,9 +192,10 @@ def pytest_make_collect_report(
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Adapt declared resources before marker deselection and validate merged marks."""
+    """Retain each declared resource value and emit marks before deselection."""
 
     for item in items:
+        resources = ResourceRequirements(0, False, False, ())
         if isinstance(item, pytest.Function):
             declaration = cast(
                 ResourceRequirements | Callable[..., ResourceRequirements] | None,
@@ -206,26 +209,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         resources = declaration(**item.callspec.params) if hasattr(item, "callspec") else declaration()
                     except (TypeError, ValueError) as error:
                         raise pytest.UsageError(f"{item.nodeid}: invalid declared resources: {error}") from error
-                if resources.cuda_count:
-                    item.add_marker(pytest.mark.requires_cuda(min_devices=resources.cuda_count))
-                if resources.requires_config:
-                    item.add_marker(pytest.mark.requires_config)
-                if resources.requires_mps:
-                    item.add_marker(pytest.mark.requires_mps)
-                for model_id in resources.model_ids:
-                    item.add_marker(pytest.mark.requires_model_weights(model_id))
-        config_markers = list(item.iter_markers("requires_config"))
-        weight_markers = list(item.iter_markers("requires_model_weights"))
-        if weight_markers and not config_markers:
-            raise pytest.UsageError(f"{item.nodeid}: requires_model_weights must be paired with requires_config")
-        for marker in config_markers:
-            if marker.args or marker.kwargs:
-                raise pytest.UsageError(f"{item.nodeid}: requires_config accepts no arguments")
-        for marker in item.iter_markers("requires_mps"):
-            if marker.args or marker.kwargs:
-                raise pytest.UsageError(f"{item.nodeid}: requires_mps accepts no arguments")
-        cuda_requirement(item)
-        model_ids(item)
+        item.stash[resource_requirements_key] = resources
+        if resources.cuda_count:
+            item.add_marker(pytest.mark.requires_cuda(min_devices=resources.cuda_count))
+        if resources.requires_config:
+            item.add_marker(pytest.mark.requires_config)
+        if resources.requires_mps:
+            item.add_marker(pytest.mark.requires_mps)
+        for model_id in resources.model_ids:
+            item.add_marker(pytest.mark.requires_model_weights(model_id))
         estimated_duration(item)
         serving_graph_group_ref = serving_graph_group(item)
         if serving_graph_group_ref is not None and list(item.iter_markers("xfail")):
@@ -241,52 +233,15 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         skip=lambda reason: pytest.skip(reason),
         fail=lambda reason: pytest.fail(reason, pytrace=False),
     )
-    operations: list[Callable[[], object]] = []
-    if list(item.iter_markers("requires_cuda")):
-        requirement = cuda_requirement(item)
-        operations.append(lambda: resolver.require_cuda(requirement))
-    if list(item.iter_markers("requires_config")):
-        operations.append(resolver.require_config)
-    if list(item.iter_markers("requires_mps")):
-        operations.append(resolver.require_mps)
-    operations.extend(
-        lambda model_id=model_id: resolver.require_model_weights(model_id) for model_id in model_ids(item)
-    )
-    for operation in operations:
-        guard.run(operation)
-
-
-def cuda_requirement(item: pytest.Item) -> CudaRequirement:
-    """Merge all CUDA markers attached to an item."""
-
-    min_devices = 1
-    for marker in item.iter_markers("requires_cuda"):
-        if marker.args:
-            raise pytest.UsageError(f"{item.nodeid}: requires_cuda accepts keyword arguments only")
-        unknown = set(marker.kwargs) - {"min_devices"}
-        if unknown:
-            raise pytest.UsageError(f"{item.nodeid}: unknown requires_cuda arguments: {sorted(unknown)}")
-        marker_min_devices = marker.kwargs.get("min_devices", 1)
-        if isinstance(marker_min_devices, bool) or not isinstance(marker_min_devices, int) or marker_min_devices < 1:
-            raise pytest.UsageError(f"{item.nodeid}: requires_cuda min_devices must be a positive integer")
-        min_devices = max(min_devices, marker_min_devices)
-    return CudaRequirement(min_devices=min_devices)
-
-
-def model_ids(item: pytest.Item) -> tuple[ModelId, ...]:
-    """Validate and return model IDs required by an item."""
-
-    result: list[ModelId] = []
-    for marker in item.iter_markers("requires_model_weights"):
-        if len(marker.args) != 1 or marker.kwargs:
-            raise pytest.UsageError(f"{item.nodeid}: requires_model_weights expects one namespace/name model ID")
-        try:
-            result.append(ModelId.model_validate(marker.args[0]))
-        except ValueError as error:
-            raise pytest.UsageError(
-                f"{item.nodeid}: requires_model_weights expects one namespace/name model ID"
-            ) from error
-    return tuple(dict.fromkeys(result))
+    resources = item.stash[resource_requirements_key]
+    if resources.cuda_count:
+        guard.run(partial(resolver.require_cuda, resources.cuda_count))
+    if resources.requires_config:
+        item.stash[resolved_config_key] = guard.run(resolver.require_config)
+    if resources.requires_mps:
+        guard.run(resolver.require_mps)
+    for model_id in resources.model_ids:
+        guard.run(partial(resolver.require_model_weights, item.stash[resolved_config_key].config, model_id))
 
 
 def estimated_duration(item: pytest.Item) -> float | None:
@@ -366,18 +321,12 @@ def pytest_collection_finish(session: pytest.Session) -> None:
             path = item.path.resolve().relative_to(root).as_posix()
         except ValueError as error:
             raise pytest.UsageError(f"{item.nodeid}: collected path is outside repository root") from error
-        cuda = cuda_requirement(item)
         cases.append(
             CollectedTestCase(
                 path=path,
                 nodeid=item.nodeid,
                 stage=TestStage.from_path(path),
-                requirements=ResourceRequirements(
-                    cuda_count=cuda.min_devices if list(item.iter_markers("requires_cuda")) else 0,
-                    requires_mps=bool(list(item.iter_markers("requires_mps"))),
-                    requires_config=bool(list(item.iter_markers("requires_config"))),
-                    model_ids=model_ids(item),
-                ),
+                requirements=item.stash[resource_requirements_key],
                 estimated_duration_seconds=estimated_duration(item),
                 timeout_seconds=timeout_seconds(item),
                 artifact_group=serving_graph_group(item),
