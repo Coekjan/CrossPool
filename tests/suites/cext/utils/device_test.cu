@@ -81,8 +81,15 @@ TEST_F(OwnedCudaStreamTest, WritesDeviceValueInStreamOrder) {
 }
 
 TEST_F(OwnedCudaStreamTest, CleanupWriteRejectsEmptyResourcesWithoutThrowing) {
-  auto stream = xpool::utils::device::OwnedCudaStream{};
+  auto *value = static_cast<std::uint32_t *>(nullptr);
+  ASSERT_EQ(cudaMalloc(&value, sizeof(*value)), cudaSuccess);
+  auto empty_stream = xpool::utils::device::OwnedCudaStream{};
+  EXPECT_FALSE(empty_stream.try_write_value(value, 1));
+  ASSERT_EQ(cudaFree(value), cudaSuccess);
+
+  auto stream = xpool::utils::device::OwnedCudaStream::create();
   EXPECT_FALSE(stream.try_write_value(nullptr, 1));
+  stream.destroy();
 }
 
 } // namespace

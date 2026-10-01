@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 
+#include <c10/util/Exception.h>
 #include <gtest/gtest.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -135,7 +136,7 @@ TEST(KvControlChannel, OwnerCloseUnlinksTheChannel) {
   auto daemon = xpool::kv::DaemonControlChannel::create(1, 1, 1);
   const auto name = daemon.name();
   daemon.close();
-  EXPECT_ANY_THROW(static_cast<void>(xpool::kv::InstanceControlChannel::attach(name, 0, 0, 1)));
+  EXPECT_THROW(static_cast<void>(xpool::kv::InstanceControlChannel::attach(name, 0, 0, 1)), c10::Error);
 }
 
 } // namespace

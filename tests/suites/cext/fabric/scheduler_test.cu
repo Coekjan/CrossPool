@@ -62,9 +62,11 @@ XPOOL_KERNEL_FN void exercise_two_lanes(xpool::fabric::Scheduler scheduler, std:
   observed[7] = third->executor_lane_index();
 }
 
-XPOOL_KERNEL_FN void exercise_random(xpool::fabric::Scheduler scheduler, std::size_t *observed) {
-  observed[0] = scheduler.try_schedule().has_value() ? 1 : 0;
-  observed[1] = scheduler.try_schedule().has_value() ? 1 : 0;
+XPOOL_KERNEL_FN void exercise_random(xpool::fabric::Scheduler scheduler, std::size_t *observed, bool poll_empty) {
+  if (poll_empty) {
+    observed[0] = scheduler.try_schedule().has_value() ? 1 : 0;
+    observed[1] = scheduler.try_schedule().has_value() ? 1 : 0;
+  }
   for (auto instance_index = std::size_t{0}; instance_index < kInstanceCount; ++instance_index) {
     scheduler.enqueue(invocation(instance_index));
   }
@@ -143,12 +145,19 @@ TEST_F(FfnSchedulerTest, RandomSelectionIsDeterministicAndEmptyPollsDoNotAdvance
   const auto scheduler =
       xpool::fabric::Scheduler::from(xpool::fabric::SchedulerPolicy::random(7), entries, kInstanceCount, 1);
 
-  exercise_random<<<1, 1, 0, nullptr>>>(scheduler, observed);
+  exercise_random<<<1, 1, 0, nullptr>>>(scheduler, observed, true);
   ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
   ASSERT_TRUE(cuda_succeeded(cudaDeviceSynchronize()));
 
   EXPECT_EQ((std::array{observed[0], observed[1]}), (std::array<std::size_t, 2>{0, 0}));
-  EXPECT_EQ((std::array{observed[2], observed[3], observed[4]}), (std::array<std::size_t, 3>{1, 2, 0}));
+  const auto with_empty_polls = std::array{observed[2], observed[3], observed[4]};
+  ASSERT_TRUE(cuda_succeeded(cudaMemset(entries, 0, kInstanceCount * sizeof(*entries))));
+  const auto fresh_scheduler =
+      xpool::fabric::Scheduler::from(xpool::fabric::SchedulerPolicy::random(7), entries, kInstanceCount, 1);
+  exercise_random<<<1, 1, 0, nullptr>>>(fresh_scheduler, observed, false);
+  ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
+  ASSERT_TRUE(cuda_succeeded(cudaDeviceSynchronize()));
+  EXPECT_EQ((std::array{observed[2], observed[3], observed[4]}), with_empty_polls);
 
   EXPECT_TRUE(cuda_succeeded(cudaFree(observed)));
   EXPECT_TRUE(cuda_succeeded(cudaFree(entries)));

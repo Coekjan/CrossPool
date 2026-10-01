@@ -13,12 +13,17 @@
 #include <xpool/utils/checked.hpp>
 
 TEST(TransportArenaHandleTest, EncodesDecodesAndIndexesOrderedContainers) {
-  const auto text = std::string(sizeof(cudaIpcMemHandle_t) * 2, '1');
-  const auto handle = xpool::transport::ArenaHandle::decode(text);
-  auto values = std::map<xpool::transport::ArenaHandle, int>{{handle, 7}};
+  const auto first_text = std::string(sizeof(cudaIpcMemHandle_t) * 2, '1');
+  const auto second_text = std::string(sizeof(cudaIpcMemHandle_t) * 2, '2');
+  const auto first = xpool::transport::ArenaHandle::decode(first_text);
+  const auto second = xpool::transport::ArenaHandle::decode(second_text);
+  auto values = std::map<xpool::transport::ArenaHandle, int>{{second, 8}, {first, 7}};
 
-  EXPECT_EQ(handle.encode(), text);
-  EXPECT_EQ(values.at(xpool::transport::ArenaHandle::decode(text)), 7);
+  EXPECT_EQ(first.encode(), first_text);
+  EXPECT_EQ(second.encode(), second_text);
+  EXPECT_EQ(values.size(), 2U);
+  EXPECT_EQ(values.at(xpool::transport::ArenaHandle::decode(first_text)), 7);
+  EXPECT_EQ(values.at(xpool::transport::ArenaHandle::decode(second_text)), 8);
   EXPECT_THROW(xpool::transport::ArenaHandle::decode("ab"), c10::Error);
 }
 
