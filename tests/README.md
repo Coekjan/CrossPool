@@ -63,11 +63,14 @@ finalization. Real sockets, subprocesses, locks and cross-module execution
 belong to Integration. Product tests retain their subsystem ownership even
 when they use a tool fixture.
 
-The test tool has a real CPU list/run/report/clean cycle through the editable
+Both tools have real CPU list/run/report/clean cycles through the editable
 `xpool-dev` development installation, including reports and cleanup from another
-working directory. Source-owned benchmark programs and prompt/trace inputs belong
-under `benches/suites/<family>/`; these are measurement scenarios, distinct from
-pytest self-tests.
+working directory. The owned benchmark regression lives under
+`tests/suites/e2e/xbench/sglang/` and uses
+the existing two-Qwen, two-GPU deployment with a short deterministic workload.
+Its performance measurements are report-only. Source-owned benchmark programs
+and prompt/trace inputs belong under `benches/suites/<family>/`; these are
+measurement scenarios, distinct from pytest self-tests.
 
 Keep common and subsystem-specific fixtures separate so each fixture owns one
 coherent reset boundary. Use pinned SGLang concrete types, such as `ServerArgs`,
@@ -113,7 +116,8 @@ when all declared and derived requirements are available. Each task materializes
 a private config from `XPOOL_CONFIG` and its selected case models, without
 waiting for unrelated configured models. Product serving E2E cases use the
 selected deployment's SLO and model geometry rather than external scheduler or
-model overrides.
+model overrides. The owned benchmark regression follows the same configuration
+assembly contract.
 
 Graph-mode acceptance criteria belong to
 [Qualification](../docs/designs/qualification.md#numerical-and-graph-evidence).

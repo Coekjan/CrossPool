@@ -627,6 +627,9 @@ are cleanup candidates.
 Shared lifecycle/resource checks are owned once under `xkit`; corresponding tool
 self-tests prove CLI wiring, retained outcomes and finalization under
 `tests/suites/<layer>/{xtest,xbench}/`. Symmetry matches responsibilities, not
-case counts. Real CPU test CLI cycles use small source tests through the editable
-`xpool-dev` development installation, including report and cleanup from another
-working directory.
+case counts. Real CPU CLI cycles use small source tests or local native streaming
+servers through the editable `xpool-dev` development installation, including
+report and cleanup from another working directory. The owned benchmark regression
+uses the ordinary E2E
+seam with its outer GPU visibility and finite deadline; it does not replace
+product numerical, graph or topology qualification.
