@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 import xpool.service.daemon.control
-from tests.harness.support.config import install_test_config, reset_global_config, synthetic_config
 from xpool.service.daemon.control import ControlPlane
 from xpool.service.wire import ControlPlaneWarning
+from xtest.harness.support.config import install_test_config, reset_global_config, synthetic_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 

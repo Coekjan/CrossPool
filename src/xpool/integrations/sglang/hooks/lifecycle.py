@@ -178,7 +178,7 @@ def around_model_runner_load_model[**P, R](
     runtime = SglangInstanceRankRuntime.attach(model_runner, binding)
     logger.info(
         "bound instance=%s rank=%s device=%s pid=%s",
-        binding.instance_id,
+        binding.model_id,
         binding.worker_rank,
         binding.cuda_device,
         os.getpid(),
@@ -249,7 +249,7 @@ def after_model_runner_alloc_memory_pool[R](
                 int(pre_capture_activation_reserve_mb(device_total_bytes / (1 << 20)) * (1 << 20)),
             )
         runtime.instance_rank = InstanceRankRuntime.start(
-            instance_id=binding.instance_id,
+            model_id=binding.model_id,
             rank=binding.worker_rank,
             transport=transport,
             ffn_profile=ffn_profile,
@@ -276,7 +276,7 @@ def after_model_runner_alloc_memory_pool[R](
         runtime.instance_rank.attach_arena_from_daemon()
         logger.info(
             "transport arena attached instance=%s rank=%s device=%s pid=%s",
-            binding.instance_id,
+            binding.model_id,
             binding.worker_rank,
             binding.cuda_device,
             os.getpid(),
@@ -322,7 +322,7 @@ def after_scheduler_get_init_info[R](
     binding = runtime.binding
     logger.info(
         "ready instance=%s rank=%s device=%s pid=%s generation=%s",
-        binding.instance_id,
+        binding.model_id,
         binding.worker_rank,
         binding.cuda_device,
         os.getpid(),

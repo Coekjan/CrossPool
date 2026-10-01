@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from math import prod
 from time import monotonic
-from typing import cast
+from typing import cast, overload
 
 import torch
 
@@ -48,6 +48,18 @@ class MoeGraphCaptureWorkspace:
     router_workspace: torch.Tensor | None
     routed_ids: torch.Tensor | None
     routed_weights: torch.Tensor | None
+
+
+@overload
+def binding_resource_projection(
+    layer_weights: weights.DenseFfnWeights,
+) -> xpool.native.ffnagent.DenseBindingResourceProjection: ...
+
+
+@overload
+def binding_resource_projection(
+    layer_weights: weights.MoeFfnWeights,
+) -> xpool.native.ffnagent.MoeBindingResourceProjection: ...
 
 
 def binding_resource_projection(
@@ -247,14 +259,8 @@ def capture_dense_signature(
 
     primary_graph = capture_graph(lambda: launch(primary_weights))
     control_graph = capture_graph(lambda: launch(control_probe))
-    primary_resources = cast(
-        xpool.native.ffnagent.DenseBindingResourceProjection,
-        binding_resource_projection(primary_weights),
-    )
-    control_resources = cast(
-        xpool.native.ffnagent.DenseBindingResourceProjection,
-        binding_resource_projection(control_probe),
-    )
+    primary_resources = binding_resource_projection(primary_weights)
+    control_resources = binding_resource_projection(control_probe)
     projection = xpool.native.ffnagent.DenseExecutionSignatureProjection(
         payload_dtype=signature.payload_dtype,
         payload_row_capacity=signature.payload_row_capacity,
@@ -377,14 +383,8 @@ def capture_moe_signature(
 
     primary_graph = capture_graph(lambda: launch(primary_weights))
     control_graph = capture_graph(lambda: launch(control_probe))
-    primary_resources = cast(
-        xpool.native.ffnagent.MoeBindingResourceProjection,
-        binding_resource_projection(primary_weights),
-    )
-    control_resources = cast(
-        xpool.native.ffnagent.MoeBindingResourceProjection,
-        binding_resource_projection(control_probe),
-    )
+    primary_resources = binding_resource_projection(primary_weights)
+    control_resources = binding_resource_projection(control_probe)
     projection = xpool.native.ffnagent.MoeExecutionSignatureProjection(
         payload_dtype=signature.payload_dtype,
         payload_row_capacity=signature.payload_row_capacity,
@@ -501,8 +501,6 @@ class FfnExecutionRegistry:
                 layer_signature_indices = []
                 for capacity in capacities:
                     if isinstance(layer_plan, DenseFfnLayerPlan):
-                        if not isinstance(layer_weights_value, weights.DenseFfnWeights):
-                            raise AssertionError("validated Dense Layer Plan changed weight type")
                         signature: execution.ExecutionSignature = execution.DenseFfnExecutionSignature(
                             payload_dtype=profile.payload_dtype,
                             payload_row_capacity=capacity,
@@ -511,13 +509,7 @@ class FfnExecutionRegistry:
                             activation=model_spec.activation,
                         )
                     else:
-                        if (
-                            not isinstance(layer_plan, MoeFfnLayerPlan)
-                            or not isinstance(layer_spec, ffn.MoeFfnSpec)
-                            or not isinstance(layer_weights_value, weights.MoeFfnWeights)
-                        ):
-                            raise ValueError("MoE Layer Plan requires MoE Model Spec and weights")
-                        model_adapter = architecture.adapter_for(model_spec)
+                        moe_spec = cast(ffn.MoeFfnSpec, layer_spec)
                         if not issubclass(model_adapter, architecture.MoeFfnModelAdapter):
                             raise ValueError("MoE Model Spec requires a MoE FFN Model Adapter")
                         router = None
@@ -527,26 +519,26 @@ class FfnExecutionRegistry:
                                 router_weight_dtype=model_adapter.router_weight_dtype(
                                     payload_dtype=profile.payload_dtype
                                 ),
-                                routed_expert_count=layer_spec.routed_expert_count,
+                                routed_expert_count=moe_spec.routed_expert_count,
                                 router_workspace_bytes=model_adapter.router_workspace_bytes(
                                     payload_dtype=profile.payload_dtype,
                                     payload_row_capacity=capacity,
                                     hidden_size=profile.hidden_size,
-                                    routed_expert_count=layer_spec.routed_expert_count,
-                                    routed_topk=layer_spec.routed_topk,
+                                    routed_expert_count=moe_spec.routed_expert_count,
+                                    routed_topk=moe_spec.routed_topk,
                                 ),
-                                correction_bias_present=(layer_spec.checkpoint.router_correction_bias_key is not None),
-                                renormalize=layer_spec.renormalize,
+                                correction_bias_present=(moe_spec.checkpoint.router_correction_bias_key is not None),
+                                renormalize=moe_spec.renormalize,
                             )
                         signature = execution.MoeFfnExecutionSignature(
                             payload_dtype=profile.payload_dtype,
                             payload_row_capacity=capacity,
                             hidden_size=profile.hidden_size,
                             local_intermediate_size=layer_plan.local_intermediate_size,
-                            expert_count=layer_spec.routed_expert_count + layer_spec.shared_expert_count,
+                            expert_count=moe_spec.routed_expert_count + moe_spec.shared_expert_count,
                             effective_topk=layer_plan.effective_topk,
                             activation=model_spec.activation,
-                            routed_scaling_factor=layer_spec.routed_scaling_factor,
+                            routed_scaling_factor=moe_spec.routed_scaling_factor,
                             router=router,
                         )
                     signature_index = signature_indices.get(signature)
@@ -579,21 +571,15 @@ class FfnExecutionRegistry:
             if capture_weight_pair is None:
                 capture_weight_pair = (representative, create_control_capture_probe(representative))
                 capture_weight_pairs[key] = capture_weight_pair
-            primary_weights, control_probe = capture_weight_pair
-            if (
-                isinstance(signature, execution.DenseFfnExecutionSignature)
-                and isinstance(primary_weights, weights.DenseFfnWeights)
-                and isinstance(control_probe, weights.DenseFfnWeights)
-            ):
-                captures.append(capture_dense_signature(signature, primary_weights, control_probe))
-            elif (
-                isinstance(signature, execution.MoeFfnExecutionSignature)
-                and isinstance(primary_weights, weights.MoeFfnWeights)
-                and isinstance(control_probe, weights.MoeFfnWeights)
-            ):
-                captures.append(capture_moe_signature(signature, primary_weights, control_probe))
+            # Admission and the signature-keyed cache preserve the weight kind.
+            if isinstance(signature, execution.DenseFfnExecutionSignature):
+                dense_weights, dense_probe = cast(
+                    tuple[weights.DenseFfnWeights, weights.DenseFfnWeights], capture_weight_pair
+                )
+                captures.append(capture_dense_signature(signature, dense_weights, dense_probe))
             else:
-                raise AssertionError("Execution Signature and representative weights disagree")
+                moe_weights, moe_probe = cast(tuple[weights.MoeFfnWeights, weights.MoeFfnWeights], capture_weight_pair)
+                captures.append(capture_moe_signature(signature, moe_weights, moe_probe))
         logger.info(
             "graph templates captured device=%s signature_count=%s dense_count=%s moe_count=%s "
             "row_capacities=%s elapsed=%.3fs",

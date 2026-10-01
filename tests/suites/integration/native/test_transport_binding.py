@@ -6,10 +6,10 @@ import pytest
 import torch
 
 import xpool.native
-from tests.harness.native.case import run_native_case
-from tests.harness.support.config import reset_global_config
-from tests.harness.support.native.transport import instance_transport_runtime
 from xpool.native import RuntimeRole
+from xtest.harness.native.case import run_native_case
+from xtest.harness.support.config import reset_global_config
+from xtest.harness.support.native.transport import instance_transport_runtime
 
 pytestmark = [
     pytest.mark.requires_cuda(),

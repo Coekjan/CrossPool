@@ -10,7 +10,6 @@ from typing import cast
 
 import pytest
 
-from tests.harness.support.config import install_test_config, reset_global_config, synthetic_config
 from xpool import ffn
 from xpool.config import XpoolConfig
 from xpool.fabric import FabricPlan, FabricRole
@@ -20,6 +19,7 @@ from xpool.native import ABI_VERSION
 from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent.device_memory import DeviceMemoryFeatures, DeviceMemoryPoint
 from xpool.runtime.ffnagent.memory_profile import corpus, fitting, runner
+from xtest.harness.support.config import install_test_config, reset_global_config, synthetic_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 

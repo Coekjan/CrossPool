@@ -125,9 +125,12 @@ Projection invariant is not checked again in private materialization helpers.
 The native Execution Runtime owns installed GraphExecs, Lane state, discovered
 schemas, shared immutable lookup tables, workspaces, streams, and activation.
 The Python `FfnExecutionRegistry` owns the tensors and modules whose addresses
-remain referenced after installation. Installation either publishes the whole
-runtime or rolls back construction resources; activation never performs lazy
-materialization.
+remain referenced after installation. It validates each local weight owner
+against its co-indexed Spec and Plan before per-Capacity capture. Dense/MoE
+dispatch preserves that admitted relationship through the Signature and Control
+Capture Probe cache; private capture consumers rely on that correspondence.
+Installation either publishes the whole runtime or rolls back construction
+resources; activation never performs lazy materialization.
 
 `FfnAgentControl` owns the process-local Device allocation shared by Lane
 Graph activation edges and, on the Coordinator PE, the Fabric Coordinator

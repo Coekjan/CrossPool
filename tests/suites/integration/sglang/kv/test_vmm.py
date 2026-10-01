@@ -8,10 +8,10 @@ import torch
 from sglang.srt.layers.radix_attention import RadixAttention
 
 import xpool.integrations.sglang.kv.vmm
-from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.integrations.sglang.kv.pool import ElasticMHATokenToKVPool, ElasticMLATokenToKVPool
 from xpool.integrations.sglang.kv.vmm import KvVmmBacking
 from xpool.service.wire import KvCapacityPartitionProfile
+from xtest.harness.support.sglang.runtime import published_sglang_config
 
 
 @pytest.mark.parametrize("memory_query_fails", [False, True], ids=["memory-reported", "memory-query-failed"])
@@ -164,7 +164,8 @@ def test_mha_pool_preserves_views_across_reversible_bundle_mapping() -> None:
         locations = torch.tensor([1, 2048], device="cuda")
         keys = torch.randn(2, 8, 64, device="cuda", dtype=torch.float16)
         values = torch.randn_like(keys)
-        pool.set_kv_buffer(cast(RadixAttention, SimpleNamespace(layer_id=0)), locations, keys, values)
+        layer = RadixAttention(num_heads=8, head_dim=64, scaling=64**-0.5, num_kv_heads=8, layer_id=0)
+        pool.set_kv_buffer(layer, locations, keys, values)
         torch.cuda.synchronize()
         assert torch.equal(keys_by_layer[0][locations], keys)
         assert torch.equal(values_by_layer[0][locations], values)
@@ -193,7 +194,7 @@ def test_mla_pool_writes_compound_strided_views() -> None:
         locations = torch.tensor([1, 2], device="cuda")
         hidden_states = torch.randn(2, 1, 576, device="cuda", dtype=torch.float16)
         pool.set_kv_buffer(
-            cast(RadixAttention, SimpleNamespace(layer_id=0)),
+            RadixAttention(num_heads=1, head_dim=576, scaling=576**-0.5, num_kv_heads=1, layer_id=0),
             locations,
             hidden_states,
             torch.empty(0, device="cuda"),

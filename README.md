@@ -117,13 +117,23 @@ uv run xtest run --suite e2e --strict-requirements
 ```
 
 See [tests/README.md](tests/README.md) for suite placement, requirements, and
-commands, and [tests/harness/README.md](tests/harness/README.md) for process,
+commands, and [Test Tooling](docs/designs/tooling.md) for process,
 GPU lease, endpoint, and artifact ownership.
 
 CMake uses ccache for C, C++, and CUDA when available and no compiler launcher
 is already configured. To disable it for a build, add
 `--config-settings-package xpool:cmake.define.XPOOL_ENABLE_CCACHE=OFF`
 to the [Quick Start sync command](docs/tutorials/quick-start.md#install-and-start-mps).
+
+The root `uv sync --group dev` installs the private `xpool-dev` workspace member
+editably alongside production `xpool`, using one root lockfile and virtual
+environment. Its direct console entry is `xtest.cli:main`;
+the released `xpool` wheel contains production code and the
+`xpool` command. The development tool exposes list/run/report/clean; xtest
+inventory and execution require source suites, while offline reports work outside
+a checkout.
+See [Test Tooling](docs/designs/tooling.md) for ownership and retained-result
+contracts.
 
 ## Repository Guide
 
@@ -136,8 +146,14 @@ to the [Quick Start sync command](docs/tutorials/quick-start.md#install-and-star
   SGLang integration, and Python/native boundaries.
 - [`src/cext-include/xpool/`](src/cext-include/xpool/) and
   [`src/cext/`](src/cext/) contain the C++/CUDA Transport and Fabric data plane.
-- [`tests/`](tests/) contains the native, Unit, Integration, and E2E validation
-  layers and their reusable harnesses.
+- [`src/xpool-dev/`](src/xpool-dev/) contains the private development project and
+  installed `xkit` and `xtest` packages for shared mechanisms and test
+  tooling. Production and native sources retain their
+  separate owners.
+- [`tests/`](tests/) contains the native, Unit, Integration and E2E validation
+  suites and their source-owned catalogue.
+- [`configs/deployments/`](configs/deployments/) contains portable runtime scenes
+  selected by the test catalogue.
 - [`docs/code-style.md`](docs/code-style.md) defines repository-wide coding
   conventions.
 

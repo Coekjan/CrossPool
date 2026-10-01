@@ -47,7 +47,7 @@ class ControlPlaneProjection:
         ffnagent_by_device = {
             registration.cuda_device: registration for registration in registrations.ffnagents.values()
         }
-        instance_by_id = {registration.instance: registration for registration in registrations.instances.values()}
+        instance_by_rank = {registration.instance: registration for registration in registrations.instances.values()}
         generation = fabric.generation
 
         atnagents = [
@@ -70,14 +70,14 @@ class ControlPlaneProjection:
         ]
         instance_slots = (
             tuple(
-                (instance.id, rank, cuda_device)
+                (instance.model_id, rank, cuda_device)
                 for instance in config.instances
                 for rank, cuda_device in enumerate(config.atn.devices)
             )
             if generation is None
             else tuple(
                 (
-                    instance_plan.instance_id,
+                    instance_plan.model_id,
                     rank,
                     config.atn.devices[atnagent_index],
                 )
@@ -88,13 +88,13 @@ class ControlPlaneProjection:
         instances = [
             ReadinessInstanceRank(
                 pid=None if registration is None else registration.proc.pid,
-                instance_id=instance_id,
+                model_id=model_id,
                 cuda_device=cuda_device,
                 rank=rank,
                 status=ReadinessStatus.OFFLINE if registration is None else registration.readiness_status(now),
             )
-            for instance_id, rank, cuda_device in instance_slots
-            for registration in (instance_by_id.get(InstanceRankId(instance_id=instance_id, rank=rank)),)
+            for model_id, rank, cuda_device in instance_slots
+            for registration in (instance_by_rank.get(InstanceRankId(model_id=model_id, rank=rank)),)
         ]
 
         # Warning projection: derive heartbeat and Transport-quiesce diagnostics
@@ -132,7 +132,7 @@ class ControlPlaneProjection:
                 kind="stale_instance",
                 cuda_device=entry.cuda_device,
                 message=(
-                    f"instance {entry.instance_id} rank {entry.rank} on CUDA device "
+                    f"instance {entry.model_id} rank {entry.rank} on CUDA device "
                     f"{entry.cuda_device} is not heartbeating"
                 ),
             )
@@ -143,17 +143,15 @@ class ControlPlaneProjection:
         # Data-plane projection: require exact Transport geometry and the
         # complete Fabric initialization barrier for every configured rank.
         transport_ready = all(
-            (registration := instance_by_id.get(instance_id)) is not None
+            (registration := instance_by_rank.get(instance_rank)) is not None
             and atnagent_by_device.get(cuda_device) is not None
             and cuda_device not in quiescing_devices
-            and (publication := transport.published_for(cuda_device, instance_id)) is not None
+            and (publication := transport.published_for(cuda_device, instance_rank)) is not None
             and publication.transport == registration.transport
-            for configured_instance_id, rank, cuda_device in instance_slots
-            for instance_id in (InstanceRankId(instance_id=configured_instance_id, rank=rank),)
+            for model_id, rank, cuda_device in instance_slots
+            for instance_rank in (InstanceRankId(model_id=model_id, rank=rank),)
         )
-        expected_initialized = {
-            InstanceRankId(instance_id=instance_id, rank=rank) for instance_id, rank, _ in instance_slots
-        }
+        expected_initialized = {InstanceRankId(model_id=model_id, rank=rank) for model_id, rank, _ in instance_slots}
         instances_initialized = generation is not None and set(generation.initialized_instances) == expected_initialized
         invocation_failure = None if generation is None else generation.invocation_failure
         owner_failure = None if generation is None else generation.owner_failure

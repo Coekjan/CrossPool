@@ -9,9 +9,9 @@ import pytest
 import xpool.devkit.registry
 import xpool.integrations.sglang.devkit.graph_observer
 import xpool.integrations.sglang.devkit.prefill_logit_observer
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.devkit import observer_enabled_config
 from xpool.native import RuntimeRole
+from xtest.harness.support.config import install_test_config, reset_global_config
+from xtest.harness.support.devkit import observer_enabled_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 

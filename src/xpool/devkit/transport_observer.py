@@ -8,10 +8,12 @@ import os
 from functools import wraps
 from pathlib import Path
 from threading import Lock
+from typing import Literal, TypedDict
 
 import xpool.native
 from xpool.bootstrap import get_runtime_role
 from xpool.config import get_global_config
+from xpool.model import ModelId
 from xpool.native import RuntimeRole
 from xpool.runtime.atnagent import AtnAgentTransportRuntime
 from xpool.runtime.instance import InstanceRankRuntime
@@ -21,26 +23,6 @@ runtime_roles = frozenset({RuntimeRole.INSTANCE, RuntimeRole.ATNAGENT})
 logger = logging.getLogger(__name__)
 install_lock = Lock()
 installed = False
-transport_trace_fields = (
-    "trace_id",
-    "payload_rows",
-    "layer_ordinal",
-    "forward_mode",
-    "output_requirement",
-    "dp_row_layout",
-    "result_code",
-    "request_staging_started",
-    "request_staging_completed",
-    "request_published",
-    "request_observed",
-    "execution_started",
-    "execution_completed",
-    "result_published",
-    "result_observed",
-    "output_copied",
-    "result_acknowledged",
-    "closed",
-)
 transport_phases = (
     ("request_staging", "request_staging_started", "request_staging_completed"),
     ("request_publication", "request_staging_completed", "request_published"),
@@ -51,7 +33,65 @@ transport_phases = (
     ("result_acknowledged_total", "request_staging_started", "result_acknowledged"),
     ("closed_total", "request_staging_started", "closed"),
 )
-type TransportRecordJson = dict[str, int | str | dict[str, int]]
+
+
+class TransportRecordJson(TypedDict):
+    """One native mailbox trace projected to JSON scalars and durations."""
+
+    trace_id: int
+    payload_rows: int
+    layer_ordinal: int
+    forward_mode: str
+    output_requirement: str
+    dp_row_layout: str
+    result_code: str
+    request_staging_started: int
+    request_staging_completed: int
+    request_published: int
+    request_observed: int
+    execution_started: int
+    execution_completed: int
+    result_published: int
+    result_observed: int
+    output_copied: int
+    result_acknowledged: int
+    closed: int
+    durations_ns: dict[str, int]
+
+
+class TransportPhaseSummaryJson(TypedDict):
+    """Count and nearest-rank duration statistics for one mailbox phase."""
+
+    count: int
+    min_ns: int
+    median_ns: int
+    p95_ns: int
+    p99_ns: int
+    max_ns: int
+
+
+class TransportRecordCountsJson(TypedDict):
+    """Retained traces classified by their terminal or incomplete state."""
+
+    retained: int
+    completed: int
+    closed: int
+    incomplete: int
+
+
+class TransportSnapshotJson(TypedDict):
+    """One process-local Transport endpoint's observer document."""
+
+    pid: int
+    site: Literal["instance", "atnagent"]
+    model_id: str
+    rank: int
+    arena_handle_suffix: str
+    sequence: int
+    dropped: int
+    phase_summary: dict[str, TransportPhaseSummaryJson]
+    record_counts: TransportRecordCountsJson
+    records: list[TransportRecordJson]
 
 
 def install() -> None:
@@ -99,14 +139,14 @@ def install_atnagent_observer() -> None:
                 return
             config = get_global_config()
             resource_by_endpoint = {
-                (config.instance_by_id[resource.instance_id].instance_index, resource.registration.rank): resource
+                (config.instance_by_model_id[resource.model_id].instance_index, resource.registration.rank): resource
                 for resource in resources
             }
             for endpoint in snapshot.endpoints:
                 resource = resource_by_endpoint[(endpoint.instance_index, endpoint.instance_rank)]
                 write_transport_snapshot(
                     site="atnagent",
-                    instance_id=resource.instance_id,
+                    model_id=resource.model_id,
                     rank=resource.registration.rank,
                     handle=resource.handle,
                     snapshot=endpoint,
@@ -131,7 +171,7 @@ def install_instance_observer() -> None:
                 if snapshot is not None:
                     write_transport_snapshot(
                         site="instance",
-                        instance_id=runtime.instance_id,
+                        model_id=runtime.model_id,
                         rank=runtime.rank,
                         handle=handle,
                         snapshot=snapshot.endpoints[0],
@@ -143,7 +183,7 @@ def install_instance_observer() -> None:
     setattr(InstanceRankRuntime, "detach_arena", observed_detach)
 
 
-def transport_phase_summary(records: list[TransportRecordJson]) -> dict[str, dict[str, int]]:
+def transport_phase_summary(records: list[TransportRecordJson]) -> dict[str, TransportPhaseSummaryJson]:
     """Aggregate observer phase durations with nearest-rank percentiles.
 
     Args:
@@ -156,11 +196,9 @@ def transport_phase_summary(records: list[TransportRecordJson]) -> dict[str, dic
     values_by_phase: dict[str, list[int]] = {}
     for record in records:
         durations = record["durations_ns"]
-        if not isinstance(durations, dict):
-            continue
         for phase, duration in durations.items():
             values_by_phase.setdefault(phase, []).append(duration)
-    summaries: dict[str, dict[str, int]] = {}
+    summaries: dict[str, TransportPhaseSummaryJson] = {}
     for phase, values in values_by_phase.items():
         values.sort()
         last_index = len(values) - 1
@@ -177,8 +215,8 @@ def transport_phase_summary(records: list[TransportRecordJson]) -> dict[str, dic
 
 def write_transport_snapshot(
     *,
-    site: str,
-    instance_id: str,
+    site: Literal["instance", "atnagent"],
+    model_id: ModelId,
     rank: int,
     handle: TransportArenaHandle,
     snapshot: xpool.native.devkit.transport_observer.EndpointSnapshot,
@@ -187,7 +225,7 @@ def write_transport_snapshot(
 
     Args:
         site: Process-local endpoint role represented by the snapshot.
-        instance_id: Configured instance associated with the arena.
+        model_id: Configured instance associated with the arena.
         rank: Instance rank associated with the arena.
         handle: Arena identity used to distinguish resource generations.
         snapshot: Native bounded-buffer trace snapshot copied at the drain boundary.
@@ -205,38 +243,50 @@ def write_transport_snapshot(
         raise RuntimeError("xpool transport observer requires debug.transport_observer.outdir")
     records: list[TransportRecordJson] = []
     for record in snapshot.records:
-        raw_values = {field: getattr(record, field) for field in transport_trace_fields}
-        numeric_values = {
-            field: int(value)
-            for field, value in raw_values.items()
-            if field not in {"forward_mode", "output_requirement", "dp_row_layout", "result_code"}
-        }
-        if numeric_values["trace_id"] == 0:
+        if record.trace_id == 0:
             continue
+        # The phase table names integer timestamp getters on the native record.
+        timestamps: dict[str, int] = {
+            field: getattr(record, field) for _, start, end in transport_phases for field in (start, end)
+        }
         durations = {
-            name: numeric_values[end] - numeric_values[start]
+            name: timestamps[end] - timestamps[start]
             for name, start, end in transport_phases
-            if numeric_values[start] != 0 and numeric_values[end] != 0 and numeric_values[end] >= numeric_values[start]
+            if timestamps[start] != 0 and timestamps[end] != 0 and timestamps[end] >= timestamps[start]
         }
         values: TransportRecordJson = {
-            **numeric_values,
+            "trace_id": record.trace_id,
+            "payload_rows": record.payload_rows,
+            "layer_ordinal": record.layer_ordinal,
             "forward_mode": record.forward_mode.name.lower(),
             "output_requirement": record.output_requirement.name.lower(),
             "dp_row_layout": record.dp_row_layout.name.lower(),
             "result_code": record.result_code.name.lower(),
+            "request_staging_started": record.request_staging_started,
+            "request_staging_completed": record.request_staging_completed,
+            "request_published": record.request_published,
+            "request_observed": record.request_observed,
+            "execution_started": record.execution_started,
+            "execution_completed": record.execution_completed,
+            "result_published": record.result_published,
+            "result_observed": record.result_observed,
+            "output_copied": record.output_copied,
+            "result_acknowledged": record.result_acknowledged,
+            "closed": record.closed,
+            "durations_ns": durations,
         }
-        records.append({**values, "durations_ns": durations})
-    records.sort(key=lambda record: int(record["trace_id"]))
+        records.append(values)
+    records.sort(key=lambda record: record["trace_id"])
     completed_field = "result_published" if site == "atnagent" else "result_acknowledged"
     completed = sum(1 for record in records if record[completed_field] != 0)
     closed = sum(1 for record in records if record["closed"] != 0)
     if any(record["result_acknowledged"] != 0 and record["closed"] != 0 for record in records):
         raise RuntimeError("xpool Transport trace record cannot be both acknowledged and closed")
     incomplete = len(records) - completed - closed
-    payload = {
+    payload: TransportSnapshotJson = {
         "pid": os.getpid(),
         "site": site,
-        "instance_id": instance_id,
+        "model_id": str(model_id),
         "rank": rank,
         "arena_handle_suffix": handle.handle[-16:],
         "sequence": snapshot.sequence,
@@ -250,8 +300,8 @@ def write_transport_snapshot(
         },
         "records": records,
     }
-    filename_instance_id = instance_id.replace("/", "--")
-    path = outdir / f"xpool.transport-observer.{os.getpid()}.{site}.{filename_instance_id}.{rank}.json"
+    filename_model_id = model_id.uri_encode()
+    path = outdir / f"xpool.transport-observer.{os.getpid()}.{site}.{filename_model_id}.{rank}.json"
     temporary_path = path.with_suffix(path.suffix + ".tmp")
     temporary_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     temporary_path.replace(path)

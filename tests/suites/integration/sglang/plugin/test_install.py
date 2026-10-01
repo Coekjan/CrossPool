@@ -9,14 +9,14 @@ from sglang.srt.model_executor.cuda_graph_config import Backend, CudaGraphConfig
 from sglang.srt.plugins.hook_registry import HookRegistry, HookType
 from sglang.srt.server_args import ServerArgs
 
-import tests.harness.support.sglang.plugin
 import xpool.integrations.sglang.plugin
-from tests.harness.support.config import reset_global_config
-from tests.harness.support.sglang.fakes import server_args as make_server_args
-from tests.harness.support.sglang.plugin import reset_plugin_required_hook_targets
-from xpool.integrations.sglang.adapter import SglangCudaPlacement
+import xtest.harness.support.config
 from xpool.integrations.sglang.hooks.lifecycle import around_runtime_context_publish
 from xpool.integrations.sglang.hooks.registry import SglangHook, discover_sglang_hooks
+from xpool.integrations.sglang.placement import SglangCudaPlacement
+from xtest.harness.support.config import reset_global_config
+from xtest.harness.support.sglang.fakes import server_args as make_server_args
+from xtest.harness.support.sglang.plugin import reset_plugin_required_hook_targets
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, reset_plugin_required_hook_targets.__name__)
 
@@ -93,18 +93,18 @@ def test_runtime_context_publish_defaults_request_concurrency_to_decode_graph(
 def test_plugin_applies_discovered_hooks_with_pinned_sglang_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_fake_hook(monkeypatch, "tests.harness.support.sglang.plugin.minimal_config")
+    install_fake_hook(monkeypatch, "xtest.harness.support.config.minimal_config")
 
     xpool.integrations.sglang.plugin.install()
     HookRegistry.apply_hooks()
 
-    assert tests.harness.support.sglang.plugin.minimal_config() == "patched"
+    assert xtest.harness.support.config.minimal_config() == "patched"
 
 
 def test_plugin_enables_upstream_post_capture_sizing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_fake_hook(monkeypatch, "tests.harness.support.sglang.plugin.minimal_config")
+    install_fake_hook(monkeypatch, "xtest.harness.support.config.minimal_config")
 
     xpool.integrations.sglang.plugin.install()
 
@@ -114,12 +114,12 @@ def test_plugin_enables_upstream_post_capture_sizing(
 def test_plugin_apply_hooks_guard_fails_closed_with_pinned_sglang_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_fake_hook(monkeypatch, "tests.harness.support.sglang.plugin.missing_target")
+    install_fake_hook(monkeypatch, "xtest.harness.support.sglang.plugin.missing_target")
 
     xpool.integrations.sglang.plugin.install()
     with pytest.raises(
         SystemExit,
-        match=r"tests\.harness\.support\.sglang\.plugin\.missing_target",
+        match=r"xtest\.harness\.support\.sglang\.plugin\.missing_target",
     ):
         HookRegistry.apply_hooks()
 
@@ -131,7 +131,7 @@ def test_plugin_fails_closed_when_hook_discovery_fails(monkeypatch: pytest.Monke
     monkeypatch.setattr(
         xpool.integrations.sglang.plugin,
         "init_global_config",
-        tests.harness.support.sglang.plugin.minimal_config,
+        xtest.harness.support.config.minimal_config,
     )
     monkeypatch.setattr(
         xpool.integrations.sglang.plugin,
@@ -145,12 +145,12 @@ def test_plugin_fails_closed_when_hook_discovery_fails(monkeypatch: pytest.Monke
 
 def install_fake_hook(monkeypatch: pytest.MonkeyPatch, target: str) -> None:
     monkeypatch.setattr(
-        tests.harness.support.sglang.plugin,
+        xtest.harness.support.config,
         "minimal_config",
-        tests.harness.support.sglang.plugin.minimal_config,
+        xtest.harness.support.config.minimal_config,
     )
     monkeypatch.setattr(
-        xpool.integrations.sglang.plugin, "init_global_config", tests.harness.support.sglang.plugin.minimal_config
+        xpool.integrations.sglang.plugin, "init_global_config", xtest.harness.support.config.minimal_config
     )
     monkeypatch.setattr(
         xpool.integrations.sglang.plugin,

@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
+from pydantic import JsonValue
 from safetensors import safe_open
 
 from xpool import ffn
@@ -17,11 +18,11 @@ SINGLE_FILE_NAME = "model.safetensors"
 MAIN_FFN_KEY_PATTERN = re.compile(r"^model\.layers\.(?P<layer_id>[0-9]+)\.mlp\.")
 
 
-def parse_json_object(payload: bytes, *, source: Path) -> dict[str, object]:
+def parse_json_object(payload: bytes, *, source: Path) -> dict[str, JsonValue]:
     """Parse a JSON object while rejecting duplicate members at every level."""
 
-    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-        result: dict[str, object] = {}
+    def unique_object(pairs: list[tuple[str, JsonValue]]) -> dict[str, JsonValue]:
+        result: dict[str, JsonValue] = {}
         for key, value in pairs:
             if key in result:
                 raise ValueError(f"duplicate JSON member {key!r} in {source}")
@@ -31,7 +32,7 @@ def parse_json_object(payload: bytes, *, source: Path) -> dict[str, object]:
     value = json.loads(payload, object_pairs_hook=unique_object)
     if not isinstance(value, dict):
         raise ValueError(f"{source} must contain one JSON object")
-    return cast(dict[str, object], value)
+    return cast(dict[str, JsonValue], value)
 
 
 def read_checkpoint_key_view(model_path: Path) -> dict[str, Path]:
@@ -46,7 +47,7 @@ def read_checkpoint_key_view(model_path: Path) -> dict[str, Path]:
 
         key_view: dict[str, Path] = {}
         for weight_key, shard_name in weight_map.items():
-            if not isinstance(weight_key, str) or not weight_key:
+            if not weight_key:
                 raise ValueError(f"{index_path} contains an invalid weight key")
             if not isinstance(shard_name, str) or not shard_name:
                 raise ValueError(f"{index_path} contains an invalid shard name for {weight_key!r}")

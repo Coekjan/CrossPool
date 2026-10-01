@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import threading
 from http import HTTPStatus
-from typing import cast
 
 import httpx
 import pytest
 
 import xpool.service.daemon.registration
-from tests.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
-from tests.harness.support.service.daemon import (
+from xpool.config import XpoolConfig
+from xpool.fabric import FabricPlan
+from xpool.service.wire import ProcessRef
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
+from xtest.harness.support.service.daemon import (
     activate_fabric_world,
     atnagent_registration,
     atnagent_transport_arena_bindings,
@@ -23,10 +25,8 @@ from tests.harness.support.service.daemon import (
     instance_transport_arena_acquire_path,
     process_ref,
     request,
+    transport_requirements,
 )
-from xpool.config import XpoolConfig
-from xpool.fabric import FabricPlan
-from xpool.service.wire import ProcessRef
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
 
@@ -40,7 +40,7 @@ def test_daemon_requires_executable_fabric_for_transport_arena() -> None:
     not_ready = request(
         app,
         "POST",
-        instance_transport_arena_acquire_path(TEST_MODEL_ID, 0),
+        instance_transport_arena_acquire_path(str(TEST_MODEL_ID), 0),
         json=process_ref(),
     )
     assert not_ready.status_code == HTTPStatus.SERVICE_UNAVAILABLE
@@ -54,7 +54,7 @@ def test_daemon_requires_executable_fabric_for_transport_arena() -> None:
         app,
         "POST",
         atnagent_transport_arenas_path(0),
-        json=atnagent_transport_arenas((TEST_MODEL_ID, 0), publisher=atnagent),
+        json=atnagent_transport_arenas((str(TEST_MODEL_ID), 0), publisher=atnagent),
     )
     assert publish_response.status_code == HTTPStatus.NO_CONTENT
     assert publish_response.content == b""
@@ -62,7 +62,7 @@ def test_daemon_requires_executable_fabric_for_transport_arena() -> None:
     response = request(
         app,
         "POST",
-        instance_transport_arena_acquire_path(TEST_MODEL_ID, 0),
+        instance_transport_arena_acquire_path(str(TEST_MODEL_ID), 0),
         json=process_ref(),
     )
 
@@ -81,7 +81,7 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     app = create_app(config)
@@ -92,12 +92,12 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
             app,
             "POST",
             "/ffnagent/register",
-            json=ffnagent_registration(cuda_device=1, model_ids=("m",)),
+            json=ffnagent_registration(cuda_device=1, model_ids=(str(TEST_MODEL_ID),)),
         ).status_code
         == HTTPStatus.NO_CONTENT
     )
     assert (
-        request(app, "POST", "/instance/register", json=instance_registration(instance_id="m")).status_code
+        request(app, "POST", "/instance/register", json=instance_registration(model_id=str(TEST_MODEL_ID))).status_code
         == HTTPStatus.NO_CONTENT
     )
     assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.OK
@@ -106,7 +106,7 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
             app,
             "POST",
             atnagent_transport_arenas_path(0),
-            json=atnagent_transport_arenas(("m", 0), publisher=atnagent),
+            json=atnagent_transport_arenas((str(TEST_MODEL_ID), 0), publisher=atnagent),
         ).status_code
         == HTTPStatus.NO_CONTENT
     )
@@ -136,7 +136,7 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
             request(
                 app,
                 "POST",
-                instance_transport_arena_acquire_path("m", 0),
+                instance_transport_arena_acquire_path(str(TEST_MODEL_ID), 0),
                 json=process_ref(),
             )
         )
@@ -158,13 +158,13 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
     }
 
 
-def test_daemon_accepts_transport_topology_using_atnagent_prefix() -> None:
+def test_daemon_rejects_transport_topology_disagreeing_with_configuration() -> None:
     config = XpoolConfig.from_mapping(
         {
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0, 1]},
             "ffn": {"devices": [2]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     app = create_app(config)
@@ -173,33 +173,12 @@ def test_daemon_accepts_transport_topology_using_atnagent_prefix() -> None:
         app,
         "POST",
         "/instance/register",
-        json=instance_registration(instance_id="m", rank=0, atn_tp_size=1),
-    )
-
-    assert response.status_code == HTTPStatus.NO_CONTENT
-
-
-def test_daemon_rejects_transport_topology_exceeding_atnagent_world() -> None:
-    config = XpoolConfig.from_mapping(
-        {
-            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
-            "atn": {"devices": [0]},
-            "ffn": {"devices": [1]},
-            "models": [{"id": "m", "path": "/models/m"}],
-        }
-    )
-    app = create_app(config)
-
-    response = request(
-        app,
-        "POST",
-        "/instance/register",
-        json=instance_registration(instance_id="m", rank=0, atn_tp_size=2),
+        json=instance_registration(model_id=str(TEST_MODEL_ID), rank=0, atn_tp_size=1, atn_dp_size=2),
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"]["message"] == (
-        "instance transport TP-by-DP topology exceeds the configured AtnAgent world"
+        "instance transport TP-by-DP topology disagrees with configured model geometry"
     )
 
 
@@ -209,7 +188,7 @@ def test_daemon_accepts_dp_transport_with_tp_fastest_rank_order() -> None:
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0, 1]},
             "ffn": {"devices": [2]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m", "atn_dp_size": 2}],
         }
     )
     app = create_app(config)
@@ -220,7 +199,7 @@ def test_daemon_accepts_dp_transport_with_tp_fastest_rank_order() -> None:
             "POST",
             "/instance/register",
             json=instance_registration(
-                instance_id="m",
+                model_id=str(TEST_MODEL_ID),
                 rank=rank,
                 atn_tp_rank=0,
                 atn_tp_size=1,
@@ -237,7 +216,7 @@ def test_daemon_rejects_transport_coordinates_that_do_not_use_tp_fastest_order()
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0, 1]},
             "ffn": {"devices": [2]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     app = create_app(config)
@@ -246,7 +225,7 @@ def test_daemon_rejects_transport_coordinates_that_do_not_use_tp_fastest_order()
         app,
         "POST",
         "/instance/register",
-        json=instance_registration(instance_id="m", rank=0, atn_tp_rank=1, atn_tp_size=2),
+        json=instance_registration(model_id=str(TEST_MODEL_ID), rank=0, atn_tp_rank=1, atn_tp_size=2),
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
@@ -259,14 +238,14 @@ def test_daemon_rejects_cross_rank_transport_geometry_mismatch() -> None:
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0, 1]},
             "ffn": {"devices": [2]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     app = create_app(config)
-    rank0 = instance_registration(instance_id="m", rank=0, atn_tp_size=2)
-    rank1 = instance_registration(instance_id="m", rank=1, atn_tp_size=2)
+    rank0 = instance_registration(model_id=str(TEST_MODEL_ID), rank=0, atn_tp_size=2)
+    rank1 = instance_registration(model_id=str(TEST_MODEL_ID), rank=1, atn_tp_size=2)
     rank1["transport"] = {
-        **cast(dict[str, int], rank1["transport"]),
+        **transport_requirements(atn_tp_rank=1, atn_tp_size=2),
         "hidden_size": 8,
     }
 
@@ -283,7 +262,7 @@ def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instan
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0, 1]},
             "ffn": {"devices": [2]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     app = create_app(config)
@@ -294,7 +273,7 @@ def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instan
     ):
         atnagents[int(payload["cuda_device"])] = payload
         assert request(app, "POST", "/atnagent/register", json=payload).status_code == HTTPStatus.NO_CONTENT
-    ffnagent = ffnagent_registration(cuda_device=2, model_ids=("m",))
+    ffnagent = ffnagent_registration(cuda_device=2, model_ids=(str(TEST_MODEL_ID),))
     assert request(app, "POST", "/ffnagent/register", json=ffnagent).status_code == HTTPStatus.NO_CONTENT
     for rank in (0, 1):
         assert (
@@ -303,7 +282,7 @@ def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instan
                 "POST",
                 "/instance/register",
                 json=instance_registration(
-                    instance_id="m",
+                    model_id=str(TEST_MODEL_ID),
                     rank=rank,
                     atn_tp_size=2,
                 ),
@@ -318,13 +297,13 @@ def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instan
                 app,
                 "POST",
                 atnagent_transport_arenas_path(rank),
-                json=atnagent_transport_arenas(("m", rank)),
+                json=atnagent_transport_arenas((str(TEST_MODEL_ID), rank)),
             ).status_code
             == HTTPStatus.NO_CONTENT
         )
 
-    rank0 = request(app, "POST", instance_transport_arena_acquire_path("m", 0), json=process_ref())
-    rank1 = request(app, "POST", instance_transport_arena_acquire_path("m", 1), json=process_ref())
+    rank0 = request(app, "POST", instance_transport_arena_acquire_path(str(TEST_MODEL_ID), 0), json=process_ref())
+    rank1 = request(app, "POST", instance_transport_arena_acquire_path(str(TEST_MODEL_ID), 1), json=process_ref())
 
     assert rank0.status_code == HTTPStatus.OK
     assert rank1.status_code == HTTPStatus.OK
@@ -338,7 +317,7 @@ def test_daemon_rejects_atnagent_transport_arena_with_wrong_rank_device() -> Non
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0, 1]},
             "ffn": {"devices": [2]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     app = create_app(config)
@@ -351,7 +330,7 @@ def test_daemon_rejects_atnagent_transport_arena_with_wrong_rank_device() -> Non
             app,
             "POST",
             "/instance/register",
-            json=instance_registration(instance_id="m", rank=1, atn_tp_size=2),
+            json=instance_registration(model_id=str(TEST_MODEL_ID), rank=1, atn_tp_size=2),
         ).status_code
         == HTTPStatus.NO_CONTENT
     )
@@ -360,7 +339,7 @@ def test_daemon_rejects_atnagent_transport_arena_with_wrong_rank_device() -> Non
         app,
         "POST",
         atnagent_transport_arenas_path(0),
-        json=atnagent_transport_arenas(("m", 1)),
+        json=atnagent_transport_arenas((str(TEST_MODEL_ID), 1)),
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
@@ -380,8 +359,8 @@ def test_daemon_rejects_duplicate_atnagent_transport_arena() -> None:
     assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
 
     arenas = atnagent_transport_arena_bindings(
-        (TEST_MODEL_ID, 0),
-        (TEST_MODEL_ID, 0),
+        (str(TEST_MODEL_ID), 0),
+        (str(TEST_MODEL_ID), 0),
     )
     arenas[1]["handle"] = instance_transport_arena(rank=1)
     response = request(
@@ -404,7 +383,7 @@ def test_daemon_rejects_duplicate_transport_arena_handle() -> None:
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
-            "models": [{"id": "a", "path": "/models/a"}, {"id": "b", "path": "/models/b"}],
+            "models": [{"id": "test/a", "path": "/models/a"}, {"id": "test/b", "path": "/models/b"}],
         }
     )
     app = create_app(config)
@@ -412,19 +391,19 @@ def test_daemon_rejects_duplicate_transport_arena_handle() -> None:
         request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=0)).status_code
         == HTTPStatus.NO_CONTENT
     )
-    for instance_id in ("a", "b"):
+    for model_id in ("test/a", "test/b"):
         assert (
             request(
                 app,
                 "POST",
                 "/instance/register",
-                json=instance_registration(instance_id=instance_id, rank=0),
+                json=instance_registration(model_id=model_id, rank=0),
             ).status_code
             == HTTPStatus.NO_CONTENT
         )
 
-    first = atnagent_transport_arenas(("a", 0))
-    second = atnagent_transport_arenas(("b", 0))
+    first = atnagent_transport_arenas(("test/a", 0))
+    second = atnagent_transport_arenas(("test/b", 0))
     assert request(app, "POST", atnagent_transport_arenas_path(0), json=first).status_code == HTTPStatus.NO_CONTENT
     response = request(
         app,

@@ -5,13 +5,13 @@ from pathlib import Path
 import pytest
 
 import xpool.integrations.sglang.devkit.graph_observer
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.sglang.graph_observer import (
+from xtest.harness.sglang.serving.graph import read_graph_events
+from xtest.harness.support.config import install_test_config, reset_global_config
+from xtest.harness.support.devkit import observer_enabled_config
+from xtest.harness.support.sglang.graph_observer import (
     FakeDecodeCudaGraphRunnerState,
     FakePrefillCudaGraphRunnerState,
-    graph_observer_config,
     install_fake_sglang_runner_classes,
-    read_events,
     reset_graph_observer,
     successful_runner_classes,
 )
@@ -26,7 +26,7 @@ def test_graph_observer_records_success_events(
     DecodeCudaGraphRunner, PrefillCudaGraphRunner = successful_runner_classes()
     install_fake_sglang_runner_classes(monkeypatch, DecodeCudaGraphRunner, PrefillCudaGraphRunner)
 
-    install_test_config(config=graph_observer_config(tmp_path.resolve()))
+    install_test_config(config=observer_enabled_config("graph_observer", tmp_path.resolve()))
     xpool.integrations.sglang.devkit.graph_observer.install()
 
     decode_runner = DecodeCudaGraphRunner()
@@ -37,7 +37,7 @@ def test_graph_observer_records_success_events(
     assert prefill_runner.capture() == "prefill-captured"
     assert prefill_runner.execute() == "prefill-executed"
 
-    events = read_events(tmp_path)
+    events = read_graph_events(tmp_path)
     assert [(event["forward_phase"], event["event"]) for event in events] == [
         ("decode", "capture_begin"),
         ("decode", "capture_end"),
@@ -71,13 +71,13 @@ def test_graph_observer_records_error_and_reraises(
             return None
 
     install_fake_sglang_runner_classes(monkeypatch, DecodeCudaGraphRunner, PrefillCudaGraphRunner)
-    install_test_config(config=graph_observer_config(tmp_path.resolve()))
+    install_test_config(config=observer_enabled_config("graph_observer", tmp_path.resolve()))
     xpool.integrations.sglang.devkit.graph_observer.install()
 
     with pytest.raises(RuntimeError, match="capture failed"):
         DecodeCudaGraphRunner().capture()
 
-    events = read_events(tmp_path)
+    events = read_graph_events(tmp_path)
     assert [(event["forward_phase"], event["event"]) for event in events] == [
         ("decode", "capture_begin"),
         ("decode", "capture_error"),
@@ -104,7 +104,7 @@ def test_graph_observer_event_fault_does_not_block_runner(
             return "prefill-executed"
 
     install_fake_sglang_runner_classes(monkeypatch, DecodeCudaGraphRunner, PrefillCudaGraphRunner)
-    install_test_config(config=graph_observer_config(tmp_path.resolve()))
+    install_test_config(config=observer_enabled_config("graph_observer", tmp_path.resolve()))
     xpool.integrations.sglang.devkit.graph_observer.install()
 
     class BadEventHandle:

@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
 
 import pytest
 import safetensors.torch
 import torch
 
-from tests.harness.support.config import install_test_config, reset_global_config
 from xpool.config import XpoolConfig
 from xpool.ffn import DenseFfnSpec, MoeFfnCheckpointKeys, MoeFfnSpec
 from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent import architecture, loader, weights
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
 
 pytestmark = [
     pytest.mark.requires_cuda,
@@ -31,7 +30,7 @@ def install_loader_config() -> None:
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [1]},
                 "ffn": {"devices": [0], "loader": {"parallelism": 2}},
-                "models": [{"id": "model", "path": "/models/model"}],
+                "models": [{"id": str(TEST_MODEL_ID), "path": "/models/model"}],
             }
         )
     )
@@ -63,7 +62,7 @@ def dense_spec() -> DenseFfnSpec:
     )
 
 
-def moe_spec() -> MoeFfnSpec:
+def moe_spec(router_correction_bias_key: str) -> MoeFfnSpec:
     """Return one small corrected-routing MoE layer with two shared Experts."""
 
     prefix = "model.layers.1.mlp"
@@ -77,7 +76,7 @@ def moe_spec() -> MoeFfnSpec:
         routed_scaling_factor=1.8,
         checkpoint=MoeFfnCheckpointKeys(
             router_weight_key=f"{prefix}.gate.weight",
-            router_correction_bias_key=f"{prefix}.gate.e_score_correction_bias",
+            router_correction_bias_key=router_correction_bias_key,
             routed_experts=tuple(
                 architecture.gated_checkpoint_keys(f"{prefix}.experts.{expert_id}") for expert_id in range(2)
             ),
@@ -96,7 +95,8 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     install_loader_config()
     hidden_size = 4
     dense = dense_spec()
-    moe = moe_spec()
+    correction_bias_key = "model.layers.1.mlp.gate.e_score_correction_bias"
+    moe = moe_spec(correction_bias_key)
     dense_tensors = {
         dense.checkpoint.gate_weight_key: tensor_values((6, hidden_size), 0),
         dense.checkpoint.up_weight_key: tensor_values((6, hidden_size), 100),
@@ -104,7 +104,7 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     }
     moe_tensors: dict[str, torch.Tensor] = {
         moe.checkpoint.router_weight_key: torch.linspace(0.101, 0.909, 2 * hidden_size).reshape(2, hidden_size),
-        cast(str, moe.checkpoint.router_correction_bias_key): torch.tensor([0.25, -0.5], dtype=torch.float32),
+        correction_bias_key: torch.tensor([0.25, -0.5], dtype=torch.float32),
     }
     for expert_id, expert in enumerate(moe.checkpoint.routed_experts):
         moe_tensors[expert.gate_weight_key] = tensor_values((4, hidden_size), 400 + expert_id * 100)
@@ -161,7 +161,7 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     assert moe_weights.router.correction_bias is not None
     torch.testing.assert_close(
         moe_weights.router.correction_bias.cpu(),
-        moe_tensors[cast(str, moe.checkpoint.router_correction_bias_key)],
+        moe_tensors[correction_bias_key],
     )
     expected_shared_gate = moe_tensors[shared.gate_weight_key].reshape(2, 4, hidden_size)[:, :2]
     torch.testing.assert_close(moe_weights.expert_gate_up_weight.cpu()[2:, :2], expected_shared_gate)
@@ -171,7 +171,8 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
 
 def test_materialize_non_router_rank_and_shape_failure(tmp_path: Path) -> None:
     install_loader_config()
-    layer = moe_spec()
+    correction_bias_key = "model.layers.1.mlp.gate.e_score_correction_bias"
+    layer = moe_spec(correction_bias_key)
     hidden_size = 4
     tensors: dict[str, torch.Tensor] = {}
     for expert_id, expert in enumerate(layer.checkpoint.routed_experts):
@@ -184,7 +185,7 @@ def test_materialize_non_router_rank_and_shape_failure(tmp_path: Path) -> None:
     tensors[shared.up_weight_key] = tensor_values((8, hidden_size), 700)
     tensors[shared.down_weight_key] = tensor_values((hidden_size, 8), 800)
     tensors[layer.checkpoint.router_weight_key] = tensor_values((2, hidden_size), 900)
-    tensors[cast(str, layer.checkpoint.router_correction_bias_key)] = torch.ones(3, dtype=torch.float32)
+    tensors[correction_bias_key] = torch.ones(3, dtype=torch.float32)
     model_path = tmp_path / "model"
     write_checkpoint(model_path, (tensors,))
     request = loader.LocalLayerWeightRequest(

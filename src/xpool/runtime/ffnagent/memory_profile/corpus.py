@@ -21,6 +21,7 @@ from xpool.fabric import (
     InstanceRankTopology,
     MoeFfnLayerPlan,
 )
+from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent import architecture, weights
 
@@ -154,7 +155,7 @@ def calibration_corpus_spec(member: str) -> ffn.FfnModelSpec:
         "softmax-moe128": "Qwen3MoeForCausalLM",
     }
     return ffn.FfnModelSpec(
-        model_id=member,
+        model_id=ModelId(f"calibration/{member}"),
         architecture_name=architecture_names[member],
         hidden_size=hidden_size,
         activation=ffn.ActivationKind.SILU,
@@ -248,7 +249,7 @@ def build_fabric_plan(
     )
     instance_plans = tuple(
         FabricInstancePlan(
-            instance_id=member[0],
+            model_id=spec.model_id,
             ffn_profile=build_instance_profile(spec, group_sum_complete=member[3]),
             instance_rank_topology=InstanceRankTopology(
                 atn_tp_size=member[2],

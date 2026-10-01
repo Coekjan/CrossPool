@@ -10,10 +10,10 @@ from pathlib import Path
 import httpx
 
 import xpool.service.daemon.control
-from tests.harness.runner.child import PythonChildProcess
-from tests.harness.runner.network import TcpEndpointReservation, TcpPortSpace
-from tests.harness.support.config import write_minimal_config
+from xkit.child import PythonChildProcess
+from xkit.network import TcpEndpointReservation, TcpPortSpace
 from xpool.cli import main
+from xtest.harness.support.config import write_minimal_config
 
 DAEMON_EXIT_TIMEOUT_SECONDS = 10.0
 
@@ -48,6 +48,7 @@ def test_daemon_exits_nonzero_after_watchdog_failure(tmp_path: Path) -> None:
         run_failing_watchdog_daemon,
         FailingWatchdogSpec(config_path),
         log_path=tmp_path / "daemon.log",
+        import_paths=(Path(__file__).resolve().parents[5],),
     )
     try:
         deadline = time.monotonic() + DAEMON_EXIT_TIMEOUT_SECONDS

@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from tests.harness.support.config import reset_global_config, write_minimal_config
 from xpool.config import ConfigError, XpoolConfig, init_global_config
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, write_minimal_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -21,7 +21,7 @@ def test_daemon_host_must_be_loopback(host: str) -> None:
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
-                "models": [{"id": "m", "path": "/models/m"}],
+                "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
             }
         )
 
@@ -43,7 +43,7 @@ def test_env_source_parses_native_observer_settings(
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
     outdir = tmp_path.resolve()
 
@@ -78,7 +78,7 @@ def test_native_observer_requires_enable_and_outdir_together(
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
 
     with pytest.raises(ValidationError, match=observer_name):
@@ -109,7 +109,7 @@ def test_native_observer_settings_cannot_be_set_from_toml(
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
-                "models": [{"id": "m", "path": "/models/m"}],
+                "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
             }
         )
 
@@ -127,7 +127,7 @@ def test_observer_record_capacity_must_fit_native_range(capacity: int, env_var: 
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
 
     with pytest.raises(ValidationError, match="record_capacity"):
@@ -139,7 +139,7 @@ def test_env_source_parses_graph_observer_settings(tmp_path: Path) -> None:
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
     outdir = tmp_path.resolve()
 
@@ -160,7 +160,7 @@ def test_env_source_parses_prefill_logit_observer_settings(tmp_path: Path) -> No
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
     outdir = tmp_path.resolve()
 
@@ -185,7 +185,7 @@ def test_graph_observer_outdir_accepts_relative_env_path(
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
 
     config = XpoolConfig.from_mapping(
@@ -215,7 +215,7 @@ def test_env_source_rejects_malformed_debug_boolean(env_var: str) -> None:
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
-                "models": [{"id": "m", "path": "/models/m"}],
+                "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
             },
             env={env_var: "true"},
         )
@@ -244,7 +244,7 @@ def test_debug_graph_observer_cannot_be_set_from_toml(
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
-                "models": [{"id": "m", "path": "/models/m"}],
+                "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
             },
         )
 
@@ -266,7 +266,7 @@ def test_graph_observer_requires_enable_and_outdir_together(
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
 
     with pytest.raises(ValidationError, match="must be set or unset together"):
@@ -290,7 +290,7 @@ def test_prefill_logit_observer_requires_enable_and_outdir_together(
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
 
     with pytest.raises(ValidationError, match="must be set or unset together"):
@@ -304,7 +304,7 @@ def test_unknown_xpool_env_warns(caplog: pytest.LogCaptureFixture) -> None:
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
-                "models": [{"id": "m", "path": "/models/m"}],
+                "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
             },
             env={
                 "XPOOL_UNKNOWN_SETTING": "0",

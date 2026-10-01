@@ -8,7 +8,6 @@ from sglang.srt.models.qwen3_moe import Qwen3MoeForCausalLM
 from sglang.srt.plugins.hook_registry import HookType
 from transformers import Qwen3MoeConfig
 
-from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 from xpool.integrations.sglang.models.qwen3_moe import (
     Qwen3MoeShimAdapter,
     XpoolQwen3MoeSparseMoeBlock,
@@ -16,6 +15,7 @@ from xpool.integrations.sglang.models.qwen3_moe import (
 )
 from xpool.integrations.sglang.shim import ShimUnavailableError
 from xpool.native.ffn import LayerKind
+from xtest.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 
 
 def qwen3_moe_config() -> Qwen3MoeConfig:
@@ -52,6 +52,14 @@ def test_qwen3_moe_replacement_is_parameter_free_sparse_shim() -> None:
     assert shim.layer_kind is LayerKind.MOE
     assert not hasattr(shim, "experts")
     assert shim.get_moe_weights() == []
+
+
+def test_qwen3_moe_sparse_replacement_rejects_invalid_hidden_size() -> None:
+    config = qwen3_moe_config()
+    config.hidden_size = 0
+
+    with pytest.raises(ValueError, match="hidden_size"):
+        XpoolQwen3MoeSparseMoeBlock(0, config)
 
 
 def test_qwen3_moe_weight_loader_filters_ffn_and_rejects_mtp() -> None:

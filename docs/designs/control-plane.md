@@ -12,8 +12,29 @@ process-global configuration and business logic reads that configuration rather
 than caching selected values elsewhere. CLI values override allowlisted
 environment variables, which override TOML, which overrides registry defaults.
 Each setting declares which of these sources it accepts.
-Model paths are resolved from the configured model entries and vendor model
-base.
+[`ModelId`](../../src/xpool/model.py) owns immutable, case-sensitive model
+identity in strict `namespace/name` form. Components admit ASCII letters,
+digits, underscore, hyphen and dot, excluding `.` and `..` components. Identity
+preserves spelling, supports hashing and lexicographic ordering of the full
+string, and owns its namespace, name and relative identity path. In-process
+configuration, plans and tool declarations use this value; JSON/TOML and native
+string boundaries retain scalar strings. The identity also owns complete-ID URI
+component encoding, which preserves spelling and escapes the separating slash.
+Model and Instance are distinct concepts. The supported deployment has one
+configured Instance for each Model ID, so Instance configuration, runtime and
+daemon lookups share that logical key. Configuration-ordered native Instance
+indices, process-owner identities and Fabric generations retain their separate
+meanings.
+
+Instance wire records name the logical key `model_id` and serialize its full
+scalar string. Instance operation URLs use `/instance/<namespace/name>/...`;
+the route boundary parses a `ModelId` before daemon lookup.
+
+`XpoolConfig.model_path_of()` resolves a Model ID through a matching configured
+path override or the vendor model base plus the identity's relative path.
+Portable deployments and tool catalogues select identities; the effective
+runtime configuration owns the machine-local checkpoint location. Preflight
+and launch use that same resolved configuration.
 
 Required settings without defaults fail fast. Deployment settings live in TOML
 with selected CLI and environment overrides; `.env` supplies process environment
@@ -28,6 +49,14 @@ defaults are the accepted sources. For example, Graph Observer uses
 `ModelConfig.path` is the schema's explicit path override. Machine-local paths
 belong in ignored `*.local.toml` files.
 
+`XpoolConfig.to_config_mapping()` serializes effective CONFIG-allowed values for
+TOML through registry source permissions, including model wildcard fields.
+Optional `None` values, bootstrap inputs and env-only debug settings are omitted;
+debug inputs and original source provenance have separate owners. Reloading a
+snapshot establishes CONFIG provenance rather than preserving its original
+sources. [Tooling launch snapshots](tooling.md#shared-serving-lifecycle) preserve
+complete effective configuration while binding owned resources and child inputs.
+
 Every process receives the same effective configuration. The daemon compares
 declared process identity and topology against that configuration during
 registration; processes do not negotiate independent settings.
@@ -39,6 +68,19 @@ belong to both roles. FFN also owns its optional device-memory calibration,
 explicit operator margin, checkpoint-loader policy, and placement-solver
 policy. Loader parallelism lives under `ffn.loader`; solver parallelism and its
 whole-solve deadline live directly under `ffn.placement`.
+
+Each configured Instance covers the complete Attention World, whose size is
+`len(atn.devices)`. A model's `atn_dp_size` defaults to one. An omitted
+`atn_tp_size` resolves to World size divided by DP size; division must be exact.
+For every model, resolved attention TP times DP must equal the World size.
+Explicit TP is validated, never rewritten. A standalone `ModelConfig` retains
+omitted TP until the complete `XpoolConfig` supplies the Fleet. Omitted FFN TP
+resolves independently to the full FfnAgent Fleet.
+
+SGLang's tensor-parallel launch argument counts the complete attention worker
+World, not the per-DP-group attention TP width. DP greater than one requires
+DP Attention. The integration validates engine geometry against configuration;
+daemon registration and readiness require the complete configured rank set.
 
 `atn.device_memory_utilization` defines the maximum share of each attention
 GPU that the post-capture Elastic KV Capacity Pool may retain. Available KV

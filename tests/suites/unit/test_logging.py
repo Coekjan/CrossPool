@@ -9,9 +9,9 @@ from typing import Literal
 import pytest
 
 import xpool.logging
-from tests.harness.support.config import install_test_config, reset_global_config, synthetic_config
 from xpool.config import LoggingConfig
 from xpool.native import RuntimeRole
+from xtest.harness.support.config import install_test_config, reset_global_config, synthetic_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 

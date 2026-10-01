@@ -9,13 +9,14 @@ import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import torch
 from safetensors import safe_open
 
 from xpool import ffn
 from xpool.config import get_global_config
-from xpool.fabric import DenseFfnLayerPlan, FabricPlan, FabricRole, MoeFfnLayerPlan
+from xpool.fabric import FabricPlan, FabricRole, MoeFfnLayerPlan
 from xpool.runtime.ffnagent import architecture, checkpoint, weights
 
 
@@ -126,8 +127,8 @@ def materialize_layer_weights(
     ffnagent_count = sum(placement.role is FabricRole.FFNAGENT for placement in fabric_plan.pe_placements)
     if not 0 <= ffnagent_index < ffnagent_count:
         raise ValueError("FfnAgent index is outside the Fabric Plan")
-    if len(model_specs) != len(fabric_plan.model_plans) or len(model_specs) != len(fabric_plan.instance_plans):
-        raise ValueError("Model Specs, Model Plans, and Instance Plans are not co-indexed")
+    if len(model_specs) != len(fabric_plan.model_plans):
+        raise ValueError("Model Specs and Model Plans are not co-indexed")
 
     requests = []
     positions = []
@@ -177,12 +178,9 @@ def materialize_layer_weights(
             if layer_plan.local_intermediate_size != intrinsic_intermediate_size // model_plan.tp_size:
                 raise ValueError(f"Model Spec {model_index} layer {layer_ordinal} has inconsistent TP geometry")
             if isinstance(layer, ffn.MoeFfnSpec):
-                if not isinstance(layer_plan, MoeFfnLayerPlan):
-                    raise ValueError(f"Model Spec {model_index} layer {layer_ordinal} requires a MoE Layer Plan")
-                if layer_plan.effective_topk != layer.routed_topk + layer.shared_expert_count:
+                moe_plan = cast(MoeFfnLayerPlan, layer_plan)
+                if moe_plan.effective_topk != layer.routed_topk + layer.shared_expert_count:
                     raise ValueError(f"Model Spec {model_index} layer {layer_ordinal} has inconsistent MoE semantics")
-            elif not isinstance(layer_plan, DenseFfnLayerPlan):
-                raise ValueError(f"Model Spec {model_index} layer {layer_ordinal} requires a Dense Layer Plan")
 
     local_weights = materialize_local_layer_weights(requests=tuple(requests))
     for (model_index, layer_ordinal), layer_weights in zip(positions, local_weights, strict=True):

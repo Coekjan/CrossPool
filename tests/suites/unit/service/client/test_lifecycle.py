@@ -6,15 +6,15 @@ import pytest
 
 import xpool.config
 import xpool.service.client
-from tests.harness.support.config import reset_global_config
-from tests.harness.support.service.client import (
+from xpool.config import XpoolConfig
+from xpool.service.client import XpoolClient
+from xpool.service.errors import XpoolClientError
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
+from xtest.harness.support.service.client import (
     initialize_client_config,
     install_scripted_http_client,
     response,
 )
-from xpool.config import XpoolConfig
-from xpool.service.client import XpoolClient
-from xpool.service.errors import XpoolClientError
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, initialize_client_config.__name__)
 
@@ -58,7 +58,7 @@ def test_client_brackets_ipv6_loopback_host(monkeypatch: pytest.MonkeyPatch) -> 
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     monkeypatch.setattr(xpool.config, "global_config", config)

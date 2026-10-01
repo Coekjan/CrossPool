@@ -63,6 +63,8 @@ reference:
 | `daemon.host` / `daemon.port` | Selects the local control-plane address; SGLang serving uses its own listener. |
 | `vendor.model_base_uri` | Sets the absolute local model root. |
 | `models[].id` / `models[].path` | Identifies a model and optionally overrides its absolute local weight path. |
+| `models[].atn_tp_size` | Fixes attention TP width; omission resolves from the Attention World and the model's DP size. |
+| `models[].atn_dp_size` | Partitions the Attention World into DP groups; defaults to one. |
 | `models[].ffn_tp_size` | Fixes the model's FFN tensor-parallel width; omission uses the number of FfnAgents. |
 | `scheduler.slo` / `models[].slo` | Sets default TTFT/TBT targets; models may override both for Elastic KV arbitration. |
 | `atn.devices` / `ffn.devices` | Assigns attention-side and FFN-side CUDA devices. |
@@ -77,7 +79,8 @@ reference:
 | `ffn.device_memory_calibration` | Selects an optional environment-qualified memory calibration profile. |
 
 Each device list must be nonempty, unique, and ascending, and the two roles
-cannot share a device.
+cannot share a device. Attention geometry must satisfy the
+[complete-World contract](designs/control-plane.md#configuration-and-integration).
 
 ## Model paths
 

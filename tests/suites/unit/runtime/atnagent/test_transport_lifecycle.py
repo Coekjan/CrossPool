@@ -4,15 +4,8 @@ from typing import cast
 
 import pytest
 
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.runtime.atnagent import (
-    instance_registration_view,
-    patch_native_atnagent_ops,
-    reset_agent_runtime,
-    reset_atnagent_runtime,
-    transport_entry,
-)
 from xpool.config import XpoolConfig
+from xpool.model import ModelId
 from xpool.native import ABI_VERSION
 from xpool.runtime.agent import AgentError
 from xpool.runtime.atnagent import AtnAgentTransportRuntime
@@ -24,6 +17,14 @@ from xpool.service.wire import (
     ProcessRef,
 )
 from xpool.transport import TransportArenaHandle
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
+from xtest.harness.support.runtime.atnagent import (
+    instance_registration_view,
+    patch_native_atnagent_ops,
+    reset_agent_runtime,
+    reset_atnagent_runtime,
+    transport_entry,
+)
 
 pytestmark = pytest.mark.usefixtures(
     reset_global_config.__name__,
@@ -61,10 +62,10 @@ def create_transport_runtime(client: object) -> AtnAgentTransportRuntime:
 def test_transport_runtime_drains_process_wide_resident(monkeypatch: pytest.MonkeyPatch) -> None:
     """Runtime drain publishes and polls one process-wide Resident command."""
 
-    transport_config("a", "b")
+    transport_config("test/a", "test/b")
     resources = (
-        transport_entry(instance_id="a", rank=0, handle_rank=1),
-        transport_entry(instance_id="b", rank=0, handle_rank=2),
+        transport_entry(model_id=ModelId("test/a"), rank=0, handle_rank=1),
+        transport_entry(model_id=ModelId("test/b"), rank=0, handle_rank=2),
     )
     events: list[str] = []
     poll_results = iter((True, False))
@@ -79,7 +80,7 @@ def test_transport_runtime_drains_process_wide_resident(monkeypatch: pytest.Monk
     patch_native_atnagent_ops(monkeypatch, drain_async=drain_async, drain_pending=drain_pending)
     monkeypatch.setattr("xpool.runtime.atnagent.time.sleep", lambda delay: events.append("sleep"))
     runtime = create_transport_runtime(object())
-    runtime.entries = {entry.instance_id: entry for entry in resources}
+    runtime.entries = {entry.model_id: entry for entry in resources}
 
     runtime.drain()
 
@@ -89,7 +90,7 @@ def test_transport_runtime_drains_process_wide_resident(monkeypatch: pytest.Monk
 def test_transport_runtime_quiesces_leases_before_draining_resident(monkeypatch: pytest.MonkeyPatch) -> None:
     """Transport admission closes before the process-wide Resident drains."""
 
-    transport_config("m")
+    transport_config(str(TEST_MODEL_ID))
     events: list[str] = []
 
     class FakeClient:
@@ -108,9 +109,9 @@ def test_transport_runtime_quiesces_leases_before_draining_resident(monkeypatch:
         drain_pending=lambda: False,
     )
     runtime = create_transport_runtime(FakeClient())
-    entry = transport_entry(instance_id="m", rank=0, handle_rank=1)
+    entry = transport_entry(model_id=TEST_MODEL_ID, rank=0, handle_rank=1)
     entry.published_epoch = 1
-    runtime.entries = {entry.instance_id: entry}
+    runtime.entries = {entry.model_id: entry}
 
     runtime.quiesce()
 
@@ -120,7 +121,7 @@ def test_transport_runtime_quiesces_leases_before_draining_resident(monkeypatch:
 def test_transport_runtime_activates_and_checks_one_process_wide_resident(monkeypatch: pytest.MonkeyPatch) -> None:
     """Activation and health checks do not enumerate arena handles."""
 
-    transport_config("a", "b")
+    transport_config("test/a", "test/b")
     events: list[str] = []
     patch_native_atnagent_ops(
         monkeypatch,
@@ -128,8 +129,8 @@ def test_transport_runtime_activates_and_checks_one_process_wide_resident(monkey
         check_health=lambda: events.append("check"),
     )
     runtime = create_transport_runtime(object())
-    entry = transport_entry(instance_id="a", rank=0, handle_rank=1)
-    runtime.entries = {entry.instance_id: entry}
+    entry = transport_entry(model_id=ModelId("test/a"), rank=0, handle_rank=1)
+    runtime.entries = {entry.model_id: entry}
 
     runtime.activate()
     runtime.check_health()
@@ -140,7 +141,7 @@ def test_transport_runtime_activates_and_checks_one_process_wide_resident(monkey
 def test_transport_runtime_skips_resident_without_assigned_instances(monkeypatch: pytest.MonkeyPatch) -> None:
     """An idle AtnAgent joins Fabric without launching an empty Transport Resident."""
 
-    transport_config("a")
+    transport_config(str(TEST_MODEL_ID))
     events: list[str] = []
     patch_native_atnagent_ops(
         monkeypatch,
@@ -160,9 +161,9 @@ def test_transport_runtime_publishes_instances_incrementally_and_republishes_eac
 ) -> None:
     """Model load skew does not block ready rank-local arena publication."""
 
-    transport_config("a", "b")
-    registrations = [InstanceRankRegistration.model_validate(instance_registration_view(instance_id="a", rank=0))]
-    publications: list[list[str]] = []
+    transport_config("test/a", "test/b")
+    registrations = [InstanceRankRegistration.model_validate(instance_registration_view(model_id="test/a", rank=0))]
+    publications: list[list[ModelId]] = []
 
     class FakeClient:
         def list_instances(self) -> list[InstanceRankRegistration]:
@@ -176,7 +177,7 @@ def test_transport_runtime_publishes_instances_incrementally_and_republishes_eac
             publisher: ProcessRef,
         ) -> None:
             assert cuda_device == 0
-            publications.append([binding.instance_id for binding in bindings])
+            publications.append([binding.model_id for binding in bindings])
 
     next_handle = 1
 
@@ -189,16 +190,16 @@ def test_transport_runtime_publishes_instances_incrementally_and_republishes_eac
     patch_native_atnagent_ops(monkeypatch, create=create)
     runtime = create_transport_runtime(FakeClient())
 
-    instance_ranks = {"a": 0, "b": 0}
+    instance_ranks = {ModelId("test/a"): 0, ModelId("test/b"): 0}
     assert not runtime.prepare(1, instance_ranks)
-    assert publications == [["a"]]
+    assert publications == [[ModelId("test/a")]]
 
-    registrations.append(InstanceRankRegistration.model_validate(instance_registration_view(instance_id="b", rank=0)))
+    registrations.append(InstanceRankRegistration.model_validate(instance_registration_view(model_id="test/b", rank=0)))
     assert runtime.prepare(1, instance_ranks)
-    assert publications == [["a"], ["b"]]
+    assert publications == [[ModelId("test/a")], [ModelId("test/b")]]
 
     assert runtime.prepare(2, instance_ranks)
-    assert publications == [["a"], ["b"], ["a", "b"]]
+    assert publications == [[ModelId("test/a")], [ModelId("test/b")], [ModelId("test/a"), ModelId("test/b")]]
 
 
 def test_transport_runtime_preserves_creation_failure_when_rollback_fails(
@@ -206,10 +207,10 @@ def test_transport_runtime_preserves_creation_failure_when_rollback_fails(
 ) -> None:
     """Partial-arena rollback diagnostics do not replace the creation cause."""
 
-    transport_config("a", "b")
+    transport_config("test/a", "test/b")
     registrations = [
-        InstanceRankRegistration.model_validate(instance_registration_view(instance_id=instance_id, rank=0))
-        for instance_id in ("a", "b")
+        InstanceRankRegistration.model_validate(instance_registration_view(model_id=model_id, rank=0))
+        for model_id in ("test/a", "test/b")
     ]
 
     class FakeClient:
@@ -228,7 +229,7 @@ def test_transport_runtime_preserves_creation_failure_when_rollback_fails(
     runtime = create_transport_runtime(FakeClient())
 
     with pytest.raises(AgentError, match="release partial arenas") as error:
-        runtime.prepare(1, {"a": 0, "b": 0})
+        runtime.prepare(1, {ModelId("test/a"): 0, ModelId("test/b"): 0})
 
     cause = error.value.__cause__
     assert isinstance(cause, RuntimeError)
@@ -239,10 +240,10 @@ def test_transport_runtime_preserves_creation_failure_when_rollback_fails(
 def test_transport_runtime_rejects_registration_geometry_change(monkeypatch: pytest.MonkeyPatch) -> None:
     """An existing native arena cannot be silently rebound to new geometry."""
 
-    transport_config("m")
-    original = InstanceRankRegistration.model_validate(instance_registration_view(instance_id="m", rank=0))
-    changed_view = instance_registration_view(instance_id="m", rank=0)
-    changed_view["transport"] = {**cast(dict[str, object], changed_view["transport"]), "hidden_size": 8}
+    transport_config(str(TEST_MODEL_ID))
+    original = InstanceRankRegistration.model_validate(instance_registration_view(model_id=str(TEST_MODEL_ID), rank=0))
+    changed_view = instance_registration_view(model_id=str(TEST_MODEL_ID), rank=0)
+    changed_view["transport"] = {**original.transport.model_dump(), "hidden_size": 8}
     changed = InstanceRankRegistration.model_validate(changed_view)
 
     class FakeClient:
@@ -250,21 +251,21 @@ def test_transport_runtime_rejects_registration_geometry_change(monkeypatch: pyt
             return [changed]
 
     runtime = create_transport_runtime(FakeClient())
-    runtime.entries["m"] = transport_entry(instance_id="m", rank=0, handle_rank=1)
-    runtime.entries["m"].registration = original
+    runtime.entries[TEST_MODEL_ID] = transport_entry(model_id=TEST_MODEL_ID, rank=0, handle_rank=1)
+    runtime.entries[TEST_MODEL_ID].registration = original
 
     with pytest.raises(AgentError, match="hot resize is unsupported"):
-        runtime.prepare(1, {"m": 0})
+        runtime.prepare(1, {TEST_MODEL_ID: 0})
 
 
 def test_transport_runtime_close_uses_collection_destroy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Terminal cleanup destroys one stable already-quiesced resource snapshot."""
 
-    transport_config("a", "b")
+    transport_config("test/a", "test/b")
     runtime = create_transport_runtime(object())
     runtime.entries = {
-        "a": transport_entry(instance_id="a", rank=0, handle_rank=1),
-        "b": transport_entry(instance_id="b", rank=0, handle_rank=2),
+        ModelId("test/a"): transport_entry(model_id=ModelId("test/a"), rank=0, handle_rank=1),
+        ModelId("test/b"): transport_entry(model_id=ModelId("test/b"), rank=0, handle_rank=2),
     }
     events: list[tuple[str, int]] = []
     patch_native_atnagent_ops(

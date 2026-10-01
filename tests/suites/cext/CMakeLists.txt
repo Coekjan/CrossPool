@@ -82,7 +82,7 @@ foreach(XPOOL_CEXT_TEST_SOURCE IN LISTS XPOOL_CEXT_TEST_SOURCES)
     CUDA_STANDARD_REQUIRED ON
     # Keep CTest launches inside the harness process boundary used by Python.
     TEST_LAUNCHER
-      "python;${PROJECT_SOURCE_DIR}/tests/harness/runner/ctest_launcher.py"
+      "python;${PROJECT_SOURCE_DIR}/src/xpool-dev/xtest/harness/runner/ctest_launcher.py"
   )
   if(XPOOL_CEXT_TEST_SOURCE MATCHES "\\.cu$")
     set_property(TARGET "${XPOOL_CEXT_TEST_TARGET}"

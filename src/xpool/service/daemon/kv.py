@@ -9,6 +9,7 @@ from time import perf_counter_ns
 import xpool.native
 from xpool.config import XpoolConfig, get_global_config
 from xpool.fabric import FabricGenerationId
+from xpool.model import ModelId
 from xpool.service.daemon.fabric import FabricGenerationState
 from xpool.service.daemon.registration import InstanceRankId, InstanceRankRegistrationState, RegistrationBook
 from xpool.service.wire import KvCapacityPartitionProfile, KvControlChannelRef
@@ -88,14 +89,14 @@ class KvCapacityPolicy:
     def partition(
         self,
         registrations: RegistrationBook,
-        instance_id: str,
+        model_id: ModelId,
         rank: int,
     ) -> InstanceRankRegistrationState:
         """Return a retained Generation partition registration."""
 
-        registration = registrations.instances.query(InstanceRankId(instance_id=instance_id, rank=rank))
+        registration = registrations.instances.query(InstanceRankId(model_id=model_id, rank=rank))
         if registration is None:
-            raise RuntimeError(f"kv capacity policy lost registration for instance {instance_id} rank {rank}")
+            raise RuntimeError(f"kv capacity policy lost registration for instance {model_id} rank {rank}")
         return registration
 
     def capacity_groups(self, fabric: FabricGenerationState) -> list[tuple[int, int, int]]:
@@ -123,7 +124,7 @@ class KvCapacityPolicy:
         return tuple(
             (
                 worker_rank,
-                self.partition(registrations, instance_plan.instance_id, worker_rank).kv_capacity,
+                self.partition(registrations, instance_plan.model_id, worker_rank).kv_capacity,
             )
             for worker_rank in range(start_rank, start_rank + topology.atn_tp_size)
         )
@@ -162,7 +163,7 @@ class KvCapacityPolicy:
                 backed_bundles = initial_backing[partition_index]
                 if backed_bundles is None:
                     raise RuntimeError("kv capacity pool freezing requires every partition backing report")
-                registration = self.partition(registrations, instance_plan.instance_id, pool_index)
+                registration = self.partition(registrations, instance_plan.model_id, pool_index)
                 profile = registration.kv_capacity
                 already_mapped_bytes += profile.bundle_bytes * backed_bundles
                 floor_bytes += profile.bundle_bytes * profile.floor_bundles
@@ -228,7 +229,7 @@ class KvCapacityPolicy:
         candidates: list[int] = []
         for pool_index, profile in self.group_profiles(registrations, fabric, instance_index, dp_rank):
             local_profiles = tuple(
-                self.partition(registrations, plan.instance_id, pool_index).kv_capacity
+                self.partition(registrations, plan.model_id, pool_index).kv_capacity
                 for plan in fabric.plan.instance_plans
             )
             floor_bytes = sum(candidate.bundle_bytes * candidate.floor_bundles for candidate in local_profiles)
@@ -259,7 +260,7 @@ class KvCapacityPolicy:
                 candidate.bundle_bytes * candidate.floor_bundles
                 for other_index, plan in enumerate(fabric.plan.instance_plans)
                 if other_index != instance_index
-                for candidate in (self.partition(registrations, plan.instance_id, pool_index).kv_capacity,)
+                for candidate in (self.partition(registrations, plan.model_id, pool_index).kv_capacity,)
             )
             candidates.append(
                 min(
@@ -346,7 +347,7 @@ class KvCapacityPolicy:
                 profile = self.group_profiles(registrations, fabric, instance_index, dp_rank)[0][1]
                 logger.info(
                     "kv capacity initialized %s[dp=%s] (bundles: %s -> %s; tokens: %s -> %s)",
-                    fabric.plan.instance_plans[instance_index].instance_id,
+                    fabric.plan.instance_plans[instance_index].model_id,
                     dp_rank,
                     operation.start_bundles,
                     expected,
@@ -494,7 +495,7 @@ class KvCapacityPolicy:
             profile = self.group_profiles(registrations, fabric, borrower_instance, borrower_dp)[0][1]
             logger.info(
                 "kv capacity growth requested %s[dp=%s] (bundles: %s -> %s; tokens: %s -> %s)",
-                fabric.plan.instance_plans[borrower_instance].instance_id,
+                fabric.plan.instance_plans[borrower_instance].model_id,
                 borrower_dp,
                 borrower_active,
                 attempt.target_bundles,
@@ -569,9 +570,9 @@ class KvCapacityPolicy:
             "kv capacity transfer requested %s[dp=%s] -> %s[dp=%s] "
             "(donor bundles: %s -> %s; donor tokens: %s -> %s; "
             "borrower bundles: %s -> %s; borrower tokens: %s -> %s)",
-            fabric.plan.instance_plans[donor_instance].instance_id,
+            fabric.plan.instance_plans[donor_instance].model_id,
             donor_dp,
-            fabric.plan.instance_plans[borrower_instance].instance_id,
+            fabric.plan.instance_plans[borrower_instance].model_id,
             borrower_dp,
             donor_active,
             target,
@@ -652,7 +653,7 @@ class KvCapacityPolicy:
                         profile = self.group_profiles(registrations, fabric, candidate_instance, candidate_dp)[0][1]
                         logger.info(
                             "kv capacity growth requested %s[dp=%s] (bundles: %s -> %s; tokens: %s -> %s)",
-                            fabric.plan.instance_plans[candidate_instance].instance_id,
+                            fabric.plan.instance_plans[candidate_instance].model_id,
                             candidate_dp,
                             active,
                             demand.requested_bundles,

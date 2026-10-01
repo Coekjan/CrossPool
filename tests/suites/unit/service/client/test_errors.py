@@ -6,21 +6,20 @@ import httpx
 import pytest
 
 import xpool.service.client
-from tests.harness.support.config import reset_global_config
-from tests.harness.support.kv import kv_capacity_profile
-from tests.harness.support.service.client import (
-    config,
-    ffn_profile,
-    initialize_client_config,
-    install_scripted_http_client,
-    response,
-    transport_attributes,
-)
-from tests.harness.support.service.daemon import ffnagent_registration
+from xpool.model import ModelId
 from xpool.native import ABI_VERSION
 from xpool.service.client import DAEMON_HEALTH_RETRY_ATTEMPTS, XpoolClient, XpoolDaemonError
 from xpool.service.errors import XpoolClientError
 from xpool.service.wire import AtnAgentRegistration, FfnAgentRegistration, InstanceRankRegistration, ProcessRef
+from xtest.harness.support.config import TEST_MODEL_ID, minimal_config, reset_global_config
+from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.runtime.instance import ffn_profile, transport_attributes
+from xtest.harness.support.service.client import (
+    initialize_client_config,
+    install_scripted_http_client,
+    response,
+)
+from xtest.harness.support.service.daemon import ffnagent_registration
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, initialize_client_config.__name__)
 
@@ -76,7 +75,7 @@ def test_client_rejects_registration_after_config_conflict(
                     InstanceRankRegistration(
                         pid=12,
                         abi_version=ABI_VERSION,
-                        instance_id="m",
+                        model_id=TEST_MODEL_ID,
                         rank=0,
                         transport=transport_attributes(),
                         ffn_profile=ffn_profile(),
@@ -90,20 +89,20 @@ def test_client_rejects_registration_after_config_conflict(
     assert exc_info.value.kind == "conflict"
     assert probe.calls == [
         ("GET", "/health", None),
-        ("POST", "/config/check", config().model_dump(mode="json")),
+        ("POST", "/config/check", minimal_config().model_dump(mode="json")),
     ]
 
 
 @pytest.mark.parametrize(
-    ("instance_id", "status", "kind", "message"),
+    ("model_id", "status", "kind", "message"),
     [
-        ("m", HTTPStatus.SERVICE_UNAVAILABLE, "not_ready", "transport arena is not published"),
-        ("missing", HTTPStatus.NOT_FOUND, "not_found", "unknown instance"),
+        (TEST_MODEL_ID, HTTPStatus.SERVICE_UNAVAILABLE, "not_ready", "transport arena is not published"),
+        (ModelId("test/missing"), HTTPStatus.NOT_FOUND, "not_found", "unknown instance"),
     ],
 )
 def test_client_instance_arena_preserves_structured_daemon_error(
     monkeypatch: pytest.MonkeyPatch,
-    instance_id: str,
+    model_id: ModelId,
     status: HTTPStatus,
     kind: str,
     message: str,
@@ -120,7 +119,7 @@ def test_client_instance_arena_preserves_structured_daemon_error(
     try:
         with pytest.raises(XpoolDaemonError) as exc_info:
             client.acquire_instance_transport_arena(
-                instance_id,
+                model_id,
                 rank=0,
                 owner=ProcessRef(pid=12, abi_version=ABI_VERSION),
             )
@@ -132,7 +131,7 @@ def test_client_instance_arena_preserves_structured_daemon_error(
     assert len(probe.calls) == 2
     assert probe.calls[1] == (
         "POST",
-        f"/instance/{instance_id}/transport-arena/acquire",
+        f"/instance/{model_id}/transport-arena/acquire",
         {"params": {"rank": 0}, "json": {"pid": 12, "abi_version": ABI_VERSION}},
     )
 
@@ -157,7 +156,7 @@ def test_client_instance_arena_classifies_recoverable_client_failure(
     try:
         with pytest.raises(XpoolClientError) as exc_info:
             client.acquire_instance_transport_arena(
-                "m",
+                TEST_MODEL_ID,
                 rank=0,
                 owner=ProcessRef(pid=12, abi_version=ABI_VERSION),
             )
@@ -169,7 +168,7 @@ def test_client_instance_arena_classifies_recoverable_client_failure(
         ("GET", "/health", None),
         (
             "POST",
-            "/instance/m/transport-arena/acquire",
+            f"/instance/{TEST_MODEL_ID}/transport-arena/acquire",
             {"params": {"rank": 0}, "json": {"pid": 12, "abi_version": ABI_VERSION}},
         ),
     ]
@@ -188,7 +187,7 @@ def test_client_instance_arena_reports_protocol_errors_without_retry(monkeypatch
     try:
         with pytest.raises(XpoolClientError) as exc_info:
             client.acquire_instance_transport_arena(
-                "m",
+                TEST_MODEL_ID,
                 rank=0,
                 owner=ProcessRef(pid=12, abi_version=ABI_VERSION),
             )
@@ -200,7 +199,7 @@ def test_client_instance_arena_reports_protocol_errors_without_retry(monkeypatch
         ("GET", "/health", None),
         (
             "POST",
-            "/instance/m/transport-arena/acquire",
+            f"/instance/{TEST_MODEL_ID}/transport-arena/acquire",
             {"params": {"rank": 0}, "json": {"pid": 12, "abi_version": ABI_VERSION}},
         ),
     ]

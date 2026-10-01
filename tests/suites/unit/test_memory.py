@@ -8,7 +8,6 @@ import pytest
 from pydantic import ValidationError
 
 import xpool.memory
-from tests.harness.support.config import install_test_config, reset_global_config
 from xpool.config import XpoolConfig
 from xpool.memory import (
     FfnMemoryCalibration,
@@ -19,6 +18,7 @@ from xpool.memory import (
 )
 from xpool.mps import MpsProbeResult
 from xpool.native import ABI_VERSION
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -74,19 +74,20 @@ def install_config(path: Path | None) -> None:
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": ffn,
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
     if path is not None:
         ffn["device_memory_calibration"] = str(path)
     install_test_config(XpoolConfig.from_mapping(payload))
 
 
-def test_profile_json_is_strict_and_forbids_extra_fields() -> None:
+def test_profile_json_rejects_string_for_numeric_field() -> None:
     payload = profile().model_dump(mode="json")
     payload["ffn"]["coefficients"]["base_bytes"] = "1"
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as error:
         XpoolMemoryCalibrationProfile.model_validate_json(json.dumps(payload))
+    assert any(item["loc"][-1] == "base_bytes" for item in error.value.errors())
 
 
 def test_absent_profile_selects_analytic_admission_without_host_probe(
@@ -102,7 +103,7 @@ def test_absent_profile_selects_analytic_admission_without_host_probe(
     assert xpool.memory.load_memory_calibration_profile() is None
 
 
-def test_load_requires_exact_host_and_config_compatibility(
+def test_load_accepts_matching_host_and_config_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -138,12 +139,22 @@ def test_configured_incompatible_profile_fails_without_fallback(
         xpool.memory.load_memory_calibration_profile()
 
 
-def test_writer_atomically_replaces_one_complete_profile(tmp_path: Path) -> None:
+def test_writer_atomically_replaces_one_complete_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "memory.json"
     path.write_text("old", encoding="utf-8")
     install_config(path)
+    expected = profile()
+    replace = xpool.memory.os.replace
 
-    xpool.memory.write_memory_calibration_profile(profile())
+    def observe_replace(source: str, destination: Path) -> None:
+        assert destination == path
+        assert path.read_text(encoding="utf-8") == "old"
+        assert XpoolMemoryCalibrationProfile.model_validate_json(Path(source).read_text(encoding="utf-8")) == expected
+        replace(source, destination)
 
-    assert path.read_text(encoding="utf-8") == profile().model_dump_json(indent=2) + "\n"
+    monkeypatch.setattr(xpool.memory.os, "replace", observe_replace)
+
+    xpool.memory.write_memory_calibration_profile(expected)
+
+    assert XpoolMemoryCalibrationProfile.model_validate_json(path.read_text(encoding="utf-8")) == expected
     assert list(tmp_path.iterdir()) == [path]

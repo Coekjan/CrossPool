@@ -9,6 +9,7 @@ import time
 import xpool.native
 from xpool.config import get_global_config
 from xpool.fabric import FabricGenerationPhase, FabricPlan, InstanceFfnProfile
+from xpool.model import ModelId
 from xpool.native import ABI_VERSION
 from xpool.native.ffn import ResultCode
 from xpool.runtime.transport import InstanceRankTransportProfile
@@ -49,7 +50,7 @@ class InstanceRankFailureMonitor:
     """Fail-close an instance when its transport arena records a failure.
 
     Args:
-        instance_id: Configured instance id used in fatal diagnostics.
+        model_id: Model ID used in fatal diagnostics.
         instance_index: Integer instance index used by the native arena map.
         rank: Rank-local process index within the instance.
 
@@ -57,14 +58,14 @@ class InstanceRankFailureMonitor:
         worker: Periodic background thread that polls native sticky failure state.
     """
 
-    def __init__(self, *, instance_id: str, instance_index: int, rank: int) -> None:
+    def __init__(self, *, model_id: ModelId, instance_index: int, rank: int) -> None:
         """Create a stopped instance failure monitor."""
 
-        self.instance_id = instance_id
+        self.model_id = model_id
         self.instance_index = instance_index
         self.rank = rank
         self.worker = BackgroundThread.periodic(
-            name=f"xpool-instance-failure-monitor-{instance_id}-{rank}",
+            name=f"xpool-instance-failure-monitor-{model_id}-{rank}",
             interval_s=INSTANCE_FAILURE_MONITOR_INTERVAL_S,
             target=self.step,
             join_timeout_s=INSTANCE_FAILURE_MONITOR_STOP_JOIN_TIMEOUT_S,
@@ -88,7 +89,7 @@ class InstanceRankFailureMonitor:
             bail(
                 logger,
                 "transport executor failed for instance %s rank %s: %s",
-                self.instance_id,
+                self.model_id,
                 self.rank,
                 failure.name,
             )
@@ -99,7 +100,7 @@ class InstanceRankHeartbeat:
     """Background heartbeat owner for one registered Instance Rank.
 
     Args:
-        instance_id: Configured instance id.
+        model_id: Model ID identifying the registered Instance.
         rank: ATN rank-local SGLang process index.
         heartbeat: Stable heartbeat payload for the current process.
 
@@ -113,19 +114,19 @@ class InstanceRankHeartbeat:
     def __init__(
         self,
         *,
-        instance_id: str,
+        model_id: ModelId,
         rank: int,
         heartbeat: ProcessRef,
     ) -> None:
         """Create a stopped heartbeat worker owner."""
 
-        self.instance_id = instance_id
+        self.model_id = model_id
         self.rank = rank
         self.heartbeat = heartbeat
         self.client = XpoolClient()
         self.transport_deadline: float | None = None
         self.worker = BackgroundThread.periodic(
-            name=f"xpool-instance-heartbeat-{self.instance_id}-{self.rank}",
+            name=f"xpool-instance-heartbeat-{self.model_id}-{self.rank}",
             interval_s=INSTANCE_HEARTBEAT_INTERVAL_S,
             target=self.step,
             join_timeout_s=INSTANCE_HEARTBEAT_STOP_JOIN_TIMEOUT_S,
@@ -150,18 +151,18 @@ class InstanceRankHeartbeat:
         try:
             degraded = self.transport_deadline is not None
             self.client.heartbeat_instance(
-                self.instance_id,
+                self.model_id,
                 rank=self.rank,
                 heartbeat=self.heartbeat,
             )
             self.transport_deadline = None
             if degraded:
-                logger.info("heartbeat transport restored instance=%s rank=%s", self.instance_id, self.rank)
+                logger.info("heartbeat transport restored instance=%s rank=%s", self.model_id, self.rank)
         except XpoolDaemonError as exc:
             bail(
                 logger,
                 "instance heartbeat rejected instance=%s rank=%s detail=%s",
-                self.instance_id,
+                self.model_id,
                 self.rank,
                 exc,
             )
@@ -171,7 +172,7 @@ class InstanceRankHeartbeat:
             bail(
                 logger,
                 "instance heartbeat failed with unexpected error instance=%s rank=%s detail=%s",
-                self.instance_id,
+                self.model_id,
                 self.rank,
                 exc,
             )
@@ -184,7 +185,7 @@ class InstanceRankHeartbeat:
             bail(
                 logger,
                 "instance heartbeat received unrecoverable client error instance=%s rank=%s detail=%s",
-                self.instance_id,
+                self.model_id,
                 self.rank,
                 exc,
             )
@@ -195,19 +196,19 @@ class InstanceRankHeartbeat:
             bail(
                 logger,
                 "heartbeat transport did not restore instance=%s rank=%s detail=%s",
-                self.instance_id,
+                self.model_id,
                 self.rank,
                 exc,
             )
         log = logger.warning if entered else logger.debug
-        log("heartbeat transport degraded instance=%s rank=%s detail=%s", self.instance_id, self.rank, exc)
+        log("heartbeat transport degraded instance=%s rank=%s detail=%s", self.model_id, self.rank, exc)
 
 
 class InstanceRankRuntime:
     """Runtime lifecycle and resources for one SGLang instance rank."""
 
     client: XpoolClient
-    instance_id: str
+    model_id: ModelId
     instance_index: int
     rank: int
     process_ref: ProcessRef
@@ -219,13 +220,13 @@ class InstanceRankRuntime:
     def __init__(
         self,
         *,
-        instance_id: str,
+        model_id: ModelId,
         rank: int,
     ) -> None:
         """Construct an unstarted runtime for one configured instance rank.
 
         Args:
-            instance_id: Configured model/instance id owned by this SGLang rank.
+            model_id: Model ID owned by this SGLang rank.
             rank: Rank-local SGLang process index within the instance.
 
         Raises:
@@ -233,14 +234,14 @@ class InstanceRankRuntime:
         """
 
         config = get_global_config()
-        config_instance = config.instance_by_id.get(instance_id)
+        config_instance = config.instance_by_model_id.get(model_id)
         if config_instance is None:
-            raise InstanceRankError(f"unknown instance id for daemon registration: {instance_id}")
+            raise InstanceRankError(f"unknown Model ID for daemon registration: {model_id}")
         if rank < 0 or rank >= config.atn_world_size:
             raise InstanceRankError(f"instance rank {rank} is outside configured ATN devices")
         pid = os.getpid()
         self.client = XpoolClient()
-        self.instance_id = instance_id
+        self.model_id = model_id
         self.instance_index = config_instance.instance_index
         self.rank = rank
         self.process_ref = ProcessRef(abi_version=ABI_VERSION, pid=pid)
@@ -254,7 +255,7 @@ class InstanceRankRuntime:
     def start(
         cls,
         *,
-        instance_id: str,
+        model_id: ModelId,
         rank: int,
         transport: InstanceRankTransportProfile,
         ffn_profile: InstanceFfnProfile,
@@ -264,7 +265,7 @@ class InstanceRankRuntime:
         """Construct and transactionally start one runner-owned runtime.
 
         Args:
-            instance_id: Configured model/instance id owned by this rank.
+            model_id: Model ID owned by this rank.
             rank: Rank-local SGLang process index within the instance.
             transport: Transport geometry declared by this rank.
             ffn_profile: Rank-independent FFN execution contract.
@@ -283,7 +284,7 @@ class InstanceRankRuntime:
             Registers with the daemon and starts the heartbeat worker.
         """
 
-        runtime = cls(instance_id=instance_id, rank=rank)
+        runtime = cls(model_id=model_id, rank=rank)
         try:
             runtime.start_runtime(transport, ffn_profile, kv_capacity, atn_runtime_headroom_bytes)
         except Exception:
@@ -334,7 +335,7 @@ class InstanceRankRuntime:
                 )
             return
         registration = InstanceRankRegistration(
-            instance_id=self.instance_id,
+            model_id=self.model_id,
             rank=self.rank,
             abi_version=ABI_VERSION,
             pid=self.process_ref.pid,
@@ -402,7 +403,7 @@ class InstanceRankRuntime:
         if plan is None:
             raise InstanceRankError("instance cannot publish initialized before the executable fabric barrier")
         self.client.publish_instance_initialized(
-            self.instance_id,
+            self.model_id,
             rank=self.rank,
             publication=InstanceRankInitializedPublication(
                 owner=self.process_ref,
@@ -458,7 +459,7 @@ class InstanceRankRuntime:
         if registration is None:
             return
         self.client.deregister_instance(
-            self.instance_id,
+            self.model_id,
             rank=self.rank,
             owner=self.process_ref,
         )
@@ -490,7 +491,7 @@ class InstanceRankRuntime:
         while True:
             try:
                 handle = self.client.acquire_instance_transport_arena(
-                    self.instance_id,
+                    self.model_id,
                     rank=self.rank,
                     owner=self.process_ref,
                 )
@@ -508,7 +509,7 @@ class InstanceRankRuntime:
             raise InstanceRankError("instance must be registered before starting heartbeat")
         if self.heartbeat_worker is None:
             self.heartbeat_worker = InstanceRankHeartbeat(
-                instance_id=self.instance_id,
+                model_id=self.model_id,
                 rank=self.rank,
                 heartbeat=self.process_ref,
             )
@@ -529,7 +530,7 @@ class InstanceRankRuntime:
             raise InstanceRankError("instance failure monitor requires an attached arena")
         if self.failure_monitor is None:
             self.failure_monitor = InstanceRankFailureMonitor(
-                instance_id=self.instance_id,
+                model_id=self.model_id,
                 instance_index=self.instance_index,
                 rank=self.rank,
             )

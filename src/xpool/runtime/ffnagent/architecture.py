@@ -12,6 +12,7 @@ from typing import TypeVar, cast
 import torch
 
 from xpool import ffn
+from xpool.model import ModelId
 from xpool.runtime.ffnagent import checkpoint
 from xpool.runtime.ffnagent.weights import MoeRouterWeights
 from xpool.utils.discovery import discover_concrete_subclasses
@@ -32,9 +33,12 @@ class FfnSourceConfig:
         """Return the sole nonempty architecture name declared by the source config."""
 
         architectures = self.get("architectures", list)
-        if len(architectures) != 1 or not isinstance(architectures[0], str) or not architectures[0]:
+        if len(architectures) != 1:
             raise ValueError("architectures must be a one-element array containing a nonempty string")
-        return cast(str, architectures[0])
+        architecture = architectures[0]
+        if not isinstance(architecture, str) or not architecture:
+            raise ValueError("architectures must be a one-element array containing a nonempty string")
+        return architecture
 
     def get(
         self,
@@ -112,7 +116,7 @@ class FfnModelAdapter(ABC):
     def compile(
         cls,
         *,
-        model_id: str,
+        model_id: ModelId,
         model_config: FfnSourceConfig,
     ) -> ffn.FfnModelSpec:
         """Compile a parsed model configuration without filesystem access."""
@@ -180,11 +184,11 @@ def adapter_for(spec: ffn.FfnModelSpec) -> type[FfnModelAdapter]:
     return adapter
 
 
-def load(*, model_id: str, model_path: pathlib.Path) -> ffn.FfnModelSpec:
+def load(*, model_id: ModelId, model_path: pathlib.Path) -> ffn.FfnModelSpec:
     """Load and compile one model's intrinsic FFN semantics.
 
     Args:
-        model_id: Nonempty CrossPool model identity.
+        model_id: Namespace-qualified CrossPool model identity.
         model_path: Local checkpoint directory resolved through CrossPool config.
 
     Returns:

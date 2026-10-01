@@ -8,7 +8,6 @@ from sglang.srt.models.glm4_moe_lite import Glm4MoeLiteForCausalLM
 from sglang.srt.plugins.hook_registry import HookType
 from transformers import Glm4MoeLiteConfig
 
-from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 from xpool.integrations.sglang.models.glm4_moe_lite import (
     Glm4MoeLiteShimAdapter,
     XpoolGlm4MoeLiteMLP,
@@ -17,6 +16,7 @@ from xpool.integrations.sglang.models.glm4_moe_lite import (
 )
 from xpool.integrations.sglang.shim import ShimUnavailableError
 from xpool.native.ffn import LayerKind
+from xtest.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 
 
 def glm_config() -> Glm4MoeLiteConfig:
@@ -62,6 +62,14 @@ def test_glm_replacements_are_parameter_free_and_preserve_layer_kinds() -> None:
     assert sparse.layer_kind is LayerKind.MOE
     assert not hasattr(sparse, "experts")
     assert sparse.get_moe_weights() == []
+
+
+def test_glm_sparse_replacement_rejects_invalid_hidden_size() -> None:
+    config = glm_config()
+    config.hidden_size = 0
+
+    with pytest.raises(ValueError, match="hidden_size"):
+        XpoolGlm4MoeLiteSparseMoeBlock(config, 1)
 
 
 def test_glm_weight_loader_filters_ffn_and_rejects_nextn() -> None:

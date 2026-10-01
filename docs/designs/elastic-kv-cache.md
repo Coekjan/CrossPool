@@ -23,7 +23,7 @@ size therefore depends on that model and rank's KV geometry. Bundle counts are
 comparable inside one Capacity Group; physical accounting uses each
 partition's own `bundle_bytes`.
 
-A **KV Capacity Group** is `(instance_id, atn_dp_rank)`. Every TP rank in the
+A **KV Capacity Group** is `(model_id, atn_dp_rank)`. Every TP rank in the
 group receives the same operation target and switches to the same
 allocator-visible bundle prefix after a common readiness vote, while backing
 its own physical partition. Different DP ranks have independent request,

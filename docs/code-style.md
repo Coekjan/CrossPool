@@ -16,6 +16,10 @@ documentation, and CLI help. Preserve executable identifiers such as `xpool`,
 `XpoolConfig`, paths, URLs, configuration keys, and command examples. Runtime
 logs and error messages use lowercase `xpool` for the system name.
 
+Executable identifiers use `Xpool` in PascalCase, `xpool` in lowercase, and
+`XPOOL` in uppercase. Do not use the CrossPool brand spelling in type, function,
+variable, or machine-readable policy identifiers.
+
 ## Documentation
 
 Document supported APIs at their declaration site. Documentation must explain
@@ -124,6 +128,36 @@ Run Python tools through `uv run`. Format with `uv run ruff format`, lint with
 Prefer explicit concrete types. Use `Any` or `object` only for a genuinely
 dynamic boundary and document the reason nearby. Import pinned third-party
 types instead of inventing local look-alike protocols.
+
+Preserve precise producer, parameter and return types through their consumers.
+Express input/output correspondence on an existing API with overloads when
+needed. Use `cast` only as a narrow static assertion at an established dynamic,
+validated, factory-invariant or test-double boundary; it neither converts nor
+validates a value. Correct avoidable type loss at its source instead of adding
+downstream casts. A reduced cast count is not a correctness criterion.
+
+Access fields declared by a known concrete type directly. Reserve `getattr` and
+`hasattr` for genuine dynamic interfaces, lifecycle-dependent attributes or
+intentional field-table operations. Reuse existing serialization and projection
+APIs instead of reflecting fixed fields by hand.
+
+Use `isinstance` for input validation and real variant dispatch. Preserve
+validated variant relationships and factory return types rather than checking
+them again solely for static narrowing. Express nullable presence with `is None`
+when the source has already established the nonnull value type. Shared
+constructor validation and its error contract belong to the owning constructor.
+
+The producer owns a serialized record's field declaration. Writers, readers
+and fixtures reuse it; a decoded dictionary is not a native snapshot or an
+already validated record. Establish external fields at the reading boundary
+and preserve genuinely nullable lifecycle facts. Private consumers rely on
+that contract rather than repeating shape validation or treating incomplete
+records as complete.
+
+Keep a test substitute's concrete local type until the call, return or field
+assignment that requires a production type. Prefer an existing cheap real
+value when it serves the test. Intentional invalid operations in runtime
+contract tests may bypass static checking at that operation.
 
 Do not use `TYPE_CHECKING` blocks or local imports to conceal ordinary
 dependency cycles. Fix the ownership boundary.

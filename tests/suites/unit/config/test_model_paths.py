@@ -7,6 +7,8 @@ import pytest
 from pydantic import ValidationError
 
 from xpool.config import MissingRequiredConfig, XpoolConfig
+from xpool.model import ModelId
+from xtest.harness.support.config import TEST_MODEL_ID
 
 
 def test_duplicate_model_paths_are_rejected() -> None:
@@ -17,8 +19,8 @@ def test_duplicate_model_paths_are_rejected() -> None:
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
                 "models": [
-                    {"id": "m0", "path": "/models/m"},
-                    {"id": "m1", "path": "/models/m"},
+                    {"id": "test/m0", "path": "/models/m"},
+                    {"id": "test/m1", "path": "/models/m"},
                 ],
             },
             cli={},
@@ -32,12 +34,12 @@ def test_vendor_model_base_uri_from_config_derives_model_path() -> None:
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
-            "models": [{"id": "test/model"}],
+            "models": [{"id": str(TEST_MODEL_ID)}],
         }
     )
 
     assert config.vendor.model_base_uri == Path("/models")
-    assert config.model_path_of("test/model") == Path("/models/test/model")
+    assert config.model_path_of(TEST_MODEL_ID) == Path("/models") / TEST_MODEL_ID.relative_path
 
 
 def test_vendor_model_base_uri_is_config_only(caplog: pytest.LogCaptureFixture) -> None:
@@ -48,14 +50,14 @@ def test_vendor_model_base_uri_is_config_only(caplog: pytest.LogCaptureFixture) 
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
-                "models": [{"id": "test/model"}],
+                "models": [{"id": str(TEST_MODEL_ID)}],
             },
             env={"XPOOL_VENDOR_MODEL_BASE_URI": "/models-from-env"},
         )
 
     assert "XPOOL_VENDOR_MODEL_BASE_URI" in caplog.text
     assert config.vendor.model_base_uri == Path("/models-from-config")
-    assert config.model_path_of("test/model") == Path("/models-from-config/test/model")
+    assert config.model_path_of(TEST_MODEL_ID) == Path("/models-from-config") / TEST_MODEL_ID.relative_path
 
 
 def test_explicit_model_path_overrides_vendor_model_base_uri() -> None:
@@ -65,12 +67,12 @@ def test_explicit_model_path_overrides_vendor_model_base_uri() -> None:
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
-            "models": [{"id": "test/model", "path": "/custom/deepseek"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/custom/deepseek"}],
         }
     )
 
     assert config.models[0].path == Path("/custom/deepseek")
-    assert config.model_path_of("test/model") == Path("/custom/deepseek")
+    assert config.model_path_of(TEST_MODEL_ID) == Path("/custom/deepseek")
 
 
 def test_model_path_lookup_rejects_unknown_model_id() -> None:
@@ -80,12 +82,12 @@ def test_model_path_lookup_rejects_unknown_model_id() -> None:
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
-            "models": [{"id": "test/model"}],
+            "models": [{"id": str(TEST_MODEL_ID)}],
         }
     )
 
     with pytest.raises(MissingRequiredConfig, match="unknown configured model id"):
-        config.model_path_of("unknown-model")
+        config.model_path_of(ModelId("test/unknown-model"))
 
 
 def test_model_path_or_vendor_model_base_uri_is_required() -> None:
@@ -95,7 +97,7 @@ def test_model_path_or_vendor_model_base_uri_is_required() -> None:
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
-                "models": [{"id": "test/model"}],
+                "models": [{"id": str(TEST_MODEL_ID)}],
             }
         )
 
@@ -108,7 +110,7 @@ def test_vendor_model_base_uri_must_be_absolute() -> None:
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
-                "models": [{"id": "test/model"}],
+                "models": [{"id": str(TEST_MODEL_ID)}],
             }
         )
 
@@ -120,7 +122,7 @@ def test_model_path_must_be_absolute() -> None:
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
-                "models": [{"id": "m", "path": "relative/model"}],
+                "models": [{"id": str(TEST_MODEL_ID), "path": "relative/model"}],
             },
             cli={},
         )

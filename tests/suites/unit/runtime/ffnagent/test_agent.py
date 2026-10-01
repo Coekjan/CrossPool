@@ -8,14 +8,14 @@ import pytest
 import torch
 
 import xpool.runtime.ffnagent.agent
-from tests.harness.support.config import install_test_config, reset_global_config, synthetic_config
 from xpool.fabric import FabricPlan
 from xpool.memory import DeviceMemoryEstimate
 from xpool.native import RuntimeRole
-from xpool.runtime.agent import AgentError
+from xpool.runtime.agent import Agent, AgentError
 from xpool.runtime.ffnagent.agent import FfnAgent
 from xpool.runtime.ffnagent.registry import FfnExecutionRegistry
-from xpool.runtime.ffnagent.weights import FfnLayerWeights
+from xpool.utils.procs import ProcUniqId
+from xtest.harness.support.config import install_test_config, reset_global_config, synthetic_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -35,11 +35,12 @@ def test_ffnagent_installs_zero_workspace_policy_before_bootstrap(monkeypatch: p
     monkeypatch.setattr(torch.cuda, "synchronize", lambda device: None)
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
     monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (1, 2))
-    monkeypatch.setattr(
-        xpool.runtime.ffnagent.agent.Agent,
-        "__init__",
-        lambda self, **kwargs: setattr(self, "proc_id", SimpleNamespace(pid=1)),
-    )
+
+    def bootstrap_agent(self: Agent, **kwargs: object) -> None:
+        assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":0:0"
+        self.proc_id = ProcUniqId.current()
+
+    monkeypatch.setattr(xpool.runtime.ffnagent.agent.Agent, "__init__", bootstrap_agent)
     monkeypatch.setattr(xpool.runtime.ffnagent.agent, "ensure_supported_cuda_allocator", lambda: None)
     monkeypatch.setattr(xpool.runtime.ffnagent.agent, "load", lambda **kwargs: SimpleNamespace(layers=()))
     monkeypatch.setattr(xpool.runtime.ffnagent.agent, "FfnAgentRegistration", lambda **kwargs: object())
@@ -120,9 +121,9 @@ def test_ffnagent_prepares_weights_then_installs_execution(monkeypatch: pytest.M
     agent.cuda_device = 1
     agent.layer_weights = None
     agent.execution_registry = None
-    layer_weights = cast(tuple[tuple[FfnLayerWeights | None, ...], ...], (("weights",),))
-    registry = cast(FfnExecutionRegistry, SimpleNamespace(layer_weights=layer_weights))
-    observed: list[tuple[str, object]] = []
+    layer_weights = (("weights",),)
+    registry = SimpleNamespace(layer_weights=layer_weights)
+    observed: list[tuple[str, dict[str, object]]] = []
     monkeypatch.setattr(agent, "fabric_pe", lambda: 0)
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
     monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (1 << 30, 2 << 30))
@@ -151,7 +152,7 @@ def test_ffnagent_prepares_weights_then_installs_execution(monkeypatch: pytest.M
     assert agent.layer_weights is None
     assert agent.execution_registry is registry
     assert [name for name, _ in observed] == ["weights", "registry"]
-    assert cast(dict[str, object], observed[1][1])["layer_weights"] is layer_weights
+    assert observed[1][1]["layer_weights"] is layer_weights
 
 
 def test_ffnagent_rejects_prejoin_memory_shortfall(monkeypatch: pytest.MonkeyPatch) -> None:

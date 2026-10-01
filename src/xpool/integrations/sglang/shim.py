@@ -47,6 +47,9 @@ class FfnShimModule(nn.Module):
             The caller is a model-specific replacement class that intentionally
             avoids the original SGLang FFN constructor.
 
+        Raises:
+            ValueError: If layer ID or hidden size is invalid, checked in that order.
+
         Side Effects:
             Initializes ``nn.Module`` directly and leaves runtime layer metadata
             unbound until plugin post-load binding.
@@ -158,7 +161,7 @@ class FfnShimModule(nn.Module):
             dp_row_layout = DpRowLayout.NONE
             dp_rank_payload_rows = None
         else:
-            sglang_padding_mode = getattr(forward_batch, "dp_padding_mode", None)
+            sglang_padding_mode = forward_batch.dp_padding_mode
             match sglang_padding_mode:
                 case None:
                     raise ShimUnavailableError("xpool attention DP requires an explicit SGLang padding mode")
@@ -170,7 +173,7 @@ class FfnShimModule(nn.Module):
                     raise ShimUnavailableError(
                         f"xpool FFN shim does not support SGLang DP padding mode {sglang_padding_mode!r}"
                     )
-            dp_rank_payload_rows = getattr(forward_batch, "global_num_tokens_gpu", None)
+            dp_rank_payload_rows = forward_batch.global_num_tokens_gpu
             if not isinstance(dp_rank_payload_rows, torch.Tensor):
                 raise ShimUnavailableError("xpool FFN shim expected global_num_tokens_gpu to be a tensor")
         request_metadata = FfnRequestMetadata(

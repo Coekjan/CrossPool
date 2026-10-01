@@ -5,8 +5,10 @@ from http import HTTPStatus
 import pytest
 
 import xpool.service.daemon.control
-from tests.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
-from tests.harness.support.service.daemon import (
+from xpool.fabric import FabricPlan
+from xpool.mps import MpsProbeResult
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
+from xtest.harness.support.service.daemon import (
     FakeMonotonicClock,
     activate_fabric_world,
     atnagent_registration,
@@ -23,8 +25,6 @@ from tests.harness.support.service.daemon import (
     start_sleeping_proc,
     stop_proc,
 )
-from xpool.fabric import FabricPlan
-from xpool.mps import MpsProbeResult
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
 
@@ -88,7 +88,7 @@ def test_daemon_ready_marks_stale_live_registrations_stale_without_pruning(
     assert ready["instances"] == [
         {
             "pid": stale_proc_id.pid,
-            "instance_id": TEST_MODEL_ID,
+            "model_id": str(TEST_MODEL_ID),
             "cuda_device": 0,
             "rank": 0,
             "status": "stale",
@@ -170,7 +170,7 @@ def test_daemon_preserves_stale_registration_but_blocks_stale_transport_arenas()
                 app,
                 "POST",
                 atnagent_transport_arenas_path(0),
-                json=atnagent_transport_arenas((TEST_MODEL_ID, 0), publisher=atnagent),
+                json=atnagent_transport_arenas((str(TEST_MODEL_ID), 0), publisher=atnagent),
             ).status_code
             == HTTPStatus.NO_CONTENT
         )
@@ -181,7 +181,7 @@ def test_daemon_preserves_stale_registration_but_blocks_stale_transport_arenas()
     response = request(
         app,
         "POST",
-        instance_transport_arena_acquire_path(TEST_MODEL_ID, 0),
+        instance_transport_arena_acquire_path(str(TEST_MODEL_ID), 0),
         json=process_ref(),
     )
 
@@ -206,7 +206,7 @@ def test_daemon_reports_not_ready_when_atnagent_upserts_before_registration() ->
         app,
         "POST",
         atnagent_transport_arenas_path(0),
-        json=atnagent_transport_arenas((TEST_MODEL_ID, 0)),
+        json=atnagent_transport_arenas((str(TEST_MODEL_ID), 0)),
     )
 
     assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE

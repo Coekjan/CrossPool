@@ -13,19 +13,19 @@ from torch import nn
 
 import xpool.config
 import xpool.ops
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.sglang.deepseek import (
-    bound_shim,
-    deepseek_config,
-    install_adapter_config,
-)
-from tests.harness.support.sglang.fakes import FakeDecoderLayer, forward_batch, loaded_model, runner_with_architecture
 from xpool.config import XpoolConfig
 from xpool.integrations.sglang.adapter import SglangInstanceRankBinding
 from xpool.integrations.sglang.models.deepseek_v2 import DeepseekV2ShimAdapter, XpoolDeepseekV2MLP, XpoolDeepseekV2MoE
 from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError, iter_ffn_shims
 from xpool.native.ffn import DpRowLayout, LayerKind, OutputRequirement
 from xpool.transport import FfnRequestMetadata
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
+from xtest.harness.support.sglang.deepseek import (
+    bound_shim,
+    deepseek_config,
+    install_adapter_config,
+)
+from xtest.harness.support.sglang.fakes import FakeDecoderLayer, forward_batch, loaded_model, runner_with_architecture
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_adapter_config.__name__)
 
@@ -80,6 +80,14 @@ def test_deepseek_moe_shim_preserves_moe_isinstance_and_minimal_attrs() -> None:
     assert moe.layer_kind is LayerKind.MOE
     assert moe.experts.moe_runner_config.inplace is True
     assert moe.get_moe_weights() == []
+
+
+def test_deepseek_sparse_shim_validates_layer_id_before_hidden_size() -> None:
+    config = deepseek_config()
+    config.hidden_size = 0
+
+    with pytest.raises(ValueError, match="layer_id"):
+        XpoolDeepseekV2MoE(config=config, layer_id=-1)
 
 
 def test_shim_forward_accepts_sglang_decoder_layer_call_contract() -> None:
@@ -235,7 +243,7 @@ def test_shim_forward_passes_structured_native_request(monkeypatch: pytest.Monke
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
-                "models": [{"id": "m", "path": "/models/m"}],
+                "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
             },
         )
     )
@@ -386,7 +394,7 @@ def test_bind_shim_runtime_binds_loaded_deepseek_shims() -> None:
     runner = runner_with_architecture("DeepseekV2ForCausalLM")
     runner.model = model
     binding = SglangInstanceRankBinding(
-        instance_id="test/model",
+        model_id=TEST_MODEL_ID,
         model_path=Path("/models/test/model"),
         instance_index=2,
         worker_rank=3,

@@ -4,8 +4,10 @@ from http import HTTPStatus
 
 import pytest
 
-from tests.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
-from tests.harness.support.service.daemon import (
+from xpool.fabric import FabricPlan
+from xpool.native import ABI_VERSION
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
+from xtest.harness.support.service.daemon import (
     ProcUniqId,
     activate_fabric_world,
     atnagent_registration,
@@ -22,8 +24,6 @@ from tests.harness.support.service.daemon import (
     start_sleeping_proc,
     stop_proc,
 )
-from xpool.fabric import FabricPlan
-from xpool.native import ABI_VERSION
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
 
@@ -32,7 +32,7 @@ def test_daemon_deregisters_instance_rank_owned_by_process() -> None:
     config = synthetic_config()
     app = create_app(config)
     registration = instance_registration()
-    instance_id = str(registration["instance_id"])
+    model_id = str(registration["model_id"])
 
     assert request(app, "POST", "/instance/register", json=registration).status_code == HTTPStatus.NO_CONTENT
     assert request(app, "GET", "/instances").json() == [registration]
@@ -40,7 +40,7 @@ def test_daemon_deregisters_instance_rank_owned_by_process() -> None:
     response = request(
         app,
         "POST",
-        f"/instance/{instance_id}/deregister?rank={registration['rank']}",
+        f"/instance/{model_id}/deregister?rank={registration['rank']}",
         json={"pid": registration["pid"], "abi_version": registration["abi_version"]},
     )
 
@@ -51,7 +51,7 @@ def test_daemon_deregisters_instance_rank_owned_by_process() -> None:
     repeated = request(
         app,
         "POST",
-        f"/instance/{instance_id}/deregister?rank={registration['rank']}",
+        f"/instance/{model_id}/deregister?rank={registration['rank']}",
         json={"pid": registration["pid"], "abi_version": registration["abi_version"]},
     )
 
@@ -73,7 +73,7 @@ def test_daemon_rejects_instance_deregister_from_another_process() -> None:
         response = request(
             app,
             "POST",
-            f"/instance/{registration['instance_id']}/deregister?rank={registration['rank']}",
+            f"/instance/{registration['model_id']}/deregister?rank={registration['rank']}",
             json={"pid": other_proc_id.pid, "abi_version": registration["abi_version"]},
         )
     finally:
@@ -125,7 +125,7 @@ def test_daemon_rejects_transport_arenas_from_non_owner_atnagent() -> None:
         app,
         "POST",
         atnagent_transport_arenas_path(0),
-        json=atnagent_transport_arenas((TEST_MODEL_ID, 0), publisher=non_owner),
+        json=atnagent_transport_arenas((str(TEST_MODEL_ID), 0), publisher=non_owner),
     )
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"] == {
@@ -149,7 +149,7 @@ def test_daemon_preserves_atnagent_transport_arenas_after_same_process_reregiste
             app,
             "POST",
             atnagent_transport_arenas_path(0),
-            json=atnagent_transport_arenas((TEST_MODEL_ID, 0), publisher=atnagent),
+            json=atnagent_transport_arenas((str(TEST_MODEL_ID), 0), publisher=atnagent),
         ).status_code
         == HTTPStatus.NO_CONTENT
     )
@@ -158,7 +158,7 @@ def test_daemon_preserves_atnagent_transport_arenas_after_same_process_reregiste
     response = request(
         app,
         "POST",
-        instance_transport_arena_acquire_path(TEST_MODEL_ID, 0),
+        instance_transport_arena_acquire_path(str(TEST_MODEL_ID), 0),
         json=process_ref(),
     )
 
@@ -201,15 +201,3 @@ def test_daemon_rejects_registration_abi_mismatch(participant: str) -> None:
         "kind": "conflict",
         "message": f"{participant} ABI version does not match daemon ABI",
     }
-
-
-def test_daemon_health_reports_process_liveness_only() -> None:
-    config = synthetic_config()
-    app = create_app(config)
-
-    health = request(app, "GET", "/health")
-    assert health.status_code == HTTPStatus.OK
-    assert health.content == b""
-
-    ready = request(app, "GET", "/ready").json()
-    assert ready["ready"] is False

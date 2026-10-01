@@ -79,6 +79,7 @@ def test_compute_dense_partial_matches_reference_without_steady_allocation(paylo
             output=output,
             activation=ActivationKind.SILU,
         )
+    hidden_states.fill_(3)
     graph.replay()
     torch.cuda.synchronize()
 
@@ -300,6 +301,7 @@ def test_compute_moe_partial_matches_reference_with_overlapped_workspace_and_gra
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
         compute()
+    hidden_states.fill_(3)
     graph.replay()
     torch.cuda.synchronize()
 

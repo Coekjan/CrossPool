@@ -245,7 +245,7 @@ def write_world_config(path: Path, source: XpoolConfig, coordinate: str) -> None
         },
         "models": [
             {
-                "id": member,
+                "id": f"calibration/{member}",
                 "path": str(path.parent / f"calibration-member-{index}"),
                 "ffn_tp_size": tp_size,
             }
@@ -356,7 +356,7 @@ def participant_child(
             return
 
         ensure_supported_cuda_allocator()
-        model_specs = tuple(calibration_corpus_spec(model.id) for model in config.models)
+        model_specs = tuple(calibration_corpus_spec(model.id.name) for model in config.models)
         warmup = torch.empty(1, dtype=torch.uint8, device="cuda")
         torch.cuda.synchronize(placement.cuda_device)
         del warmup

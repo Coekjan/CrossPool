@@ -3,9 +3,15 @@ from __future__ import annotations
 import pytest
 
 import xpool.runtime.instance
-from tests.harness.support.config import reset_global_config
-from tests.harness.support.kv import kv_capacity_profile
-from tests.harness.support.runtime.instance import (
+from xpool.model import ModelId
+from xpool.native import ABI_VERSION
+from xpool.native.ffn import ResultCode
+from xpool.runtime.instance import InstanceRankError, InstanceRankFailureMonitor
+from xpool.service.wire import InstanceRankRegistration, ProcessRef
+from xpool.transport import TransportArenaHandle
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
+from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.runtime.instance import (
     ffn_profile,
     install_offline_instance_client,
     patch_native_instance_ops,
@@ -14,11 +20,6 @@ from tests.harness.support.runtime.instance import (
     transport_arena,
     transport_attributes,
 )
-from xpool.native import ABI_VERSION
-from xpool.native.ffn import ResultCode
-from xpool.runtime.instance import InstanceRankError, InstanceRankFailureMonitor
-from xpool.service.wire import InstanceRankRegistration, ProcessRef
-from xpool.transport import TransportArenaHandle
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_offline_instance_client.__name__)
 
@@ -31,7 +32,7 @@ def test_failure_monitor_keeps_polling_healthy_arena(monkeypatch: pytest.MonkeyP
         lambda: calls.append(True) or ResultCode.OK,
     )
 
-    monitor = InstanceRankFailureMonitor(instance_id="m", instance_index=3, rank=2)
+    monitor = InstanceRankFailureMonitor(model_id=TEST_MODEL_ID, instance_index=3, rank=2)
 
     assert monitor.step()
     assert calls == [True]
@@ -55,7 +56,7 @@ def test_failure_monitor_fail_closes_on_executor_error(monkeypatch: pytest.Monke
         terminate_process,
     )
 
-    monitor = InstanceRankFailureMonitor(instance_id="m", instance_index=3, rank=2)
+    monitor = InstanceRankFailureMonitor(model_id=TEST_MODEL_ID, instance_index=3, rank=2)
 
     with pytest.raises(ProcessTerminated, match="PROTOCOL_MISMATCH"):
         monitor.step()
@@ -77,7 +78,7 @@ def test_instance_attach_from_daemon_uses_rank_local_fetch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = runtime_config()
-    calls: list[tuple[str, int, int]] = []
+    calls: list[tuple[ModelId | str, int, int]] = []
 
     class FakeXpoolClient:
         def __init__(self) -> None:
@@ -88,12 +89,12 @@ def test_instance_attach_from_daemon_uses_rank_local_fetch(
 
         def acquire_instance_transport_arena(
             self,
-            instance_id: str,
+            model_id: ModelId,
             *,
             rank: int,
             owner: ProcessRef,
         ) -> TransportArenaHandle:
-            calls.append((instance_id, rank, owner.pid))
+            calls.append((model_id, rank, owner.pid))
             return transport_arena()
 
     def fake_install(instance_index: int, rank: int, arena: TransportArenaHandle) -> None:
@@ -105,7 +106,10 @@ def test_instance_attach_from_daemon_uses_rank_local_fetch(
     instance = runtime_instance(config, monkeypatch)
     instance.attach_arena_from_daemon()
 
-    assert calls == [("m", 0, xpool.runtime.instance.os.getpid()), ("0", 0, xpool.runtime.instance.os.getpid())]
+    assert calls == [
+        (TEST_MODEL_ID, 0, xpool.runtime.instance.os.getpid()),
+        ("0", 0, xpool.runtime.instance.os.getpid()),
+    ]
 
 
 def test_started_instance_rejects_different_transport(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,7 +118,7 @@ def test_started_instance_rejects_different_transport(monkeypatch: pytest.Monkey
 
     instance = runtime_instance(config, monkeypatch)
     instance.registration = InstanceRankRegistration(
-        instance_id=instance.instance_id,
+        model_id=instance.model_id,
         rank=instance.rank,
         abi_version=ABI_VERSION,
         pid=instance.process_ref.pid,
@@ -130,7 +134,7 @@ def test_started_instance_rejects_different_transport(monkeypatch: pytest.Monkey
 def test_started_instance_rejects_different_runtime_headroom(monkeypatch: pytest.MonkeyPatch) -> None:
     instance = runtime_instance(runtime_config(), monkeypatch)
     instance.registration = InstanceRankRegistration(
-        instance_id=instance.instance_id,
+        model_id=instance.model_id,
         rank=instance.rank,
         abi_version=ABI_VERSION,
         pid=instance.process_ref.pid,

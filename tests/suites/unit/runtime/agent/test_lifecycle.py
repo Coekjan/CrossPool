@@ -11,13 +11,13 @@ from typing import Literal, cast
 import pytest
 
 import xpool.runtime.agent
-from tests.harness.support.config import reset_global_config
-from tests.harness.support.runtime.atnagent import reset_agent_runtime
 from xpool.fabric import FabricPlan
 from xpool.native import RuntimeRole
 from xpool.runtime.agent import Agent, AgentError
 from xpool.service.client import XpoolClient
 from xpool.service.wire import HeartbeatResponse
+from xtest.harness.support.config import reset_global_config
+from xtest.harness.support.runtime.atnagent import reset_agent_runtime
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, reset_agent_runtime.__name__)
 

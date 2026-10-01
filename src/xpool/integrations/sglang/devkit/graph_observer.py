@@ -16,6 +16,7 @@ from sglang.srt.model_executor.runner.decode_cuda_graph_runner import DecodeCuda
 from sglang.srt.model_executor.runner.prefill_cuda_graph_runner import PrefillCudaGraphRunner
 
 from xpool.config import get_global_config
+from xpool.integrations.sglang.devkit import SglangGraphEvent
 from xpool.native import RuntimeRole
 
 __all__ = ["install"]
@@ -27,8 +28,6 @@ logger = logging.getLogger(__name__)
 type GraphRunner = DecodeCudaGraphRunner | PrefillCudaGraphRunner
 type ForwardPhase = Literal["decode", "prefill"]
 type GraphOperation = Literal["capture", "execute"]
-type JsonValue = str | int
-type GraphEvent = dict[str, JsonValue]
 
 event_file: Path | None = None
 event_handle: TextIO | None = None
@@ -146,7 +145,7 @@ def write_event(forward_phase: ForwardPhase, event: str, runner: GraphRunner) ->
         current_handle = event_handle
         if current_handle is None or current_handle.closed:
             return
-        payload: GraphEvent = {
+        payload: SglangGraphEvent = {
             "pid": os.getpid(),
             "time_ns": time.monotonic_ns(),
             "forward_phase": forward_phase,

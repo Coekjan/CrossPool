@@ -4,8 +4,8 @@ from http import HTTPStatus
 
 import pytest
 
-from tests.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
-from tests.harness.support.service.daemon import (
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
+from xtest.harness.support.service.daemon import (
     atnagent_registration,
     atnagent_transport_arenas,
     atnagent_transport_arenas_path,
@@ -46,7 +46,7 @@ def test_daemon_registration_flow() -> None:
         "instances": [
             {
                 "pid": None,
-                "instance_id": TEST_MODEL_ID,
+                "model_id": str(TEST_MODEL_ID),
                 "cuda_device": 0,
                 "rank": 0,
                 "status": "offline",
@@ -96,7 +96,7 @@ def test_daemon_registration_flow() -> None:
     assert ready["instances"] == [
         {
             "pid": registration["pid"],
-            "instance_id": TEST_MODEL_ID,
+            "model_id": str(TEST_MODEL_ID),
             "cuda_device": 0,
             "rank": 0,
             "status": "online",

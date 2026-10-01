@@ -2,47 +2,43 @@
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
-import pytest
+from tests import TEST_CATALOG_PATH
 
-from tests.harness.sglang import numerical
-from tests.harness.sglang.manifest import (
-    E2E_MANIFEST_PATH,
+import xtest
+from xkit.deployment import resolve_deployment_path
+from xkit.serving.sglang.graph import SglangGraphMode
+from xpool.model import ModelId
+from xtest.harness.runner.requirements import ResolvedConfig
+from xtest.harness.sglang import numerical
+from xtest.harness.sglang.catalog import (
     E2eFfnInputMatrix,
     E2eFfnNumericalCase,
-    E2eManifest,
-    E2eModel,
-    E2eModelPlacement,
     E2eServingCase,
 )
-from tests.harness.sglang.serving import qualification
-from tests.harness.sglang.serving.graph import SglangGraphMode
-from xpool.config import XpoolConfig
+from xtest.harness.sglang.serving import qualification
 
-pytest_plugins = ("tests.harness.support.config",)
+pytest_plugins = ("xtest.harness.support.config",)
 
-MODEL = E2eModel(model_id="deepseek-ai/DeepSeek-V2-Lite-Chat", architecture="DeepseekV2ForCausalLM")
-SERVING_SLO = E2eManifest.load(E2E_MANIFEST_PATH).serving_slo
+MODEL = ModelId("deepseek-ai/DeepSeek-V2-Lite-Chat")
 NUMERICAL_CASES: tuple[E2eFfnNumericalCase, ...] = (
     E2eFfnNumericalCase(
-        id="deepseek-v2-lite-ffn-numerical",
-        model_placement=E2eModelPlacement(model_id=MODEL.model_id, atn_tp_size=1, atn_dp_size=1),
+        description="Representative real-checkpoint FFN numerical parity against the original SGLang implementation.",
+        deployment=resolve_deployment_path(TEST_CATALOG_PATH, (MODEL,), "atn1-ffn2-lanes1"),
+        model_id=MODEL,
         layer_ids=(0, 1, 26),
         input_matrix=E2eFfnInputMatrix(seed=17, row_counts=(1, 32, 4096)),
-        ffnagent_count=2,
-        executor_lane_count=1,
-        ffn_tp_size=2,
         estimated_duration_seconds=600,
         timeout_seconds=1800,
     ),
 )
 SERVING_CASES: tuple[E2eServingCase, ...] = (
     E2eServingCase(
-        id="deepseek-v2-lite-tp1-dp1-f1-e1",
-        models=(E2eModelPlacement(model_id=MODEL.model_id, atn_tp_size=1, atn_dp_size=1),),
-        ffnagent_count=1,
-        executor_lane_count=1,
+        description="Installed serving graph qualification with attention TP 1, DP 1 and FFN TP 1.",
+        deployment=resolve_deployment_path(TEST_CATALOG_PATH, (MODEL,), "atn1-ffn1-lanes1"),
+        models=(MODEL,),
         graph_modes=(
             SglangGraphMode.EAGER,
             SglangGraphMode.DECODE_FULL,
@@ -52,10 +48,9 @@ SERVING_CASES: tuple[E2eServingCase, ...] = (
         timeout_seconds=3600,
     ),
     E2eServingCase(
-        id="deepseek-v2-lite-tp1-dp2-f1-e1",
-        models=(E2eModelPlacement(model_id=MODEL.model_id, atn_tp_size=1, atn_dp_size=2),),
-        ffnagent_count=1,
-        executor_lane_count=1,
+        description="Installed serving graph qualification with attention TP 1, DP 2 and FFN TP 1.",
+        deployment=resolve_deployment_path(TEST_CATALOG_PATH, (MODEL,), "atn2-dp2-ffn1-lanes1"),
+        models=(MODEL,),
         graph_modes=(SglangGraphMode.EAGER, SglangGraphMode.DECODE_FULL),
         estimated_duration_seconds=800,
         timeout_seconds=3600,
@@ -63,33 +58,32 @@ SERVING_CASES: tuple[E2eServingCase, ...] = (
 )
 
 
-@pytest.mark.parametrize(
+@xtest.parameterize(
     "case",
-    tuple(numerical.case_parameter(case, model=MODEL) for case in NUMERICAL_CASES),
+    tuple(numerical.case_parameter(case) for case in NUMERICAL_CASES),
 )
+@xtest.requirements(numerical.requirements_of)
 def test_ffn_numerical(
     case: E2eFfnNumericalCase,
-    e2e_base_config: XpoolConfig,
+    e2e_base_config: ResolvedConfig,
     tmp_path: Path,
     task_artifact_dir: Path | None,
 ) -> None:
     """Compare installed FFN with an independent SGLang reference."""
 
-    numerical.run_numerical_case(case, e2e_base_config, tmp_path, task_artifact_dir, model=MODEL)
+    numerical.run_numerical_case(case, e2e_base_config, tmp_path, task_artifact_dir)
 
 
-@pytest.mark.parametrize(
+@xtest.parameterize(
     ("case", "graph_mode"),
-    tuple(
-        qualification.case_parameter(case, graph_mode, models=(MODEL,), compare_modes=True)
-        for case in SERVING_CASES
-        for graph_mode in case.graph_modes
-    ),
+    SERVING_CASES,
+    rows=partial(qualification.graph_rows, compare_modes=True),
 )
+@xtest.requirements(qualification.requirements_of)
 def test_serving_graph(
     case: E2eServingCase,
     graph_mode: SglangGraphMode,
-    e2e_base_config: XpoolConfig,
+    e2e_base_config: ResolvedConfig,
     tmp_path: Path,
     task_artifact_dir: Path | None,
 ) -> None:
@@ -101,7 +95,5 @@ def test_serving_graph(
         e2e_base_config,
         tmp_path,
         task_artifact_dir,
-        models=(MODEL,),
-        serving_slo=SERVING_SLO,
         compare_modes=True,
     )

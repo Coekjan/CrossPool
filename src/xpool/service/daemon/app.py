@@ -11,14 +11,17 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from importlib.metadata import version
 from time import monotonic
+from typing import Annotated
 
 import httpx
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from xpool import bootstrap
 from xpool.config import XpoolConfig, get_global_config
 from xpool.fabric import FabricGenerationId, FabricPlan
+from xpool.model import ModelId
 from xpool.native import RuntimeRole
 from xpool.service.daemon.control import ControlPlane
 from xpool.service.daemon.registration import (
@@ -81,6 +84,15 @@ async def probe_serving_listener(client: httpx.AsyncClient, listener: ServingLis
     return response.is_success
 
 
+def model_id_from_path(model_id: str) -> ModelId:
+    """Parse one route identity, retaining the unknown-Instance response."""
+
+    try:
+        return ModelId(model_id)
+    except ValidationError as error:
+        raise XpoolDaemonError("not_found", "unknown instance") from error
+
+
 def create_daemon() -> FastAPI:
     """Create the FastAPI daemon application for the process-global config.
 
@@ -112,32 +124,30 @@ def create_daemon() -> FastAPI:
 
         async def monitor_serving_health() -> None:
             observed_targets = None
-            healthy_instance_ids: set[str] = set()
+            healthy_model_ids: set[ModelId] = set()
             try:
                 async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
                     while True:
                         targets = await asyncio.to_thread(control_plane.capture_serving_health_targets)
                         if targets is None:
                             observed_targets = None
-                            healthy_instance_ids.clear()
+                            healthy_model_ids.clear()
                         else:
                             if targets != observed_targets:
                                 observed_targets = targets
-                                healthy_instance_ids.clear()
+                                healthy_model_ids.clear()
                             pending = tuple(
-                                (instance_id, listener)
-                                for instance_id, listener in targets.listeners
-                                if instance_id not in healthy_instance_ids
+                                (model_id, listener)
+                                for model_id, listener in targets.listeners
+                                if model_id not in healthy_model_ids
                             )
                             results = await asyncio.gather(
                                 *(probe_serving_listener(client, listener) for _, listener in pending)
                             )
-                            healthy_instance_ids.update(
-                                instance_id
-                                for (instance_id, _), healthy in zip(pending, results, strict=True)
-                                if healthy
+                            healthy_model_ids.update(
+                                model_id for (model_id, _), healthy in zip(pending, results, strict=True) if healthy
                             )
-                            if len(healthy_instance_ids) == len(targets.listeners) and await asyncio.to_thread(
+                            if len(healthy_model_ids) == len(targets.listeners) and await asyncio.to_thread(
                                 control_plane.confirm_serving_health,
                                 targets,
                             ):
@@ -145,10 +155,10 @@ def create_daemon() -> FastAPI:
                                     "serving healthy instance_count=%s",
                                     len(targets.listeners),
                                 )
-                                for instance_id, listener in targets.listeners:
+                                for model_id, listener in targets.listeners:
                                     logger.info(
                                         "serving listener instance=%s host=%s port=%s",
-                                        instance_id,
+                                        model_id,
                                         listener.host,
                                         listener.port,
                                     )
@@ -427,7 +437,7 @@ def create_daemon() -> FastAPI:
             Empty 204 response after registration.
 
         Raises:
-            404: The configured Instance identity or rank is unknown.
+            404: The configured Model ID or Instance rank is unknown.
             409: ABI, ffn_profile, placement, or process ownership conflicts.
             503: A predecessor registration has not completed cleanup.
         """
@@ -435,7 +445,7 @@ def create_daemon() -> FastAPI:
         await asyncio.to_thread(
             control_plane.register_instance,
             InstanceRankRegistrationState(
-                instance=InstanceRankId(instance_id=request.instance_id, rank=request.rank),
+                instance=InstanceRankId(model_id=request.model_id, rank=request.rank),
                 abi_version=request.abi_version,
                 pid=request.pid,
                 transport=request.transport,
@@ -447,8 +457,12 @@ def create_daemon() -> FastAPI:
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
-    @app.post("/instance/{instance_id:path}/deregister")
-    async def deregister_instance(instance_id: str, rank: int, request: ProcessRef) -> Response:
+    @app.post("/instance/{model_id:path}/deregister")
+    async def deregister_instance(
+        model_id: Annotated[ModelId, Depends(model_id_from_path)],
+        rank: int,
+        request: ProcessRef,
+    ) -> Response:
         """Remove one authenticated Instance-rank registration.
 
         Returns:
@@ -459,12 +473,12 @@ def create_daemon() -> FastAPI:
             409: The process identity does not own that registration.
         """
 
-        await asyncio.to_thread(control_plane.deregister_instance, instance_id, rank, request)
+        await asyncio.to_thread(control_plane.deregister_instance, model_id, rank, request)
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
-    @app.post("/instance/{instance_id:path}/initialized")
+    @app.post("/instance/{model_id:path}/initialized")
     async def publish_instance_initialized(
-        instance_id: str,
+        model_id: Annotated[ModelId, Depends(model_id_from_path)],
         rank: int,
         request: InstanceRankInitializedPublication,
     ) -> Response:
@@ -481,14 +495,18 @@ def create_daemon() -> FastAPI:
 
         await asyncio.to_thread(
             control_plane.publish_instance_initialized,
-            instance_id,
+            model_id,
             rank=rank,
             publication=request,
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
-    @app.post("/instance/{instance_id:path}/heartbeat")
-    async def heartbeat_instance(instance_id: str, rank: int, request: ProcessRef) -> HeartbeatResponse:
+    @app.post("/instance/{model_id:path}/heartbeat")
+    async def heartbeat_instance(
+        model_id: Annotated[ModelId, Depends(model_id_from_path)],
+        rank: int,
+        request: ProcessRef,
+    ) -> HeartbeatResponse:
         """Refresh one authenticated Instance-rank registration and return desired state.
 
         Raises:
@@ -496,11 +514,11 @@ def create_daemon() -> FastAPI:
             409: The process identity does not own that registration.
         """
 
-        return await asyncio.to_thread(control_plane.heartbeat_instance, instance_id, rank, request)
+        return await asyncio.to_thread(control_plane.heartbeat_instance, model_id, rank, request)
 
-    @app.post("/instance/{instance_id:path}/transport-arena/acquire")
+    @app.post("/instance/{model_id:path}/transport-arena/acquire")
     async def acquire_instance_transport_arena(
-        instance_id: str,
+        model_id: Annotated[ModelId, Depends(model_id_from_path)],
         rank: int,
         request: ProcessRef,
     ) -> TransportArenaHandle:
@@ -514,7 +532,7 @@ def create_daemon() -> FastAPI:
 
         return await asyncio.to_thread(
             control_plane.acquire_instance_transport_arena,
-            instance_id,
+            model_id,
             rank=rank,
             owner=request,
         )

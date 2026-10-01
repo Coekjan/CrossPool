@@ -9,11 +9,11 @@ from typing import cast
 import pytest
 
 import xpool.native
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.devkit import observer_enabled_config
 from xpool.devkit.fabric_observer import record_payload, write_fabric_snapshot
 from xpool.fabric import FabricGenerationId
 from xpool.native.ffn import DpRowLayout, ForwardMode, OutputRequirement
+from xtest.harness.support.config import install_test_config, reset_global_config
+from xtest.harness.support.devkit import observer_enabled_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -30,13 +30,12 @@ class FakeKey:
 class FakeRecord:
     """Minimal target Fabric trace record replacement."""
 
-    kind: object
+    kind: xpool.native.devkit.fabric_observer.RecordKind
     local_trace_id: int = 1
     key: FakeKey = FakeKey()
     layer_ordinal: int = 4
     payload_rows: int = 8
     output_requirement: OutputRequirement = OutputRequirement.GROUP_SUM_COMPLETE
-    dp_row_layout: DpRowLayout = DpRowLayout.NONE
     dp_rank_payload_rows: int = 8
     forward_mode: ForwardMode = ForwardMode.DECODE
     executor_lane_index: int = 1
@@ -45,29 +44,38 @@ class FakeRecord:
     payload_row_capacity: int = 16
     delivery: xpool.native.fabric.DeliveryVariant = xpool.native.fabric.DeliveryVariant.SINGLE_COMPLETE
 
-    def timestamp(self, event: object) -> int:
+    @property
+    def dp_row_layout(self) -> DpRowLayout | None:
+        """Return layout only for the AtnAgent trace alternative."""
+
+        return DpRowLayout.NONE if self.kind is xpool.native.devkit.fabric_observer.RecordKind.ATNAGENT else None
+
+    def timestamp(
+        self,
+        event: xpool.native.devkit.fabric_observer.AtnAgentEvent
+        | xpool.native.devkit.fabric_observer.CoordinatorEvent
+        | xpool.native.devkit.fabric_observer.FfnAgentEvent,
+    ) -> int:
         """Return one deterministic nonzero event timestamp."""
 
-        return int(cast(xpool.native.devkit.fabric_observer.AtnAgentEvent, event)) + 1
+        return int(event) + 1
 
 
 @pytest.mark.parametrize(
-    ("kind", "expected_kind", "fact_name", "expected_fact"),
+    ("kind", "expected_kind", "expected_fact"),
     [
-        (xpool.native.devkit.fabric_observer.RecordKind.ATNAGENT, "atnagent", "forward_mode", "decode"),
+        (xpool.native.devkit.fabric_observer.RecordKind.ATNAGENT, "atnagent", "decode"),
         (
             xpool.native.devkit.fabric_observer.RecordKind.COORDINATOR,
             "coordinator",
-            "scheduler",
             {"policy": "fifo", "ready_ticket": 9},
         ),
-        (xpool.native.devkit.fabric_observer.RecordKind.FFNAGENT, "ffnagent", "delivery", "single_complete"),
+        (xpool.native.devkit.fabric_observer.RecordKind.FFNAGENT, "ffnagent", "single_complete"),
     ],
 )
 def test_record_payload_uses_target_trace_domains(
-    kind: object,
+    kind: xpool.native.devkit.fabric_observer.RecordKind,
     expected_kind: str,
-    fact_name: str,
     expected_fact: object,
 ) -> None:
     payload = record_payload(cast("xpool.native.devkit.fabric_observer.Record", FakeRecord(kind)))
@@ -75,8 +83,16 @@ def test_record_payload_uses_target_trace_domains(
     assert payload["kind"] == expected_kind
     assert payload["payload_rows"] == 8
     assert payload["output_requirement"] == "group_sum_complete"
-    assert payload["dp_row_layout"] == "none"
-    assert cast(dict[str, object], payload["facts"])[fact_name] == expected_fact
+    match payload["kind"]:
+        case "atnagent":
+            assert payload["dp_row_layout"] == "none"
+            assert payload["facts"]["forward_mode"] == expected_fact
+        case "coordinator":
+            assert payload["dp_row_layout"] is None
+            assert payload["facts"]["scheduler"] == expected_fact
+        case "ffnagent":
+            assert payload["dp_row_layout"] is None
+            assert payload["facts"]["delivery"] == expected_fact
 
 
 def test_write_fabric_snapshot_uses_generation_pe_identity(tmp_path: Path) -> None:

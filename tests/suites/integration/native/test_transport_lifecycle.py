@@ -8,9 +8,9 @@ import pytest
 import torch
 
 import xpool.native
-from tests.harness.native.case import run_native_case
-from tests.harness.native.debug import native_debug_options
+from xpool.config import DebugConfig
 from xpool.native import RuntimeRole
+from xtest.harness.native.case import run_native_case
 
 pytestmark = [pytest.mark.requires_cuda(), pytest.mark.timeout(180)]
 
@@ -19,7 +19,7 @@ def isolated_transport_activation_requires_joined_fabric() -> None:
     xpool.native.initialize(
         RuntimeRole.ATNAGENT,
         cuda_device=torch.cuda.current_device(),
-        debug_options=native_debug_options(),
+        debug_options=DebugConfig().native_options(),
     )
     arena = xpool.native.transport.create_arena(0, 0, 8, 4, torch.bfloat16, 0, 1, 0, 1)
     try:

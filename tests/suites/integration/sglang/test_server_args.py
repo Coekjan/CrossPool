@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
@@ -9,11 +12,11 @@ from sglang.srt.runtime_context import get_context, get_exec, publish
 from transformers import Qwen3Config
 
 import xpool.integrations.sglang.hooks.lifecycle
-from tests.harness.support.config import reset_global_config
-from tests.harness.support.sglang.fakes import FakeModelRunner, ServerArgs, server_args
-from tests.harness.support.sglang.plugin import FakeAdapter, reset_plugin_required_hook_targets
-from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.integrations.sglang.server_args import validate_sglang_server_args
+from xtest.harness.support.config import reset_global_config
+from xtest.harness.support.sglang.fakes import FakeModelRunner, ServerArgs, server_args
+from xtest.harness.support.sglang.plugin import FakeAdapter, reset_plugin_required_hook_targets
+from xtest.harness.support.sglang.runtime import published_sglang_config
 
 pytestmark = pytest.mark.usefixtures(
     reset_global_config.__name__, reset_plugin_required_hook_targets.__name__, published_sglang_config.__name__
@@ -52,11 +55,12 @@ def test_gate_reads_graph_modes_resolved_from_real_model_config(tmp_path: Path) 
     args = ServerArgs(
         model_path=str(tmp_path), device="cpu", cuda_graph_backend_decode="full", cuda_graph_backend_prefill="breakable"
     )
-    publish(args, role="test")
+    with patch.dict(os.environ):
+        publish(args, role="test")
 
-    assert args.cuda_graph_config is None
-    assert isinstance(get_exec().graph.cuda_graph_config, CudaGraphConfig)
-    validate_sglang_server_args()
+        assert args.cuda_graph_config is None
+        assert isinstance(get_exec().graph.cuda_graph_config, CudaGraphConfig)
+        validate_sglang_server_args()
 
 
 def test_global_server_arg_gate_allows_dp_atn_when_parallel_policy_matches() -> None:
@@ -128,6 +132,36 @@ def test_global_server_arg_gate_rejects_unsupported_features(
 
     with pytest.raises(RuntimeError, match=label):
         validate_sglang_server_args()
+
+
+def test_pinned_sglang_resolves_explicit_grpc_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    (model_path / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["Qwen3ForCausalLM"],
+                "hidden_size": 64,
+                "intermediate_size": 128,
+                "model_type": "qwen3",
+                "num_attention_heads": 8,
+                "num_hidden_layers": 2,
+                "num_key_value_heads": 8,
+                "vocab_size": 128,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SGLANG_GRPC_PORT", "19002")
+
+    server_args = ServerArgs(model_path=str(model_path), port=65_000, device="cpu")
+    with patch.dict(os.environ):
+        server_args.resolve_once()
+
+        assert server_args.resolved_dict()["grpc_port"] == 19_002
 
 
 @pytest.mark.parametrize(

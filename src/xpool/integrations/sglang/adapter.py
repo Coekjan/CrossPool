@@ -6,7 +6,6 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from itertools import pairwise
 from pathlib import Path
 
 from sglang.srt.distributed import get_tp_group
@@ -21,8 +20,10 @@ from xpool.config import get_global_config
 from xpool.integrations.sglang.hooks.registry import SglangHook
 from xpool.integrations.sglang.kv.capacity import CapacityReconciler
 from xpool.integrations.sglang.kv.pool import ElasticMHATokenToKVPool, ElasticMLATokenToKVPool
+from xpool.integrations.sglang.placement import SglangCudaPlacement
 from xpool.integrations.sglang.shim import FfnShimModule, iter_ffn_shims
 from xpool.integrations.sglang.topology import SglangAttentionTopology, SglangModelMetadata
+from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
 from xpool.runtime.instance import InstanceRankRuntime
 
@@ -38,53 +39,15 @@ def filter_decoder_ffn_weights[W](weights: Iterable[tuple[str, W]]) -> Iterator[
 
 
 @dataclass(frozen=True, slots=True)
-class SglangCudaPlacement:
-    """SGLang CUDA placement arguments derived from CrossPool ATN devices.
-
-    Attributes:
-        base_gpu_id: SGLang ``base_gpu_id`` corresponding to the first ATN CUDA device.
-        gpu_id_step: SGLang ``gpu_id_step`` between adjacent ATN CUDA devices.
-    """
-
-    base_gpu_id: int
-    gpu_id_step: int
-
-    @classmethod
-    def derive(cls, atn_cuda_devices: Sequence[int]) -> SglangCudaPlacement:
-        """Derive SGLang CUDA placement from ordered attention devices.
-
-        Args:
-            atn_cuda_devices: Strictly increasing arithmetic device sequence.
-
-        Returns:
-            SGLang base GPU id and rank step.
-
-        Raises:
-            RuntimeError: If devices are empty, unordered, or nonuniform.
-        """
-
-        if not atn_cuda_devices:
-            raise RuntimeError("xpool SGLang integration requires at least one attention CUDA device")
-        gpu_id_step = atn_cuda_devices[1] - atn_cuda_devices[0] if len(atn_cuda_devices) > 1 else 1
-        if any(left >= right for left, right in pairwise(atn_cuda_devices)):
-            raise RuntimeError("xpool SGLang integration requires strictly increasing attention CUDA devices")
-        if any((right - left) != gpu_id_step for left, right in pairwise(atn_cuda_devices)):
-            raise RuntimeError(
-                "xpool SGLang integration requires attention CUDA devices to match base_gpu_id + rank * gpu_id_step"
-            )
-        return cls(base_gpu_id=atn_cuda_devices[0], gpu_id_step=gpu_id_step)
-
-
-@dataclass(frozen=True, slots=True)
 class SglangInstanceRankBinding:
     """CrossPool runtime identity for one SGLang model runner.
 
-    ``instance_id`` is the human-readable model id from ``XPOOL_CONFIG``; the
+    ``model_id`` identifies the configured Model and its Instance; the
     integer ``instance_index`` becomes the static transport-arena identity used
     to route FFN results back to the right instance.
 
     Attributes:
-        instance_id: Human-readable model/instance id from CrossPool config.
+        model_id: Model ID from CrossPool config.
         model_path: Resolved absolute model path matched against SGLang.
         instance_index: Config-order identity published during transport setup.
         worker_rank: SGLang model-worker rank for this model runner.
@@ -98,7 +61,7 @@ class SglangInstanceRankBinding:
         atn_dp_size: Attention data-parallel size for this SGLang rank.
     """
 
-    instance_id: str
+    model_id: ModelId
     model_path: Path
     instance_index: int
     worker_rank: int
@@ -149,6 +112,7 @@ class SglangInstanceRankBinding:
         spec = SglangModelMetadata.load(config.model_path_of(model.id), model_id=model.id)
         policy = SglangAttentionTopology.from_runtime(
             spec,
+            model=model,
             atnagent_count=config.atn_world_size,
             supports_dp_attention=supports_dp_attention,
         )
@@ -181,7 +145,7 @@ class SglangInstanceRankBinding:
         if worker_rank != atn_dp_rank * atn_tp_size + atn_tp_rank:
             raise RuntimeError("xpool SGLang rank does not use TP-fastest attention coordinates")
         return cls(
-            instance_id=instance.id,
+            model_id=instance.model_id,
             model_path=model_path,
             instance_index=instance.instance_index,
             worker_rank=worker_rank,
@@ -258,9 +222,7 @@ class SglangInstanceRankBinding:
             ("enable_dp_attention", get_parallel().enable_dp_attention, self.atn_dp_size > 1),
         ):
             if actual != expected:
-                raise RuntimeError(
-                    f"xpool config expects SGLang {label}={expected} for {self.instance_id}, got {actual}"
-                )
+                raise RuntimeError(f"xpool config expects SGLang {label}={expected} for {self.model_id}, got {actual}")
         expected_cuda_device = self.sglang_base_gpu_id + self.worker_rank * self.sglang_gpu_id_step
         if self.cuda_device != expected_cuda_device:
             raise RuntimeError(

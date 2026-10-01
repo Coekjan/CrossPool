@@ -8,7 +8,6 @@ from typing import cast
 import pytest
 import torch
 
-from tests.harness.support.config import install_test_config, reset_global_config
 from xpool.config import XpoolConfig
 from xpool.fabric import (
     DenseFfnLayerPlan,
@@ -27,6 +26,7 @@ from xpool.fabric import (
 from xpool.ffn import ActivationKind, DenseFfnSpec, FfnModelSpec, GatedFfnCheckpointKeys
 from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent import loader, weights
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -36,7 +36,7 @@ def test_plan_materialization_selects_only_local_layers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = FfnModelSpec(
-        model_id="model",
+        model_id=TEST_MODEL_ID,
         architecture_name="Qwen3ForCausalLM",
         hidden_size=4,
         activation=ActivationKind.SILU,
@@ -71,7 +71,7 @@ def test_plan_materialization_selects_only_local_layers(
         ),
         instance_plans=(
             FabricInstancePlan(
-                instance_id="model",
+                model_id=TEST_MODEL_ID,
                 ffn_profile=InstanceFfnProfile(
                     payload_dtype=torch.bfloat16,
                     hidden_size=4,
@@ -94,7 +94,7 @@ def test_plan_materialization_selects_only_local_layers(
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1, 2]},
-                "models": [{"id": "model", "path": str(tmp_path)}],
+                "models": [{"id": str(TEST_MODEL_ID), "path": str(tmp_path)}],
             }
         )
     )
@@ -109,6 +109,9 @@ def test_plan_materialization_selects_only_local_layers(
         return (weight,) if requests else ()
 
     monkeypatch.setattr(loader, "materialize_local_layer_weights", materialize)
+
+    with pytest.raises(ValueError, match="Model Specs and Model Plans are not co-indexed"):
+        loader.materialize_layer_weights(fabric_plan=plan, model_specs=(), ffnagent_index=0)
 
     assert loader.materialize_layer_weights(
         fabric_plan=plan,

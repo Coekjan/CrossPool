@@ -9,9 +9,17 @@ import pytest
 import xpool.runtime.instance
 import xpool.utils.background
 import xpool.utils.procs
-from tests.harness.support.config import reset_global_config
-from tests.harness.support.kv import kv_capacity_profile
-from tests.harness.support.runtime.instance import (
+from xpool.model import ModelId
+from xpool.native import ABI_VERSION
+from xpool.runtime.instance import InstanceRankRuntime
+from xpool.service.wire import (
+    HeartbeatResponse,
+    InstanceRankRegistration,
+    ProcessRef,
+)
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
+from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.runtime.instance import (
     ffn_profile,
     install_offline_instance_client,
     install_scripted_instance_client,
@@ -21,13 +29,6 @@ from tests.harness.support.runtime.instance import (
     runtime_instance,
     transport_arena,
     transport_attributes,
-)
-from xpool.native import ABI_VERSION
-from xpool.runtime.instance import InstanceRankRuntime
-from xpool.service.wire import (
-    HeartbeatResponse,
-    InstanceRankRegistration,
-    ProcessRef,
 )
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_offline_instance_client.__name__)
@@ -62,10 +63,10 @@ def test_instance_deregister_stops_heartbeat_worker(monkeypatch: pytest.MonkeyPa
         def register_instance(self, registration: InstanceRankRegistration) -> None:
             return None
 
-        def deregister_instance(self, instance_id: str, *, rank: int, owner: object) -> None:
-            events.append(("deregister", instance_id, rank, worker.stop_event.is_set(), owner))
+        def deregister_instance(self, model_id: ModelId, *, rank: int, owner: object) -> None:
+            events.append(("deregister", model_id, rank, worker.stop_event.is_set(), owner))
 
-    patch_native_instance_ops(monkeypatch, detach=lambda: events.append(("detach", "m", 0)))
+    patch_native_instance_ops(monkeypatch, detach=lambda: events.append(("detach", TEST_MODEL_ID, 0)))
     monkeypatch.setattr(xpool.runtime.instance, "XpoolClient", FakeXpoolClient)
 
     instance = runtime_instance(config, monkeypatch)
@@ -77,10 +78,10 @@ def test_instance_deregister_stops_heartbeat_worker(monkeypatch: pytest.MonkeyPa
     worker = heartbeat_worker.worker
     instance.deregister_runtime()
 
-    assert events[0] == ("detach", "m", 0)
+    assert events[0] == ("detach", TEST_MODEL_ID, 0)
     assert events[1] == ("join", xpool.runtime.instance.INSTANCE_HEARTBEAT_STOP_JOIN_TIMEOUT_S)
     assert isinstance(events[2], tuple)
-    assert events[2][:4] == ("deregister", "m", 0, True)
+    assert events[2][:4] == ("deregister", TEST_MODEL_ID, 0, True)
 
 
 def test_instance_start_registers_heartbeat_without_attaching_transport(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -153,7 +154,7 @@ def test_instance_heartbeat_retries_recoverable_response_failure(
     heartbeat.step()
 
     assert len(client.calls) == 3
-    assert all(call[:3] == ("heartbeat", "m", 0) for call in client.calls)
+    assert all(call[:3] == ("heartbeat", TEST_MODEL_ID, 0) for call in client.calls)
 
 
 def test_instance_heartbeat_keeps_client_on_recoverable_failure_and_closes_on_stop(
@@ -176,8 +177,8 @@ def test_instance_heartbeat_keeps_client_on_recoverable_failure_and_closes_on_st
     heartbeat.stop()
 
     assert client.calls == [
-        ("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123)),
-        ("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123)),
+        ("heartbeat", TEST_MODEL_ID, 0, ProcessRef(abi_version=ABI_VERSION, pid=123)),
+        ("heartbeat", TEST_MODEL_ID, 0, ProcessRef(abi_version=ABI_VERSION, pid=123)),
         ("close",),
     ]
     assert client.close_count == 1
@@ -202,7 +203,7 @@ def test_instance_heartbeat_fail_closes_after_transport_error_deadline(
 
     assert exc_info.value.code == 1
     assert client.calls == [
-        ("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123)),
+        ("heartbeat", TEST_MODEL_ID, 0, ProcessRef(abi_version=ABI_VERSION, pid=123)),
     ]
 
 
@@ -220,7 +221,7 @@ def test_instance_heartbeat_fail_closes_when_daemon_registration_is_missing(
         runtime_heartbeat(config, monkeypatch).step()
 
     assert exc_info.value.code == 1
-    assert client.calls == [("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123))]
+    assert client.calls == [("heartbeat", TEST_MODEL_ID, 0, ProcessRef(abi_version=ABI_VERSION, pid=123))]
 
 
 @pytest.mark.parametrize(
@@ -242,4 +243,4 @@ def test_instance_heartbeat_fail_closes_on_fatal_error(
         runtime_heartbeat(config, monkeypatch).step()
 
     assert exc_info.value.code == 1
-    assert client.calls == [("heartbeat", "m", 0, ProcessRef(abi_version=ABI_VERSION, pid=123))]
+    assert client.calls == [("heartbeat", TEST_MODEL_ID, 0, ProcessRef(abi_version=ABI_VERSION, pid=123))]

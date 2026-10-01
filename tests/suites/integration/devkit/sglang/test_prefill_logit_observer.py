@@ -15,8 +15,8 @@ from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMo
 from sglang.srt.model_executor.model_runner import ModelRunner, ModelRunnerOutput
 
 import xpool.integrations.sglang.devkit.prefill_logit_observer
-from tests.harness.support.config import install_test_config, reset_global_config
-from xpool.config import XpoolConfig
+from xtest.harness.support.config import install_test_config, reset_global_config
+from xtest.harness.support.devkit import observer_enabled_config
 
 
 @pytest.fixture
@@ -42,7 +42,7 @@ def test_prefill_logit_observer_records_first_rank_zero_extend(
         return ModelRunnerOutput(LogitsProcessorOutput(logits), can_run_graph=False)
 
     monkeypatch.setattr(ModelRunner, "forward", forward)
-    install_test_config(config=observer_config(tmp_path))
+    install_test_config(config=observer_enabled_config("prefill_logit_observer", tmp_path))
     xpool.integrations.sglang.devkit.prefill_logit_observer.install()
     runner = cast(ModelRunner, SimpleNamespace(ps=ParallelState.trivial()))
 
@@ -71,7 +71,7 @@ def test_prefill_logit_observer_skips_nonzero_tp_rank(
         return ModelRunnerOutput(LogitsProcessorOutput(torch.ones((1, 3))), can_run_graph=False)
 
     monkeypatch.setattr(ModelRunner, "forward", forward)
-    install_test_config(config=observer_config(tmp_path))
+    install_test_config(config=observer_enabled_config("prefill_logit_observer", tmp_path))
     xpool.integrations.sglang.devkit.prefill_logit_observer.install()
 
     ModelRunner.forward(
@@ -80,21 +80,6 @@ def test_prefill_logit_observer_skips_nonzero_tp_rank(
     )
 
     assert not tuple(tmp_path.glob("xpool.prefill-logits.*.safetensors"))
-
-
-def observer_config(outdir: Path) -> XpoolConfig:
-    return XpoolConfig.from_mapping(
-        {
-            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
-            "atn": {"devices": [0]},
-            "ffn": {"devices": [1]},
-            "models": [{"id": "m", "path": "/models/m"}],
-        },
-        env={
-            "XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE": "1",
-            "XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_OUTDIR": str(outdir),
-        },
-    )
 
 
 def forward_batch(mode: ForwardMode, rids: list[str]) -> ForwardBatch:

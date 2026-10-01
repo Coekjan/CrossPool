@@ -10,6 +10,7 @@ import psutil
 
 from xpool import ffn
 from xpool.fabric import InstanceFfnProfile
+from xpool.model import ModelId
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
@@ -91,7 +92,7 @@ class CommonRegistration(ABC):
 class InstanceRankId:
     """Daemon-local identity of one configured Instance rank."""
 
-    instance_id: str
+    model_id: ModelId
     rank: int
 
 
@@ -318,7 +319,7 @@ class RegistrationBook:
         return [
             InstanceRankRegistration(
                 pid=registration.proc.pid,
-                instance_id=registration.instance.instance_id,
+                model_id=registration.instance.model_id,
                 rank=registration.instance.rank,
                 abi_version=registration.abi_version,
                 transport=registration.transport,

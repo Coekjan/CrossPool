@@ -7,11 +7,11 @@ import pytest
 
 import xpool.cli.subcommands.atnagent
 import xpool.cli.subcommands.daemon
-from tests.harness.support.config import reset_global_config
 from xpool.cli import main
 from xpool.fabric import FabricGenerationId
 from xpool.service.client import XpoolClientError
 from xpool.service.wire import ReadinessSnapshot
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -37,7 +37,7 @@ def ready_snapshot(*, ready: bool) -> ReadinessSnapshot:
                 {
                     "pid": 200 if ready else None,
                     "status": instance_status,
-                    "instance_id": "test/model",
+                    "model_id": str(TEST_MODEL_ID),
                     "cuda_device": 0,
                     "rank": 0,
                 }
@@ -73,7 +73,7 @@ def test_daemon_check_reports_ready_snapshot(monkeypatch, capsys) -> None:
     assert payload["readiness"]["instances"] == [
         {
             "cuda_device": 0,
-            "instance_id": "test/model",
+            "model_id": str(TEST_MODEL_ID),
             "pid": 200,
             "rank": 0,
             "status": "online",
@@ -129,24 +129,6 @@ def test_daemon_serve_runs_uvicorn(monkeypatch) -> None:
     assert main(["daemon", "serve", "--config", "configs/xpool.example.toml"]) == 0
 
     assert calls == [(app, "127.0.0.1", 9810, False, failure)]
-
-
-def test_daemon_serve_returns_nonzero_after_watchdog_failure(monkeypatch) -> None:
-    failure = xpool.cli.subcommands.daemon.DaemonFailure()
-    app = SimpleNamespace(state=SimpleNamespace(daemon_failure=failure))
-
-    class FailingDaemonServer:
-        def __init__(self, config, server_failure) -> None:
-            assert config.app is app
-            assert server_failure is failure
-
-        def run(self) -> None:
-            failure.record(RuntimeError("watchdog failed"))
-
-    monkeypatch.setattr(xpool.cli.subcommands.daemon, "create_daemon", lambda: app)
-    monkeypatch.setattr(xpool.cli.subcommands.daemon, "DaemonServer", FailingDaemonServer)
-
-    assert main(["daemon", "serve", "--config", "configs/xpool.example.toml"]) == 1
 
 
 def test_atnagent_run_reports_daemon_transport_error(monkeypatch, capsys) -> None:

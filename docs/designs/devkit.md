@@ -61,3 +61,24 @@ production execution.
 Native Graph snapshots expose CUDA node kinds as underlying integers; the
 Python Graph Observer resolves official cuda-python enum names only when
 constructing its JSON presentation.
+
+## Serialized observations
+
+Python Fabric and Transport writers own concrete JSON declarations shared by
+readers and fixtures. These projections differ from native snapshots: they
+flatten role facts, serialize enums, derive durations and add process or model
+context. Matching-role native getters determine field types and nullability.
+Incomplete records remain diagnostic input: AtnAgent lane and lease facts are
+nullable until AdmissionObserved, and Coordinator lane and lease facts until
+Scheduled.
+
+Transport snapshot filenames combine PID, endpoint site, the Model ID's
+[URI component representation](control-plane.md#configuration-and-integration)
+and Instance Rank. Each model retains its own process-local snapshot file;
+the JSON payload carries its canonical scalar Model ID for readers.
+
+The production SGLang Devkit package owns its lightweight Graph-event
+declaration, shared by the event writer and readers independently of Graph
+runner implementations. Native Graph snapshots retain their existing production
+model. [Tooling](tooling.md#shared-serving-lifecycle) owns file-input validation
+and the separate semantic qualification assertions.

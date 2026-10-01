@@ -9,13 +9,6 @@ import torch
 import xpool.native
 import xpool.runtime.agent
 import xpool.runtime.ffnagent.agent
-from tests.harness.support.config import install_test_config, reset_global_config, synthetic_config
-from tests.harness.support.runtime.atnagent import (
-    create_atnagent,
-    reset_agent_runtime,
-    reset_atnagent_runtime,
-)
-from tests.harness.support.service.daemon import ffn_model_spec
 from xpool.config import XpoolConfig
 from xpool.fabric import (
     DenseFfnLayerPlan,
@@ -41,6 +34,13 @@ from xpool.runtime.atnagent import AtnAgent
 from xpool.runtime.ffnagent import FfnAgent
 from xpool.service.client import XpoolClient, XpoolClientError
 from xpool.service.wire import FabricParticipantReport, KvControlChannelRef
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config, synthetic_config
+from xtest.harness.support.runtime.atnagent import (
+    create_atnagent,
+    reset_agent_runtime,
+    reset_atnagent_runtime,
+)
+from xtest.harness.support.service.daemon import ffn_model_spec
 
 pytestmark = pytest.mark.usefixtures(
     reset_global_config.__name__,
@@ -69,7 +69,7 @@ def fabric_plan(profile: InstanceFfnProfile) -> FabricPlan:
         ),
         instance_plans=(
             FabricInstancePlan(
-                instance_id="m",
+                model_id=TEST_MODEL_ID,
                 ffn_profile=profile,
                 instance_rank_topology=InstanceRankTopology(
                     atn_tp_size=1,
@@ -99,7 +99,7 @@ def test_agent_construction_initializes_role_and_devkit(
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     install_test_config(config=config)
@@ -170,7 +170,7 @@ def test_participant_report_commits_only_after_daemon_acknowledgement(monkeypatc
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     agent = create_atnagent(config, cuda_device=0)
@@ -214,7 +214,7 @@ def test_post_join_value_error_is_reported_as_control_failure(monkeypatch: pytes
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     agent = create_atnagent(config, cuda_device=0)
@@ -257,7 +257,7 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         },
     )
     agent = create_atnagent(config, cuda_device=0)

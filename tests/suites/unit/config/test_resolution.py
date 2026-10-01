@@ -7,11 +7,6 @@ import pytest
 from pydantic import ValidationError
 
 import xpool.config
-from tests.harness.support.config import (
-    reset_global_config,
-    source_record,
-    write_minimal_config,
-)
 from xpool.config import (
     ConfigError,
     ConfigSource,
@@ -19,6 +14,12 @@ from xpool.config import (
     XpoolConfig,
     get_global_config,
     init_global_config,
+)
+from xtest.harness.support.config import (
+    TEST_MODEL_ID,
+    minimal_config,
+    reset_global_config,
+    write_minimal_config,
 )
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
@@ -52,15 +53,7 @@ def test_cli_config_default_precedence_without_config_field_env(
 
 
 def test_defaults_fill_missing_optional_sections() -> None:
-    config = XpoolConfig.from_mapping(
-        {
-            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
-            "atn": {"devices": [0]},
-            "ffn": {"devices": [1]},
-            "models": [{"id": "m", "path": "/models/m"}],
-        },
-        cli={},
-    )
+    config = minimal_config()
 
     assert config.debug.graph_observer.enable is False
     assert config.debug.graph_observer.outdir is None
@@ -75,6 +68,28 @@ def test_defaults_fill_missing_optional_sections() -> None:
     assert config.logging.color is True
     assert config.ffn.device_memory_calibration is None
     assert config.vendor.model_base_uri is None
+    sources = {record["name"]: record["source"] for record in config.sources}
+    assert sources["daemon.host"] is ConfigSource.DEFAULT
+    assert sources["scheduler.ffn_policy"] is ConfigSource.DEFAULT
+    assert sources["vendor.model_base_uri"] is ConfigSource.UNSET
+    assert sources["models[0].path"] is ConfigSource.CONFIG
+
+
+@pytest.mark.parametrize("model_slo", [None, (700, 25)])
+def test_fixture_toml_preserves_quoted_paths_and_optional_model_slo(
+    tmp_path: Path, model_slo: tuple[int, int] | None
+) -> None:
+    model_path = tmp_path / 'quoted"model\\weights'
+    path = write_minimal_config(tmp_path, model_path=model_path, model_slo=model_slo)
+    config = XpoolConfig.from_file(path)
+
+    assert config.model_path_of(TEST_MODEL_ID) == model_path
+    if model_slo is None:
+        assert config.models[0].slo is None
+    else:
+        slo = config.models[0].slo
+        assert slo is not None
+        assert (slo.ttft_ms, slo.tbt_ms) == model_slo
 
 
 def test_ffn_loader_parallelism_uses_cli_env_config_default_precedence() -> None:
@@ -82,7 +97,7 @@ def test_ffn_loader_parallelism_uses_cli_env_config_default_precedence() -> None
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1], "loader": {"parallelism": 2}},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
 
     assert XpoolConfig.from_mapping(payload).ffn.loader.parallelism == 2
@@ -102,7 +117,7 @@ def test_ffn_placement_parallelism_uses_cli_env_config_default_precedence() -> N
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1], "placement": {"parallelism": 2}},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
 
     assert XpoolConfig.from_mapping(payload).ffn.placement.parallelism == 2
@@ -125,7 +140,7 @@ def test_logging_level_uses_cli_env_config_default_precedence() -> None:
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
 
     assert XpoolConfig.from_mapping(payload).logging.level == "warning"
@@ -146,7 +161,7 @@ def test_logging_color_uses_toml_and_ignores_environment_override(caplog: pytest
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
 
     with caplog.at_level("WARNING", logger="xpool.config"):
@@ -161,7 +176,7 @@ def test_ffn_device_memory_calibration_uses_env_before_config() -> None:
         "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
         "atn": {"devices": [0]},
         "ffn": {"devices": [1], "device_memory_calibration": "/config/memory.json"},
-        "models": [{"id": "m", "path": "/models/m"}],
+        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
     }
 
     assert XpoolConfig.from_mapping(payload).ffn.device_memory_calibration == Path("/config/memory.json")
@@ -178,7 +193,7 @@ def test_ffn_device_memory_calibration_must_be_absolute() -> None:
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1], "device_memory_calibration": "relative.json"},
-                "models": [{"id": "m", "path": "/models/m"}],
+                "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
             }
         )
 
@@ -190,7 +205,7 @@ def test_ffn_device_memory_calibration_expands_home(tmp_path: Path, monkeypatch:
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1], "device_memory_calibration": "~/memory.json"},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
 
@@ -203,14 +218,14 @@ def test_config_resolution_does_not_mutate_caller_mapping() -> None:
         "atn": {"devices": [0]},
         "ffn": {"devices": [1]},
         "vendor": {"model_base_uri": "/models"},
-        "models": [{"id": "m"}],
+        "models": [{"id": str(TEST_MODEL_ID)}],
     }
     original = deepcopy(payload)
 
     config = XpoolConfig.from_mapping(payload, cli={"daemon_host": "127.0.0.3"})
 
     assert config.daemon.host == "127.0.0.3"
-    assert config.model_path_of("m") == Path("/models/m")
+    assert config.model_path_of(TEST_MODEL_ID) == Path("/models") / TEST_MODEL_ID.relative_path
     assert payload == original
 
 
@@ -267,34 +282,34 @@ def test_init_global_config_tracks_effective_sources(monkeypatch: pytest.MonkeyP
         config_path="configs/xpool.example.toml",
         cli={"daemon_host": "127.0.0.6"},
     )
-    report = config.sources
+    sources = {record["name"]: record for record in config.sources}
 
     assert config.daemon.host == "127.0.0.6"
     assert "sources" not in config.model_dump(mode="json")
-    assert source_record(report, "daemon.host") == {
+    assert sources["daemon.host"] == {
         "name": "daemon.host",
         "source": ConfigSource.CLI,
         "value": "127.0.0.6",
     }
-    assert source_record(report, "debug.transport_observer.record_capacity") == {
+    assert sources["debug.transport_observer.record_capacity"] == {
         "name": "debug.transport_observer.record_capacity",
         "source": ConfigSource.ENV,
         "value": 64,
     }
-    assert source_record(report, "debug.fabric_observer.record_capacity") == {
+    assert sources["debug.fabric_observer.record_capacity"] == {
         "name": "debug.fabric_observer.record_capacity",
         "source": ConfigSource.DEFAULT,
         "value": 8192,
     }
-    assert source_record(report, "daemon.port")["source"] == ConfigSource.CONFIG
-    assert source_record(report, "atn.devices")["source"] == ConfigSource.CONFIG
-    assert source_record(report, "models[0].id")["source"] == ConfigSource.CONFIG
-    assert source_record(report, "models[0].path") == {
+    assert sources["daemon.port"]["source"] == ConfigSource.CONFIG
+    assert sources["atn.devices"]["source"] == ConfigSource.CONFIG
+    assert sources["models[0].id"]["source"] == ConfigSource.CONFIG
+    assert sources["models[0].path"] == {
         "name": "models[0].path",
         "source": ConfigSource.UNSET,
         "value": None,
     }
-    assert not any(record["name"] in {"config_path", "models"} for record in report)
+    assert not {"config_path", "models"} & sources.keys()
 
 
 def test_config_sources_format_multiple_model_indices() -> None:
@@ -305,17 +320,17 @@ def test_config_sources_format_multiple_model_indices() -> None:
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [
-                {"id": "model-zero", "path": "/custom/model-zero"},
+                {"id": "test/model-zero", "path": "/custom/model-zero"},
                 {"id": "org/model-one"},
             ],
         }
     )
-    report = config.sources
+    sources = {record["name"]: record for record in config.sources}
 
-    assert source_record(report, "models[0].id")["source"] == ConfigSource.CONFIG
-    assert source_record(report, "models[0].path")["source"] == ConfigSource.CONFIG
-    assert source_record(report, "models[1].id")["source"] == ConfigSource.CONFIG
-    assert source_record(report, "models[1].path") == {
+    assert sources["models[0].id"]["source"] == ConfigSource.CONFIG
+    assert sources["models[0].path"]["source"] == ConfigSource.CONFIG
+    assert sources["models[1].id"]["source"] == ConfigSource.CONFIG
+    assert sources["models[1].path"] == {
         "name": "models[1].path",
         "source": ConfigSource.UNSET,
         "value": None,
@@ -329,7 +344,7 @@ def test_config_rejects_non_list_models_for_registered_wildcard_settings() -> No
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
-                "models": {"id": "m", "path": "/models/m"},
+                "models": {"id": str(TEST_MODEL_ID), "path": "/models/m"},
             }
         )
 
@@ -352,6 +367,6 @@ def test_int_source_rejects_invalid_integer() -> None:
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
                 "ffn": {"devices": [1]},
-                "models": [{"id": "m", "path": "/models/m"}],
+                "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
             },
         )

@@ -13,6 +13,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from xpool.config import get_global_config
 from xpool.fabric import FabricGenerationId, FabricPlan
+from xpool.model import ModelId
 from xpool.service.errors import XpoolClientError, XpoolDaemonError
 from xpool.service.wire import (
     AtnAgentRegistration,
@@ -375,47 +376,44 @@ class XpoolClient:
         self.check_config()
         self.request("POST", "/instance/register", json=registration.model_dump(mode="json"))
 
-    def deregister_instance(self, instance_id: str, *, rank: int, owner: ProcessRef) -> None:
+    def deregister_instance(self, model_id: ModelId, *, rank: int, owner: ProcessRef) -> None:
         """Remove one instance-rank registration owned by this process.
 
         Args:
-            instance_id: Instance id whose registration should be removed.
+            model_id: Model ID whose Instance registration should be removed.
             rank: Rank-local process index to deregister.
             owner: Process identity that must match the current registration.
         """
 
-        instance_path = quote(instance_id, safe="/")
         self.request(
             "POST",
-            f"/instance/{instance_path}/deregister",
+            f"/instance/{model_id}/deregister",
             params={"rank": rank},
             json=owner.model_dump(mode="json"),
         )
 
     def publish_instance_initialized(
         self,
-        instance_id: str,
+        model_id: ModelId,
         *,
         rank: int,
         publication: InstanceRankInitializedPublication,
     ) -> None:
         """Publish one SGLang rank's post-initialize startup barrier."""
 
-        instance_path = quote(instance_id, safe="/")
         self.request(
             "POST",
-            f"/instance/{instance_path}/initialized",
+            f"/instance/{model_id}/initialized",
             params={"rank": rank},
             json=publication.model_dump(mode="json"),
         )
 
-    def heartbeat_instance(self, instance_id: str, *, rank: int, heartbeat: ProcessRef) -> HeartbeatResponse:
+    def heartbeat_instance(self, model_id: ModelId, *, rank: int, heartbeat: ProcessRef) -> HeartbeatResponse:
         """Refresh one instance-rank heartbeat and return daemon warnings."""
 
-        instance_path = quote(instance_id, safe="/")
         response = self.request(
             "POST",
-            f"/instance/{instance_path}/heartbeat",
+            f"/instance/{model_id}/heartbeat",
             params={"rank": rank},
             json=heartbeat.model_dump(mode="json"),
         )
@@ -423,7 +421,7 @@ class XpoolClient:
 
     def acquire_instance_transport_arena(
         self,
-        instance_id: str,
+        model_id: ModelId,
         *,
         rank: int,
         owner: ProcessRef,
@@ -431,7 +429,7 @@ class XpoolClient:
         """Attempt one daemon-brokered transport arena acquisition.
 
         Args:
-            instance_id: Instance id whose arena should be fetched.
+            model_id: Model ID whose Instance arena should be fetched.
             rank: Local instance rank whose transport arena should be fetched.
             owner: Process identity for the acquiring instance rank.
 
@@ -443,10 +441,9 @@ class XpoolClient:
             XpoolDaemonError: If the daemon rejects the acquisition.
         """
 
-        instance_path = quote(instance_id, safe="/")
         response = self.request(
             "POST",
-            f"/instance/{instance_path}/transport-arena/acquire",
+            f"/instance/{model_id}/transport-arena/acquire",
             params={"rank": rank},
             json=owner.model_dump(mode="json"),
         )

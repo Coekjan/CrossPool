@@ -12,13 +12,13 @@ from sglang.srt.models.qwen2 import Qwen2DecoderLayer, Qwen2ForCausalLM
 from sglang.srt.plugins.hook_registry import HookType
 from transformers import Qwen2Config
 
-from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 from xpool.integrations.sglang.models.qwen2 import (
     Qwen2ShimAdapter,
     XpoolQwen2MLP,
     around_load_weights,
     qwen2_decoder_forward,
 )
+from xtest.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 
 
 def test_qwen2_adapter_declares_shared_mlp_and_decoder_hooks() -> None:

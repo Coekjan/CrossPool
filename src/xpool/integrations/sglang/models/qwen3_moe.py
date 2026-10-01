@@ -36,13 +36,10 @@ class XpoolQwen3MoeSparseMoeBlock(FfnShimModule, Qwen3MoeSparseMoeBlock):
         hidden_act = config.hidden_act
         if hidden_act != "silu":
             raise ValueError(f"Unsupported activation: {hidden_act}. Only silu is supported for now.")
-        hidden_size = config.hidden_size
-        if not isinstance(hidden_size, int) or isinstance(hidden_size, bool) or hidden_size <= 0:
-            raise ShimUnavailableError("xpool Qwen3-MoE shim requires positive integer config field hidden_size")
         FfnShimModule.__init__(
             self,
             layer_id=layer_id,
-            hidden_size=hidden_size,
+            hidden_size=config.hidden_size,
             layer_kind=LayerKind.MOE,
         )
 

@@ -9,14 +9,14 @@ from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseCo
 from sglang.srt.runtime_context import get_context
 from torch import nn
 
-from tests.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner, ServerArgs, server_args
-from tests.harness.support.sglang.plugin import binding
-from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.fabric import InstanceFfnLayerProfile
 from xpool.integrations.sglang.adapter import SglangInstanceRankBinding
 from xpool.integrations.sglang.hooks.lifecycle import derive_instance_ffn_profile
 from xpool.integrations.sglang.shim import FfnShimModule
 from xpool.native.ffn import LayerKind
+from xtest.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner, ServerArgs, server_args
+from xtest.harness.support.sglang.plugin import binding
+from xtest.harness.support.sglang.runtime import published_sglang_config
 
 pytestmark = pytest.mark.usefixtures(published_sglang_config.__name__)
 
@@ -145,7 +145,6 @@ def workload_inputs(
     )
     model_binding = replace(
         binding(),
-        instance_id=model_path.name,
         model_path=model_path,
     )
     return runner, model_binding

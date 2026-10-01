@@ -12,16 +12,17 @@ import pytest
 
 import xpool.devkit.transport_observer
 import xpool.native
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.runtime.atnagent import transport_entry
-from xpool.config import XpoolConfig
 from xpool.devkit.transport_observer import write_transport_snapshot
+from xpool.model import ModelId
 from xpool.native import ABI_VERSION
 from xpool.native.ffn import DpRowLayout, ForwardMode, OutputRequirement, ResultCode
 from xpool.runtime.atnagent import AtnAgentTransportArenaState, AtnAgentTransportRuntime
 from xpool.service.client import XpoolClient
 from xpool.service.wire import ProcessRef
 from xpool.transport import TransportArenaHandle
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
+from xtest.harness.support.devkit import observer_enabled_config
+from xtest.harness.support.runtime.atnagent import transport_entry
 
 production_quiesce = AtnAgentTransportRuntime.quiesce
 
@@ -83,10 +84,10 @@ def atnagent_snapshot(*records: SimpleNamespace) -> SimpleNamespace:
 def test_write_transport_snapshot_serializes_structured_records(tmp_path: Path) -> None:
     """Observer output derives semantic values and phases from one mailbox trace."""
 
-    install_test_config(config=transport_observer_config(tmp_path))
+    install_test_config(config=observer_enabled_config("transport_observer", tmp_path))
     path = write_transport_snapshot(
         site="instance",
-        instance_id="model/0",
+        model_id=TEST_MODEL_ID,
         rank=0,
         handle=TransportArenaHandle("00" * 64),
         snapshot=trace_snapshot(trace_record()),
@@ -126,10 +127,10 @@ def test_write_transport_snapshot_classifies_closed_record(tmp_path: Path) -> No
         result_acknowledged=0,
         closed=110,
     )
-    install_test_config(config=transport_observer_config(tmp_path))
+    install_test_config(config=observer_enabled_config("transport_observer", tmp_path))
     path = write_transport_snapshot(
         site="instance",
-        instance_id="model/0",
+        model_id=TEST_MODEL_ID,
         rank=0,
         handle=TransportArenaHandle("00" * 64),
         snapshot=trace_snapshot(record),
@@ -145,16 +146,39 @@ def test_write_transport_snapshot_classifies_closed_record(tmp_path: Path) -> No
     assert payload["records"][0]["durations_ns"]["closed_total"] == 10
 
 
+def test_transport_snapshots_preserve_distinct_model_identities(tmp_path: Path) -> None:
+    install_test_config(config=observer_enabled_config("transport_observer", tmp_path))
+    model_ids = (ModelId("a-/b"), ModelId("a/-b"))
+    paths = tuple(
+        write_transport_snapshot(
+            site="atnagent",
+            model_id=model_id,
+            rank=0,
+            handle=TransportArenaHandle("00" * 64),
+            snapshot=trace_snapshot(trace_record()),
+        )
+        for model_id in model_ids
+    )
+
+    assert len(set(paths)) == 2
+    assert tuple(json.loads(path.read_bytes())["model_id"] for path in paths) == tuple(map(str, model_ids))
+    assert len(list(tmp_path.glob("xpool.transport-observer.*.json"))) == 2
+
+
 def test_install_records_snapshot_after_production_quiesce(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Installed observer reads a snapshot after Resident drain and before destroy."""
 
-    calls: list[str] = []
+    calls: list[ModelId] = []
 
     def fake_quiesce(owner: AtnAgentTransportRuntime) -> None:
-        calls.extend(resource.instance_id for resource in owner.resources)
+        calls.extend(resource.model_id for resource in owner.resources)
+
+    def read_after_quiesce() -> object:
+        assert calls == [TEST_MODEL_ID]
+        return atnagent_snapshot()
 
     monkeypatch.setattr(AtnAgentTransportRuntime, "quiesce", fake_quiesce)
     monkeypatch.setattr(
@@ -165,14 +189,14 @@ def test_install_records_snapshot_after_production_quiesce(
     monkeypatch.setattr(
         xpool.devkit.transport_observer.xpool.native.devkit.transport_observer,
         "read",
-        lambda: atnagent_snapshot(),
+        read_after_quiesce,
     )
-    install_test_config(config=transport_observer_config(tmp_path))
+    install_test_config(config=observer_enabled_config("transport_observer", tmp_path))
     xpool.devkit.transport_observer.install()
-    runtime = create_transport_runtime(transport_entry(instance_id="m", rank=0, handle_rank=1))
+    runtime = create_transport_runtime(transport_entry(model_id=TEST_MODEL_ID, rank=0, handle_rank=1))
 
     assert runtime.quiesce() is None
-    assert calls == ["m"]
+    assert calls == [TEST_MODEL_ID]
     assert len(list(tmp_path.glob("xpool.transport-observer.*.json"))) == 1
 
 
@@ -183,11 +207,11 @@ def test_snapshot_write_failure_warns_without_blocking_quiesce(
 ) -> None:
     """Observer I/O failure does not turn successful native quiesce into failure."""
 
-    quiesced: list[str] = []
+    quiesced: list[ModelId] = []
     monkeypatch.setattr(
         AtnAgentTransportRuntime,
         "quiesce",
-        lambda owner: quiesced.extend(resource.instance_id for resource in owner.resources),
+        lambda owner: quiesced.extend(resource.model_id for resource in owner.resources),
     )
     monkeypatch.setattr(
         xpool.devkit.transport_observer,
@@ -204,15 +228,15 @@ def test_snapshot_write_failure_warns_without_blocking_quiesce(
         raise OSError("disk full")
 
     monkeypatch.setattr(xpool.devkit.transport_observer, "write_transport_snapshot", fail_write)
-    install_test_config(config=transport_observer_config(tmp_path))
+    install_test_config(config=observer_enabled_config("transport_observer", tmp_path))
     xpool.devkit.transport_observer.install()
-    runtime = create_transport_runtime(transport_entry(instance_id="m", rank=0, handle_rank=1))
+    runtime = create_transport_runtime(transport_entry(model_id=TEST_MODEL_ID, rank=0, handle_rank=1))
 
     with caplog.at_level("WARNING", logger="xpool.devkit.transport_observer"):
         assert runtime.quiesce() is None
 
     assert "failed to record xpool transport observer snapshot" in caplog.text
-    assert quiesced == ["m"]
+    assert quiesced == [TEST_MODEL_ID]
 
 
 def test_native_quiesce_failure_prevents_snapshot_read(
@@ -236,9 +260,9 @@ def test_native_quiesce_failure_prevents_snapshot_read(
         "read",
         lambda: reads.append("read") or atnagent_snapshot(),
     )
-    install_test_config(config=transport_observer_config(tmp_path))
+    install_test_config(config=observer_enabled_config("transport_observer", tmp_path))
     xpool.devkit.transport_observer.install()
-    runtime = create_transport_runtime(transport_entry(instance_id="m", rank=0, handle_rank=1))
+    runtime = create_transport_runtime(transport_entry(model_id=TEST_MODEL_ID, rank=0, handle_rank=1))
 
     with pytest.raises(RuntimeError, match="native quiesce failed"):
         runtime.quiesce()
@@ -255,22 +279,5 @@ def create_transport_runtime(*resources: AtnAgentTransportArenaState) -> AtnAgen
         local_rank=0,
         publisher=ProcessRef(abi_version=ABI_VERSION, pid=1),
     )
-    runtime.entries = {resource.instance_id: resource for resource in resources}
+    runtime.entries = {resource.model_id: resource for resource in resources}
     return runtime
-
-
-def transport_observer_config(outdir: Path) -> XpoolConfig:
-    """Return a config with native transport observation enabled."""
-
-    return XpoolConfig.from_mapping(
-        {
-            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
-            "atn": {"devices": [0]},
-            "ffn": {"devices": [1]},
-            "models": [{"id": "m", "path": "/models/m"}],
-        },
-        env={
-            "XPOOL_DEBUG_TRANSPORT_OBSERVER_ENABLE": "1",
-            "XPOOL_DEBUG_TRANSPORT_OBSERVER_OUTDIR": str(outdir),
-        },
-    )

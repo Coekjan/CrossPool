@@ -4,8 +4,8 @@ import argparse
 
 import pytest
 
-from tests.harness.support.config import synthetic_config
 from xpool.cli.subcommands import memory_profile
+from xtest.harness.support.config import synthetic_config
 
 
 def test_memory_profile_command_publishes_only_completed_profile(monkeypatch: pytest.MonkeyPatch) -> None:

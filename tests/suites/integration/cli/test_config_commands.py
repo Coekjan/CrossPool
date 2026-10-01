@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from tests.harness.support.config import reset_global_config
 from xpool.cli import main
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -97,7 +97,7 @@ def test_missing_config_path_returns_cli_error(monkeypatch, capsys) -> None:
     ("failure", "expected_message"),
     [
         ("missing", "No such file"),
-        ("malformed", None),
+        ("malformed", "line 1"),
         ("schema", "overlapping devices"),
     ],
 )
@@ -105,16 +105,16 @@ def test_config_dump_reports_configuration_errors_without_traceback(
     tmp_path,
     capsys,
     failure: str,
-    expected_message: str | None,
+    expected_message: str,
 ) -> None:
     config_path = tmp_path / f"{failure}.toml"
     if failure == "malformed":
         config_path.write_text("[daemon\n", encoding="utf-8")
     elif failure == "schema":
         config_path.write_text(
-            """
+            f"""
 [scheduler]
-slo = { ttft_ms = 1000, tbt_ms = 50 }
+slo = {{ ttft_ms = 1000, tbt_ms = 50 }}
 
 [atn]
 devices = [0]
@@ -123,7 +123,7 @@ devices = [0]
 devices = [0]
 
 [[models]]
-id = "m"
+id = "{TEST_MODEL_ID}"
 path = "/models/m"
 """.strip(),
             encoding="utf-8",
@@ -133,6 +133,5 @@ path = "/models/m"
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    if expected_message is not None:
-        assert expected_message in captured.err
+    assert expected_message in captured.err
     assert "Traceback" not in captured.err

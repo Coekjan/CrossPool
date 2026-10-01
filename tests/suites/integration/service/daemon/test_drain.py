@@ -6,8 +6,11 @@ from http import HTTPStatus
 import pytest
 
 import xpool.service.daemon.control
-from tests.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
-from tests.harness.support.service.daemon import (
+from xpool.config import XpoolConfig
+from xpool.fabric import FabricPlan
+from xpool.native import ABI_VERSION
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
+from xtest.harness.support.service.daemon import (
     FakeMonotonicClock,
     ProcUniqId,
     activate_fabric_world,
@@ -26,9 +29,6 @@ from tests.harness.support.service.daemon import (
     start_sleeping_proc,
     stop_proc,
 )
-from xpool.config import XpoolConfig
-from xpool.fabric import FabricPlan
-from xpool.native import ABI_VERSION
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
 
@@ -59,7 +59,7 @@ def test_daemon_quiesce_atnagent_transport_leases_blocks_new_acquires_and_termin
             app,
             "POST",
             atnagent_transport_arenas_path(0),
-            json=atnagent_transport_arenas((TEST_MODEL_ID, 0), publisher=atnagent),
+            json=atnagent_transport_arenas((str(TEST_MODEL_ID), 0), publisher=atnagent),
         ).status_code
         == HTTPStatus.NO_CONTENT
     )
@@ -67,7 +67,7 @@ def test_daemon_quiesce_atnagent_transport_leases_blocks_new_acquires_and_termin
         request(
             app,
             "POST",
-            instance_transport_arena_acquire_path(TEST_MODEL_ID, 0),
+            instance_transport_arena_acquire_path(str(TEST_MODEL_ID), 0),
             json=process_ref(registration),
         ).status_code
         == HTTPStatus.OK
@@ -85,7 +85,7 @@ def test_daemon_quiesce_atnagent_transport_leases_blocks_new_acquires_and_termin
         app,
         "POST",
         atnagent_transport_arenas_path(0),
-        json=atnagent_transport_arenas((TEST_MODEL_ID, 0), publisher=atnagent),
+        json=atnagent_transport_arenas((str(TEST_MODEL_ID), 0), publisher=atnagent),
     )
     request(
         app,
@@ -96,7 +96,7 @@ def test_daemon_quiesce_atnagent_transport_leases_blocks_new_acquires_and_termin
     response = request(
         app,
         "POST",
-        instance_transport_arena_acquire_path(TEST_MODEL_ID, 0),
+        instance_transport_arena_acquire_path(str(TEST_MODEL_ID), 0),
         json=process_ref(registration),
     )
 
@@ -105,7 +105,7 @@ def test_daemon_quiesce_atnagent_transport_leases_blocks_new_acquires_and_termin
         {
             "pid": registration["pid"],
             "abi_version": registration["abi_version"],
-            "instance_id": TEST_MODEL_ID,
+            "model_id": str(TEST_MODEL_ID),
             "rank": 0,
         }
     ]
@@ -131,14 +131,14 @@ def test_daemon_lease_quiesce_terminates_all_live_owners_concurrently(
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
             "models": [
-                {"id": "a", "path": "/models/a"},
-                {"id": "b", "path": "/models/b"},
+                {"id": "test/a", "path": "/models/a"},
+                {"id": "test/b", "path": "/models/b"},
             ],
         }
     )
     app = create_app(config)
     atnagent = atnagent_registration(cuda_device=0)
-    ffnagent = ffnagent_registration(model_ids=("a", "b"))
+    ffnagent = ffnagent_registration(model_ids=("test/a", "test/b"))
     owner_processes = [start_sleeping_proc(), start_sleeping_proc()]
     owner_ids = {owner_id.pid for owner, owner_id in owner_processes}
     owner_barrier = threading.Barrier(len(owner_processes))
@@ -155,13 +155,13 @@ def test_daemon_lease_quiesce_terminates_all_live_owners_concurrently(
     try:
         assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
         assert request(app, "POST", "/ffnagent/register", json=ffnagent).status_code == HTTPStatus.NO_CONTENT
-        for instance_id, (owner, owner_id) in zip(("a", "b"), owner_processes, strict=True):
-            registration = instance_registration(instance_id=instance_id, pid=owner_id.pid)
+        for model_id, (owner, owner_id) in zip(("test/a", "test/b"), owner_processes, strict=True):
+            registration = instance_registration(model_id=model_id, pid=owner_id.pid)
             assert request(app, "POST", "/instance/register", json=registration).status_code == HTTPStatus.NO_CONTENT
         plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
         activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
 
-        bindings = atnagent_transport_arena_bindings(("a", 0), ("b", 0))
+        bindings = atnagent_transport_arena_bindings(("test/a", 0), ("test/b", 0))
         bindings[1]["handle"] = {"handle": "01" * 64}
         assert (
             request(
@@ -172,12 +172,12 @@ def test_daemon_lease_quiesce_terminates_all_live_owners_concurrently(
             ).status_code
             == HTTPStatus.NO_CONTENT
         )
-        for instance_id, (owner, owner_id) in zip(("a", "b"), owner_processes, strict=True):
+        for model_id, (owner, owner_id) in zip(("test/a", "test/b"), owner_processes, strict=True):
             assert (
                 request(
                     app,
                     "POST",
-                    instance_transport_arena_acquire_path(instance_id, 0),
+                    instance_transport_arena_acquire_path(model_id, 0),
                     json={"pid": owner_id.pid, "abi_version": ABI_VERSION},
                 ).status_code
                 == HTTPStatus.OK
@@ -222,7 +222,7 @@ def test_daemon_allows_stale_atnagent_to_quiesce_transport_leases(
             app,
             "POST",
             atnagent_transport_arenas_path(0),
-            json=atnagent_transport_arenas((TEST_MODEL_ID, 0), publisher=atnagent),
+            json=atnagent_transport_arenas((str(TEST_MODEL_ID), 0), publisher=atnagent),
         ).status_code
         == HTTPStatus.NO_CONTENT
     )
@@ -230,7 +230,7 @@ def test_daemon_allows_stale_atnagent_to_quiesce_transport_leases(
         request(
             app,
             "POST",
-            instance_transport_arena_acquire_path(TEST_MODEL_ID, 0),
+            instance_transport_arena_acquire_path(str(TEST_MODEL_ID), 0),
             json=process_ref(registration),
         ).status_code
         == HTTPStatus.OK
@@ -255,7 +255,7 @@ def test_daemon_allows_stale_atnagent_to_quiesce_transport_leases(
         {
             "pid": registration["pid"],
             "abi_version": registration["abi_version"],
-            "instance_id": TEST_MODEL_ID,
+            "model_id": str(TEST_MODEL_ID),
             "rank": 0,
         }
     ]

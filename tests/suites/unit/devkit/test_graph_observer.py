@@ -9,11 +9,11 @@ import cuda.bindings.runtime  # ty: ignore[unresolved-import]
 import pytest
 
 import xpool.native
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.devkit import observer_enabled_config
 from xpool.devkit import graph_observer
 from xpool.fabric import FabricGenerationId
 from xpool.runtime.ffnagent.agent import FfnAgent
+from xtest.harness.support.config import install_test_config, reset_global_config
+from xtest.harness.support.devkit import observer_enabled_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 

@@ -78,12 +78,16 @@ class FabricMembership:
         instance_plans: list[FabricInstancePlan] = []
         instance_owners: list[tuple[InstanceRankId, ProcUniqId]] = []
         for instance in config.instances:
-            rank_zero = instance_by_rank.get(InstanceRankId(instance_id=instance.id, rank=0))
+            rank_zero = instance_by_rank.get(InstanceRankId(model_id=instance.model_id, rank=0))
             if rank_zero is None:
                 return None
-            rank_count = rank_zero.transport.atn_tp_size * rank_zero.transport.atn_dp_size
+            model = config.model_by_id[instance.model_id]
+            atn_tp_size = config.atn_tp_size_of(instance.model_id)
+            atn_dp_size = model.atn_dp_size
+            rank_count = config.atn_world_size
             ranks = tuple(
-                instance_by_rank.get(InstanceRankId(instance_id=instance.id, rank=rank)) for rank in range(rank_count)
+                instance_by_rank.get(InstanceRankId(model_id=instance.model_id, rank=rank))
+                for rank in range(rank_count)
             )
             if any(registration is None for registration in ranks):
                 return None
@@ -91,8 +95,6 @@ class FabricMembership:
             ffn_profile = complete_ranks[0].ffn_profile
             if any(registration.ffn_profile != ffn_profile for registration in complete_ranks[1:]):
                 raise XpoolDaemonError("conflict", "FFN ffn_profile disagrees across instance ranks")
-            atn_tp_size = complete_ranks[0].transport.atn_tp_size
-            atn_dp_size = complete_ranks[0].transport.atn_dp_size
             for dp_rank in range(atn_dp_size):
                 capacity_group = tuple(
                     registration for registration in complete_ranks if registration.transport.atn_dp_rank == dp_rank
@@ -111,7 +113,7 @@ class FabricMembership:
                 raise XpoolDaemonError("conflict", "instance ranks do not cover each TP-fastest coordinate once")
             instance_plans.append(
                 FabricInstancePlan(
-                    instance_id=instance.id,
+                    model_id=instance.model_id,
                     ffn_profile=ffn_profile,
                     instance_rank_topology=InstanceRankTopology(
                         atn_tp_size=atn_tp_size,

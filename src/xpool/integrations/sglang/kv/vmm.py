@@ -5,8 +5,8 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 
-import cuda.bindings.driver as driver  # ty: ignore[unresolved-import]
 import torch
+from cuda.bindings import driver  # ty: ignore[unresolved-import]
 from sglang.srt.mem_cache.memory_pool import KvBufferDesc
 from sglang.srt.utils.cuda_vmm_utils import (
     check_drv,

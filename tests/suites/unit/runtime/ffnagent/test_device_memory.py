@@ -5,9 +5,6 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.native.sizing import install_native_allocation_sizing
-from tests.harness.support.service.daemon import ffn_model_spec, ffn_profile
 from xpool.config import XpoolConfig
 from xpool.fabric import (
     FabricGenerationId,
@@ -25,6 +22,9 @@ from xpool.memory import MIB, SIGNED_INT64_MAX, FfnMemoryCalibrationCoefficients
 from xpool.runtime.ffnagent import device_memory, execution
 from xpool.runtime.ffnagent.memory_profile import corpus
 from xpool.service.daemon.ffn_placement import place_ffn_models
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
+from xtest.harness.support.native.sizing import install_native_allocation_sizing
+from xtest.harness.support.service.daemon import ffn_model_spec, ffn_profile
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -42,14 +42,14 @@ def estimator_and_plan() -> tuple[device_memory.DeviceMemoryEstimator, FabricPla
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1, 2]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     install_test_config(config)
-    spec = FfnModelSpec.model_validate(ffn_model_spec(model_id="m"))
+    spec = FfnModelSpec.model_validate(ffn_model_spec(model_id=str(TEST_MODEL_ID)))
     profile = InstanceFfnProfile.model_validate(ffn_profile())
     instance_plan = FabricInstancePlan(
-        instance_id="m",
+        model_id=TEST_MODEL_ID,
         ffn_profile=profile,
         instance_rank_topology=InstanceRankTopology(atn_tp_size=1, atn_dp_size=1, atnagent_indices=(0,)),
     )

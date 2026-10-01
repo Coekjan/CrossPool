@@ -28,8 +28,6 @@ from sglang.srt.runtime_context import get_context, get_parallel
 
 import xpool.integrations.sglang.hooks.kv
 import xpool.native
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.config import LatencySloConfig, XpoolConfig
 from xpool.integrations.sglang.hooks.kv import (
     CapacityRequestReceiver,
@@ -49,6 +47,8 @@ from xpool.integrations.sglang.kv.capacity import CapacityReconciler
 from xpool.integrations.sglang.kv.radix import evict_suffix_reclaim_nodes, select_suffix_reclaim_nodes
 from xpool.integrations.sglang.kv.vmm import KvVmmBacking
 from xpool.runtime.instance import InstanceRankRuntime
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
+from xtest.harness.support.sglang.runtime import published_sglang_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, published_sglang_config.__name__)
 
@@ -60,7 +60,7 @@ def test_reservation_budget_uses_static_device_envelope(monkeypatch: pytest.Monk
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0], "device_memory_utilization": 0.75},
                 "ffn": {"devices": [1]},
-                "models": [{"id": "m", "path": "/models/m"}],
+                "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
             }
         )
     )
@@ -104,7 +104,7 @@ def test_pinned_sglang_kv_seams_match() -> None:
 
 
 def test_capacity_request_receiver_forwards_local_requests() -> None:
-    local_requests = cast(list[AbortReq], [object()])
+    local_requests = [AbortReq(rid="test-request")]
     receiver = SimpleNamespace(recv_requests=lambda *, local_reqs: local_reqs)
     wrapped = CapacityRequestReceiver(
         cast(SchedulerRequestReceiver, receiver),
@@ -261,7 +261,7 @@ def test_pool_accounting_treats_withheld_suffix_as_free() -> None:
     )
     observer = cast(
         SchedulerPoolStatsObserver,
-        SimpleNamespace(token_to_kv_pool_allocator=allocator, max_total_num_tokens=6),
+        SimpleNamespace(token_to_kv_pool_allocator=allocator, max_total_num_tokens=10),
     )
 
     adjusted = after_pool_stats(stats, observer)
@@ -275,14 +275,14 @@ def test_pool_accounting_treats_withheld_suffix_as_free() -> None:
         check,
         cast(
             SchedulerInvariantChecker,
-            SimpleNamespace(token_to_kv_pool_allocator=allocator, max_total_num_tokens=6),
+            SimpleNamespace(token_to_kv_pool_allocator=allocator, max_total_num_tokens=10),
         ),
         stats,
     )
 
     assert adjusted.full_num_used == 1
-    assert adjusted.full_token_usage == pytest.approx(1 / 6)
-    assert seen[0].full_available_size == 3
+    assert adjusted.full_token_usage == pytest.approx(1 / 10)
+    assert seen[0].full_available_size == 7
 
 
 def test_authoritative_admission_failures_publish_quantified_demand(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -342,6 +342,10 @@ def test_authoritative_admission_failures_publish_quantified_demand(monkeypatch:
             False,
             None,
         )
+        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request])))
+        assert [
+            (demand.evaluated_sequence, demand.requested_bundles, demand.deadline_monotonic_ns) for demand in published
+        ] == [(1, 4, 11_000_000_000)]
         batch = cast(
             ScheduleBatch,
             SimpleNamespace(
@@ -351,13 +355,15 @@ def test_authoritative_admission_failures_publish_quantified_demand(monkeypatch:
             ),
         )
         after_check_decode_mem(False, batch, selected_indices=[0])
+        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request])))
+        assert len(published) == 1
         after_check_decode_mem(False, batch)
         reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request])))
 
     assert result is AddReqResult.NO_TOKEN
     assert [
         (demand.evaluated_sequence, demand.requested_bundles, demand.deadline_monotonic_ns) for demand in published
-    ] == [(1, 3, 10_550_000_000)]
+    ] == [(1, 4, 11_000_000_000), (1, 3, 10_550_000_000)]
 
 
 def test_drain_stops_new_prefill_admission() -> None:
@@ -392,10 +398,10 @@ def test_decode_retraction_preserves_all_ordinary_requests_below_ceiling(
     allocator = ElasticTokenToKVPoolAllocator(2, torch.float16, "cpu", cast(KVCache, object()), False)
     allocator.set_token_capacity(1)
     requests = [SimpleNamespace(beam_group=None), SimpleNamespace(beam_group=None)]
-    retracted: list[object] = []
+    retracted: list[Req] = []
 
-    def retract(**kwargs: object) -> None:
-        retracted.extend(cast(list[object], kwargs["reqs"]))
+    def retract(*, reqs: list[Req], **kwargs: object) -> None:
+        retracted.extend(reqs)
 
     monkeypatch.setattr(xpool.integrations.sglang.hooks.kv, "retract_all", retract)
     monkeypatch.setattr(ScheduleBatch, "_get_decode_retraction_order", staticmethod(lambda reqs: [0, 1]))

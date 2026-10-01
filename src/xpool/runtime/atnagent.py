@@ -12,6 +12,7 @@ import torch
 import xpool.native
 from xpool.config import get_global_config
 from xpool.fabric import FabricGenerationPhase, FabricParticipantPhase
+from xpool.model import ModelId
 from xpool.native import ABI_VERSION, RuntimeRole
 from xpool.runtime.agent import AGENT_SHUTDOWN_POLL_INTERVAL_S, Agent, AgentError, AgentHeartbeat
 from xpool.service.client import XpoolClient, XpoolClientError
@@ -38,13 +39,13 @@ class AtnAgentTransportArenaState:
     """One native arena and its current daemon publication state.
 
     Attributes:
-        instance_id: Configured instance consuming this rank-local arena.
+        model_id: Model ID of the Instance consuming this rank-local arena.
         registration: Latest matching instance registration and geometry.
         handle: Native CUDA IPC arena handle owned by this process.
         published_epoch: AtnAgent registration epoch that accepted this handle.
     """
 
-    instance_id: str
+    model_id: ModelId
     registration: InstanceRankRegistration
     handle: TransportArenaHandle
     published_epoch: int | None = None
@@ -53,7 +54,7 @@ class AtnAgentTransportArenaState:
         """Return this entry's daemon publication value."""
 
         return AtnAgentTransportArenaBinding(
-            instance_id=self.instance_id,
+            model_id=self.model_id,
             rank=self.registration.rank,
             handle=self.handle,
         )
@@ -63,7 +64,7 @@ class AtnAgentTransportArenaState:
 
         if self.registration.transport != registration.transport:
             raise AgentError(
-                f"transport attributes changed for instance {self.instance_id} rank "
+                f"transport attributes changed for instance {self.model_id} rank "
                 f"{self.registration.rank}; runtime hot resize is unsupported"
             )
         self.registration = registration
@@ -86,7 +87,7 @@ class AtnAgentTransportRuntime:
         self.cuda_device = cuda_device
         self.local_rank = local_rank
         self.publisher = publisher
-        self.entries: dict[str, AtnAgentTransportArenaState] = {}
+        self.entries: dict[ModelId, AtnAgentTransportArenaState] = {}
         self.publication_deadline: float | None = None
 
     @property
@@ -101,13 +102,13 @@ class AtnAgentTransportRuntime:
 
         return any(entry.published_epoch is not None for entry in self.entries.values())
 
-    def local_registrations(self, instance_ranks: Mapping[str, int]) -> dict[str, InstanceRankRegistration]:
+    def local_registrations(self, instance_ranks: Mapping[ModelId, int]) -> dict[ModelId, InstanceRankRegistration]:
         """Return registrations assigned to this AtnAgent by the Fabric Plan."""
 
         return {
-            registration.instance_id: registration
+            registration.model_id: registration
             for registration in self.client.list_instances()
-            if registration.rank == instance_ranks.get(registration.instance_id)
+            if registration.rank == instance_ranks.get(registration.model_id)
         }
 
     def retry_or_raise(self, error: Exception) -> bool:
@@ -120,7 +121,7 @@ class AtnAgentTransportRuntime:
         logger.debug("waiting to publish transport arenas: %s", error)
         return False
 
-    def prepare(self, registration_epoch: int, instance_ranks: Mapping[str, int]) -> bool:
+    def prepare(self, registration_epoch: int, instance_ranks: Mapping[ModelId, int]) -> bool:
         """Create and publish every currently registered local instance arena.
 
         Args:
@@ -144,16 +145,16 @@ class AtnAgentTransportRuntime:
                 raise AgentError(f"atnagent instance-list reconcile failed: {error}") from error
             return self.retry_or_raise(error)
 
-        for instance_id, entry in self.entries.items():
-            registration = registrations.get(instance_id)
+        for model_id, entry in self.entries.items():
+            registration = registrations.get(model_id)
             if registration is not None:
                 entry.accept_registration(registration)
 
         created: list[AtnAgentTransportArenaState] = []
         try:
             for instance_index, instance in enumerate(get_global_config().instances):
-                registration = registrations.get(instance.id)
-                if registration is None or instance.id in self.entries:
+                registration = registrations.get(instance.model_id)
+                if registration is None or instance.model_id in self.entries:
                     continue
                 handle = TransportArenaHandle(
                     handle=xpool.native.transport.create_arena(
@@ -170,7 +171,7 @@ class AtnAgentTransportRuntime:
                 )
                 created.append(
                     AtnAgentTransportArenaState(
-                        instance_id=instance.id,
+                        model_id=instance.model_id,
                         registration=registration,
                         handle=handle,
                     )
@@ -185,11 +186,11 @@ class AtnAgentTransportRuntime:
                 ) from error
             raise AgentError(f"failed to create transport arenas for CUDA device {self.cuda_device}") from error
 
-        self.entries.update((entry.instance_id, entry) for entry in created)
+        self.entries.update((entry.model_id, entry) for entry in created)
         publishable = [
             entry
             for entry in self.entries.values()
-            if entry.instance_id in registrations and entry.published_epoch != registration_epoch
+            if entry.model_id in registrations and entry.published_epoch != registration_epoch
         ]
         if publishable:
             try:
@@ -217,7 +218,7 @@ class AtnAgentTransportRuntime:
                     "waiting for local instance registrations device=%s rank=%s missing=%s",
                     self.cuda_device,
                     self.local_rank,
-                    ", ".join(sorted(missing)),
+                    ", ".join(str(model_id) for model_id in sorted(missing)),
                 )
         return complete
 
@@ -262,7 +263,7 @@ class AtnAgentTransportRuntime:
             logger.debug(
                 "waiting for transport arena leases rank=%s in_use=%s",
                 self.local_rank,
-                ", ".join(f"{entry.instance_id}:{entry.rank}" for entry in response.in_use),
+                ", ".join(f"{entry.model_id}:{entry.rank}" for entry in response.in_use),
             )
             time.sleep(AGENT_SHUTDOWN_POLL_INTERVAL_S)
         raise AgentError("timed out quiescing transport leases; native arenas remain allocated")
@@ -357,7 +358,7 @@ class AtnAgent(Agent):
         if self.fabric_plan is None:
             raise AgentError("AtnAgent cannot prepare transport before receiving a Fabric Plan")
         instance_ranks = {
-            instance_plan.instance_id: rank
+            instance_plan.model_id: rank
             for instance_plan in self.fabric_plan.instance_plans
             for rank, atnagent_index in enumerate(instance_plan.instance_rank_topology.atnagent_indices)
             if atnagent_index == self.local_rank

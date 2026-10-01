@@ -17,14 +17,24 @@ phrase as two title-cased words; never hyphenate it or lowercase its second
 word. Executable identifiers may use `kv_cache` or `kv`.
 
 **Instance**:
-A configured model-serving deployment whose SGLang workers share one identity
-and one Fabric Instance Plan.
+A configured model-serving deployment whose workers share the deployed model's
+Model ID and one Fabric Instance Plan.
 _Avoid_: InstanceRankRuntime, model process
+
+**Model ID**:
+The `namespace/name` identity of one model, preserving its spelling independently
+of its local checkpoint path or particular serving deployment.
+_Avoid_: Checkpoint path, model directory
 
 **Instance Rank**:
 One SGLang worker process within an Instance, owning rank-local attention
 execution and one Transport attachment.
 _Avoid_: InstanceRankRuntime rank, Instance process
+
+**Attention World**:
+The complete attention-side rank set backed by the shared AtnAgent Fleet. Each
+Instance covers this World through attention DP groups of attention TP ranks.
+_Avoid_: Attention TP width, per-model rank subset
 
 **Prefill Context Parallelism**:
 The SGLang execution mode that partitions Prefill token rows among attention
@@ -90,7 +100,7 @@ coordination, and physical completion observations.
 _Avoid_: KV Capacity Channel, AtnAgent channel, TP-group channel, KV data channel
 
 **KV Capacity Group**:
-The Instance ranks for one `(instance_id, atn_dp_rank)` that share a logical KV
+The Instance ranks for one `(model_id, atn_dp_rank)` that share a logical KV
 capacity target across their tensor-parallel shards.
 _Avoid_: TP pool, KV allocation group
 

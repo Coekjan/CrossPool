@@ -10,10 +10,10 @@ import safetensors
 import torch
 
 import xpool.native
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.devkit import observer_enabled_config
 from xpool.devkit.ffn_routing_observer import write_routing_snapshot
 from xpool.fabric import FabricGenerationId
+from xtest.harness.support.config import install_test_config, reset_global_config
+from xtest.harness.support.devkit import observer_enabled_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 

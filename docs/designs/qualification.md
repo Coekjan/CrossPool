@@ -25,6 +25,8 @@ combined Decode Full plus Prefill Breakable mode's first-prefill logits with
 full-distribution forward KL while the Graph Observer proves that Breakable
 execution actually occurred. Prefill token identity is diagnostic, not a
 correctness requirement.
+The two nonempty `[1, V]` logits tensors must have identical shapes before KL;
+different vocabulary widths fail qualification rather than broadcasting.
 
 Routine serving E2E proves installed HTTP completion, graph-mode startup and
 observed Graph structure, and Transport and Fabric behavior with Qwen3-0.6B

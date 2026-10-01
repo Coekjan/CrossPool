@@ -66,5 +66,5 @@ def configure(role: RuntimeRole) -> None:
     handler.name = HANDLER_NAME
     handler.setFormatter(ConsoleFormatter(role, color=config.color))
     runtime_logger.addHandler(handler)
-    runtime_logger.setLevel(getattr(logging, config.level.upper()))
+    runtime_logger.setLevel(config.level.upper())
     runtime_logger.propagate = False

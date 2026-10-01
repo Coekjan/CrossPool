@@ -9,6 +9,7 @@ import triton
 from triton import language
 
 from xpool import ffn
+from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent import architecture, weights
 
@@ -153,15 +154,16 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
         # Retain FP32 operands like the pinned gate, without capture-time storage allocation.
         copy_router_input(hidden_states, router_input)
         torch.mm(router_input, router_weights.weight.t(), out=logits)
-        typing.cast(typing.Callable[..., None], biased_sigmoid_topk_kernel[(row_capacity,)])(
+        # Triton launch metadata exceeds the constexpr-annotated kernel signature.
+        typing.cast(typing.Callable[..., object], biased_sigmoid_topk_kernel[(row_capacity,)])(
             logits,
             correction_bias,
             routed_ids,
             routed_weights,
-            EXPERT_COUNT=typing.cast(language.constexpr, routed_expert_count),
-            TOPK=typing.cast(language.constexpr, routed_topk),
-            EXPERT_BLOCK_SIZE=typing.cast(language.constexpr, triton.next_power_of_2(routed_expert_count)),
-            TOPK_BLOCK_SIZE=typing.cast(language.constexpr, triton.next_power_of_2(routed_topk)),
+            EXPERT_COUNT=routed_expert_count,
+            TOPK=routed_topk,
+            EXPERT_BLOCK_SIZE=triton.next_power_of_2(routed_expert_count),
+            TOPK_BLOCK_SIZE=triton.next_power_of_2(routed_topk),
             num_warps=2,
         )
 
@@ -169,7 +171,7 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
     def compile(
         cls,
         *,
-        model_id: str,
+        model_id: ModelId,
         model_config: architecture.FfnSourceConfig,
     ) -> ffn.FfnModelSpec:
         """Compile GLM main layers and corrected-sigmoid routing semantics."""

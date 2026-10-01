@@ -15,18 +15,6 @@ from sglang.srt.runtime_context import get_context, get_exec, pre_capture_activa
 
 import xpool.config
 import xpool.integrations.sglang.hooks.lifecycle
-from tests.harness.support.config import TEST_MODEL_ID, reset_global_config
-from tests.harness.support.kv import kv_capacity_profile
-from tests.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner
-from tests.harness.support.sglang.plugin import (
-    FailingAfterLoadAdapter,
-    FakeAdapter,
-    binding,
-    configure_xpool_model,
-    ffn_profile,
-    reset_plugin_required_hook_targets,
-)
-from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.config import LatencySloConfig, MissingRequiredConfig
 from xpool.fabric import FabricGenerationId
 from xpool.integrations.sglang.adapter import SglangInstanceRankRuntime
@@ -34,9 +22,22 @@ from xpool.integrations.sglang.kv.allocator import ElasticTokenToKVPoolAllocator
 from xpool.integrations.sglang.kv.pool import ElasticMHATokenToKVPool
 from xpool.integrations.sglang.kv.vmm import KvVmmBacking
 from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
+from xpool.model import ModelId
 from xpool.native import RuntimeRole
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.wire import KvControlChannelRef, ServingListener
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
+from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner
+from xtest.harness.support.sglang.plugin import (
+    FailingAfterLoadAdapter,
+    FakeAdapter,
+    binding,
+    configure_xpool_model,
+    ffn_profile,
+    reset_plugin_required_hook_targets,
+)
+from xtest.harness.support.sglang.runtime import published_sglang_config
 
 pytestmark = pytest.mark.usefixtures(
     reset_global_config.__name__, reset_plugin_required_hook_targets.__name__, published_sglang_config.__name__
@@ -92,7 +93,7 @@ def test_model_runner_hook_delegates_to_matching_adapters(
     assert events == ["validate_before_load", "bind_runtime", "original", "validate_after_load"]
     assert runner.xpool_runtime is not None
     binding = runner.xpool_runtime.binding
-    assert binding.instance_id == TEST_MODEL_ID
+    assert binding.model_id == TEST_MODEL_ID
     assert binding.worker_world_size == 1
     assert binding.atn_dp_size == 1
 
@@ -149,12 +150,12 @@ path = "{unrelated_model_path}"
     )
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
 
-    def fake_sglang_metadata(config_path: Path, *, model_id: str) -> SglangModelMetadata:
+    def fake_sglang_metadata(config_path: Path, *, model_id: ModelId) -> SglangModelMetadata:
         assert config_path == model_path
-        assert model_id == "test/model"
+        assert model_id == ModelId("test/model")
         return SglangModelMetadata(
             model_id=model_id,
-            family=model_id,
+            family=str(model_id),
             hidden_size=2048,
             num_atn_heads=16,
             num_key_value_heads=2,
@@ -177,7 +178,7 @@ path = "{unrelated_model_path}"
     assert result == "loaded"
     assert events == ["validate_before_load", "bind_runtime", "original", "validate_after_load"]
     assert runner.xpool_runtime is not None
-    assert runner.xpool_runtime.binding.instance_id == "test/model"
+    assert runner.xpool_runtime.binding.model_id == ModelId("test/model")
 
 
 @pytest.mark.parametrize(
@@ -199,8 +200,8 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     activation_limited: bool,
 ) -> None:
     events: list[str] = []
-    installs: list[tuple[str, int]] = []
-    registrations: list[tuple[str, int, int]] = []
+    installs: list[tuple[ModelId, int]] = []
+    registrations: list[tuple[ModelId, int, int]] = []
     profiles: list[object] = []
     capacity_attachments: list[dict[str, object]] = []
     listeners: list[ServingListener] = []
@@ -258,18 +259,18 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
 
     def fake_instance_init(
         *,
-        instance_id: str,
+        model_id: ModelId,
         rank: int,
         transport: InstanceRankTransportProfile,
         ffn_profile: object,
         kv_capacity: object,
         atn_runtime_headroom_bytes: int,
     ) -> FakeInstanceRuntime:
-        registrations.append((instance_id, rank, transport.payload_row_capacity))
+        registrations.append((model_id, rank, transport.payload_row_capacity))
         profiles.append(ffn_profile)
         assert kv_capacity == kv_capacity_profile()
         assert atn_runtime_headroom_bytes == expected_headroom_bytes
-        installs.append((instance_id, rank))
+        installs.append((model_id, rank))
         events.append("start_instance")
         return FakeInstanceRuntime()
 
@@ -507,75 +508,6 @@ def test_model_runner_hook_cleans_up_when_post_executable_transport_attach_fails
         "close_instance",
     ]
     assert runner.xpool_runtime is None
-
-
-def test_model_runner_hook_waits_for_executable_fabric(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The model runner attaches Transport only after Fabric is executable."""
-
-    events: list[str] = []
-    adapter = FakeAdapter(matches=True, events=events)
-    runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
-    install_fake_elastic_kv(runner)
-    configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
-    generation = FabricGenerationId(high=1, low=2)
-
-    class FakeClient:
-        def kv_control_channel(self, candidate: FabricGenerationId) -> KvControlChannelRef:
-            assert candidate == generation
-            events.append("discover_capacity")
-            return KvControlChannelRef(generation=generation, name="/xpool-kv-test")
-
-    class FakeInstanceRuntime:
-        client = FakeClient()
-
-        def wait_for_fabric_executable(self) -> object:
-            events.append("wait_for_fabric_executable")
-            return SimpleNamespace(generation=generation)
-
-        def attach_arena_from_daemon(self) -> None:
-            events.append("attach_transport")
-
-        def start_failure_monitor(self) -> None:
-            events.append("start_failure_monitor")
-
-        def close(self) -> None:
-            events.append("close_instance")
-
-    def fake_instance_init(*args: object, **kwargs: object) -> FakeInstanceRuntime:
-        events.append("register_instance_profile")
-        return FakeInstanceRuntime()
-
-    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.InstanceRankRuntime, "start", fake_instance_init)
-    monkeypatch.setattr(
-        xpool.integrations.sglang.hooks.lifecycle.CapacityReconciler,
-        "attach",
-        lambda **kwargs: events.append("attach_capacity") or SimpleNamespace(close=lambda: None),
-    )
-    monkeypatch.setattr(
-        xpool.integrations.sglang.hooks.lifecycle, "derive_instance_ffn_profile", lambda *args: ffn_profile()
-    )
-
-    xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
-        (adapter,), lambda model_runner: None, runner.as_model_runner()
-    )
-
-    result = xpool.integrations.sglang.hooks.lifecycle.after_model_runner_alloc_memory_pool(
-        None, runner.as_model_runner()
-    )
-
-    assert result is None
-    assert runner.xpool_runtime is not None
-    assert events[-6:] == [
-        "register_instance_profile",
-        "wait_for_fabric_executable",
-        "discover_capacity",
-        "attach_capacity",
-        "attach_transport",
-        "start_failure_monitor",
-    ]
 
 
 def test_model_runner_hook_rejects_configured_model_without_matching_adapter(

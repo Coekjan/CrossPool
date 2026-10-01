@@ -4,47 +4,31 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
+import xtest
+from xkit.serving.sglang.graph import SglangGraphMode
+from xtest.harness.runner.requirements import ResolvedConfig
+from xtest.harness.sglang.catalog import E2eServingCase
+from xtest.harness.sglang.serving import qualification
 
-from tests.harness.sglang.manifest import E2E_MANIFEST_PATH, E2eManifest, E2eServingCase
-from tests.harness.sglang.serving.graph import SglangGraphMode
-from tests.harness.sglang.serving.qualification import case_parameter, run_serving_case
-from xpool.config import XpoolConfig
-
-pytest_plugins = ("tests.harness.support.config",)
-MANIFEST = E2eManifest.load(E2E_MANIFEST_PATH)
+pytest_plugins = ("xtest.harness.support.config",)
 
 
-@pytest.mark.parametrize(
-    ("case", "graph_mode"),
-    tuple(
-        case_parameter(
-            case,
-            graph_mode,
-            models=tuple(MANIFEST.model(placement.model_id) for placement in case.models),
-            compare_modes=False,
-        )
-        for case in MANIFEST.model_serving_cases
-        if case.elastic_kv is None
-        for graph_mode in case.graph_modes
-    ),
-)
+@xtest.parameterize(("case", "graph_mode"), rows=qualification.graph_rows)
+@xtest.requirements(qualification.requirements_of)
 def test_e2e_model_serving(
     case: E2eServingCase,
     graph_mode: SglangGraphMode,
-    e2e_base_config: XpoolConfig,
+    e2e_base_config: ResolvedConfig,
     tmp_path: Path,
     task_artifact_dir: Path | None,
 ) -> None:
     """Prove installed serving for the selected graph mode."""
 
-    run_serving_case(
+    qualification.run_serving_case(
         case,
         graph_mode,
         e2e_base_config,
         tmp_path,
         task_artifact_dir,
-        models=tuple(MANIFEST.model(placement.model_id) for placement in case.models),
-        serving_slo=MANIFEST.serving_slo,
         compare_modes=False,
     )

@@ -4,18 +4,6 @@ from http import HTTPStatus
 
 import pytest
 
-from tests.harness.support.config import reset_global_config
-from tests.harness.support.kv import kv_capacity_profile
-from tests.harness.support.service.client import (
-    arena_record,
-    config,
-    ffn_profile,
-    initialize_client_config,
-    install_scripted_http_client,
-    response,
-    transport_attributes,
-)
-from tests.harness.support.service.daemon import ffnagent_registration
 from xpool.fabric import FabricGenerationId
 from xpool.native import ABI_VERSION
 from xpool.service.client import ATNAGENT_TRANSPORT_LEASE_QUIESCE_TIMEOUT_S, XpoolClient
@@ -27,6 +15,16 @@ from xpool.service.wire import (
     InstanceRankRegistration,
     ProcessRef,
 )
+from xtest.harness.support.config import TEST_MODEL_ID, minimal_config, reset_global_config
+from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.runtime.instance import ffn_profile, transport_attributes
+from xtest.harness.support.service.client import (
+    arena_record,
+    initialize_client_config,
+    install_scripted_http_client,
+    response,
+)
+from xtest.harness.support.service.daemon import ffnagent_registration
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, initialize_client_config.__name__)
 
@@ -59,7 +57,7 @@ def test_participant_registration_follows_config_check(
             registration = InstanceRankRegistration(
                 pid=13,
                 abi_version=ABI_VERSION,
-                instance_id="m",
+                model_id=TEST_MODEL_ID,
                 rank=0,
                 transport=transport_attributes(),
                 ffn_profile=ffn_profile(),
@@ -73,7 +71,7 @@ def test_participant_registration_follows_config_check(
 
     assert probe.calls == [
         ("GET", "/health", None),
-        ("POST", "/config/check", config().model_dump(mode="json")),
+        ("POST", "/config/check", minimal_config().model_dump(mode="json")),
         ("POST", expected_path, registration.model_dump(mode="json")),
     ]
 
@@ -93,7 +91,7 @@ def test_transport_publication_and_quiesce_preserve_owner_and_timeout(monkeypatc
     try:
         client.upsert_atnagent_transport_arenas(
             0,
-            [AtnAgentTransportArenaBinding(instance_id="m", rank=0, handle=arena_record(rank=0))],
+            [AtnAgentTransportArenaBinding(model_id=TEST_MODEL_ID, rank=0, handle=arena_record(rank=0))],
             publisher=publisher,
         )
         assert client.quiesce_atnagent_transport_leases(
@@ -110,7 +108,9 @@ def test_transport_publication_and_quiesce_preserve_owner_and_timeout(monkeypatc
             "/atnagent/0/transport-arenas",
             {
                 "publisher": {"pid": 11, "abi_version": ABI_VERSION},
-                "bindings": [{"instance_id": "m", "rank": 0, "handle": {"handle": arena_record(rank=0).handle}}],
+                "bindings": [
+                    {"model_id": str(TEST_MODEL_ID), "rank": 0, "handle": {"handle": arena_record(rank=0).handle}}
+                ],
             },
         ),
         (
@@ -134,7 +134,7 @@ def test_instance_deregistration_preserves_rank_and_owner(monkeypatch: pytest.Mo
 
     client = XpoolClient()
     try:
-        client.deregister_instance("m", rank=0, owner=owner)
+        client.deregister_instance(TEST_MODEL_ID, rank=0, owner=owner)
     finally:
         client.close()
 
@@ -142,7 +142,7 @@ def test_instance_deregistration_preserves_rank_and_owner(monkeypatch: pytest.Mo
         ("GET", "/health", None),
         (
             "POST",
-            "/instance/m/deregister",
+            f"/instance/{TEST_MODEL_ID}/deregister",
             {
                 "params": {"rank": 0},
                 "json": {"pid": 12, "abi_version": ABI_VERSION},

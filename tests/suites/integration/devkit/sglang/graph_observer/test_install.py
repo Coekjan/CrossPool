@@ -6,11 +6,11 @@ from pathlib import Path
 import pytest
 
 import xpool.integrations.sglang.devkit.graph_observer
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.sglang.graph_observer import (
-    graph_observer_config,
+from xtest.harness.sglang.serving.graph import read_graph_events
+from xtest.harness.support.config import install_test_config, reset_global_config
+from xtest.harness.support.devkit import observer_enabled_config
+from xtest.harness.support.sglang.graph_observer import (
     install_fake_sglang_runner_classes,
-    read_events,
     reset_graph_observer,
     successful_runner_classes,
 )
@@ -26,7 +26,7 @@ def test_graph_observer_install_truncates_process_event_file(
     event_file = tmp_path / f"xpool.graph-observer.{os.getpid()}.jsonl"
     event_file.write_text("stale\n", encoding="utf-8")
     install_fake_sglang_runner_classes(monkeypatch, DecodeCudaGraphRunner, PrefillCudaGraphRunner)
-    install_test_config(config=graph_observer_config(tmp_path.resolve()))
+    install_test_config(config=observer_enabled_config("graph_observer", tmp_path.resolve()))
 
     xpool.integrations.sglang.devkit.graph_observer.install()
 
@@ -40,7 +40,7 @@ def test_graph_observer_repeat_install_preserves_process_event_file(
     DecodeCudaGraphRunner, PrefillCudaGraphRunner = successful_runner_classes()
     event_file = tmp_path / f"xpool.graph-observer.{os.getpid()}.jsonl"
     install_fake_sglang_runner_classes(monkeypatch, DecodeCudaGraphRunner, PrefillCudaGraphRunner)
-    install_test_config(config=graph_observer_config(tmp_path.resolve()))
+    install_test_config(config=observer_enabled_config("graph_observer", tmp_path.resolve()))
     xpool.integrations.sglang.devkit.graph_observer.install()
     first_capture = DecodeCudaGraphRunner.capture
     assert DecodeCudaGraphRunner().capture() == "captured"
@@ -52,7 +52,7 @@ def test_graph_observer_repeat_install_preserves_process_event_file(
     assert event_file.read_text(encoding="utf-8") == event_file_text
 
     assert DecodeCudaGraphRunner().capture() == "captured"
-    assert [(event["forward_phase"], event["event"]) for event in read_events(tmp_path)] == [
+    assert [(event["forward_phase"], event["event"]) for event in read_graph_events(tmp_path)] == [
         ("decode", "capture_begin"),
         ("decode", "capture_end"),
         ("decode", "capture_begin"),
@@ -68,7 +68,7 @@ def test_graph_observer_install_fails_when_event_file_cannot_be_opened(
     event_file = tmp_path / f"xpool.graph-observer.{os.getpid()}.jsonl"
     event_file.mkdir()
     install_fake_sglang_runner_classes(monkeypatch, DecodeCudaGraphRunner, PrefillCudaGraphRunner)
-    install_test_config(config=graph_observer_config(tmp_path.resolve()))
+    install_test_config(config=observer_enabled_config("graph_observer", tmp_path.resolve()))
 
     with pytest.raises(OSError):
         xpool.integrations.sglang.devkit.graph_observer.install()

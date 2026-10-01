@@ -9,45 +9,29 @@ from pathlib import Path
 from threading import Barrier
 
 import httpx
-import pytest
-from _pytest.mark.structures import ParameterSet
 
-from tests.harness.sglang.manifest import E2E_MANIFEST_PATH, E2eManifest, E2eServingCase
-from tests.harness.sglang.serving.graph import SglangGraphSettings
-from tests.harness.sglang.serving.probe import run_probe
-from tests.harness.sglang.serving.server import NEW_TOKENS, SglangServerProcess, SglangServerResult
-from tests.harness.support.native.observer import (
+import xtest
+from xkit.serving.sglang.graph import SglangGraphSettings
+from xtest.harness.runner.requirements import ResolvedConfig
+from xtest.harness.sglang.catalog import E2eServingCase
+from xtest.harness.sglang.serving import qualification
+from xtest.harness.sglang.serving.probe import run_probe
+from xtest.harness.sglang.serving.server import NEW_TOKENS, SglangProbeServer, SglangServerResult
+from xtest.harness.support.native.observer import (
     assert_fabric_observer_snapshots,
     assert_transport_observer_snapshots,
     assert_two_model_executor_overlap,
 )
-from tests.harness.support.sglang.graph import assert_run_graph_evidence
-from xpool.config import XpoolConfig
+from xtest.harness.support.sglang.graph import assert_run_graph_evidence
 
-pytest_plugins = ("tests.harness.support.config",)
+pytest_plugins = ("xtest.harness.support.config",)
 
-MANIFEST = E2eManifest.load(E2E_MANIFEST_PATH)
 HTTP_TIMEOUT_SECONDS = 5 * 60.0
 SUSTAINED_REQUEST_COUNT = 4
 
 
-def case_parameter(case: E2eServingCase) -> ParameterSet:
-    """Attach the resources required by one elastic KV serving case."""
-
-    model_ids = tuple(placement.model_id for placement in case.models)
-    marks = [
-        pytest.mark.requires_cuda(min_devices=case.required_gpu_count),
-        pytest.mark.requires_config,
-        pytest.mark.requires_mps,
-        pytest.mark.timeout(case.timeout_seconds),
-        pytest.mark.estimated_duration(seconds=case.estimated_duration_seconds),
-    ]
-    marks.extend(pytest.mark.requires_model_weights(model_id) for model_id in model_ids)
-    return pytest.param(case, id=case.id, marks=marks)
-
-
 def generate(
-    server: SglangServerProcess,
+    server: SglangProbeServer,
     request_id: str,
     token_count: int,
     *,
@@ -87,13 +71,11 @@ def generate(
     return cached_tokens, tuple(output_ids)
 
 
-@pytest.mark.parametrize(
-    "case",
-    tuple(case_parameter(case) for case in MANIFEST.model_serving_cases if case.elastic_kv),
-)
+@xtest.parameterize("case")
+@xtest.requirements(qualification.requirements_of)
 def test_e2e_elastic_kv(
     case: E2eServingCase,
-    e2e_base_config: XpoolConfig,
+    e2e_base_config: ResolvedConfig,
     tmp_path: Path,
 ) -> None:
     """Observe competing prefix hits, peer-pressure cache loss, and renewed hits."""
@@ -101,12 +83,12 @@ def test_e2e_elastic_kv(
     workload = case.elastic_kv
     assert workload is not None
 
-    def requests(servers: list[SglangServerProcess]) -> tuple[SglangServerResult, ...]:
+    def requests(servers: list[SglangProbeServer]) -> tuple[SglangServerResult, ...]:
         request_barrier = Barrier(len(servers))
         with ThreadPoolExecutor(max_workers=len(servers)) as executor:
-            results = tuple(executor.map(SglangServerProcess.result, servers, repeat(request_barrier)))
+            results = tuple(executor.map(SglangProbeServer.result, servers, repeat(request_barrier)))
 
-        by_model_id = {server.model.model_id: server for server in servers}
+        by_model_id = {server.process.model.model_id: server for server in servers}
         prefix_server = by_model_id[workload.prefix_model_id]
         pressure_server = by_model_id[workload.pressure_model_id]
         response = httpx.get(f"{pressure_server.url()}/server_info", timeout=HTTP_TIMEOUT_SECONDS)
@@ -180,7 +162,7 @@ def test_e2e_elastic_kv(
             input_token_id=restored_token_id,
         )
 
-        def sustain(alias: str, server: SglangServerProcess, token_count: int) -> int:
+        def sustain(alias: str, server: SglangProbeServer, token_count: int) -> int:
             for index in range(SUSTAINED_REQUEST_COUNT):
                 generate(server, f"xpool-elastic-kv-{alias}-{index}", token_count)
             return SUSTAINED_REQUEST_COUNT
@@ -223,23 +205,25 @@ def test_e2e_elastic_kv(
 
     run = run_probe(
         case,
-        models=tuple(MANIFEST.model(placement.model_id) for placement in case.models),
-        serving_slo=MANIFEST.serving_slo,
         base_config=e2e_base_config,
         graph_settings=SglangGraphSettings(decode_backend="full", prefill_backend="breakable"),
         workdir=tmp_path,
         workload=requests,
     )
     assert_transport_observer_snapshots(
-        run.launch.observer_outdir,
+        run.observer_outdir,
         expected_count=case.atnagent_count * len(case.models),
         site="atnagent",
     )
     assert_fabric_observer_snapshots(
-        run.launch.observer_outdir,
+        run.observer_outdir,
         atnagent_count=case.atnagent_count,
         ffnagent_count=case.ffnagent_count,
-        expected_topologies=tuple((model.atn_tp_size, model.atn_dp_size) for model in case.models),
+        expected_topologies=tuple(
+            (case.atnagent_count // model.atn_dp_size, model.atn_dp_size)
+            for model_id in case.models
+            for model in (case.deployment_config.model_by_id[model_id],)
+        ),
     )
-    assert_two_model_executor_overlap(run.launch.observer_outdir)
+    assert_two_model_executor_overlap(run.observer_outdir)
     assert_run_graph_evidence(run)

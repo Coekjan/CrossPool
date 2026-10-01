@@ -8,16 +8,26 @@ import pytest
 from sglang.srt.runtime_context import get_context
 
 import xpool.integrations.sglang.topology
-from tests.harness.support.sglang.fakes import ServerArgs, server_args
-from tests.harness.support.sglang.runtime import published_sglang_config
-from xpool.config import ConfigError, TopologyError
+from xpool.config import ConfigError, ModelConfig, TopologyError
 from xpool.integrations.sglang.topology import (
     SglangAttentionKind,
     SglangAttentionTopology,
     SglangModelMetadata,
 )
+from xpool.model import ModelId
+from xtest.harness.support.config import TEST_MODEL_ID
+from xtest.harness.support.sglang.fakes import ServerArgs, server_args
+from xtest.harness.support.sglang.runtime import published_sglang_config
 
 pytestmark = pytest.mark.usefixtures(published_sglang_config.__name__)
+
+
+def test_model_metadata_rejects_non_object_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match=r"config.json must contain an object"):
+        SglangModelMetadata.load(config_path, model_id=TEST_MODEL_ID)
 
 
 def test_gqa_atn_policy_retains_resolved_sglang_topology(
@@ -43,10 +53,11 @@ def test_gqa_atn_policy_retains_resolved_sglang_topology(
         },
     )
 
-    spec = SglangModelMetadata.load(model_dir, model_id="qwen")
+    spec = SglangModelMetadata.load(model_dir, model_id=TEST_MODEL_ID)
     get_context().override("test", tp_size=2)
     policy = SglangAttentionTopology.from_runtime(
         spec,
+        model=ModelConfig(id=spec.model_id),
         atnagent_count=2,
         supports_dp_attention=False,
     )
@@ -91,11 +102,12 @@ def test_mla_atn_policy_accepts_independent_tp_or_dp(
             "moe_intermediate_size": 1410,
         },
     )
-    spec = SglangModelMetadata.load(model_dir, model_id="test-model")
+    spec = SglangModelMetadata.load(model_dir, model_id=TEST_MODEL_ID)
 
     get_context().override("test", tp_size=tp_size, dp_size=dp_size, enable_dp_attention=dp_size > 1)
     policy = SglangAttentionTopology.from_runtime(
         spec,
+        model=ModelConfig(id=spec.model_id, atn_tp_size=expected_atn_tp_size, atn_dp_size=dp_size),
         atnagent_count=atnagent_count,
         supports_dp_attention=True,
     )
@@ -125,12 +137,13 @@ def test_mla_atn_policy_rejects_combined_tp_by_dp(
             "num_key_value_heads": 16,
         },
     )
-    spec = SglangModelMetadata.load(model_dir, model_id="test-model")
+    spec = SglangModelMetadata.load(model_dir, model_id=TEST_MODEL_ID)
 
     with pytest.raises(TopologyError, match="combined attention TP-by-DP"):
         get_context().override("test", tp_size=4, dp_size=2, enable_dp_attention=True)
         SglangAttentionTopology.from_runtime(
             spec,
+            model=ModelConfig(id=spec.model_id, atn_tp_size=2, atn_dp_size=2),
             atnagent_count=4,
             supports_dp_attention=True,
         )
@@ -160,12 +173,13 @@ def test_regular_mqa_when_sglang_reports_non_mla(
         },
     )
 
-    spec = SglangModelMetadata.load(model_dir, model_id="synthetic-mqa")
+    spec = SglangModelMetadata.load(model_dir, model_id=TEST_MODEL_ID)
     get_context().override(
         "test",
     )
     policy = SglangAttentionTopology.from_runtime(
         spec,
+        model=ModelConfig(id=spec.model_id),
         atnagent_count=1,
         supports_dp_attention=False,
     )
@@ -176,29 +190,22 @@ def test_regular_mqa_when_sglang_reports_non_mla(
 
 def test_zero_kv_heads_from_sglang_metadata_fail_fast(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    patch_sglang_metadata(
-        monkeypatch,
-        family="bad",
-        hidden_size=4096,
-        atn_heads=32,
-        kv_heads=0,
-        atn_kind=SglangAttentionKind.GQA,
-    )
     model_dir = write_model_config(
         tmp_path / "bad",
         {
-            "model_type": "bad",
+            "architectures": ["Qwen3ForCausalLM"],
+            "model_type": "qwen3",
             "hidden_size": 4096,
             "num_attention_heads": 32,
             "num_key_value_heads": 0,
+            "num_hidden_layers": 2,
             "intermediate_size": 11010,
         },
     )
 
     with pytest.raises(ConfigError, match="num_key_value_heads"):
-        SglangModelMetadata.load(model_dir, model_id="bad")
+        SglangModelMetadata.load(model_dir, model_id=TEST_MODEL_ID)
 
 
 def test_attention_head_divisibility_is_checked_against_resolved_tp(
@@ -223,18 +230,19 @@ def test_attention_head_divisibility_is_checked_against_resolved_tp(
             "intermediate_size": 4,
         },
     )
-    spec = SglangModelMetadata.load(model_dir, model_id="bad-ffn")
+    spec = SglangModelMetadata.load(model_dir, model_id=TEST_MODEL_ID)
 
     with pytest.raises(TopologyError, match="does not divide query heads"):
         get_context().override("test", tp_size=3)
         SglangAttentionTopology.from_runtime(
             spec,
+            model=ModelConfig(id=spec.model_id),
             atnagent_count=3,
             supports_dp_attention=False,
         )
 
 
-def test_policy_rejects_sglang_world_that_does_not_cover_atnagents(
+def test_policy_rejects_sglang_world_that_disagrees_with_configuration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -256,12 +264,13 @@ def test_policy_rejects_sglang_world_that_does_not_cover_atnagents(
             "intermediate_size": 11008,
         },
     )
-    spec = SglangModelMetadata.load(model_dir, model_id=model_dir.name)
+    spec = SglangModelMetadata.load(model_dir, model_id=TEST_MODEL_ID)
 
-    with pytest.raises(TopologyError, match="must equal configured AtnAgent count"):
+    with pytest.raises(TopologyError, match="must match configured attention"):
         get_context().override("test", tp_size=1)
         SglangAttentionTopology.from_runtime(
             spec,
+            model=ModelConfig(id=spec.model_id),
             atnagent_count=2,
             supports_dp_attention=False,
         )
@@ -296,7 +305,7 @@ def test_policy_rejects_inconsistent_dp_attention_flag(
             "num_key_value_heads": 16,
         },
     )
-    spec = SglangModelMetadata.load(model_dir, model_id="deepseek")
+    spec = SglangModelMetadata.load(model_dir, model_id=TEST_MODEL_ID)
 
     get_context().override(
         "test", tp_size=args.tp_size, dp_size=args.dp_size, enable_dp_attention=args.enable_dp_attention
@@ -304,6 +313,7 @@ def test_policy_rejects_inconsistent_dp_attention_flag(
     with pytest.raises(TopologyError, match="enable_dp_attention"):
         SglangAttentionTopology.from_runtime(
             spec,
+            model=ModelConfig(id=spec.model_id, atn_tp_size=args.tp_size // args.dp_size, atn_dp_size=args.dp_size),
             atnagent_count=args.tp_size,
             supports_dp_attention=True,
         )
@@ -324,12 +334,13 @@ def test_policy_rejects_dp_attention_without_adapter_capability(
         atn_kind=atn_kind,
     )
     model_dir = write_model_config(tmp_path / "unsupported", {"model_type": "unsupported"})
-    spec = SglangModelMetadata.load(model_dir, model_id="unsupported")
+    spec = SglangModelMetadata.load(model_dir, model_id=TEST_MODEL_ID)
 
     with pytest.raises(TopologyError, match="adapter does not support"):
         get_context().override("test", tp_size=2, dp_size=2, enable_dp_attention=True)
         SglangAttentionTopology.from_runtime(
             spec,
+            model=ModelConfig(id=spec.model_id, atn_tp_size=1, atn_dp_size=2),
             atnagent_count=2,
             supports_dp_attention=False,
         )
@@ -348,11 +359,12 @@ def test_gqa_policy_accepts_dp_attention_with_adapter_capability(
         atn_kind=SglangAttentionKind.GQA,
     )
     model_dir = write_model_config(tmp_path / "qwen3-moe", {"model_type": "qwen3_moe"})
-    spec = SglangModelMetadata.load(model_dir, model_id="qwen3-moe")
+    spec = SglangModelMetadata.load(model_dir, model_id=TEST_MODEL_ID)
 
     get_context().override("test", tp_size=2, dp_size=2, enable_dp_attention=True)
     policy = SglangAttentionTopology.from_runtime(
         spec,
+        model=ModelConfig(id=spec.model_id, atn_tp_size=1, atn_dp_size=2),
         atnagent_count=2,
         supports_dp_attention=True,
     )
@@ -365,7 +377,7 @@ def test_gqa_policy_accepts_dp_attention_with_adapter_capability(
 @pytest.mark.parametrize("size", [1, 2, 4, 8])
 def test_gqa_attention_tp_accepts_kv_sharding_and_replication(size: int) -> None:
     spec = SglangModelMetadata(
-        model_id="qwen3-moe",
+        model_id=TEST_MODEL_ID,
         family="qwen3_moe",
         hidden_size=2048,
         num_atn_heads=32,
@@ -380,7 +392,7 @@ def test_gqa_attention_tp_accepts_kv_sharding_and_replication(size: int) -> None
 @pytest.mark.parametrize("size", [3, 6])
 def test_gqa_attention_tp_rejects_invalid_head_geometry(size: int) -> None:
     spec = SglangModelMetadata(
-        model_id="qwen3-moe",
+        model_id=TEST_MODEL_ID,
         family="qwen3_moe",
         hidden_size=2048,
         num_atn_heads=32,
@@ -395,7 +407,7 @@ def test_gqa_attention_tp_rejects_invalid_head_geometry(size: int) -> None:
 
 def test_mla_attention_tp_ignores_ordinary_kv_head_geometry() -> None:
     spec = SglangModelMetadata(
-        model_id="deepseek",
+        model_id=TEST_MODEL_ID,
         family="deepseek_v2",
         hidden_size=2048,
         num_atn_heads=16,
@@ -422,7 +434,7 @@ def test_model_config_preserves_explicit_zero_num_experts(
 
     spec = SglangModelMetadata.from_raw(
         {"num_experts": 0, "n_routed_experts": 64},
-        model_id="dense-model",
+        model_id=TEST_MODEL_ID,
         config_path=tmp_path / "config.json",
     )
 
@@ -444,9 +456,9 @@ def patch_sglang_metadata(
     kv_heads: int,
     atn_kind: SglangAttentionKind,
 ) -> None:
-    def load_shape(config_path: Path, *, model_id: str) -> xpool.integrations.sglang.topology.SglangModelShape:
+    def load_shape(config_path: Path, *, model_id: ModelId) -> xpool.integrations.sglang.topology.SglangModelShape:
         return xpool.integrations.sglang.topology.SglangModelShape(
-            family=family or model_id,
+            family=family or str(model_id),
             hidden_size=hidden_size,
             num_atn_heads=atn_heads,
             num_key_value_heads=kv_heads,

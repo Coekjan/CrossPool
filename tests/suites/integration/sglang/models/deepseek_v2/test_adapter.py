@@ -9,10 +9,6 @@ from sglang.srt.models.deepseek_v2 import DeepseekV2ForCausalLM
 from sglang.srt.plugins.hook_registry import HookType
 
 import xpool.config
-from tests.harness.support.config import reset_global_config
-from tests.harness.support.sglang.deepseek import deepseek_config, install_adapter_config
-from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
-from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.integrations.sglang.adapter import (
     SglangInstanceRankBinding,
     SglangInstanceRankRuntime,
@@ -24,6 +20,10 @@ from xpool.integrations.sglang.models.deepseek_v2 import (
     XpoolDeepseekV2MoE,
 )
 from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, write_minimal_config
+from xtest.harness.support.sglang.deepseek import deepseek_config, install_adapter_config
+from xtest.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
+from xtest.harness.support.sglang.runtime import published_sglang_config
 
 pytestmark = pytest.mark.usefixtures(
     reset_global_config.__name__, install_adapter_config.__name__, published_sglang_config.__name__
@@ -125,29 +125,8 @@ def test_deepseek_model_binding_resolves_instance_from_config(
 """.strip(),
         encoding="utf-8",
     )
-    config_path = tmp_path / "xpool.toml"
-    config_path.write_text(
-        f"""
-[daemon]
-host = "127.0.0.1"
-port = 9810
-
-[scheduler]
-atn_concurrency = 1
-ffn_concurrency = 1
-slo = {{ ttft_ms = 1000, tbt_ms = 50 }}
-
-[atn]
-devices = [0]
-
-[ffn]
-devices = [1]
-
-[[models]]
-id = "test/deepseek-v2"
-path = "{model_path}"
-""",
-        encoding="utf-8",
+    config_path = write_minimal_config(
+        tmp_path / "xpool.toml", model_path=model_path, atn_cuda_devices=(0,), ffn_cuda_devices=(1,)
     )
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
     monkeypatch.setattr(
@@ -155,7 +134,7 @@ path = "{model_path}"
         "load",
         lambda config_path, *, model_id: SglangModelMetadata(
             model_id=model_id,
-            family=model_id,
+            family=str(model_id),
             hidden_size=2048,
             num_atn_heads=16,
             num_key_value_heads=2,
@@ -174,6 +153,6 @@ path = "{model_path}"
     )
     SglangInstanceRankRuntime.attach(runner.as_model_runner(), binding)
 
-    assert binding.instance_id == "test/deepseek-v2"
+    assert binding.model_id == TEST_MODEL_ID
     assert runner.xpool_runtime is not None
     assert runner.xpool_runtime.binding == binding

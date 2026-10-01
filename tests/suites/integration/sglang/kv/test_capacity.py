@@ -17,13 +17,13 @@ from sglang.srt.runtime_context import get_context, get_parallel
 
 import xpool.integrations.sglang.kv.capacity
 import xpool.native
-from tests.harness.support.sglang.fakes import ServerArgs
-from tests.harness.support.sglang.runtime import published_sglang_config
 from xpool.config import LatencySloConfig
 from xpool.integrations.sglang.kv.allocator import ElasticTokenToKVPoolAllocator
 from xpool.integrations.sglang.kv.capacity import CapacityReconciler
 from xpool.integrations.sglang.kv.vmm import KvVmmBacking
 from xpool.runtime.instance import InstanceRankRuntime
+from xtest.harness.support.sglang.fakes import ServerArgs
+from xtest.harness.support.sglang.runtime import published_sglang_config
 
 pytestmark = pytest.mark.usefixtures(published_sglang_config.__name__)
 TEST_SLO = LatencySloConfig(ttft_ms=1000, tbt_ms=50)
@@ -207,11 +207,16 @@ def test_growth_maps_before_exposing_capacity_and_completes_at_the_boundary() ->
     channel = FakeControlChannel(command)
     backing = FakeBacking(2)
     capacities: list[int] = []
+
+    def expose_capacity(value: int) -> None:
+        assert backing.resize_calls == [3]
+        capacities.append(value)
+
     running_batch = SimpleNamespace(batch_is_full=True)
     reconciler = make_reconciler(
         channel,
         backing,
-        SimpleNamespace(set_token_capacity=capacities.append),
+        SimpleNamespace(set_token_capacity=expose_capacity),
         SimpleNamespace(reset_aux_cache_allocator=lambda: None),
         command=command,
         active_bundles=2,
@@ -291,6 +296,7 @@ def test_accepted_reclaim_defers_unmap_and_completion_until_cuda_retires(
     with get_parallel().override(attn_tp_rank=0, attn_tp_size=1):
         reconciler.begin_scheduling(scheduler)
         assert channel.completions == []
+        assert backing.resize_calls == []
         event.ready = True
         reconciler.begin_scheduling(scheduler)
 

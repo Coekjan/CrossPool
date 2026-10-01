@@ -8,9 +8,14 @@ import pytest
 
 import xpool.native
 import xpool.service.daemon.kv
-from tests.harness.support.config import reset_global_config
-from tests.harness.support.kv import kv_capacity_profile
-from tests.harness.support.service.daemon import (
+from xpool.config import XpoolConfig
+from xpool.fabric import FabricGenerationId
+from xpool.service.daemon.control import ControlPlane
+from xpool.service.daemon.fabric import FabricGenerationState
+from xpool.service.daemon.kv import KvCapacityPolicy
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
+from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.service.daemon import (
     atnagent_registration,
     create_app,
     deterministic_daemon_dependencies,
@@ -19,11 +24,6 @@ from tests.harness.support.service.daemon import (
     register_fabric_world,
     request,
 )
-from xpool.config import XpoolConfig
-from xpool.fabric import FabricGenerationId
-from xpool.service.daemon.control import ControlPlane
-from xpool.service.daemon.fabric import FabricGenerationState
-from xpool.service.daemon.kv import KvCapacityPolicy
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
 
@@ -79,7 +79,13 @@ def capacity_policy_world(
             "atn": {"devices": list(range(atn_world_size))},
             "ffn": {"devices": [atn_world_size]},
             "models": [
-                {"id": instance_id, "path": f"/models/{instance_id}"} for instance_id in bundle_bytes_by_instance
+                {
+                    "id": model_id,
+                    "path": f"/models/{model_id}",
+                    "atn_tp_size": atn_tp_size,
+                    "atn_dp_size": atn_dp_size,
+                }
+                for model_id in bundle_bytes_by_instance
             ],
         }
     )
@@ -92,16 +98,16 @@ def capacity_policy_world(
         "/ffnagent/register",
         json=ffnagent_registration(cuda_device=atn_world_size, model_ids=tuple(bundle_bytes_by_instance)),
     ).is_success
-    for instance_id, bundle_bytes in bundle_bytes_by_instance.items():
+    for model_id, bundle_bytes in bundle_bytes_by_instance.items():
         for rank in range(atn_world_size):
             registration = instance_registration(
-                instance_id=instance_id,
+                model_id=model_id,
                 rank=rank,
                 atn_tp_rank=rank % atn_tp_size,
                 atn_tp_size=atn_tp_size,
                 atn_dp_rank=rank // atn_tp_size,
                 atn_dp_size=atn_dp_size,
-                atn_runtime_headroom_bytes=(runtime_headroom_by_instance or {}).get(instance_id, 0),
+                atn_runtime_headroom_bytes=(runtime_headroom_by_instance or {}).get(model_id, 0),
             )
             profile = kv_capacity_profile().model_copy(update={"bundle_bytes": bundle_bytes})
             registration["kv_capacity"] = profile.model_dump(mode="json")
@@ -169,7 +175,7 @@ def demand(sequence: int, bundles: int | None, deadline_ns: int | None) -> xpool
 
 
 def test_initial_policy_freezes_pools_and_waits_for_every_tp_completion() -> None:
-    control, fabric = capacity_policy_world({"model": 4096}, atn_tp_size=2)
+    control, fabric = capacity_policy_world({str(TEST_MODEL_ID): 4096}, atn_tp_size=2)
     channel = FakeDaemonControlChannel(pool_count=2, slot_count=2)
     policy = KvCapacityPolicy(
         generation=fabric.plan.generation,
@@ -205,8 +211,8 @@ def test_pool_freeze_keeps_larger_reserve(
     expected_capacity_bytes: int,
 ) -> None:
     control, fabric = capacity_policy_world(
-        {"model": 4096},
-        runtime_headroom_by_instance={"model": runtime_headroom_bytes},
+        {str(TEST_MODEL_ID): 4096},
+        runtime_headroom_by_instance={str(TEST_MODEL_ID): runtime_headroom_bytes},
     )
     channel = FakeDaemonControlChannel(pool_count=1, slot_count=1)
     policy = KvCapacityPolicy(
@@ -221,8 +227,8 @@ def test_pool_freeze_keeps_larger_reserve(
 
 def test_pool_freeze_sums_same_device_instance_headroom() -> None:
     control, fabric = capacity_policy_world(
-        {"a": 4096, "b": 4096},
-        runtime_headroom_by_instance={"a": 6000, "b": 7000},
+        {"test/a": 4096, "test/b": 4096},
+        runtime_headroom_by_instance={"test/a": 6000, "test/b": 7000},
     )
     channel = FakeDaemonControlChannel(pool_count=1, slot_count=2)
     policy = KvCapacityPolicy(
@@ -236,7 +242,9 @@ def test_pool_freeze_sums_same_device_instance_headroom() -> None:
 
 
 def test_pool_freeze_rejects_runtime_headroom_that_displaces_floors() -> None:
-    control, fabric = capacity_policy_world({"model": 4096}, runtime_headroom_by_instance={"model": 52_000})
+    control, fabric = capacity_policy_world(
+        {str(TEST_MODEL_ID): 4096}, runtime_headroom_by_instance={str(TEST_MODEL_ID): 52_000}
+    )
     channel = FakeDaemonControlChannel(pool_count=1, slot_count=1)
     policy = KvCapacityPolicy(
         generation=fabric.plan.generation,
@@ -260,7 +268,7 @@ def test_capacity_channel_discovery_is_generation_scoped() -> None:
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     app = create_app(config)
@@ -279,7 +287,7 @@ def test_capacity_channel_discovery_is_generation_scoped() -> None:
 
 
 def test_persistent_demand_issues_one_full_target_growth() -> None:
-    control, fabric = capacity_policy_world({"borrower": 4096})
+    control, fabric = capacity_policy_world({"test/borrower": 4096})
     channel = FakeDaemonControlChannel(pool_count=1, slot_count=1)
     policy = service_policy(
         control,
@@ -299,7 +307,7 @@ def test_persistent_demand_issues_one_full_target_growth() -> None:
 
 def test_pre_deadline_borrower_order_is_earliest_deadline_first(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(xpool.service.daemon.kv, "perf_counter_ns", lambda: 50)
-    control, fabric = capacity_policy_world({"later": 4096, "earlier": 4096})
+    control, fabric = capacity_policy_world({"test/later": 4096, "test/earlier": 4096})
     channel = FakeDaemonControlChannel(pool_count=1, slot_count=2)
     policy = service_policy(
         control,
@@ -318,7 +326,7 @@ def test_pre_deadline_borrower_order_is_earliest_deadline_first(monkeypatch: pyt
 
 def test_overdue_borrowers_rotate_by_oldest_completed_grant(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(xpool.service.daemon.kv, "perf_counter_ns", lambda: 500)
-    control, fabric = capacity_policy_world({"never-served": 4096, "served": 4096})
+    control, fabric = capacity_policy_world({"test/never-served": 4096, "test/served": 4096})
     channel = FakeDaemonControlChannel(pool_count=1, slot_count=2)
     policy = service_policy(
         control,
@@ -338,7 +346,9 @@ def test_overdue_borrowers_rotate_by_oldest_completed_grant(monkeypatch: pytest.
 
 def test_inverse_donor_order_prefers_the_later_active_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(xpool.service.daemon.kv, "perf_counter_ns", lambda: 0)
-    control, fabric = capacity_policy_world({"borrower": 4096, "later-donor": 4096, "earlier-donor": 4096})
+    control, fabric = capacity_policy_world(
+        {"test/borrower": 4096, "test/later-donor": 4096, "test/earlier-donor": 4096}
+    )
     channel = FakeDaemonControlChannel(pool_count=1, slot_count=3)
     policy = service_policy(
         control,
@@ -357,7 +367,7 @@ def test_inverse_donor_order_prefers_the_later_active_deadline(monkeypatch: pyte
 
 
 def test_multiple_donors_fund_one_complete_growth_without_overlapping_bytes() -> None:
-    control, fabric = capacity_policy_world({"borrower": 8192, "donor-a": 4096, "donor-b": 12288})
+    control, fabric = capacity_policy_world({"test/borrower": 8192, "test/donor-a": 4096, "test/donor-b": 12288})
     channel = FakeDaemonControlChannel(pool_count=1, slot_count=3)
     policy = service_policy(
         control,
@@ -384,7 +394,7 @@ def test_multiple_donors_fund_one_complete_growth_without_overlapping_bytes() ->
 
 
 def test_changed_borrower_witness_abandons_completed_donor_attempt() -> None:
-    control, fabric = capacity_policy_world({"borrower": 4096, "donor": 4096})
+    control, fabric = capacity_policy_world({"test/borrower": 4096, "test/donor": 4096})
     channel = FakeDaemonControlChannel(pool_count=1, slot_count=2)
     policy = service_policy(
         control,
@@ -403,7 +413,7 @@ def test_changed_borrower_witness_abandons_completed_donor_attempt() -> None:
 
 
 def test_demand_change_waits_for_capacity_evaluation_before_next_operation() -> None:
-    control, fabric = capacity_policy_world({"borrower": 4096})
+    control, fabric = capacity_policy_world({"test/borrower": 4096})
     channel = FakeDaemonControlChannel(pool_count=1, slot_count=1)
     policy = service_policy(
         control,
@@ -428,7 +438,7 @@ def test_demand_change_waits_for_capacity_evaluation_before_next_operation() -> 
 
 
 def test_infeasible_edf_head_does_not_block_a_fundable_peer() -> None:
-    control, fabric = capacity_policy_world({"large": 4096, "small": 4096})
+    control, fabric = capacity_policy_world({"test/large": 4096, "test/small": 4096})
     channel = FakeDaemonControlChannel(pool_count=1, slot_count=2)
     policy = service_policy(
         control,
@@ -449,7 +459,7 @@ def test_unfundable_overdue_demand_allows_predeadline_growth_on_another_pool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(xpool.service.daemon.kv, "perf_counter_ns", lambda: 50)
-    control, fabric = capacity_policy_world({"first": 4096, "second": 4096}, atn_dp_size=2)
+    control, fabric = capacity_policy_world({"test/first": 4096, "test/second": 4096}, atn_dp_size=2)
     channel = FakeDaemonControlChannel(pool_count=2, slot_count=4)
     policy = service_policy(
         control,
@@ -470,7 +480,7 @@ def test_unfundable_overdue_demand_blocks_predeadline_growth_on_its_pool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(xpool.service.daemon.kv, "perf_counter_ns", lambda: 50)
-    control, fabric = capacity_policy_world({"first": 4096, "second": 4096}, atn_dp_size=2)
+    control, fabric = capacity_policy_world({"test/first": 4096, "test/second": 4096}, atn_dp_size=2)
     channel = FakeDaemonControlChannel(pool_count=2, slot_count=4)
     policy = service_policy(
         control,
@@ -489,7 +499,7 @@ def test_unfundable_overdue_demand_blocks_predeadline_growth_on_its_pool(
 
 def test_pending_donor_allows_only_disjoint_direct_growth(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(xpool.service.daemon.kv, "perf_counter_ns", lambda: 50)
-    control, fabric = capacity_policy_world({"first": 4096, "second": 4096}, atn_dp_size=2)
+    control, fabric = capacity_policy_world({"test/first": 4096, "test/second": 4096}, atn_dp_size=2)
     channel = FakeDaemonControlChannel(pool_count=2, slot_count=4)
     policy = service_policy(
         control,
@@ -516,7 +526,7 @@ def test_pending_donor_does_not_start_another_donor_on_an_unrelated_pool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(xpool.service.daemon.kv, "perf_counter_ns", lambda: 50)
-    control, fabric = capacity_policy_world({"first": 4096, "second": 4096}, atn_dp_size=2)
+    control, fabric = capacity_policy_world({"test/first": 4096, "test/second": 4096}, atn_dp_size=2)
     channel = FakeDaemonControlChannel(pool_count=2, slot_count=4)
     policy = service_policy(
         control,

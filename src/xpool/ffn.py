@@ -11,6 +11,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 import xpool.native
+from xpool.model import ModelId
 
 __all__ = [
     "ActivationKind",
@@ -126,7 +127,7 @@ type FfnLayerSpec = Annotated[
 class FfnModelSpec(FfnModel):
     """Complete model-source-intrinsic FFN semantics."""
 
-    model_id: str = Field(strict=True, min_length=1, description="Configured model identity.")
+    model_id: ModelId = Field(description="Canonical configured model identity.")
     architecture_name: str = Field(strict=True, min_length=1, description="Selected FFN Model Adapter identity.")
     hidden_size: int = Field(strict=True, ge=1, description="Model hidden-state width in elements.")
     activation: ActivationKind = Field(description="Gated activation shared by all model FFN layers.")

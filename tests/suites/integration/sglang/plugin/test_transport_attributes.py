@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 import xpool.integrations.sglang.hooks.lifecycle
-from tests.harness.support.sglang.plugin import binding, ffn_profile
+from xtest.harness.support.sglang.plugin import binding, ffn_profile
 
 
 @pytest.mark.parametrize(

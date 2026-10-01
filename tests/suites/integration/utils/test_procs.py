@@ -6,8 +6,8 @@ import time
 
 import pytest
 
-from tests.harness.support.process_probe import command
 from xpool.utils.procs import PROCESS_KILL_WAIT_S, ProcUniqId
+from xtest.harness.support.process_probe import command
 
 
 def test_process_identity_treats_unreaped_zombie_as_not_alive() -> None:

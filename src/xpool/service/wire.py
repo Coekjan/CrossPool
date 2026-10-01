@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from xpool import ffn
 from xpool.fabric import FabricGenerationId, FabricGenerationPhase, FabricParticipantPhase, InstanceFfnProfile
+from xpool.model import ModelId
 from xpool.native.ffn import ResultCode
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.errors import XpoolDaemonError, XpoolDaemonErrorKind
@@ -35,9 +36,9 @@ class XpoolDaemonErrorDetail(WireModel):
 
 
 class AtnAgentTransportArenaBinding(WireModel):
-    """Association between an instance id and one AtnAgent-owned arena."""
+    """Association between a Model ID and one AtnAgent-owned arena."""
 
-    instance_id: str = Field(description="Instance id whose rank can attach this arena.")
+    model_id: ModelId = Field(description="Model ID whose Instance rank can attach this arena.")
     rank: int = Field(ge=0, description="Rank-local process index within the instance.")
     handle: TransportArenaHandle = Field(
         description="CUDA IPC transport arena handle owned by the publishing AtnAgent."
@@ -112,7 +113,7 @@ class FabricInstanceRankOwnerFailure(WireModel):
     """Daemon-observed loss of one Instance-rank owner."""
 
     role: Literal["instance"] = Field(default="instance", description="Instance role owning the registered rank.")
-    instance_id: str = Field(description="Configured model instance id.")
+    model_id: ModelId = Field(description="Model ID identifying the configured Instance.")
     rank: int = Field(ge=0, description="Instance rank within the attention world.")
     reason: FabricOwnerFailureReason = Field(description="Reason this Instance-rank owner was lost.")
 
@@ -230,7 +231,7 @@ class FfnAgentRegistration(ProcessRef):
 class InstanceRankRef(ProcessRef):
     """Reference to one instance-rank host process."""
 
-    instance_id: str = Field(description="Instance id from the resolved CrossPool config.")
+    model_id: ModelId = Field(description="Model ID from the resolved CrossPool config.")
     rank: int = Field(ge=0, description="Rank-local process index within the instance.")
 
 
@@ -313,7 +314,7 @@ class ReadinessFfnAgent(ReadinessEntry):
 class ReadinessInstanceRank(ReadinessEntry):
     """One configured instance rank slot reported by the readiness endpoint."""
 
-    instance_id: str = Field(description="Instance id from the resolved CrossPool config.")
+    model_id: ModelId = Field(description="Model ID from the resolved CrossPool config.")
     cuda_device: int = Field(ge=0, description="Attention CUDA device assigned to this instance rank.")
     rank: int = Field(ge=0, description="Rank-local process index within the instance.")
 

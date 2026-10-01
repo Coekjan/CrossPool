@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 import inspect
 import pkgutil
-from collections.abc import Iterable
 from typing import cast
 
 
@@ -27,7 +26,7 @@ def walk_package_modules(package_name: str) -> tuple[pkgutil.ModuleInfo, ...]:
         raise RuntimeError(f"failed to import package {failed_package_name}")
 
     package = importlib.import_module(package_name)
-    package_path = cast(Iterable[str], getattr(package, "__path__"))
+    package_path = package.__path__
     modules = (
         module_info
         for module_info in pkgutil.walk_packages(

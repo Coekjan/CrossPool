@@ -154,6 +154,12 @@ NVSHMEM host and device libraries, ahead of unrelated Toolkit NVSHMEM headers;
 the CMake/scikit-build package boundary owns this module identity and header
 selection rather than a duplicate handwritten typing module.
 
+Installed test commands use resource/serving mechanisms in
+`xkit`, with test policies in `xtest.harness`.
+Production `xpool` does not depend on these packages. See
+[Test Tooling](tooling.md) for process ownership and
+offline report contracts.
+
 The current implementation provides real Dense and MoE FFN execution, true-TP
 weight ownership, Device-resident Transport and Fabric progress, per-Lane
 GraphExec ownership, static placement, memory admission, elastic

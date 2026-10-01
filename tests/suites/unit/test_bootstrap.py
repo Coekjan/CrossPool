@@ -6,9 +6,9 @@ import pytest
 import torch
 
 import xpool.bootstrap
-from tests.harness.support.config import reset_global_config
 from xpool.config import DebugConfig
 from xpool.native import RuntimeRole
+from xtest.harness.support.config import reset_global_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -105,6 +105,9 @@ def test_bootstrap_stops_after_failed_native_initialization(monkeypatch: pytest.
     monkeypatch.setattr(xpool.bootstrap, "get_global_config", lambda: SimpleNamespace(debug=DebugConfig()))
     process_titles: list[str] = []
     monkeypatch.setattr(xpool.bootstrap, "set_process_title", process_titles.append)
+    monkeypatch.setattr(
+        torch.cuda, "set_device", lambda device: pytest.fail("CUDA device selected after native failure")
+    )
 
     def fail_init(
         role: RuntimeRole,
@@ -120,7 +123,7 @@ def test_bootstrap_stops_after_failed_native_initialization(monkeypatch: pytest.
     assert process_titles == []
 
 
-def test_daemon_bootstrap_rejects_cuda_device_before_native_initialization(
+def test_daemon_bootstrap_propagates_native_cuda_device_rejection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The host-only daemon delegates CUDA-device rejection to native."""

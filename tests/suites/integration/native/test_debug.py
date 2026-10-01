@@ -8,9 +8,9 @@ import pytest
 import torch
 
 import xpool.native
-from tests.harness.native.case import run_native_case
-from tests.harness.native.debug import native_debug_options
+from xpool.config import DebugConfig, TransportObserverDebugConfig
 from xpool.native import RuntimeRole
+from xtest.harness.native.case import run_native_case
 
 
 def isolated_default_debug_options_are_frozen() -> None:
@@ -21,12 +21,14 @@ def isolated_default_debug_options_are_frozen() -> None:
         xpool.native.initialize(
             RuntimeRole.INSTANCE,
             cuda_device,
-            native_debug_options(transport_observer=True),
+            DebugConfig(
+                transport_observer=TransportObserverDebugConfig(enable=True, outdir=Path.cwd())
+            ).native_options(),
         )
 
 
 def test_debug_options_are_read_only() -> None:
-    options = native_debug_options()
+    options = DebugConfig().native_options()
     with pytest.raises(AttributeError):
         setattr(options.transport_observer, "enable", True)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from xpool import ffn
+from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent import architecture, operators, weights
 
@@ -90,7 +91,7 @@ class Qwen3MoeAdapter(architecture.MoeFfnModelAdapter):
     def compile(
         cls,
         *,
-        model_id: str,
+        model_id: ModelId,
         model_config: architecture.FfnSourceConfig,
     ) -> ffn.FfnModelSpec:
         """Compile all main Qwen3-MoE decoder layers and routing semantics."""
@@ -99,7 +100,7 @@ class Qwen3MoeAdapter(architecture.MoeFfnModelAdapter):
         if model_config.get("decoder_sparse_step", int, ge=1) != 1:
             raise ValueError("decoder_sparse_step must equal 1")
         mlp_only_layers = model_config.optional("mlp_only_layers", list)
-        if not isinstance(mlp_only_layers, list) or mlp_only_layers:
+        if mlp_only_layers is None or mlp_only_layers:
             raise ValueError("mlp_only_layers must be an empty JSON array")
         hidden_size = model_config.get("hidden_size", int, ge=1)
         layer_count = model_config.get("num_hidden_layers", int, ge=1)

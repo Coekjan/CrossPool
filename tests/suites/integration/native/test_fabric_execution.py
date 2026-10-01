@@ -8,12 +8,12 @@ import pytest
 import torch
 
 import xpool.native
-from tests.harness.native.fabric.bootstrap import fabric_bootstrap
-from tests.harness.native.fabric.protocol import FabricCoordinatorTrace, FabricFfnAgentTrace
-from tests.harness.native.fabric.topology import run_fabric_topology
-from tests.harness.support.native.fabric import assert_fabric_report
 from xpool.native import RuntimeRole
 from xpool.native.ffn import ForwardMode, LayerKind, OutputRequirement
+from xtest.harness.native.fabric.bootstrap import fabric_bootstrap
+from xtest.harness.native.fabric.protocol import FabricCoordinatorTrace, FabricFfnAgentTrace
+from xtest.harness.native.fabric.topology import run_fabric_topology
+from xtest.harness.support.native.fabric import assert_fabric_report
 
 pytestmark = [
     pytest.mark.requires_cuda(min_devices=2),

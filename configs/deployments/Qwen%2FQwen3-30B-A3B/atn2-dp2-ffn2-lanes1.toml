@@ -1,0 +1,18 @@
+[atn]
+devices = [0, 1]
+
+[ffn]
+devices = [2, 3]
+
+[scheduler]
+ffn_concurrency = 1
+
+[scheduler.slo]
+ttft_ms = 1000
+tbt_ms = 50
+
+[[models]]
+id = "Qwen/Qwen3-30B-A3B"
+atn_tp_size = 1
+atn_dp_size = 2
+ffn_tp_size = 2

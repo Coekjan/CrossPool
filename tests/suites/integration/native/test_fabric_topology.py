@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.harness.native.fabric.bootstrap import fabric_bootstrap
-from tests.harness.native.fabric.protocol import FabricCoordinatorTrace
-from tests.harness.native.fabric.topology import run_fabric_topology
-from tests.harness.support.native.fabric import assert_fabric_report, coordinator_records
 from xpool.native.ffn import ForwardMode, LayerKind
+from xtest.harness.native.fabric.bootstrap import fabric_bootstrap
+from xtest.harness.native.fabric.protocol import FabricCoordinatorTrace
+from xtest.harness.native.fabric.topology import run_fabric_topology
+from xtest.harness.support.native.fabric import assert_fabric_report
 
 pytestmark = [
     pytest.mark.requires_cuda(min_devices=4),
@@ -48,7 +48,12 @@ def test_fabric_topology_executes_mixed_requests_with_exclusive_two_lane_leases(
         )
     assert_fabric_report(report, expected_repetitions=3)
 
-    coordinator = coordinator_records(report)
+    coordinator = tuple(
+        record
+        for participant in report.participants
+        for record in participant.records
+        if isinstance(record, FabricCoordinatorTrace)
+    )
     assert coordinator
     assert_exclusive_executor_leases(coordinator)
 

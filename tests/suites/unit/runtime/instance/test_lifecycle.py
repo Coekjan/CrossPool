@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import cast
 
 import pytest
 
 import xpool.runtime.instance
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.kv import kv_capacity_profile
-from tests.harness.support.runtime.instance import (
+from xpool.config import XpoolConfig
+from xpool.fabric import FabricGenerationId, FabricGenerationPhase
+from xpool.model import ModelId
+from xpool.native import ABI_VERSION
+from xpool.runtime.instance import InstanceRankError, InstanceRankRuntime
+from xpool.runtime.transport import InstanceRankTransportProfile
+from xpool.service.wire import InstanceRankRegistration, ReadinessSnapshot, ReadinessStatus
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
+from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.runtime.instance import (
     ffn_profile,
     install_offline_instance_client,
     patch_native_instance_ops,
@@ -17,12 +23,6 @@ from tests.harness.support.runtime.instance import (
     transport_arena,
     transport_attributes,
 )
-from xpool.config import XpoolConfig
-from xpool.fabric import FabricGenerationId, FabricGenerationPhase, FabricPlan
-from xpool.native import ABI_VERSION
-from xpool.runtime.instance import InstanceRankError, InstanceRankRuntime
-from xpool.runtime.transport import InstanceRankTransportProfile
-from xpool.service.wire import InstanceRankRegistration, ReadinessSnapshot, ReadinessStatus
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_offline_instance_client.__name__)
 
@@ -33,14 +33,14 @@ def test_instance_register_rejects_unknown_instance() -> None:
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},
-            "models": [{"id": "m", "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
     install_test_config(config=config)
 
-    with pytest.raises(InstanceRankError, match="unknown instance"):
+    with pytest.raises(InstanceRankError, match="unknown Model ID"):
         InstanceRankRuntime.start(
-            instance_id="missing",
+            model_id=ModelId("test/missing"),
             rank=0,
             transport=transport_attributes(),
             ffn_profile=ffn_profile(),
@@ -100,7 +100,7 @@ def test_instance_deregister_detaches_before_publishing_departure(
     config = runtime_config()
     instance = runtime_instance(config, monkeypatch)
     instance.registration = InstanceRankRegistration(
-        instance_id="m",
+        model_id=TEST_MODEL_ID,
         rank=0,
         abi_version=ABI_VERSION,
         pid=instance.process_ref.pid,
@@ -116,7 +116,7 @@ def test_instance_deregister_detaches_before_publishing_departure(
     monkeypatch.setattr(
         instance.client,
         "deregister_instance",
-        lambda instance_id, rank, owner: events.append("deregister"),
+        lambda model_id, rank, owner: events.append("deregister"),
     )
 
     instance.deregister_runtime()
@@ -124,9 +124,19 @@ def test_instance_deregister_detaches_before_publishing_departure(
     assert events == ["stop_monitor", "detach", "stop_heartbeat", "deregister"]
 
 
-def test_instance_start_does_not_cleanup_when_registration_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_instance_start_closes_local_client_without_remote_deregistration_on_registration_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     runtime_config()
     events: list[str] = []
+    failure = RuntimeError("register failed")
+
+    class FakeXpoolClient:
+        def close(self) -> None:
+            events.append("close")
+
+        def deregister_instance(self, *args: object, **kwargs: object) -> None:
+            events.append("remote_deregister")
 
     def fail_register(
         self: InstanceRankRuntime,
@@ -136,14 +146,14 @@ def test_instance_start_does_not_cleanup_when_registration_fails(monkeypatch: py
         atn_runtime_headroom_bytes: int,
     ) -> None:
         events.append("register")
-        raise RuntimeError("register failed")
+        raise failure
 
+    monkeypatch.setattr(xpool.runtime.instance, "XpoolClient", FakeXpoolClient)
     monkeypatch.setattr(InstanceRankRuntime, "register_runtime", fail_register)
-    monkeypatch.setattr(InstanceRankRuntime, "deregister_runtime", lambda self: events.append("deregister"))
 
-    with pytest.raises(RuntimeError, match="register failed"):
+    with pytest.raises(RuntimeError, match="register failed") as error:
         InstanceRankRuntime.start(
-            instance_id="m",
+            model_id=TEST_MODEL_ID,
             rank=0,
             transport=transport_attributes(),
             ffn_profile=ffn_profile(),
@@ -151,7 +161,8 @@ def test_instance_start_does_not_cleanup_when_registration_fails(monkeypatch: py
             atn_runtime_headroom_bytes=0,
         )
 
-    assert events == ["register", "deregister"]
+    assert error.value is failure
+    assert events == ["register", "close"]
 
 
 def test_instance_close_releases_runtime_before_client(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -195,7 +206,7 @@ def test_instance_waits_through_every_fabric_startup_phase(monkeypatch: pytest.M
             instances=[],
         )
 
-    plan = cast(FabricPlan, SimpleNamespace(generation=generation))
+    plan = SimpleNamespace(generation=generation)
     monkeypatch.setattr(instance.client, "readiness", readiness, raising=False)
     monkeypatch.setattr(instance.client, "fabric_plan", lambda: plan, raising=False)
     monkeypatch.setattr(xpool.runtime.instance.time, "sleep", lambda _: None)

@@ -1,0 +1,134 @@
+[serving_cases.serving-001]
+description = "Installed Qwen3 serving with one attention rank and one FFN rank."
+module = "e2e.sglang.test_e2e_model_serving"
+deployment = "atn1-ffn1-lanes1"
+models = ["Qwen/Qwen3-0.6B"]
+graph_modes = ["decode-full-prefill-breakable"]
+estimated_duration_seconds = 300
+timeout_seconds = 1800
+
+[serving_cases.serving-002]
+description = "Installed Qwen3 serving with attention TP two and one FFN rank."
+module = "e2e.sglang.test_e2e_model_serving"
+deployment = "atn2-ffn1-lanes1"
+models = ["Qwen/Qwen3-0.6B"]
+graph_modes = ["decode-full-prefill-breakable"]
+estimated_duration_seconds = 360
+timeout_seconds = 1800
+
+[serving_cases.serving-003]
+description = "Installed Qwen2.5 serving with one attention rank and one FFN rank."
+module = "e2e.sglang.test_e2e_model_serving"
+deployment = "atn1-ffn1-lanes1"
+models = ["Qwen/Qwen2.5-0.5B"]
+graph_modes = ["decode-full-prefill-breakable"]
+estimated_duration_seconds = 300
+timeout_seconds = 1800
+
+[serving_cases.serving-004]
+description = "Installed Qwen2.5 serving with attention TP two and one FFN rank."
+module = "e2e.sglang.test_e2e_model_serving"
+deployment = "atn2-ffn1-lanes1"
+models = ["Qwen/Qwen2.5-0.5B"]
+graph_modes = ["decode-full-prefill-breakable"]
+estimated_duration_seconds = 360
+timeout_seconds = 1800
+
+[serving_cases.serving-005]
+description = "Cross-model prefix-cache reclamation with single-rank attention."
+module = "e2e.sglang.test_e2e_elastic_kv"
+deployment = "atn1-ffn2-lanes2"
+models = [
+  "Qwen/Qwen2.5-0.5B",
+  "Qwen/Qwen3-0.6B",
+]
+estimated_duration_seconds = 600
+timeout_seconds = 3600
+
+[serving_cases.serving-005.elastic_kv]
+prefix_model_id = "Qwen/Qwen2.5-0.5B"
+prefix_tokens = 20000
+pressure_model_id = "Qwen/Qwen3-0.6B"
+atn_device_memory_budget_bytes = 10737418240
+
+[serving_cases.serving-006]
+description = "Cross-model prefix-cache reclamation with two-rank attention TP."
+module = "e2e.sglang.test_e2e_elastic_kv"
+deployment = "atn2-ffn2-lanes2"
+models = [
+  "Qwen/Qwen2.5-0.5B",
+  "Qwen/Qwen3-0.6B",
+]
+estimated_duration_seconds = 700
+timeout_seconds = 3600
+
+[serving_cases.serving-006.elastic_kv]
+prefix_model_id = "Qwen/Qwen2.5-0.5B"
+prefix_tokens = 32000
+pressure_model_id = "Qwen/Qwen3-0.6B"
+atn_device_memory_budget_bytes = 11274289152
+
+[topology_cases.topology-001]
+description = "Single-rank FFN delivery for complete and rank-summed outputs."
+module = "e2e.sglang.test_e2e_ffn_topology"
+deployment = "atn1-ffn1-lanes1"
+instances = [{ model_id = "Qwen/Qwen3-0.6B", layer_ordinal = 0 }]
+requests = [
+  { instance_index = 0, forward_mode = "decode", dp_rank_payload_rows = [1], output_requirement = "per_rank_complete" },
+  { instance_index = 0, forward_mode = "decode", dp_rank_payload_rows = [1], output_requirement = "group_sum_complete" },
+  { instance_index = 0, forward_mode = "prefill", dp_rank_payload_rows = [128], output_requirement = "per_rank_complete" },
+  { instance_index = 0, forward_mode = "prefill", dp_rank_payload_rows = [128], output_requirement = "group_sum_complete" },
+]
+estimated_duration_seconds = 600
+timeout_seconds = 3600
+
+[topology_cases.topology-002]
+description = "Direct partial delivery across four attention DP ranks."
+module = "e2e.sglang.test_e2e_ffn_topology"
+deployment = "atn4-ffn2-lanes1"
+instances = [{ model_id = "Qwen/Qwen3-0.6B", layer_ordinal = 0 }]
+requests = [
+  { instance_index = 0, forward_mode = "decode", dp_rank_payload_rows = [1, 0, 0, 0], output_requirement = "group_sum_complete" },
+  { instance_index = 0, forward_mode = "prefill", dp_rank_payload_rows = [32, 32, 32, 32], output_requirement = "group_sum_complete" },
+]
+estimated_duration_seconds = 900
+timeout_seconds = 3600
+
+[topology_cases.topology-003]
+description = "Odd FFN TP three with one attention rank and single-complete delivery."
+module = "e2e.sglang.test_e2e_ffn_topology"
+deployment = "atn1-ffn3-lanes1"
+instances = [{ model_id = "Qwen/Qwen3-0.6B", layer_ordinal = 0 }]
+requests = [
+  { instance_index = 0, forward_mode = "decode", dp_rank_payload_rows = [1], output_requirement = "group_sum_complete" },
+  { instance_index = 0, forward_mode = "prefill", dp_rank_payload_rows = [128], output_requirement = "group_sum_complete" },
+]
+estimated_duration_seconds = 900
+timeout_seconds = 3600
+
+[topology_cases.topology-004]
+description = "Replicated complete delivery from an FFN TP subgroup across attention DP ranks."
+module = "e2e.sglang.test_e2e_ffn_topology"
+deployment = "atn2-ffn4-lanes1"
+instances = [{ model_id = "Qwen/Qwen2.5-0.5B", layer_ordinal = 0 }]
+requests = [
+  { instance_index = 0, forward_mode = "decode", dp_rank_payload_rows = [1, 0], output_requirement = "per_rank_complete" },
+  { instance_index = 0, forward_mode = "prefill", dp_rank_payload_rows = [64, 64], output_requirement = "per_rank_complete" },
+]
+estimated_duration_seconds = 900
+timeout_seconds = 3600
+
+[topology_cases.topology-005]
+description = "Independent cross-model FFN placement and delivery on a shared fleet."
+module = "e2e.sglang.test_e2e_ffn_topology"
+deployment = "atn2-ffn4-lanes2"
+instances = [
+  { model_id = "Qwen/Qwen3-0.6B", layer_ordinal = 0 },
+  { model_id = "Qwen/Qwen2.5-0.5B", layer_ordinal = 0 },
+]
+requests = [
+  { instance_index = 0, forward_mode = "decode", dp_rank_payload_rows = [1, 0], output_requirement = "group_sum_complete" },
+  { instance_index = 1, forward_mode = "prefill", dp_rank_payload_rows = [64, 64], output_requirement = "per_rank_complete" },
+]
+estimated_duration_seconds = 1200
+timeout_seconds = 3600

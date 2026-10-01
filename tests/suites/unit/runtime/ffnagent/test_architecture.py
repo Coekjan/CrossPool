@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from xpool.runtime.ffnagent import architecture
+from xtest.harness.support.config import TEST_MODEL_ID
 
 
 def dense_keys(layer_id: int) -> tuple[str, ...]:
@@ -44,7 +45,7 @@ def test_load_rejects_extra_main_layer_ffn_key(tmp_path: Path) -> None:
     write_indexed_model(tmp_path / "model", config, (*keys, "model.layers.0.mlp.unowned.weight"))
 
     with pytest.raises(RuntimeError, match=r"extra=.*unowned"):
-        architecture.load(model_id="model", model_path=tmp_path / "model")
+        architecture.load(model_id=TEST_MODEL_ID, model_path=tmp_path / "model")
 
 
 def test_load_rejects_duplicate_config_member(tmp_path: Path) -> None:
@@ -53,7 +54,7 @@ def test_load_rejects_duplicate_config_member(tmp_path: Path) -> None:
     (model_path / "config.json").write_bytes(b'{"architectures":[],"architectures":[]}')
 
     with pytest.raises(RuntimeError, match="duplicate JSON member 'architectures'"):
-        architecture.load(model_id="model", model_path=model_path)
+        architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
 
 
 def test_source_config_reads_strict_types_and_constraints() -> None:

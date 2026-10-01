@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-from collections.abc import Callable
-from typing import cast
 
 from xpool.bootstrap import get_runtime_role
 from xpool.config import get_global_config
@@ -14,7 +12,6 @@ from xpool.utils.discovery import walk_package_modules
 
 DEVKIT_PACKAGE = "xpool.devkit"
 logger = logging.getLogger(__name__)
-type ObserverInstaller = Callable[[], None]
 
 
 def install(package_name: str = DEVKIT_PACKAGE) -> None:
@@ -68,4 +65,4 @@ def install(package_name: str = DEVKIT_PACKAGE) -> None:
         if not callable(entry):
             raise RuntimeError(f"xpool devkit observer {module.__name__} does not expose install()")
         logger.debug("installing devkit observer=%s", module_info.name)
-        cast(ObserverInstaller, entry)()
+        entry()

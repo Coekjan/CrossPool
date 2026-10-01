@@ -5,7 +5,7 @@ derives their resource requirements, runs CTest and Python stages in order, and
 keeps one GPU pool locked until every supervised process scope is reaped.
 Direct pytest and CTest commands are focused debugging interfaces only.
 The process tree, scheduler, GPU lease, endpoint, and artifact internals are
-documented in [`tests/harness/README.md`](harness/README.md).
+documented in [Test Tooling](../docs/designs/tooling.md).
 
 Tests prove behavior visible at public boundaries. Avoid tests that mirror
 registry internals, config table structure, or implementation text. Source-text
@@ -32,20 +32,38 @@ public behavior is broken, replace it with a behavior test.
 - `tests/suites/models/<model-id>/` owns optional real-checkpoint numerical and
   cross-graph qualification, including token or logit comparison. Engine-specific
   files use names such as `test_sglang_model_qualification.py`.
-- `tests/harness/` contains reusable collection, scheduling, process, GPU,
-  native, and SGLang infrastructure. Harness modules are not test suites and
-  must not import collected test modules.
+- `src/xpool-dev/xkit/` owns shared process, GPU, endpoint, run-store and serving
+  lifecycle mechanisms. `src/xpool-dev/xtest/harness/` owns test collection,
+  scheduling, verdicts, fixtures, native support and qualification.
+  Harness modules are installed
+  tooling, not test suites, and must not import collected test modules.
 
 Place a test at the lowest layer that can observe its public behavior. Shared
 setup belongs in a focused harness module or an explicitly imported fixture;
 do not create implicit fixture dependencies through directory `conftest.py`
 imports. Put engine-owned Integration and E2E files under an engine-named
 directory; do not mix their cases with engine-neutral files. E2E files use
-`test_e2e_*.py` names. Shared model IDs, topology matrices, graph modes, and
-test-only KV limits belong in `tests/harness/sglang/manifest.toml`. Observer
-record capacity belongs to the serving harness. Concrete-model numerical and
-serving qualification cases belong as typed constants in their model suite
-modules.
+`test_e2e_*.py` names. Named cases in `tests/tests.toml` select models, source
+modules, graph modes and test-only KV limits, with English descriptions.
+Catalogue cases reference portable scenes under `configs/deployments/` for
+complete device placement, model TP/DP geometry, Executor Lane count and SLO.
+The common runtime assembly and model-path contract belong to
+[Shared deployment configuration](../docs/designs/tooling.md#shared-deployment-configuration).
+Observer record capacity belongs to the serving harness. Concrete-model
+numerical and serving qualification cases belong as typed constants in their
+model suite modules.
+
+Tool self-tests use `tests/suites/<layer>/{xkit,xtest}/`. Unit paths
+mirror the installed modules, including each tool's `harness/`; Integration
+paths identify the owning interface or workflow. Shared mechanisms are tested
+once under `xkit`; tool tests prove CLI wiring, retained outcomes and
+finalization. Real sockets, subprocesses, locks and cross-module execution
+belong to Integration. Product tests retain their subsystem ownership even
+when they use a tool fixture.
+
+The test tool has a real CPU list/run/report/clean cycle through the editable
+`xpool-dev` development installation, including reports and cleanup from another
+working directory.
 
 Keep common and subsystem-specific fixtures separate so each fixture owns one
 coherent reset boundary. Use pinned SGLang concrete types, such as `ServerArgs`,
@@ -65,19 +83,33 @@ Pytest resource markers are executable metadata:
 - `requires_mps` requires the externally managed CUDA MPS controller.
 - `requires_model_weights(model_id)` resolves weights through `XPOOL_CONFIG`.
 
+`xtest.requirements` provides the same resource declarations statically or through
+a callback returning `xkit.ResourceRequirements` for concrete parameter values.
+`xtest.parameterize` binds catalogue cases or explicit source values; optional
+row callbacks return native pytest parameters. Fixtures remain ordinary pytest
+fixtures. See the
+[serving test](suites/e2e/sglang/test_e2e_model_serving.py) and
+[shared declaration contract](../docs/designs/tooling.md#catalogue-and-source-declarations).
+Synthetic tests reuse the typed `TEST_MODEL_ID` from
+`xtest.harness.support.config` unless a distinct identity is part of the behavior
+under test.
+
 Unavailable resources skip by default and fail with
 `--strict-requirements`; malformed explicit configuration always fails. Every
 pytest session preflights `xpool.native` and the sole `xpool.ops.ffn_shim`
-dispatcher registration. CTest CUDA cases declare one CTest GPU resource and
-perform their own MPS preflight.
+dispatcher registration and loads the complete portable test catalogue once
+before collection, including Unit-only sessions. Collection does not resolve
+machine configuration, read checkpoints or probe GPUs. CTest CUDA cases declare
+one CTest GPU resource and perform their own MPS preflight.
 
 A missing or ABI-incompatible native extension fails the session, including
 Unit-only sessions. Resource markers handle unavailable external resources.
 E2E tests run without strict mode
 when all declared and derived requirements are available. Each task materializes
 a private config from `XPOOL_CONFIG` and its selected case models, without
-waiting for unrelated configured models. All serving E2E cases use the shared
-manifest's `serving_slo` rather than external scheduler or model SLO values.
+waiting for unrelated configured models. Product serving E2E cases use the
+selected deployment's SLO and model geometry rather than external scheduler or
+model overrides.
 
 Graph-mode acceptance criteria belong to
 [Qualification](../docs/designs/qualification.md#numerical-and-graph-evidence).
@@ -110,7 +142,8 @@ newest 20 inactive entries by default; use `--keep N`, `--all`, and
 `--dry-run` to select or preview another cleanup. Concurrent active runs are
 never removed.
 
-Each E2E SGLang server writes a versionless `*.inference.json` beside its log.
+Each E2E SGLang server writes `models/<model-id.uri_encode()>/inference.json` beside
+its server log within the attempt directory.
 It contains the exact public `/generate` request and response and is written
 before HTTP-status and token-shape validation. JUnit describes case outcome,
 `*.duration.json` records timing and resolved graph mode. Explicit Models
@@ -138,6 +171,13 @@ uv run xtest run --suite e2e --strict-requirements
 uv run xtest run --suite integration --suite e2e --integration=sglang
 uv run xtest run --suite Qwen/Qwen3-0.6B --integration=sglang
 uv run xtest run --suite models --strict-requirements
+
+# Inventory concrete cases without running fixtures or probing resources.
+uv run xtest list --suite unit
+uv run xtest list --suite integration --integration=sglang
+
+# Offline reporting preserves the original test verdict and strictness.
+uv run xtest report .xpool-cache/test-runs/RUN_ID --output /tmp/test-report
 
 # Explicit durable-result cleanup; default is --keep 20.
 uv run xtest clean --dry-run

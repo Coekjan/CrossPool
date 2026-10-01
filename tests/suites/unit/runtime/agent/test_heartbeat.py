@@ -6,11 +6,11 @@ from typing import cast
 
 import pytest
 
-from tests.harness.support.wait import wait_until, wait_until_raise
 from xpool.runtime.agent import Agent, AgentError, AgentHeartbeat
 from xpool.service.client import XpoolClientError
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import HeartbeatResponse
+from xtest.harness.support.wait import wait_until, wait_until_raise
 
 
 class HeartbeatAgent:

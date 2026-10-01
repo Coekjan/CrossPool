@@ -24,6 +24,7 @@ from xpool.fabric import (
     FifoSchedulerPolicy,
     RandomSchedulerPolicy,
 )
+from xpool.model import ModelId
 from xpool.mps import MpsProbeResult, probe_mps_controller
 from xpool.native import ABI_VERSION
 from xpool.service.daemon.fabric import FabricController, FabricGenerationState, FabricMembership
@@ -89,7 +90,7 @@ class ServingStartupState:
     """Generation-scoped Instance listeners and serving-health confirmation."""
 
     generation: FabricGenerationId | None = None
-    listeners: dict[str, ServingListener] = field(default_factory=dict)
+    listeners: dict[ModelId, ServingListener] = field(default_factory=dict)
     confirmed: bool = False
 
 
@@ -98,7 +99,7 @@ class ServingHealthTargets:
     """Immutable ordered listener snapshot for one Fabric generation."""
 
     generation: FabricGenerationId
-    listeners: tuple[tuple[str, ServingListener], ...]
+    listeners: tuple[tuple[ModelId, ServingListener], ...]
 
 
 class ControlPlane:
@@ -353,7 +354,7 @@ class ControlPlane:
                         self.transport_broker.remove_instance(owner.instance)
                         logger.info(
                             "registration removed role=instance instance=%s rank=%s pid=%s",
-                            owner.instance.instance_id,
+                            owner.instance.model_id,
                             owner.instance.rank,
                             owner.proc.pid,
                         )
@@ -443,18 +444,21 @@ class ControlPlane:
         """Install an instance registration unless a different live one exists."""
 
         self.retire_terminal_generation()
-        instance_id = registration.instance.instance_id
+        model_id = registration.instance.model_id
         rank = registration.instance.rank
         if registration.abi_version != ABI_VERSION:
             raise XpoolDaemonError("conflict", "instance ABI version does not match daemon ABI")
-        if instance_id not in get_global_config().instance_by_id:
-            raise XpoolDaemonError("not_found", "unknown instance")
-        self.validate_instance_rank(rank)
+        self.validate_instance_rank(model_id, rank)
         transport = registration.transport
-        if transport.atn_tp_size * transport.atn_dp_size > get_global_config().atn_world_size:
+        config = get_global_config()
+        model = config.model_by_id[model_id]
+        if (transport.atn_tp_size, transport.atn_dp_size) != (
+            config.atn_tp_size_of(model_id),
+            model.atn_dp_size,
+        ):
             raise XpoolDaemonError(
                 "conflict",
-                "instance transport TP-by-DP topology exceeds the configured AtnAgent world",
+                "instance transport TP-by-DP topology disagrees with configured model geometry",
             )
         if transport.atn_dp_rank * transport.atn_tp_size + transport.atn_tp_rank != rank:
             raise XpoolDaemonError("conflict", "instance transport coordinates do not use TP-fastest rank order")
@@ -466,7 +470,7 @@ class ControlPlane:
                 if expected_owner != registration.proc:
                     fabric.record_owner_failure(
                         FabricInstanceRankOwnerFailure(
-                            instance_id=instance_id,
+                            model_id=model_id,
                             rank=rank,
                             reason=FabricOwnerFailureReason.REPLACED,
                         )
@@ -478,7 +482,7 @@ class ControlPlane:
             if self.registrations.instances.query(registration.instance) is not existing:
                 raise XpoolDaemonError("not_ready", "instance registration changed during validation")
             for peer in self.registrations.instances.values():
-                if peer.instance.instance_id != instance_id or peer.instance == registration.instance:
+                if peer.instance.model_id != model_id or peer.instance == registration.instance:
                     continue
                 peer_contract = (
                     peer.transport.hidden_size,
@@ -508,20 +512,18 @@ class ControlPlane:
                 self.membership_revision += 1
                 logger.info(
                     "registration accepted role=instance instance=%s rank=%s pid=%s device=%s",
-                    registration.instance.instance_id,
+                    registration.instance.model_id,
                     registration.instance.rank,
                     registration.proc.pid,
                     get_global_config().atn.devices[registration.instance.rank],
                 )
         self.ensure_fabric_plan()
 
-    def deregister_instance(self, instance_id: str, rank: int, owner: ProcessRef) -> None:
+    def deregister_instance(self, model_id: ModelId, rank: int, owner: ProcessRef) -> None:
         """Remove an instance-rank registration when the owner process requests it."""
 
-        if instance_id not in get_global_config().instance_by_id:
-            raise XpoolDaemonError("not_found", "unknown instance")
-        self.validate_instance_rank(rank)
-        instance = InstanceRankId(instance_id=instance_id, rank=rank)
+        self.validate_instance_rank(model_id, rank)
+        instance = InstanceRankId(model_id=model_id, rank=rank)
         with self.lock:
             registration = self.registrations.instances.query(instance)
         if registration is None:
@@ -534,7 +536,7 @@ class ControlPlane:
             self.fabric_controller.instance_departed(
                 instance,
                 FabricInstanceRankOwnerFailure(
-                    instance_id=instance_id,
+                    model_id=model_id,
                     rank=rank,
                     reason=FabricOwnerFailureReason.EXITED,
                 ),
@@ -543,7 +545,7 @@ class ControlPlane:
             )
         logger.info(
             "registration removed role=instance instance=%s rank=%s pid=%s",
-            instance_id,
+            model_id,
             rank,
             registration.proc.pid,
         )
@@ -723,15 +725,15 @@ class ControlPlane:
 
     def publish_instance_initialized(
         self,
-        instance_id: str,
+        model_id: ModelId,
         *,
         rank: int,
         publication: InstanceRankInitializedPublication,
     ) -> None:
         """Record one Instance Rank's scheduler construction and listener."""
 
-        self.validate_instance_rank(rank)
-        instance = InstanceRankId(instance_id=instance_id, rank=rank)
+        self.validate_instance_rank(model_id, rank)
+        instance = InstanceRankId(model_id=model_id, rank=rank)
         with self.lock:
             registration = self.registrations.instances.query(instance)
         if registration is None:
@@ -742,7 +744,7 @@ class ControlPlane:
                 raise XpoolDaemonError("not_ready", "fabric generation retired during initialization")
             if self.registrations.instances.query(instance) is not registration:
                 raise XpoolDaemonError("not_ready", "instance registration changed during initialization")
-            listener = self.serving_startup.listeners.get(instance_id)
+            listener = self.serving_startup.listeners.get(model_id)
             if listener is not None and listener != publication.serving_listener:
                 raise XpoolDaemonError("conflict", "serving listener disagrees across instance ranks")
             self.fabric_controller.record_initialized(
@@ -750,7 +752,7 @@ class ControlPlane:
                 registration.proc,
                 generation=publication.generation,
             )
-            self.serving_startup.listeners.setdefault(instance_id, publication.serving_listener)
+            self.serving_startup.listeners.setdefault(model_id, publication.serving_listener)
 
     def heartbeat_response(self, now: float) -> HeartbeatResponse:
         """Build the unified heartbeat response from authoritative state."""
@@ -791,11 +793,11 @@ class ControlPlane:
             self.registrations.ffnagents.commit_heartbeat(cuda_device, registration, now=now)
         return self.heartbeat_response(now)
 
-    def heartbeat_instance(self, instance_id: str, rank: int, heartbeat: ProcessRef) -> HeartbeatResponse:
+    def heartbeat_instance(self, model_id: ModelId, rank: int, heartbeat: ProcessRef) -> HeartbeatResponse:
         """Refresh an instance-rank heartbeat and return global daemon warnings."""
 
         now = monotonic()
-        instance = InstanceRankId(instance_id=instance_id, rank=rank)
+        instance = InstanceRankId(model_id=model_id, rank=rank)
         with self.lock:
             registration = self.registrations.instances.query(instance)
         if registration is None:
@@ -891,7 +893,7 @@ class ControlPlane:
                             continue
                         fabric.record_owner_failure(
                             FabricInstanceRankOwnerFailure(
-                                instance_id=instance.instance_id,
+                                model_id=instance.model_id,
                                 rank=instance.rank,
                                 reason=reason,
                             )
@@ -1013,7 +1015,7 @@ class ControlPlane:
                 InstanceRankRef(
                     pid=owner.proc.pid,
                     abi_version=owner.abi_version,
-                    instance_id=owner.instance.instance_id,
+                    model_id=owner.instance.model_id,
                     rank=owner.instance.rank,
                 )
                 for owner in live_remaining
@@ -1036,9 +1038,9 @@ class ControlPlane:
             if handle.handle in seen_handles:
                 raise XpoolDaemonError("conflict", "atnagent transport arenas contain duplicate arena handle")
             seen_handles.add(handle.handle)
-            if binding.instance_id not in get_global_config().instance_by_id:
+            if binding.model_id not in get_global_config().instance_by_model_id:
                 raise XpoolDaemonError("conflict", "atnagent transport arena handle references unknown instance")
-            self.validate_instance_rank(binding.rank)
+            self.validate_instance_rank(binding.model_id, binding.rank)
             expected_cuda_device = atn_cuda_devices[binding.rank]
             if expected_cuda_device != cuda_device:
                 raise XpoolDaemonError(
@@ -1049,7 +1051,7 @@ class ControlPlane:
                         f"not {cuda_device}"
                     ),
                 )
-            instance = InstanceRankId(instance_id=binding.instance_id, rank=binding.rank)
+            instance = InstanceRankId(model_id=binding.model_id, rank=binding.rank)
             if instance in seen:
                 raise XpoolDaemonError("conflict", "atnagent transport arenas contain duplicate instance-rank handle")
             registration = self.registrations.instances.query(instance)
@@ -1104,12 +1106,12 @@ class ControlPlane:
                 ).readiness.ready
             ):
                 return None
-            instance_ids = tuple(instance.id for instance in config.instances)
-            if set(startup.listeners) != set(instance_ids):
+            model_ids = tuple(instance.model_id for instance in config.instances)
+            if set(startup.listeners) != set(model_ids):
                 return None
             return ServingHealthTargets(
                 generation=fabric.plan.generation,
-                listeners=tuple((instance_id, startup.listeners[instance_id]) for instance_id in instance_ids),
+                listeners=tuple((model_id, startup.listeners[model_id]) for model_id in model_ids),
             )
 
     def confirm_serving_health(self, targets: ServingHealthTargets) -> bool:
@@ -1127,10 +1129,10 @@ class ControlPlane:
                 or startup.confirmed
             ):
                 return False
-            instance_ids = tuple(instance.id for instance in config.instances)
-            if set(startup.listeners) != set(instance_ids):
+            model_ids = tuple(instance.model_id for instance in config.instances)
+            if set(startup.listeners) != set(model_ids):
                 return False
-            listeners = tuple((instance_id, startup.listeners[instance_id]) for instance_id in instance_ids)
+            listeners = tuple((model_id, startup.listeners[model_id]) for model_id in model_ids)
             if listeners != targets.listeners:
                 return False
             startup.confirmed = True
@@ -1138,7 +1140,7 @@ class ControlPlane:
 
     def acquire_instance_transport_arena(
         self,
-        instance_id: str,
+        model_id: ModelId,
         *,
         rank: int,
         owner: ProcessRef,
@@ -1146,13 +1148,9 @@ class ControlPlane:
         """Acquire a daemon-brokered transport arena handle for one registered instance rank."""
 
         config = get_global_config()
-        instance = config.instance_by_id.get(instance_id)
-        if instance is None:
-            raise XpoolDaemonError("not_found", "unknown instance")
-
         atn_cuda_devices = config.atn.devices
-        self.validate_instance_rank(rank)
-        instance_uid = InstanceRankId(instance_id=instance_id, rank=rank)
+        self.validate_instance_rank(model_id, rank)
+        instance_uid = InstanceRankId(model_id=model_id, rank=rank)
         cuda_device = atn_cuda_devices[rank]
         now = monotonic()
         with self.lock:
@@ -1205,11 +1203,14 @@ class ControlPlane:
             )
         return publication.handle
 
-    def validate_instance_rank(self, rank: int) -> None:
-        """Reject an instance rank outside the configured ATN world."""
+    def validate_instance_rank(self, model_id: ModelId, rank: int) -> None:
+        """Reject an unknown model or rank outside its configured attention world."""
 
-        if rank < 0 or rank >= get_global_config().atn_world_size:
+        config = get_global_config()
+        if model_id not in config.instance_by_model_id:
+            raise XpoolDaemonError("not_found", "unknown instance")
+        if rank < 0 or rank >= config.atn_world_size:
             raise XpoolDaemonError(
                 "conflict",
-                f"instance rank {rank} is outside atn_world_size={get_global_config().atn_world_size}",
+                f"instance rank {rank} is outside atn_world_size={config.atn_world_size}",
             )

@@ -17,9 +17,10 @@ from threading import Lock
 from types import MappingProxyType
 from typing import Literal, TypedDict, cast
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, PrivateAttr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, JsonValue, PrivateAttr, field_validator, model_validator
 
 import xpool.native
+from xpool.model import ModelId
 
 __all__ = [
     "CONFIG_REGISTRY",
@@ -254,8 +255,10 @@ class ConfigSetting:
                 records.append(
                     {
                         "name": format_source_record_name((*concrete_path, segment, *rest)),
-                        "value": None,
-                        "source": ConfigSource.UNSET,
+                        "value": self.default if ConfigSource.DEFAULT in self.allowed_sources else None,
+                        "source": ConfigSource.DEFAULT
+                        if ConfigSource.DEFAULT in self.allowed_sources
+                        else ConfigSource.UNSET,
                     }
                 )
                 return
@@ -577,6 +580,21 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Optional absolute local model path override containing config.json.",
     ),
     ConfigSetting(
+        name="model_atn_tp_size",
+        path=("models", "*", "atn_tp_size"),
+        parser="int",
+        allowed_sources=(ConfigSource.CONFIG,),
+        description="Optional attention tensor-parallel width; omission divides the attention world by DP.",
+    ),
+    ConfigSetting(
+        name="model_atn_dp_size",
+        path=("models", "*", "atn_dp_size"),
+        parser="int",
+        allowed_sources=(ConfigSource.CONFIG, ConfigSource.DEFAULT),
+        default=1,
+        description="Attention data-parallel width; values above one require DP attention.",
+    ),
+    ConfigSetting(
         name="model_ffn_tp_size",
         path=("models", "*", "ffn_tp_size"),
         parser="int",
@@ -790,10 +808,22 @@ class ModelConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(min_length=1, description="Full model id, for example deepseek-ai/DeepSeek-V2-Lite-Chat.")
+    id: ModelId = Field(description="Canonical model identity, for example deepseek-ai/DeepSeek-V2-Lite-Chat.")
     path: Path | None = Field(
         default=None,
         description="Optional absolute local model path override containing config.json.",
+    )
+    atn_tp_size: int | None = Field(
+        default=None,
+        ge=1,
+        strict=True,
+        description="Optional attention TP width; omission divides the AtnAgent Fleet width by attention DP.",
+    )
+    atn_dp_size: int = Field(
+        default=1,
+        ge=1,
+        strict=True,
+        description="Attention DP width; values above one enable DP attention.",
     )
     ffn_tp_size: int | None = Field(
         default=None,
@@ -849,7 +879,7 @@ class InstanceConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(description="Instance id, equal to the configured model id in the current topology.")
+    model_id: ModelId = Field(description="Model ID identifying this configured Instance.")
     instance_index: int = Field(ge=0, description="Integer instance index fed to the native shim ABI.")
 
 
@@ -1237,6 +1267,38 @@ class XpoolConfig(BaseModel):
 
         return self._sources
 
+    def to_config_mapping(self) -> dict[str, JsonValue]:
+        """Snapshot CONFIG-allowed effective values for TOML materialization.
+
+        Registry source permissions, including model wildcard paths, own the
+        projection. Optional None values, bootstrap inputs and env-only debug
+        values are omitted. Callers retain debug environment and original source
+        provenance separately; reloading the snapshot establishes CONFIG sources.
+        """
+
+        paths = tuple(
+            setting.path
+            for setting in CONFIG_REGISTRY
+            if setting.path is not None and ConfigSource.CONFIG in setting.allowed_sources
+        )
+
+        def project(value: JsonValue, allowed: tuple[tuple[str, ...], ...]) -> JsonValue:
+            if () in allowed:
+                return value
+            if isinstance(value, dict):
+                return {
+                    name: project(child, tuple(path[1:] for path in allowed if path and path[0] == name))
+                    for name, child in value.items()
+                    if any(path and path[0] == name for path in allowed)
+                }
+            if isinstance(value, list):
+                nested = tuple(path[1:] for path in allowed if path and path[0] == "*")
+                return [project(child, nested) for child in value]
+            raise ConfigError("configuration registry path does not match its schema")
+
+        payload = cast(dict[str, JsonValue], self.model_dump(mode="json", exclude_none=True))
+        return cast(dict[str, JsonValue], project(payload, paths))
+
     @cached_property
     def cuda_devices(self) -> tuple[int, ...]:
         """Return all CUDA devices managed by CrossPool, ordered by CUDA device index."""
@@ -1287,30 +1349,52 @@ class XpoolConfig(BaseModel):
             Immutable instance placement tuple in model declaration order.
         """
 
-        return tuple(InstanceConfig(id=model.id, instance_index=index) for index, model in enumerate(self.models))
+        return tuple(InstanceConfig(model_id=model.id, instance_index=index) for index, model in enumerate(self.models))
 
     @cached_property
-    def instance_by_id(self) -> Mapping[str, InstanceConfig]:
-        """Return derived instance placement keyed by configured instance id."""
+    def instance_by_model_id(self) -> Mapping[ModelId, InstanceConfig]:
+        """Return derived Instance placements keyed by Model ID."""
 
-        return MappingProxyType({instance.id: instance for instance in self.instances})
+        return MappingProxyType({instance.model_id: instance for instance in self.instances})
+
+    @property
+    def model_by_id(self) -> Mapping[ModelId, ModelConfig]:
+        """Return model declarations keyed by canonical identity."""
+
+        return MappingProxyType({model.id: model for model in self.models})
 
     @property
     def atn_world_size(self) -> int:
-        """Return the number of attention-side instance ranks per model."""
+        """Return the physical AtnAgent Fleet width."""
 
         return len(self.atn.devices)
 
+    def atn_tp_size_of(self, model_id: ModelId) -> int:
+        """Resolve declared or omitted attention TP against the complete World.
+
+        Model declarations retain omitted TP as None. The complete configuration
+        validates divisibility and the TP-by-DP product before runtime consumers
+        use this concrete width.
+        """
+
+        model = self.model_by_id[model_id]
+        return model.atn_tp_size if model.atn_tp_size is not None else self.atn_world_size // model.atn_dp_size
+
     @model_validator(mode="after")
     def validate_device_assignments(self) -> XpoolConfig:
-        """Reject CUDA devices assigned to both ATN and FFN roles."""
+        """Validate role separation and each model's complete attention World."""
 
         overlap = sorted(set(self.atn.devices) & set(self.ffn.devices))
         if overlap:
             raise ValueError(f"CUDA devices may host only one xpool role; overlapping devices: {overlap}")
+        for model in self.models:
+            if self.atn_world_size % model.atn_dp_size != 0:
+                raise ValueError(f"{model.id}: attention DP must divide the configured attention World")
+            if self.atn_tp_size_of(model.id) * model.atn_dp_size != self.atn_world_size:
+                raise ValueError(f"{model.id}: attention TP times DP must equal the configured attention World")
         return self
 
-    def model_path_of(self, model_id: str) -> Path:
+    def model_path_of(self, model_id: ModelId) -> Path:
         """Return the resolved absolute local path for a configured model.
 
         Args:
@@ -1335,7 +1419,7 @@ class XpoolConfig(BaseModel):
                     raise MissingRequiredConfig(
                         f"missing required model path for {model.id}: set models[].path or vendor.model_base_uri"
                     )
-                model_path = self.vendor.model_base_uri / model.id
+                model_path = self.vendor.model_base_uri / model.id.relative_path
             return model_path
         raise MissingRequiredConfig(f"unknown configured model id: {model_id}")
 
@@ -1350,7 +1434,7 @@ class XpoolConfig(BaseModel):
             ValueError: If model ids or resolved model paths are duplicated.
         """
 
-        model_path_by_id: dict[str, Path] = {}
+        model_path_by_id: dict[ModelId, Path] = {}
         for model in self.models:
             if model.id in model_path_by_id:
                 raise ValueError("model ids must be unique")
@@ -1360,7 +1444,7 @@ class XpoolConfig(BaseModel):
                     raise MissingRequiredConfig(
                         f"missing required model path for {model.id}: set models[].path or vendor.model_base_uri"
                     )
-                model_path = self.vendor.model_base_uri / model.id
+                model_path = self.vendor.model_base_uri / model.id.relative_path
             model_path_by_id[model.id] = model_path
         model_paths = [model_path.resolve() for model_path in model_path_by_id.values()]
         if len(model_paths) != len(set(model_paths)):

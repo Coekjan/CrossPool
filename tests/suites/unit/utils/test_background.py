@@ -4,8 +4,8 @@ import threading
 
 import pytest
 
-from tests.harness.support.wait import wait_until
 from xpool.utils.background import BackgroundThread
+from xtest.harness.support.wait import wait_until
 
 
 def test_background_thread_start_stop_sets_event_and_clears_thread() -> None:
@@ -114,6 +114,9 @@ def test_background_thread_timeout_preserves_live_worker_for_retry() -> None:
     assert worker.is_running
 
     release.set()
+    assert worker.thread is not None
+    worker.thread.join(timeout=1.0)
+    assert not worker.thread.is_alive()
     worker.close()
     assert worker.thread is None
     with pytest.raises(RuntimeError, match="closed background thread"):

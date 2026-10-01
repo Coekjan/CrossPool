@@ -2,27 +2,37 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import cast
 
-import pytest
 import safetensors.torch
 import torch
-from _pytest.mark.structures import ParameterSet
 
-from tests.harness.native.ffn.protocol import FfnInstanceReady, FfnInstanceSpec, FfnInvocationSpec
-from tests.harness.native.ffn.topology import (
+import xtest
+from xkit import ResourceRequirements
+from xkit.config import assemble_config
+from xkit.gpu import GpuPool
+from xkit.network import TcpEndpointReservation, TcpPortSpace
+from xpool.config import XpoolConfig
+from xpool.devkit.graph_observer import FfnGraphObserverSnapshot
+from xpool.fabric import FabricGenerationId, InstanceFfnLayerProfile, InstanceFfnProfile
+from xpool.ffn import FfnModelSpec
+from xpool.native.ffn import DpRowLayout, ForwardMode, OutputRequirement
+from xpool.runtime.ffnagent import architecture
+from xpool.runtime.transport import InstanceRankTransportProfile
+from xtest.harness.native.ffn.protocol import FfnInstanceReady, FfnInstanceSpec, FfnInvocationSpec
+from xtest.harness.native.ffn.topology import (
     FfnLiveTopologyObservation,
+    ffn_cluster_environment,
     materialize_ffn_cluster_launch,
     run_ffn_topology,
 )
-from tests.harness.runner.gpu import GpuPool
-from tests.harness.runner.network import TcpEndpointReservation, TcpPortSpace
-from tests.harness.sglang.manifest import E2E_MANIFEST_PATH, E2eFfnTopologyCase, E2eManifest, E2eModel
-from tests.harness.sglang.reference.ffn import SglangFfnReferenceCase, SglangFfnReferenceRunner
-from tests.harness.support.ffn import (
+from xtest.harness.runner.requirements import ResolvedConfig
+from xtest.harness.sglang.catalog import E2eFfnTopologyCase
+from xtest.harness.sglang.reference.ffn import SglangFfnReferenceCase, SglangFfnReferenceRunner
+from xtest.harness.support.ffn import (
     FFN_OUTPUT_ATOL,
     FFN_OUTPUT_MAXIMUM_SCALED_ERROR_LIMIT,
     FFN_OUTPUT_NORMALIZED_RMSE_LIMIT,
@@ -35,59 +45,57 @@ from tests.harness.support.ffn import (
     compare_ffn_outputs,
     generate_ffn_hidden_states,
 )
-from tests.harness.support.native.observer import (
-    object_dict,
-    object_list,
+from xtest.harness.support.native.observer import (
     read_fabric_observer_snapshots,
-    read_json_object,
 )
-from tests.harness.support.wait import remaining_seconds
-from xpool.config import ModelConfig, XpoolConfig
-from xpool.fabric import FabricGenerationId, FifoSchedulerPolicy, InstanceFfnLayerProfile, InstanceFfnProfile
-from xpool.ffn import FfnModelSpec
-from xpool.native.ffn import DpRowLayout, ForwardMode, OutputRequirement
-from xpool.runtime.ffnagent import architecture
-from xpool.runtime.transport import InstanceRankTransportProfile
+from xtest.harness.support.wait import remaining_seconds
 
-pytest_plugins = ("tests.harness.support.config",)
+pytest_plugins = ("xtest.harness.support.config",)
 
-MANIFEST = E2eManifest.load(E2E_MANIFEST_PATH)
 FFN_TOPOLOGY_INPUT_SEED = 17
 
 
-def case_parameter(case: E2eFfnTopologyCase) -> ParameterSet:
-    """Attach manifest-derived resources to one topology world."""
+def requirements_of(case: E2eFfnTopologyCase) -> ResourceRequirements:
+    """Declare the topology lease and its distinct local model resources."""
 
-    model_ids = tuple(instance.model_id for instance in case.instances)
-    return pytest.param(
-        case,
-        id=case.id,
-        marks=(
-            pytest.mark.requires_cuda(min_devices=case.required_gpu_count),
-            pytest.mark.requires_config,
-            pytest.mark.requires_mps,
-            *(pytest.mark.requires_model_weights(model_id) for model_id in model_ids),
-            pytest.mark.timeout(case.timeout_seconds),
-            pytest.mark.estimated_duration(seconds=case.estimated_duration_seconds),
-        ),
+    return ResourceRequirements(
+        case.required_gpu_count,
+        True,
+        True,
+        tuple(dict.fromkeys(instance.model_id for instance in case.instances)),
     )
 
 
-@pytest.mark.parametrize("case", tuple(case_parameter(case) for case in MANIFEST.ffn_topology_cases))
+@xtest.parameterize("case")
+@xtest.requirements(requirements_of)
 def test_e2e_ffn_topology(
     case: E2eFfnTopologyCase,
-    e2e_base_config: XpoolConfig,
+    e2e_base_config: ResolvedConfig,
     tmp_path: Path,
     task_artifact_dir: Path | None,
 ) -> None:
     """Prove real placement, delivery, scheduling, MPS, and numerical output."""
 
     deadline = time.monotonic() + case.timeout_seconds
-    models = tuple(MANIFEST.model(instance.model_id) for instance in case.instances)
-    task_config = e2e_base_config.model_copy(update={"models": [ModelConfig(id=model.model_id) for model in models]})
+    artifact_root = task_artifact_dir or tmp_path
+    production_workdir = artifact_root / "production"
+    model_ids = tuple(instance.model_id for instance in case.instances)
+    task_config = assemble_config(
+        model_ids,
+        deployment=case.deployment,
+        runtime_config=e2e_base_config.path,
+        overrides={
+            "scheduler": {"ffn_policy": "fifo", "ffn_random_seed": None},
+        },
+        env={
+            **os.environ,
+            **ffn_cluster_environment(
+                config_path=production_workdir / "xpool.toml", observer_outdir=production_workdir / "observers"
+            ),
+        },
+    )
     model_specs = tuple(
-        architecture.load(model_id=model.model_id, model_path=task_config.model_path_of(model.model_id))
-        for model in models
+        architecture.load(model_id=model_id, model_path=task_config.model_path_of(model_id)) for model_id in model_ids
     )
     for instance, model_spec in zip(case.instances, model_specs, strict=True):
         if instance.layer_ordinal >= len(model_spec.layers):
@@ -103,7 +111,6 @@ def test_e2e_ffn_topology(
     )
     references = run_references(
         case,
-        models=models,
         model_specs=model_specs,
         hidden_states=hidden_states,
         base_config=task_config,
@@ -112,17 +119,8 @@ def test_e2e_ffn_topology(
     )
 
     endpoint = TcpEndpointReservation.reserve(task_config.daemon.host, port_space=TcpPortSpace.local())
-    artifact_root = task_artifact_dir or tmp_path
-    production_workdir = artifact_root / "production"
     launch = materialize_ffn_cluster_launch(
-        base_config=task_config,
-        model_tp_sizes=tuple(
-            (model.model_id, instance.ffn_tp_size) for model, instance in zip(models, case.instances, strict=True)
-        ),
-        atnagent_count=case.atnagent_count,
-        ffnagent_count=case.ffnagent_count,
-        executor_lane_count=case.executor_lane_count,
-        scheduler=FifoSchedulerPolicy(),
+        config=task_config,
         daemon_port=endpoint.port,
         workdir=production_workdir,
     )
@@ -136,6 +134,7 @@ def test_e2e_ffn_topology(
 
     instance_specs, spec_instance_indices, output_paths = materialize_instance_specs(
         case,
+        config=task_config,
         model_specs=model_specs,
         environment=dict(launch.environment),
         input_paths=tuple(input_paths),
@@ -155,7 +154,7 @@ def test_e2e_ffn_topology(
     generation = ready[0].generation
     actual_instance_indices = resolve_instance_indices(case, ready, spec_instance_indices)
     observer_outdir = production_workdir / "observers"
-    execution_groups = resolve_execution_groups(case, ready, spec_instance_indices)
+    execution_groups = resolve_execution_groups(case, ready, spec_instance_indices, config=task_config)
     validate_graph_snapshots(
         observer_outdir,
         generation=generation,
@@ -165,6 +164,7 @@ def test_e2e_ffn_topology(
     validate_trace(
         observer_outdir,
         case=case,
+        config=task_config,
         actual_instance_indices=actual_instance_indices,
         execution_groups=execution_groups,
     )
@@ -184,7 +184,6 @@ def test_e2e_ffn_topology(
 def run_references(
     case: E2eFfnTopologyCase,
     *,
-    models: tuple[E2eModel, ...],
     model_specs: tuple[FfnModelSpec, ...],
     hidden_states: tuple[torch.Tensor, ...],
     base_config: XpoolConfig,
@@ -194,9 +193,7 @@ def run_references(
     """Evaluate each topology request with its original model FFN."""
 
     results: dict[int, torch.Tensor] = {}
-    for instance_index, (instance, model, model_spec) in enumerate(
-        zip(case.instances, models, model_specs, strict=True)
-    ):
+    for instance_index, (instance, model_spec) in enumerate(zip(case.instances, model_specs, strict=True)):
         request_ordinals = tuple(
             ordinal for ordinal, request in enumerate(case.requests) if request.instance_index == instance_index
         )
@@ -212,8 +209,8 @@ def run_references(
             workdir=workdir / f"instance-{instance_index}",
             timeout_seconds=remaining_seconds(deadline, "FFN topology Reference"),
         ).run(
-            model_path=base_config.model_path_of(model.model_id),
-            tensor_parallel_size=instance.ffn_tp_size,
+            model_path=base_config.model_path_of(instance.model_id),
+            tensor_parallel_size=base_config.model_by_id[instance.model_id].ffn_tp_size or len(base_config.ffn.devices),
             cases=reference_cases,
         )
         for ordinal, result in zip(request_ordinals, reference_results, strict=True):
@@ -226,6 +223,7 @@ def run_references(
 def materialize_instance_specs(
     case: E2eFfnTopologyCase,
     *,
+    config: XpoolConfig,
     model_specs: tuple[FfnModelSpec, ...],
     environment: dict[str, str],
     input_paths: tuple[Path, ...],
@@ -237,6 +235,8 @@ def materialize_instance_specs(
     spec_instance_indices = []
     output_paths: dict[tuple[int, int], Path] = {}
     for instance_index, (instance, model_spec) in enumerate(zip(case.instances, model_specs, strict=True)):
+        model = config.model_by_id[instance.model_id]
+        atn_tp_size = config.atn_tp_size_of(instance.model_id)
         request_ordinals = tuple(
             ordinal for ordinal, request in enumerate(case.requests) if request.instance_index == instance_index
         )
@@ -263,9 +263,8 @@ def materialize_instance_specs(
                 case.requests[ordinal].output_requirement == "group_sum_complete" for ordinal in request_ordinals
             ),
         )
-        rank_count = instance.atn_tp_size * instance.atn_dp_size
-        for rank in range(rank_count):
-            dp_rank = rank // instance.atn_tp_size
+        for rank in range(config.atn_world_size):
+            dp_rank = rank // atn_tp_size
             invocations = []
             for ordinal in request_ordinals:
                 request = case.requests[ordinal]
@@ -283,24 +282,24 @@ def materialize_instance_specs(
                             else ForwardMode[request.forward_mode.upper()]
                         ),
                         output_requirement=OutputRequirement[request.output_requirement.upper()],
-                        dp_row_layout=(DpRowLayout.NONE if instance.atn_dp_size == 1 else DpRowLayout.PACKED_BY_RANK),
-                        dp_rank_payload_rows=(None if instance.atn_dp_size == 1 else request.dp_rank_payload_rows),
+                        dp_row_layout=(DpRowLayout.NONE if model.atn_dp_size == 1 else DpRowLayout.PACKED_BY_RANK),
+                        dp_rank_payload_rows=(None if model.atn_dp_size == 1 else request.dp_rank_payload_rows),
                     )
                 )
             specs.append(
                 FfnInstanceSpec(
                     environment=environment.copy(),
-                    instance_id=model_spec.model_id,
+                    model_id=model_spec.model_id,
                     rank=rank,
-                    ffn_tp_size=instance.ffn_tp_size,
+                    ffn_tp_size=model.ffn_tp_size or len(config.ffn.devices),
                     ffn_profile=profile,
                     transport=InstanceRankTransportProfile(
                         hidden_size=model_spec.hidden_size,
                         payload_row_capacity=max(row_capacities),
-                        atn_tp_rank=rank % instance.atn_tp_size,
-                        atn_tp_size=instance.atn_tp_size,
+                        atn_tp_rank=rank % atn_tp_size,
+                        atn_tp_size=atn_tp_size,
                         atn_dp_rank=dp_rank,
-                        atn_dp_size=instance.atn_dp_size,
+                        atn_dp_size=model.atn_dp_size,
                     ),
                     invocations=tuple(invocations),
                 )
@@ -335,6 +334,8 @@ def resolve_execution_groups(
     case: E2eFfnTopologyCase,
     ready: tuple[FfnInstanceReady, ...],
     spec_instance_indices: tuple[int, ...],
+    *,
+    config: XpoolConfig,
 ) -> tuple[tuple[int, ...], ...]:
     """Resolve Layer Execution Groups from the admitted production Plan."""
 
@@ -348,7 +349,8 @@ def resolve_execution_groups(
         if len(values) != 1:
             raise AssertionError(f"topology Instance {instance_index} observed inconsistent execution groups {values}")
         group = values.pop()
-        if len(group) != instance.ffn_tp_size or len(group) != len(set(group)):
+        ffn_tp_size = config.model_by_id[instance.model_id].ffn_tp_size or len(config.ffn.devices)
+        if len(group) != ffn_tp_size or len(group) != len(set(group)):
             raise AssertionError(
                 f"topology Instance {instance_index} received an invalid Layer Execution Group {group}"
             )
@@ -378,16 +380,16 @@ def validate_graph_snapshots(
     }
     lane_counts = set()
     for path in paths:
-        snapshot = read_json_object(path)
-        if snapshot["generation"] != {"high": generation.high, "low": generation.low}:
+        snapshot = FfnGraphObserverSnapshot.model_validate_json(path.read_text(encoding="utf-8"), strict=True)
+        if snapshot.generation != generation:
             raise AssertionError("topology Graph Observer generation mismatch")
-        lane_graphs = object_list(snapshot, "lane_graphs")
+        lane_graphs = snapshot.lane_graphs
         lane_counts.add(len(lane_graphs))
-        primary_graphs = object_list(snapshot, "primary_graphs")
-        ffnagent_index = cast(int, snapshot["pe"]) - case.atnagent_count
+        primary_graphs = snapshot.primary_graphs
+        ffnagent_index = snapshot.pe - case.atnagent_count
         if ffnagent_index in assigned_ffnagent_indices and not primary_graphs:
             raise AssertionError("topology Graph Observer omitted an assigned FfnAgent Primary Graph")
-        if any(cast(int, graph["binding_site_count"]) <= 0 for graph in primary_graphs):
+        if any(graph.binding_site_count <= 0 for graph in primary_graphs):
             raise AssertionError("topology Graph Observer omitted Primary Graph binding-site evidence")
     if lane_counts != {case.executor_lane_count}:
         raise AssertionError(f"topology Graph Observer lane counts mismatch: {lane_counts}")
@@ -397,6 +399,7 @@ def validate_trace(
     outdir: Path,
     *,
     case: E2eFfnTopologyCase,
+    config: XpoolConfig,
     actual_instance_indices: tuple[int, ...],
     execution_groups: tuple[tuple[int, ...], ...],
 ) -> None:
@@ -405,12 +408,10 @@ def validate_trace(
     snapshots = read_fabric_observer_snapshots(outdir)
     if len(snapshots) != case.atnagent_count + case.ffnagent_count:
         raise AssertionError("topology Fabric Observer omitted a PE snapshot")
-    records = tuple(
-        (cast(int, snapshot["pe"]), record) for snapshot in snapshots for record in object_list(snapshot, "records")
-    )
+    records = tuple((snapshot["pe"], record) for snapshot in snapshots for record in snapshot["records"])
     if any(snapshot["dropped"] != 0 for snapshot in snapshots):
         raise AssertionError("topology Fabric Observer dropped records")
-    expected_identities: set[tuple[object, ...]] = set()
+    expected_identities: set[tuple[str, int, int, int]] = set()
     sequence_by_instance: dict[int, int] = defaultdict(int)
     for request in case.requests:
         manifest_index = request.instance_index
@@ -418,13 +419,16 @@ def validate_trace(
         invocation_sequence = sequence_by_instance[manifest_index]
         actual_instance_index = actual_instance_indices[manifest_index]
         instance = case.instances[manifest_index]
-        output_count = instance.atn_tp_size * instance.atn_dp_size
+        model = config.model_by_id[instance.model_id]
+        atn_tp_size = config.atn_tp_size_of(instance.model_id)
+        ffn_tp_size = model.ffn_tp_size or len(config.ffn.devices)
+        output_count = config.atn_world_size
         payload_rows = sum(request.dp_rank_payload_rows)
         delivery = (
             "replicated_complete"
             if request.output_requirement == "per_rank_complete"
             else "direct_partial"
-            if instance.ffn_tp_size <= output_count
+            if ffn_tp_size <= output_count
             else "single_complete"
         )
         matching = [
@@ -446,8 +450,8 @@ def validate_trace(
         ):
             raise AssertionError("topology Fabric trace membership disagrees with the installed groups")
         for pe, record in atn_records:
-            facts = object_dict(record, "facts")
-            dp_rank = pe // instance.atn_tp_size
+            facts = record["facts"]
+            dp_rank = pe // atn_tp_size
             expected_mode = "idle" if request.dp_rank_payload_rows[dp_rank] == 0 else request.forward_mode
             if (
                 facts["forward_mode"] != expected_mode
@@ -455,18 +459,17 @@ def validate_trace(
             ):
                 raise AssertionError("topology AtnAgent trace mode or local rows mismatch")
         for _, record in ffn_records:
-            if object_dict(record, "facts")["delivery"] != delivery:
+            if record["facts"]["delivery"] != delivery:
                 raise AssertionError("topology FfnAgent trace delivery mismatch")
         common = matching[0][1]
-        common_facts = object_dict(common, "facts")
-        if (
-            cast(int, common_facts["executor_lane_index"]) < 0
-            or cast(int, common_facts["executor_lease_sequence"]) <= 0
-        ):
+        common_facts = common["facts"]
+        lane_index = common_facts["executor_lane_index"]
+        lease_sequence = common_facts["executor_lease_sequence"]
+        if lane_index is None or lane_index < 0 or lease_sequence is None or lease_sequence <= 0:
             raise AssertionError("topology trace omitted its Executor lease")
-        expected_layout = "none" if instance.atn_dp_size == 1 else "packed_by_rank"
+        expected_layout = "none" if model.atn_dp_size == 1 else "packed_by_rank"
         for pe, record in matching:
-            facts = object_dict(record, "facts")
+            facts = record["facts"]
             observed_layout = record["dp_row_layout"]
             required_layout = expected_layout if record["kind"] == "atnagent" else None
             if (
@@ -494,8 +497,7 @@ def compare_outputs(
 
     evidence = []
     for request_ordinal, request in enumerate(case.requests):
-        instance = case.instances[request.instance_index]
-        output_count = instance.atn_tp_size * instance.atn_dp_size
+        output_count = case.atnagent_count
         actual = tuple(read_output(output_paths[request_ordinal, rank]) for rank in range(output_count))
         if request.output_requirement == "per_rank_complete":
             for rank, values in enumerate(actual):

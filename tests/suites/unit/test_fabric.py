@@ -21,6 +21,7 @@ from xpool.fabric import (
     InstanceRankTopology,
 )
 from xpool.native.ffn import LayerKind
+from xtest.harness.support.config import TEST_MODEL_ID
 
 
 def profile(payload_dtype: torch.dtype = torch.bfloat16) -> InstanceFfnProfile:
@@ -57,7 +58,7 @@ def fabric_plan() -> FabricPlan:
         ),
         instance_plans=(
             FabricInstancePlan(
-                instance_id="m",
+                model_id=TEST_MODEL_ID,
                 ffn_profile=profile(),
                 instance_rank_topology=InstanceRankTopology(
                     atn_tp_size=1,

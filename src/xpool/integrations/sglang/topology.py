@@ -7,13 +7,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 from sglang.srt.configs import model_config
 from sglang.srt.runtime_context import get_parallel
 
-from xpool.config import ConfigError, TopologyError
+from xpool.config import ConfigError, ModelConfig, TopologyError
+from xpool.model import ModelId
 
 __all__ = [
     "SglangAttentionKind",
@@ -57,7 +57,7 @@ class SglangModelShape:
     atn_kind: SglangAttentionKind
 
     @classmethod
-    def load(cls, config_path: Path, *, model_id: str) -> SglangModelShape:
+    def load(cls, config_path: Path, *, model_id: ModelId) -> SglangModelShape:
         """Resolve model shape through SGLang's own model-config loader.
 
         Args:
@@ -77,12 +77,8 @@ class SglangModelShape:
         except Exception as exc:
             raise ConfigError(f"{model_id}: SGLang failed to resolve model config at {model_path}") from exc
 
-        family = str(
-            getattr(sglang_config.hf_text_config, "model_type", None)
-            or getattr(sglang_config.hf_config, "model_type", None)
-            or model_id
-        )
-        hidden_size = positive_runtime_int(getattr(sglang_config, "hidden_size", None), "hidden_size", model_id)
+        family = str(sglang_config.hf_text_config.model_type or sglang_config.hf_config.model_type or model_id)
+        hidden_size = positive_runtime_int(sglang_config.hidden_size, "hidden_size", model_id)
         atn_heads = positive_runtime_int(
             sglang_config.get_total_num_attention_heads(),
             "num_attention_heads",
@@ -122,7 +118,7 @@ class SglangModelMetadata(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    model_id: str = Field(description="Configured model id whose config.json produced this metadata.")
+    model_id: ModelId = Field(description="Configured model id whose config.json produced this metadata.")
     family: str = Field(description="SGLang/Hugging Face model family string used for diagnostics.")
     hidden_size: int = Field(ge=1, description="Hidden-state width consumed by each FFN shim call.")
     num_atn_heads: int = Field(ge=1, description="Total query-head count reported by SGLang.")
@@ -162,7 +158,7 @@ class SglangModelMetadata(BaseModel):
             )
 
     @classmethod
-    def load(cls, model_path: str | Path, *, model_id: str) -> SglangModelMetadata:
+    def load(cls, model_path: str | Path, *, model_id: ModelId) -> SglangModelMetadata:
         """Load and derive metadata for one configured model.
 
         Args:
@@ -176,11 +172,13 @@ class SglangModelMetadata(BaseModel):
         path = Path(model_path).expanduser()
         config_path = path if path.is_file() else path / "config.json"
         with config_path.open("r", encoding="utf-8") as config_file:
-            raw = cast(Mapping[str, object], json.load(config_file))
+            raw = json.load(config_file)
+        if not isinstance(raw, dict):
+            raise ConfigError(f"{model_id}: config.json must contain an object")
         return cls.from_raw(raw, model_id=model_id, config_path=config_path.resolve())
 
     @classmethod
-    def from_raw(cls, raw: Mapping[str, object], *, model_id: str, config_path: Path) -> SglangModelMetadata:
+    def from_raw(cls, raw: Mapping[str, object], *, model_id: ModelId, config_path: Path) -> SglangModelMetadata:
         """Derive model metadata from parsed ``config.json`` content.
 
         Args:
@@ -196,13 +194,6 @@ class SglangModelMetadata(BaseModel):
         """
 
         sglang = SglangModelShape.load(config_path, model_id=model_id)
-        for label, value in (
-            ("hidden_size", sglang.hidden_size),
-            ("num_attention_heads", sglang.num_atn_heads),
-            ("num_key_value_heads", sglang.num_key_value_heads),
-        ):
-            if value <= 0:
-                raise ConfigError(f"{model_id}: SGLang-derived {label} must be positive")
         num_experts = optional_int(raw, "num_experts")
         if num_experts is None:
             num_experts = optional_int(raw, "n_routed_experts")
@@ -230,7 +221,7 @@ class SglangAttentionTopology(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    model_id: str = Field(description="Configured model id this topology record applies to.")
+    model_id: ModelId = Field(description="Configured model id this topology record applies to.")
     worker_world_size: int = Field(ge=1, description="Expected SGLang model-worker world size.")
     atn_tp_size: int = Field(
         ge=1, description="CrossPool attention tensor-parallel degree retained for topology audits."
@@ -242,6 +233,7 @@ class SglangAttentionTopology(BaseModel):
         cls,
         spec: SglangModelMetadata,
         *,
+        model: ModelConfig,
         atnagent_count: int,
         supports_dp_attention: bool,
     ) -> SglangAttentionTopology:
@@ -249,6 +241,7 @@ class SglangAttentionTopology(BaseModel):
 
         Args:
             spec: SGLang-derived model metadata.
+            model: Configured attention geometry for this model.
             atnagent_count: Number of configured physical AtnAgents.
             supports_dp_attention: Whether the selected adapter supports DPA.
 
@@ -265,10 +258,11 @@ class SglangAttentionTopology(BaseModel):
         worker_world_size = positive_runtime_int(get_parallel().tp_size, "tp_size", spec.model_id)
         dp_size = positive_runtime_int(get_parallel().dp_size, "dp_size", spec.model_id)
         cp_size = positive_runtime_int(get_parallel().attn_cp_size, "attn_cp_size", spec.model_id)
-        if worker_world_size != atnagent_count:
+        configured_dp = model.atn_dp_size
+        if (worker_world_size, dp_size) != (atnagent_count, configured_dp):
             raise TopologyError(
-                f"{spec.model_id}: SGLang worker world size {worker_world_size} "
-                f"must equal configured AtnAgent count {atnagent_count}"
+                f"{spec.model_id}: SGLang worker world size {worker_world_size} and DP size {dp_size} "
+                f"must match configured attention World={atnagent_count}, DP={configured_dp}"
             )
         if cp_size != 1:
             raise TopologyError(f"{spec.model_id}: attention context parallel size must be one, got {cp_size}")
@@ -348,7 +342,7 @@ def coerce_config_int(value: object, key: str) -> int:
     raise ConfigError(f"model config.json field {key} must be an integer")
 
 
-def positive_runtime_int(value: object, label: str, model_id: str) -> int:
+def positive_runtime_int(value: object, label: str, model_id: ModelId) -> int:
     """Return a positive integer reported by SGLang runtime config.
 
     Args:

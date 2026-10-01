@@ -17,6 +17,8 @@ current architecture while workflow history remains in version control.
   KV storage, logical admission, physical capacity coordination, and
   reclamation.
 - [Devkit](devkit.md) defines Hook Points and observer evidence.
+- [Test Tooling](tooling.md) defines installed harness ownership,
+  shared resource lifecycle and retained test reports.
 - [Qualification](qualification.md) defines readiness and acceptance evidence.
 
 The root [CONTEXT.md](../../CONTEXT.md) owns domain terminology. An active plan

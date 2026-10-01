@@ -7,10 +7,10 @@ from sglang.srt.models.qwen3 import Qwen3ForCausalLM
 from sglang.srt.plugins.hook_registry import HookType
 from transformers import Qwen3Config
 
-from tests.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 from xpool.integrations.sglang.adapter import filter_decoder_ffn_weights
 from xpool.integrations.sglang.models.qwen2 import XpoolQwen2MLP
 from xpool.integrations.sglang.models.qwen3 import Qwen3ShimAdapter
+from xtest.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
 
 
 def qwen_shim(layer_id: int) -> XpoolQwen2MLP:

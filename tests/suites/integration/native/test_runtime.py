@@ -6,9 +6,9 @@ import pytest
 import torch
 
 import xpool.native
-from tests.harness.native.case import run_native_case
-from tests.harness.native.debug import native_debug_options
+from xpool.config import DebugConfig
 from xpool.native import RuntimeRole
+from xtest.harness.native.case import run_native_case
 
 
 def isolated_uninitialized_runtime_role() -> None:
@@ -39,7 +39,7 @@ def isolated_negative_cuda_device() -> None:
 def isolated_cuda_configuration_failure() -> None:
     invalid_device = torch.cuda.device_count() + 100
     with pytest.raises(RuntimeError):
-        xpool.native.initialize(RuntimeRole.INSTANCE, invalid_device, native_debug_options())
+        xpool.native.initialize(RuntimeRole.INSTANCE, invalid_device, DebugConfig().native_options())
     with pytest.raises(RuntimeError, match="current process was initialized as instance"):
         xpool.native.initialize(RuntimeRole.ATNAGENT, torch.cuda.current_device(), None)
 
@@ -47,7 +47,7 @@ def isolated_cuda_configuration_failure() -> None:
 def isolated_daemon_runtime() -> None:
     with pytest.raises(RuntimeError, match="daemon init requires a null CUDA device"):
         xpool.native.initialize(RuntimeRole.DAEMON, 0, None)
-    options = native_debug_options()
+    options = DebugConfig().native_options()
     xpool.native.initialize(RuntimeRole.DAEMON, None, options)
     assert xpool.native.runtime_role() is RuntimeRole.DAEMON
     xpool.native.initialize(RuntimeRole.DAEMON, None, options)

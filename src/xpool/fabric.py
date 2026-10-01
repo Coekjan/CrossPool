@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_seriali
 
 import xpool.native
 from xpool.config import FfnSchedulingPolicy
+from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
 
 __all__ = [
@@ -338,7 +339,7 @@ class InstanceRankTopology(FabricModel):
 class FabricInstancePlan(FabricModel):
     """One Instance FFN profile and its attention topology."""
 
-    instance_id: str = Field(min_length=1, description="Configured model instance identity.")
+    model_id: ModelId = Field(description="Model ID identifying this configured Instance.")
     ffn_profile: InstanceFfnProfile = Field(description="Rank-independent FFN profile for this instance.")
     instance_rank_topology: InstanceRankTopology = Field(
         description="Attention rank topology and AtnAgent membership for this instance.",
@@ -424,9 +425,9 @@ class FabricPlan(FabricModel):
         atnagent_count, ffnagent_count = FabricPePlacement.validate_order(self.pe_placements)
         if len(self.model_plans) != len(self.instance_plans):
             raise ValueError("Model Plans and Instance Plans must be co-indexed")
-        instance_ids = tuple(plan.instance_id for plan in self.instance_plans)
-        if len(set(instance_ids)) != len(instance_ids):
-            raise ValueError("Instance IDs must be unique")
+        model_ids = tuple(plan.model_id for plan in self.instance_plans)
+        if len(set(model_ids)) != len(model_ids):
+            raise ValueError("Instance Model IDs must be unique")
 
         for model_plan, instance_plan in zip(self.model_plans, self.instance_plans, strict=True):
             profile = instance_plan.ffn_profile

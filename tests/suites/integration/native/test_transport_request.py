@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tests.harness.support.config import reset_global_config
-from tests.harness.support.native.transport import instance_transport_runtime
+from xtest.harness.support.config import reset_global_config
+from xtest.harness.support.native.transport import instance_transport_runtime
 
 pytestmark = [
     pytest.mark.requires_cuda(),

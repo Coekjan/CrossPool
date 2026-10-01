@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from xpool import ffn
+from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent import architecture, operators, weights
 
@@ -90,7 +91,7 @@ class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
     def compile(
         cls,
         *,
-        model_id: str,
+        model_id: ModelId,
         model_config: architecture.FfnSourceConfig,
     ) -> ffn.FfnModelSpec:
         """Compile DeepSeek layer placement and routing semantics."""

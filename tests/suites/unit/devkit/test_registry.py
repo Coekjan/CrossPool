@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 
 import xpool.devkit.registry
-from tests.harness.support.config import install_test_config, reset_global_config
-from tests.harness.support.devkit import create_observer_package, observer_enabled_config, observers_disabled_config
 from xpool.native import RuntimeRole
+from xtest.harness.support.config import install_test_config, minimal_config, reset_global_config
+from xtest.harness.support.devkit import create_observer_package, observer_enabled_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -26,7 +26,7 @@ def test_registry_does_not_import_disabled_observer(
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(xpool.devkit.registry, "get_runtime_role", lambda: RuntimeRole.INSTANCE)
-    install_test_config(config=observers_disabled_config())
+    install_test_config(config=minimal_config())
 
     xpool.devkit.registry.install(package)
 

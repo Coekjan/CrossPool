@@ -9,11 +9,12 @@ import pytest
 from pydantic import ValidationError
 
 import xpool.service.daemon.app
-from tests.harness.support.config import install_test_config, reset_global_config, synthetic_config
 from xpool.fabric import FabricGenerationId
+from xpool.model import ModelId
 from xpool.native import RuntimeRole
 from xpool.service.daemon.control import ServingHealthTargets
 from xpool.service.wire import ServingListener
+from xtest.harness.support.config import install_test_config, reset_global_config, synthetic_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -125,8 +126,8 @@ def test_daemon_lifespan_latches_concurrent_serving_health(
     targets = ServingHealthTargets(
         generation=FabricGenerationId(high=1, low=1),
         listeners=(
-            ("a", ServingListener(host="127.0.0.1", port=30000)),
-            ("b", ServingListener(host="127.0.0.1", port=30001)),
+            (ModelId("test/a"), ServingListener(host="127.0.0.1", port=30000)),
+            (ModelId("test/b"), ServingListener(host="127.0.0.1", port=30001)),
         ),
     )
     confirmed = threading.Event()
@@ -161,7 +162,8 @@ def test_daemon_lifespan_latches_concurrent_serving_health(
 
     asyncio.run(run())
 
-    assert entered == [30000, 30001, 30001]
+    assert set(entered) == {30000, 30001}
+    assert attempts == {30000: 1, 30001: 2}
 
 
 def test_create_daemon_initializes_native_daemon_role(monkeypatch: pytest.MonkeyPatch) -> None:

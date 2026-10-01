@@ -134,9 +134,8 @@ class XpoolDeepseekV2MoE(FfnShimModule, DeepseekV2MoE):
             mla_enable_prefill_cp: Original SGLang MLA context-parallel flag.
 
         Raises:
-            ValueError: If SGLang requests an unsupported activation.
-            ShimUnavailableError: If the layer is next-token draft flow or config
-                lacks an integer hidden size.
+            ValueError: If the activation, layer ID or hidden size is invalid.
+            ShimUnavailableError: If the layer is next-token draft flow.
 
         Side Effects:
             Initializes only the CrossPool shim base and attaches minimal SGLang MoE
@@ -148,13 +147,10 @@ class XpoolDeepseekV2MoE(FfnShimModule, DeepseekV2MoE):
         hidden_act = config.hidden_act
         if hidden_act != "silu":
             raise ValueError(f"Unsupported activation: {hidden_act}. Only silu is supported for now.")
-        hidden_size = config.hidden_size
-        if not isinstance(hidden_size, int) or isinstance(hidden_size, bool) or hidden_size <= 0:
-            raise ShimUnavailableError("xpool DeepSeek shim requires positive integer config field hidden_size")
         FfnShimModule.__init__(
             self,
             layer_id=layer_id,
-            hidden_size=hidden_size,
+            hidden_size=config.hidden_size,
             layer_kind=LayerKind.MOE,
         )
         self.experts = DeepseekShimExperts()

@@ -6,11 +6,11 @@ import pytest
 import torch
 
 import xpool.native
-from tests.harness.native.case import run_native_case
-from tests.harness.native.debug import native_debug_options
-from tests.harness.native.fabric.bootstrap import create_fabric_uid
+from xpool.config import DebugConfig, FabricObserverDebugConfig, FfnRoutingObserverDebugConfig
 from xpool.fabric import FABRIC_UID_HEX_LENGTH
 from xpool.native import RuntimeRole
+from xtest.harness.native.case import run_native_case
+from xtest.harness.native.fabric.bootstrap import create_fabric_uid
 
 
 def test_fabric_uid_is_opaque_unique_hex(tmp_path: Path) -> None:
@@ -88,7 +88,7 @@ def isolated_fabric_role_guard() -> None:
 
 
 def isolated_native_allocation_sizing() -> None:
-    xpool.native.initialize(RuntimeRole.DAEMON, None, native_debug_options())
+    xpool.native.initialize(RuntimeRole.DAEMON, None, DebugConfig().native_options())
     arena_bytes = xpool.native.fabric.arena_allocation_bytes(2, 3, 2, 2, 3, 3, 6, 300, 32)
     assert arena_bytes > 0
     assert xpool.native.fabric.arena_allocation_bytes(2, 3, 2, 2, 3, 3, 6, 300, 32) == arena_bytes
@@ -103,12 +103,10 @@ def isolated_enabled_observer_sizing() -> None:
     xpool.native.initialize(
         RuntimeRole.DAEMON,
         None,
-        native_debug_options(
-            fabric_observer=True,
-            ffn_routing_observer=True,
-            record_capacity=2,
-            routing_record_capacity=2,
-        ),
+        DebugConfig(
+            fabric_observer=FabricObserverDebugConfig(enable=True, outdir=Path.cwd(), record_capacity=2),
+            ffn_routing_observer=FfnRoutingObserverDebugConfig(enable=True, outdir=Path.cwd(), record_capacity=2),
+        ).native_options(),
     )
     fabric_bytes = xpool.native.devkit.fabric_observer.allocation_bytes(2, 2)
     assert fabric_bytes > 0
