@@ -9,16 +9,14 @@ import pytest
 import safetensors.torch
 import torch
 
+import xtest
 from xpool.config import XpoolConfig
 from xpool.ffn import DenseFfnSpec, MoeFfnCheckpointKeys, MoeFfnSpec
 from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent import architecture, loader, weights
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
 
-pytestmark = [
-    pytest.mark.requires_cuda,
-    pytest.mark.usefixtures(reset_global_config.__name__),
-]
+pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
 
 def install_loader_config() -> None:
@@ -91,6 +89,7 @@ def tensor_values(shape: tuple[int, ...], start: int) -> torch.Tensor:
     return torch.arange(start, start + torch.Size(shape).numel(), dtype=torch.float32).reshape(shape).to(torch.bfloat16)
 
 
+@xtest.requirements(cuda_count=1)
 def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path) -> None:
     install_loader_config()
     hidden_size = 4
@@ -169,6 +168,7 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     torch.testing.assert_close(moe_weights.expert_down_weight.cpu()[2:], expected_shared_down)
 
 
+@xtest.requirements(cuda_count=1)
 def test_materialize_non_router_rank_and_shape_failure(tmp_path: Path) -> None:
     install_loader_config()
     correction_bias_key = "model.layers.1.mlp.gate.e_score_correction_bias"

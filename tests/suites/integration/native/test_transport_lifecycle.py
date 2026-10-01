@@ -8,11 +8,12 @@ import pytest
 import torch
 
 import xpool.native
+import xtest
 from xpool.config import DebugConfig
 from xpool.native import RuntimeRole
 from xtest.harness.native.case import run_native_case
 
-pytestmark = [pytest.mark.requires_cuda(), pytest.mark.timeout(180)]
+pytestmark = pytest.mark.timeout(180)
 
 
 def isolated_transport_activation_requires_joined_fabric() -> None:
@@ -29,5 +30,6 @@ def isolated_transport_activation_requires_joined_fabric() -> None:
         xpool.native.transport.destroy_arenas([arena])
 
 
+@xtest.requirements(cuda_count=1)
 def test_transport_activation_requires_joined_fabric(tmp_path: Path) -> None:
     run_native_case(isolated_transport_activation_requires_joined_fabric, workdir=tmp_path / "case")

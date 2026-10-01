@@ -6,23 +6,25 @@ import pytest
 import torch
 
 import xpool.native
+import xtest
 from xpool.native import RuntimeRole
 from xtest.harness.native.case import run_native_case
 from xtest.harness.support.config import reset_global_config
 from xtest.harness.support.native.transport import instance_transport_runtime
 
 pytestmark = [
-    pytest.mark.requires_cuda(),
     pytest.mark.usefixtures(reset_global_config.__name__),
     pytest.mark.usefixtures(instance_transport_runtime.__name__),
 ]
 
 
+@xtest.requirements(cuda_count=1)
 def test_transport_initial_attachment_rejects_malformed_handle() -> None:
     with pytest.raises(RuntimeError, match="unexpected byte length"):
         xpool.native.transport.attach_arena(1, 0, "00" * 63)
 
 
+@xtest.requirements(cuda_count=1)
 def test_transport_unattached_operations_fail_closed() -> None:
     with pytest.raises(RuntimeError, match="requires an attached arena"):
         xpool.native.transport.read_generation_failure()
@@ -48,6 +50,7 @@ def isolated_transport_arena_geometry_overflow() -> None:
         )
 
 
+@xtest.requirements(cuda_count=1)
 def test_transport_arena_geometry_overflow_fails_closed(tmp_path: Path) -> None:
     run_native_case(isolated_transport_arena_geometry_overflow, workdir=tmp_path / "case")
 
@@ -67,5 +70,6 @@ def isolated_transport_binding_guards() -> None:
             xpool.native.transport.attach_arena(instance_index, rank, "00" * 64)
 
 
+@xtest.requirements(cuda_count=1)
 def test_transport_binding_rejects_role_and_unsigned_conversion_mismatches(tmp_path: Path) -> None:
     run_native_case(isolated_transport_binding_guards, workdir=tmp_path / "case")

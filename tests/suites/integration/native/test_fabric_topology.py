@@ -7,17 +7,14 @@ from pathlib import Path
 
 import pytest
 
+import xtest
 from xpool.native.ffn import ForwardMode, LayerKind
 from xtest.harness.native.fabric.bootstrap import fabric_bootstrap
 from xtest.harness.native.fabric.protocol import FabricCoordinatorTrace
 from xtest.harness.native.fabric.topology import run_fabric_topology
 from xtest.harness.support.native.fabric import assert_fabric_report
 
-pytestmark = [
-    pytest.mark.requires_cuda(min_devices=4),
-    pytest.mark.requires_mps,
-    pytest.mark.timeout(180),
-]
+pytestmark = pytest.mark.timeout(180)
 
 
 def assert_exclusive_executor_leases(records: tuple[FabricCoordinatorTrace, ...]) -> None:
@@ -33,6 +30,7 @@ def assert_exclusive_executor_leases(records: tuple[FabricCoordinatorTrace, ...]
             assert previous.lane_released_ns <= current.scheduled_ns
 
 
+@xtest.requirements(cuda_count=4, requires_mps=True)
 def test_fabric_topology_executes_mixed_requests_with_exclusive_two_lane_leases(tmp_path: Path) -> None:
     """Exercise concurrent mixed requests in the largest component topology."""
 
@@ -58,6 +56,7 @@ def test_fabric_topology_executes_mixed_requests_with_exclusive_two_lane_leases(
     assert_exclusive_executor_leases(coordinator)
 
 
+@xtest.requirements(cuda_count=4, requires_mps=True)
 def test_fabric_topology_quiesces_mixed_two_lane_requests_before_native_drain(tmp_path: Path) -> None:
     """Finish admitted mixed requests before native Fabric drain."""
 

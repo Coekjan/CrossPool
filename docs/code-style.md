@@ -125,6 +125,14 @@ behavior. `DevAgent` is not a current role or compatibility term.
 Run Python tools through `uv run`. Format with `uv run ruff format`, lint with
 `uv run ruff check`, and type-check with `uv run ty check`.
 
+Declare repository test resources on each function with `xtest.requirements`;
+derive case-dependent requirements from their existing owner. Tests without
+external-resource needs require no empty declaration. Keep ordinary input
+matrices under `pytest.mark.parametrize`; use `xtest.parameterize` for catalogue
+binding and case/graph row expansion. See
+[Test Architecture](../tests/README.md#requirements) for authoring examples and
+the pytest adapter boundary.
+
 Prefer explicit concrete types. Use `Any` or `object` only for a genuinely
 dynamic boundary and document the reason nearby. Import pinned third-party
 types instead of inventing local look-alike protocols.

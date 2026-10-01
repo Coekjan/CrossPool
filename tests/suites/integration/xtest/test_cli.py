@@ -114,11 +114,10 @@ def test_list_declares_unavailable_requirements_without_resolving_them(source_ch
     suite = source_checkout / "tests/suites/integration"
     suite.mkdir()
     (suite / "test_resource.py").write_text(
-        "import pytest\n"
-        "@pytest.mark.requires_cuda(min_devices=2)\n"
-        "@pytest.mark.requires_config\n"
-        "@pytest.mark.requires_mps\n"
-        "@pytest.mark.requires_model_weights('missing/model')\n"
+        "import xtest\n"
+        "from xpool.model import ModelId\n"
+        "@xtest.requirements(cuda_count=2, requires_config=True, requires_mps=True, "
+        "model_ids=(ModelId('missing/model'),))\n"
         "def test_resource():\n    raise AssertionError('inventory executed a test')\n",
         encoding="utf-8",
     )

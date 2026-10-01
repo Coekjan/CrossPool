@@ -8,6 +8,7 @@ import pytest
 import torch
 
 import xpool.native
+import xtest
 from xpool.config import DebugConfig, TransportObserverDebugConfig
 from xpool.native import RuntimeRole
 from xtest.harness.native.case import run_native_case
@@ -33,6 +34,6 @@ def test_debug_options_are_read_only() -> None:
         setattr(options.transport_observer, "enable", True)
 
 
-@pytest.mark.requires_cuda()
+@xtest.requirements(cuda_count=1)
 def test_debug_defaults_are_frozen_by_first_initialization(tmp_path: Path) -> None:
     run_native_case(isolated_default_debug_options_are_frozen, workdir=tmp_path / "case")

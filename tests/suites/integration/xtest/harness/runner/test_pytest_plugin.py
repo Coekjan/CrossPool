@@ -39,6 +39,7 @@ def test_bound_cases_preserve_native_fixtures_explicit_rows_and_resource_deselec
     program = pytester.path / "tests/suites/integration/test_program.py"
     program.write_text(
         """
+import pytest
 import xtest
 from xkit import ResourceRequirements
 
@@ -51,9 +52,13 @@ def test_bound(case, tmp_path):
     assert tmp_path.is_dir()
 
 @xtest.parameterize("size", (16, 32))
-@xtest.requirements()
 def test_explicit(size, tmp_path):
     assert size in (16, 32) and tmp_path.is_dir()
+
+@pytest.mark.parametrize("cuda_count", (1, 2))
+@xtest.requirements(lambda cuda_count: ResourceRequirements(cuda_count, False, False, ()))
+def test_native(cuda_count, tmp_path):
+    assert cuda_count in (1, 2) and tmp_path.is_dir()
 
 def test_plain(tmp_path):
     assert tmp_path.is_dir()
@@ -72,8 +77,8 @@ def test_plain(tmp_path):
     )
     assert collected.ret == 0
     plan = xtest.harness.runner.plan.TestPlan.read(output)
-    assert len(plan.cases) == 5
-    assert tuple(case.requirements.cuda_count for case in plan.cases) == (2, 3, 0, 0, 0)
+    assert len(plan.cases) == 7
+    assert tuple(case.requirements.cuda_count for case in plan.cases) == (2, 3, 0, 0, 1, 2, 0)
     assert plan.cases[0].nodeid.endswith("test_bound[serving-001]")
     assert plan.cases[1].nodeid.endswith("test_bound[serving-002]")
     assert plan.cases[0].requirements.model_ids == (ModelId("Qwen/Qwen3-0.6B"),)
@@ -86,7 +91,7 @@ def test_plain(tmp_path):
         "-q",
         str(program),
     )
-    executed.assert_outcomes(passed=3, deselected=2)
+    executed.assert_outcomes(passed=3, deselected=4)
 
 
 @pytest.mark.parametrize(
@@ -210,9 +215,9 @@ def test_missing_config_skips_by_default_and_fails_when_strict(
     monkeypatch.delenv("XPOOL_CONFIG", raising=False)
     pytester.makepyfile(
         """
-        import pytest
+        import xtest
 
-        @pytest.mark.requires_config
+        @xtest.requirements(requires_config=True)
         def test_config():
             pass
         """
@@ -236,9 +241,9 @@ def test_deselected_requirement_is_not_resolved(pytester: pytest.Pytester, monke
     monkeypatch.delenv("XPOOL_CONFIG", raising=False)
     pytester.makepyfile(
         """
-        import pytest
+        import xtest
 
-        @pytest.mark.requires_config
+        @xtest.requirements(requires_config=True)
         def test_config():
             pass
 
@@ -333,11 +338,10 @@ def test_collection_worker_writes_final_typed_item_metadata(pytester: pytest.Pyt
     (test_directory / "test_example.py").write_text(
         f"""
 import pytest
+import xtest
+from xpool.model import ModelId
 
-@pytest.mark.requires_cuda(min_devices=2)
-@pytest.mark.requires_config
-@pytest.mark.requires_mps
-@pytest.mark.requires_model_weights({str(TEST_MODEL_ID)!r})
+@xtest.requirements(cuda_count=2, requires_config=True, requires_mps=True, model_ids=(ModelId({str(TEST_MODEL_ID)!r}),))
 @pytest.mark.estimated_duration(seconds=3)
 @pytest.mark.timeout(12)
 def test_example():

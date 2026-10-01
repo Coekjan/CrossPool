@@ -4,11 +4,14 @@ import json
 import os
 import shutil
 import subprocess
+from functools import partial
 from pathlib import Path
 
 import pytest
 import tomli_w
+from benches.suites.serving.multi_model import requirements_of
 
+import xtest
 from xbench.harness.serving.case import BenchCatalog, JsonlPrompts, NativeSampling, OwnedBenchCase, TraceArrivals
 from xbench.harness.serving.measure import BenchRunManifest
 from xbench.harness.serving.report import load_series
@@ -24,11 +27,7 @@ assert isinstance(CASE, OwnedBenchCase)
 
 
 @pytest.mark.usefixtures(e2e_base_config.__name__)
-@pytest.mark.requires_config
-@pytest.mark.requires_cuda(min_devices=2)
-@pytest.mark.requires_mps
-@pytest.mark.requires_model_weights("Qwen/Qwen2.5-0.5B")
-@pytest.mark.requires_model_weights("Qwen/Qwen3-0.6B")
+@xtest.requirements(partial(requirements_of, case=CASE))
 @pytest.mark.estimated_duration(seconds=90)
 @pytest.mark.timeout(4200)
 def test_e2e_owned_benchmark_measures_both_targets_and_reproduces_offline(

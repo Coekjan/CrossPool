@@ -3,17 +3,18 @@ from __future__ import annotations
 import pytest
 import torch
 
+import xtest
 from xtest.harness.support.config import reset_global_config
 from xtest.harness.support.native.transport import instance_transport_runtime
 
 pytestmark = [
-    pytest.mark.requires_cuda(),
     pytest.mark.timeout(180),
     pytest.mark.usefixtures(reset_global_config.__name__),
     pytest.mark.usefixtures(instance_transport_runtime.__name__),
 ]
 
 
+@xtest.requirements(cuda_count=1)
 def test_transport_request_enum_is_validated_before_submit() -> None:
     hidden_states = torch.empty((2, 4), device="cuda", dtype=torch.bfloat16)
     output = torch.empty_like(hidden_states)
@@ -21,6 +22,7 @@ def test_transport_request_enum_is_validated_before_submit() -> None:
         torch.ops.xpool.ffn_shim(hidden_states, None, output, 0, 99, 1, 0)
 
 
+@xtest.requirements(cuda_count=1)
 def test_transport_request_tensors_are_validated_before_submit() -> None:
     cpu_hidden_states = torch.empty((2, 4), dtype=torch.bfloat16)
     cpu_output = torch.empty_like(cpu_hidden_states)
@@ -50,7 +52,7 @@ def test_transport_request_tensors_are_validated_before_submit() -> None:
             torch.ops.xpool.ffn_shim(hidden_states, None, invalid_output, 0, 2, 1, 0)
 
 
-@pytest.mark.requires_cuda(min_devices=2)
+@xtest.requirements(cuda_count=2)
 def test_transport_request_rejects_cross_device_tensors() -> None:
     current_device = torch.cuda.current_device()
     other_device = next(device for device in range(torch.cuda.device_count()) if device != current_device)

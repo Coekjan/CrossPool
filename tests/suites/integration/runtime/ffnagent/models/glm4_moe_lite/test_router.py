@@ -5,14 +5,14 @@ from __future__ import annotations
 import pytest
 import torch
 
+import xtest
 from xpool.runtime.ffnagent import weights
 from xpool.runtime.ffnagent.models.glm4_moe_lite import Glm4MoeLiteAdapter
-
-pytestmark = pytest.mark.requires_cuda
 
 
 @pytest.mark.parametrize("payload_dtype", (torch.bfloat16, torch.float16), ids=("bfloat16", "float16"))
 @pytest.mark.parametrize("expert_count, topk", ((64, 4), (48, 3), (17, 1), (17, 17)))
+@xtest.requirements(cuda_count=1)
 def test_glm_router_matches_biased_sigmoid_formula(payload_dtype: torch.dtype, expert_count: int, topk: int) -> None:
     hidden_states = torch.arange(2 * expert_count, device="cuda", dtype=torch.float32).view(2, expert_count).to(
         payload_dtype
@@ -76,6 +76,7 @@ def test_glm_router_matches_biased_sigmoid_formula(payload_dtype: torch.dtype, e
     )
 
 
+@xtest.requirements(cuda_count=1)
 def test_glm_router_prefers_higher_expert_ids_on_ties_and_preserves_zero_weights() -> None:
     hidden_states = torch.tensor(((0.0,) * 17, (-1000.0,) * 17), device="cuda", dtype=torch.bfloat16)
     correction_bias = torch.zeros(17, device="cuda", dtype=torch.float32)

@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 import torch
 
+import xtest
 from xpool.runtime.ffnagent import weights
 from xpool.runtime.ffnagent.models.deepseek_v2 import DeepseekV2Adapter
 
-pytestmark = pytest.mark.requires_cuda
-
 
 @pytest.mark.parametrize("payload_dtype", (torch.bfloat16, torch.float16), ids=("bfloat16", "float16"))
+@xtest.requirements(cuda_count=1)
 def test_deepseek_router_matches_admitted_softmax_formula(payload_dtype: torch.dtype) -> None:
     hidden_states = torch.tensor(
         ((3.0, 1.0, -1.0, -3.0), (-2.0, 0.0, 2.0, 4.0)),
