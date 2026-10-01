@@ -154,10 +154,10 @@ NVSHMEM host and device libraries, ahead of unrelated Toolkit NVSHMEM headers;
 the CMake/scikit-build package boundary owns this module identity and header
 selection rather than a duplicate handwritten typing module.
 
-Installed test commands use resource/serving mechanisms in
-`xkit`, with test policies in `xtest.harness`.
+Installed test and benchmark commands share resource/serving mechanisms in
+`xkit`, with their distinct policies in `xtest.harness` and `xbench.harness`.
 Production `xpool` does not depend on these packages. See
-[Test Tooling](tooling.md) for process ownership and
+[Test and Benchmark Tooling](tooling.md) for process ownership, measurement and
 offline report contracts.
 
 The current implementation provides real Dense and MoE FFN execution, true-TP

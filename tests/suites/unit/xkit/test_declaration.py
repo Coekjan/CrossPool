@@ -1,14 +1,17 @@
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
+import xbench
 import xtest
 from xkit import ResourceRequirements
 from xkit.source import resolve_source_path
 from xtest.harness.support.config import TEST_MODEL_ID
 
 
-def test_declarations_preserve_the_callable_and_defer_dynamic_resources() -> None:
+@pytest.mark.parametrize("tool", [xtest, xbench])
+def test_declarations_preserve_the_callable_and_defer_dynamic_resources(tool: ModuleType) -> None:
     resources = ResourceRequirements(1, True, True, (TEST_MODEL_ID,))
     observed: list[int] = []
 
@@ -20,9 +23,9 @@ def test_declarations_preserve_the_callable_and_defer_dynamic_resources() -> Non
     def program(size: int) -> int:
         return size
 
-    # The tool exports shared declarations, retaining the original function.
-    parameterize = xtest.parameterize
-    requirements = xtest.requirements
+    # The tools export the same shared declarations, retaining the original function.
+    parameterize = xtest.parameterize if tool is xtest else xbench.parameterize
+    requirements = xtest.requirements if tool is xtest else xbench.requirements
     assert parameterize("size", (16, 32))(requirements(required_resources)(program)) is program
     assert program(32) == 32
     assert observed == []

@@ -5,7 +5,7 @@ derives their resource requirements, runs CTest and Python stages in order, and
 keeps one GPU pool locked until every supervised process scope is reaped.
 Direct pytest and CTest commands are focused debugging interfaces only.
 The process tree, scheduler, GPU lease, endpoint, and artifact internals are
-documented in [Test Tooling](../docs/designs/tooling.md).
+documented in [Test and Benchmark Tooling](../docs/designs/tooling.md).
 
 Tests prove behavior visible at public boundaries. Avoid tests that mirror
 registry internals, config table structure, or implementation text. Source-text
@@ -34,8 +34,9 @@ public behavior is broken, replace it with a behavior test.
   files use names such as `test_sglang_model_qualification.py`.
 - `src/xpool-dev/xkit/` owns shared process, GPU, endpoint, run-store and serving
   lifecycle mechanisms. `src/xpool-dev/xtest/harness/` owns test collection,
-  scheduling, verdicts, fixtures, native support and qualification.
-  Harness modules are installed
+  scheduling, verdicts, fixtures, native support and qualification;
+  `src/xpool-dev/xbench/harness/` owns
+  benchmark workloads, measurements and reports. Harness modules are installed
   tooling, not test suites, and must not import collected test modules.
 
 Place a test at the lowest layer that can observe its public behavior. Shared
@@ -46,14 +47,15 @@ directory; do not mix their cases with engine-neutral files. E2E files use
 `test_e2e_*.py` names. Named cases in `tests/tests.toml` select models, source
 modules, graph modes and test-only KV limits, with English descriptions.
 Catalogue cases reference portable scenes under `configs/deployments/` for
-complete device placement, model TP/DP geometry, Executor Lane count and SLO.
+complete device placement, model TP/DP geometry, Executor Lane count and SLO;
+owned benchmark cases reuse those scenes from `benches/benches.toml`.
 The common runtime assembly and model-path contract belong to
 [Shared deployment configuration](../docs/designs/tooling.md#shared-deployment-configuration).
 Observer record capacity belongs to the serving harness. Concrete-model
 numerical and serving qualification cases belong as typed constants in their
 model suite modules.
 
-Tool self-tests use `tests/suites/<layer>/{xkit,xtest}/`. Unit paths
+Tool self-tests use `tests/suites/<layer>/{xkit,xtest,xbench}/`. Unit paths
 mirror the installed modules, including each tool's `harness/`; Integration
 paths identify the owning interface or workflow. Shared mechanisms are tested
 once under `xkit`; tool tests prove CLI wiring, retained outcomes and
@@ -61,9 +63,14 @@ finalization. Real sockets, subprocesses, locks and cross-module execution
 belong to Integration. Product tests retain their subsystem ownership even
 when they use a tool fixture.
 
-The test tool has a real CPU list/run/report/clean cycle through the editable
+Both tools have real CPU list/run/report/clean cycles through the editable
 `xpool-dev` development installation, including reports and cleanup from another
-working directory.
+working directory. The owned benchmark regression lives under
+`tests/suites/e2e/xbench/sglang/` and uses
+the existing two-Qwen, two-GPU deployment with a short deterministic workload.
+Its performance measurements are report-only. Source-owned benchmark programs
+and prompt/trace inputs belong under `benches/suites/<family>/`; these are
+measurement scenarios, distinct from pytest self-tests.
 
 Keep common and subsystem-specific fixtures separate so each fixture owns one
 coherent reset boundary. Use pinned SGLang concrete types, such as `ServerArgs`,
@@ -109,7 +116,8 @@ when all declared and derived requirements are available. Each task materializes
 a private config from `XPOOL_CONFIG` and its selected case models, without
 waiting for unrelated configured models. Product serving E2E cases use the
 selected deployment's SLO and model geometry rather than external scheduler or
-model overrides.
+model overrides. The owned benchmark regression follows the same configuration
+assembly contract.
 
 Graph-mode acceptance criteria belong to
 [Qualification](../docs/designs/qualification.md#numerical-and-graph-evidence).

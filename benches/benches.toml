@@ -1,0 +1,23 @@
+[serving_cases.serving-001]
+description = "Concurrent two-model serving with fixed-length random prompts and independent Poisson arrivals."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.serving-001.arrivals]
+kind = "poisson"
+duration_seconds = 60
+rates = { "Qwen/Qwen2.5-0.5B" = 4, "Qwen/Qwen3-0.6B" = 4 }
+
+[[serving_cases.serving-001.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+output_tokens = 128
+graph_mode = "decode-full-prefill-breakable"
+prompts = { kind = "random", input_tokens = 512 }
+
+[[serving_cases.serving-001.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+output_tokens = 128
+graph_mode = "decode-full-prefill-breakable"
+prompts = { kind = "random", input_tokens = 512 }

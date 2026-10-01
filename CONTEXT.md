@@ -26,6 +26,29 @@ The `namespace/name` identity of one model, preserving its spelling independentl
 of its local checkpoint path or particular serving deployment.
 _Avoid_: Checkpoint path, model directory
 
+**Benchmark Target**:
+One model-serving endpoint measured in a benchmark case, identified by its Model
+ID and corresponding to a configured Instance or an externally supplied endpoint.
+Each Model ID has one Target within a case; aggregate measurements are derived
+across Targets rather than another Target.
+_Avoid_: Benchmark Instance, aggregate target
+
+**Serving Benchmark Case**:
+A concrete serving-performance experiment fixing its declared models, deployment
+conditions, prompt inputs or generation parameters, and arrival process. It is
+distinct from its executions, observed environments and retained measurements.
+_Avoid_: Workload template, benchmark run
+
+**Benchmark Measurement**:
+Client-observed timing, token progress and request outcomes from one benchmark
+workload execution, independent of their presentation.
+_Avoid_: Benchmark Report, plotted results
+
+**Benchmark Report**:
+An offline presentation derived from retained Benchmark Measurements and their
+deployment conditions, without another serving execution.
+_Avoid_: Benchmark execution, measurement run
+
 **Instance Rank**:
 One SGLang worker process within an Instance, owning rank-local attention
 execution and one Transport attachment.
