@@ -117,7 +117,7 @@ uv run xtest run --suite e2e --strict-requirements
 ```
 
 See [tests/README.md](tests/README.md) for suite placement, requirements, and
-commands, and [Test Tooling](docs/designs/tooling.md) for process,
+commands, and [Test and Benchmark Tooling](docs/designs/tooling.md) for process,
 GPU lease, endpoint, and artifact ownership.
 
 CMake uses ccache for C, C++, and CUDA when available and no compiler launcher
@@ -125,15 +125,52 @@ is already configured. To disable it for a build, add
 `--config-settings-package xpool:cmake.define.XPOOL_ENABLE_CCACHE=OFF`
 to the [Quick Start sync command](docs/tutorials/quick-start.md#install-and-start-mps).
 
+## Serving Benchmarks
+
+`xbench` measures multi-model LLM serving through native SGLang streaming. It
+supports client-only load against externally owned endpoints and owned execution
+that starts the declared CrossPool model combination and topology. Prompt JSONL
+or random token prompts combine independently with trace JSONL or Poisson arrivals.
+Random prompts require matching local tokenizer/model metadata; inputs are prepared
+offline and retained for replay.
+
+`run` computes request metrics and retains them with request/event JSONL and
+execution checkpoints. `report` aggregates saved metrics and event samples into
+distributions and logical input/output throughput, then exports CSV and
+paper-layout PDF/SVG/PNG figures inside each repetition's `report/` directory.
+Run inputs expand to independent repetition reports. Repeated reporting
+overwrites generated files and preserves unrelated files and the measurement.
+
+```bash
+if [ -f .env ]; then export UV_ENV_FILE="$PWD/.env"; fi
+
+uv run xbench list
+uv run xbench run --case serving-001
+uv run xbench report .xpool-cache/bench-runs/RUN_ID
+uv run xbench clean --dry-run
+```
+
+The checked-in [catalogue](benches/benches.toml) uses the
+[two-Qwen deployment](configs/deployments/Qwen%252FQwen2.5-0.5B+Qwen%252FQwen3-0.6B/atn1-ffn1-lanes2.toml),
+one attention GPU, one FFN GPU, external MPS and local checkpoints resolved from
+`XPOOL_CONFIG`. Owned cases inherit machine paths and runtime policy from that
+complete configuration while their portable deployment supplies topology and
+SLO; optional `runtime_config` selects an explicit base.
+Supply `--catalog FILE` for other scenarios; relative input paths resolve against
+that catalogue. Each catalogue names a source module below its sibling `suites/`
+directory; that program orchestrates the scenario through installed tooling.
+Client catalogues declare external endpoints instead of an owned deployment. An
+installed invocation outside this checkout supplies an explicit catalogue.
+
 The root `uv sync --group dev` installs the private `xpool-dev` workspace member
 editably alongside production `xpool`, using one root lockfile and virtual
-environment. Its direct console entry is `xtest.cli:main`;
-the released `xpool` wheel contains production code and the
-`xpool` command. The development tool exposes list/run/report/clean; xtest
+environment. Its direct console entries are `xtest.cli:main` and
+`xbench.cli:main`; the released `xpool` wheel contains production code and the
+`xpool` command. Both development tools expose list/run/report/clean; xtest
 inventory and execution require source suites, while offline reports work outside
 a checkout.
-See [Test Tooling](docs/designs/tooling.md) for ownership and retained-result
-contracts.
+See [Test and Benchmark Tooling](docs/designs/tooling.md) for ownership, dataset
+and metric contracts. Performance values are report-only, not readiness gates.
 
 ## Repository Guide
 
@@ -147,13 +184,14 @@ contracts.
 - [`src/cext-include/xpool/`](src/cext-include/xpool/) and
   [`src/cext/`](src/cext/) contain the C++/CUDA Transport and Fabric data plane.
 - [`src/xpool-dev/`](src/xpool-dev/) contains the private development project and
-  installed `xkit` and `xtest` packages for shared mechanisms and test
-  tooling. Production and native sources retain their
+  installed `xkit`, `xtest` and `xbench` packages for shared mechanisms, test
+  tooling and benchmark tooling. Production and native sources retain their
   separate owners.
 - [`tests/`](tests/) contains the native, Unit, Integration and E2E validation
   suites and their source-owned catalogue.
-- [`configs/deployments/`](configs/deployments/) contains portable runtime scenes
-  selected by the test catalogue.
+- [`benches/`](benches/) owns the benchmark catalogue, suite programs and inputs;
+  [`configs/deployments/`](configs/deployments/) contains portable runtime scenes
+  shared by the test and benchmark catalogues.
 - [`docs/code-style.md`](docs/code-style.md) defines repository-wide coding
   conventions.
 

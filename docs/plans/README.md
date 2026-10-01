@@ -37,7 +37,6 @@ combination requires its own accepted plan and qualification evidence.
 | Cross-host Fabric | Product Capability | [#7](https://github.com/Coekjan/CrossPool/issues/7) |
 | Accelerator Portability | Product Capability | [#8](https://github.com/Coekjan/CrossPool/issues/8) |
 | Code Quality and Taste | Cross-cutting Practice | Bounded tasks opened individually |
-| Benchmark Workflows | Cross-cutting Practice | [#9](https://github.com/Coekjan/CrossPool/issues/9) |
 | Evaluation and Baselines | Cross-cutting Practice | [#10](https://github.com/Coekjan/CrossPool/issues/10) |
 
 The linked issues define bounded initial discovery stages and recommended
@@ -214,24 +213,6 @@ Only findings that alter architecture or public contracts receive an active
 plan. This workstream does not add a second linter, include sorter, comment
 density rule, or source-text quality gate.
 
-## Benchmark Workflows
-
-- **Class:** Cross-cutting Practice.
-- **Outcome:** Provide `xbench` as the canonical benchmark runner alongside
-  `xtest`, with live progress and metrics and durable results in a consistent,
-  machine-readable format.
-- **Current seam:** `xtest` already manages test resources and artifacts;
-  existing serving and report-only performance runs provide benchmark inputs.
-- **Requires:** An accepted benchmark case and result contract covering workload,
-  environment, warmup, measurements, failures, and artifact ownership.
-- **Benefits from:** Reusing applicable `xtest` resource and process-lifecycle
-  mechanisms, and Unified Timeline Observability when available.
-
-Research should identify what can be shared with `xtest` without making
-benchmarks depend on test verdicts. Candidate deliverables are a minimal
-`xbench` prototype, a stable live-and-stored result shape, and an accepted
-active plan for benchmark execution and result retention.
-
 ## Evaluation and Baselines
 
 - **Class:** Cross-cutting Practice.
@@ -242,8 +223,8 @@ active plan for benchmark execution and result retention.
 - **Requires:** Explicit hardware, models, workloads, arrival process, memory
   budget, warmup, concurrency, SLOs, metrics, raw artifacts, and treatment of
   failed or incomplete runs.
-- **Benefits from:** Benchmark Workflows, Unified Timeline Observability, and
-  the Product Capability being evaluated.
+- **Benefits from:** Unified Timeline Observability and the Product Capability
+  being evaluated.
 
 Baseline classes include native SGLang and potentially vLLM, multi-model sharing
 systems such as MuxServe, KV-elastic systems such as kvcached, and CrossPool

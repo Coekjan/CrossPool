@@ -5,12 +5,13 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "xpool-dev"
 version = "0.1.0"
-description = "Development test tools for CrossPool"
+description = "Development test and benchmark tools for CrossPool"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "xpool",
     "fastapi>=0.137.1",
     "httpx>=0.28.1",
+    "matplotlib>=3.10",
     "psutil>=7.2.2",
     "pydantic>=2.13.4",
     "pytest>=9.1.0",
@@ -24,7 +25,8 @@ dependencies = [
 
 [project.scripts]
 xtest = "xtest.cli:main"
+xbench = "xbench.cli:main"
 
 [tool.scikit-build]
 wheel.cmake = false
-wheel.packages = ["xkit", "xtest"]
+wheel.packages = ["xkit", "xtest", "xbench"]
