@@ -24,14 +24,15 @@ Add one concrete Model ID without broadening the architecture speculatively.
    implementation, and the existing adapters under
    `xpool.integrations.sglang.models`.
 2. Classify the model as one of:
-   - supported by an existing adapter without source changes;
-   - supported by a small model-specific adapter;
-   - blocked by a missing Router, operator, quantization, expert-parallel, or
-     FFN architecture capability.
+   - compatible with an existing adapter without source changes;
+   - requiring a small model-specific adapter within accepted contracts;
+   - requiring a missing Router, operator, quantization, expert-parallel, or
+     FFN capability, or a new cache, wrapper, or lifecycle contract.
 3. Reuse an existing adapter whenever its architecture and checkpoint contract
    match. Add the smallest model-specific adapter only when behavior differs.
-4. If support requires a new architecture capability, stop ordinary
-   implementation and use `write-plan` to design that capability first.
+4. If support requires a new architecture capability or cache, wrapper, or
+   lifecycle contract, pause affected implementation and use `write-plan` to
+   define the scoped extension. Obtain acceptance before implementing it.
 5. Add the model-owned SGLang qualification at
    `tests/suites/models/<model-id>/test_sglang_model_qualification.py`. Keep
    model constants and model-specific cases in that suite.
@@ -41,13 +42,23 @@ Add one concrete Model ID without broadening the architecture speculatively.
    uv run xtest run --integration=sglang --suite <model-id> --strict-requirements
    ```
 
-7. Add the Model ID to `docs/supported-models.md` only after the strict model
-   suite passes.
+   Complete the task's applicable acceptance and invalidated qualification as
+   defined in `docs/designs/qualification.md`. When the task includes native
+   multimodal input acceptance, decoder/text-only success completes a phase;
+   finish the required native-input acceptance before claiming support.
+
+7. After required qualification and task acceptance pass, update
+   `docs/supported-models.md` by the complete Model ID. Update the existing
+   row's Family from the verified full checkpoint architecture and set Support
+   to `✅ Supported`; add a row only when that ID is absent. Preserve the
+   Model ID / Family / Support columns and unique Model IDs. If acceptance
+   fails or remains incomplete, retain the candidate's unsupported status and
+   report the failed or missing evidence.
 
 ## Completion Report
 
 Report these outcomes separately:
 
 - adapter implementation or confirmed reuse;
-- qualification result;
-- supported-model entry added or withheld.
+- qualification result and remaining required evidence;
+- support-table row updated or added, or update withheld with its reason.
