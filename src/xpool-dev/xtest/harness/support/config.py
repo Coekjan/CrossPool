@@ -49,8 +49,8 @@ def e2e_base_config(request: pytest.FixtureRequest) -> ResolvedConfig:
 def synthetic_config(
     *,
     model_id: ModelId = TEST_MODEL_ID,
-    atn_cuda_devices: tuple[int, ...] = (0,),
-    ffn_cuda_devices: tuple[int, ...] = (1,),
+    atn_devices: tuple[int, ...] = (0,),
+    ffn_devices: tuple[int, ...] = (1,),
 ) -> XpoolConfig:
     """Return an in-memory config for tests where model identity is incidental."""
 
@@ -64,8 +64,8 @@ def synthetic_config(
                 "slo": {"ttft_ms": 1000, "tbt_ms": 50},
             },
             "vendor": {"model_base_uri": "/models"},
-            "atn": {"devices": list(atn_cuda_devices)},
-            "ffn": {"devices": list(ffn_cuda_devices)},
+            "atn": {"devices": list(atn_devices)},
+            "ffn": {"devices": list(ffn_devices)},
             "models": [{"id": str(model_id)}],
         }
     )
@@ -89,8 +89,8 @@ def write_minimal_config(
     atn_concurrency: int = 1,
     ffn_concurrency: int = 1,
     model_path: Path | None = None,
-    atn_cuda_devices: tuple[int, ...] = (0, 1),
-    ffn_cuda_devices: tuple[int, ...] = (2, 3, 4),
+    atn_devices: tuple[int, ...] = (0, 1),
+    ffn_devices: tuple[int, ...] = (2, 3, 4),
     model_slo: tuple[int, int] | None = None,
 ) -> Path:
     """Write fixture TOML to a file or directory and return the resulting path.
@@ -115,8 +115,8 @@ def write_minimal_config(
             "ffn_concurrency": ffn_concurrency,
             "slo": {"ttft_ms": 1000, "tbt_ms": 50},
         },
-        "atn": {"devices": list(atn_cuda_devices)},
-        "ffn": {"devices": list(ffn_cuda_devices)},
+        "atn": {"devices": list(atn_devices)},
+        "ffn": {"devices": list(ffn_devices)},
         "models": [model],
     }
     path.write_text(tomli_w.dumps(payload), encoding="utf-8")

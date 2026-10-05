@@ -32,7 +32,7 @@ class ControlPlaneProjection:
         *,
         config: XpoolConfig,
         now: float,
-        mps_online: bool,
+        mps_online: bool | None,
         registrations: RegistrationBook,
         transport: TransportBroker,
         fabric: FabricController,
@@ -41,38 +41,34 @@ class ControlPlaneProjection:
 
         # Process projection: copy every configured role slot and its cached
         # liveness status without retaining registration objects.
-        atnagent_by_device = {
-            registration.cuda_device: registration for registration in registrations.atnagents.values()
-        }
-        ffnagent_by_device = {
-            registration.cuda_device: registration for registration in registrations.ffnagents.values()
-        }
+        atnagent_by_device = {registration.device: registration for registration in registrations.atnagents.values()}
+        ffnagent_by_device = {registration.device: registration for registration in registrations.ffnagents.values()}
         instance_by_rank = {registration.instance: registration for registration in registrations.instances.values()}
         generation = fabric.generation
 
         atnagents = [
             ReadinessAtnAgent(
                 pid=None if registration is None else registration.proc.pid,
-                cuda_device=agent.cuda_device,
+                device=agent.device,
                 status=ReadinessStatus.OFFLINE if registration is None else registration.readiness_status(now),
             )
             for agent in config.atnagents
-            for registration in (atnagent_by_device.get(agent.cuda_device),)
+            for registration in (atnagent_by_device.get(agent.device),)
         ]
         ffnagents = [
             ReadinessFfnAgent(
                 pid=None if registration is None else registration.proc.pid,
-                cuda_device=agent.cuda_device,
+                device=agent.device,
                 status=ReadinessStatus.OFFLINE if registration is None else registration.readiness_status(now),
             )
             for agent in config.ffnagents
-            for registration in (ffnagent_by_device.get(agent.cuda_device),)
+            for registration in (ffnagent_by_device.get(agent.device),)
         ]
         instance_slots = (
             tuple(
-                (instance.model_id, rank, cuda_device)
+                (instance.model_id, rank, device)
                 for instance in config.instances
-                for rank, cuda_device in enumerate(config.atn.devices)
+                for rank, device in enumerate(config.atn.devices)
             )
             if generation is None
             else tuple(
@@ -89,40 +85,40 @@ class ControlPlaneProjection:
             ReadinessInstanceRank(
                 pid=None if registration is None else registration.proc.pid,
                 model_id=model_id,
-                cuda_device=cuda_device,
+                device=device,
                 rank=rank,
                 status=ReadinessStatus.OFFLINE if registration is None else registration.readiness_status(now),
             )
-            for model_id, rank, cuda_device in instance_slots
+            for model_id, rank, device in instance_slots
             for registration in (instance_by_rank.get(InstanceRankId(model_id=model_id, rank=rank)),)
         ]
 
         # Warning projection: derive heartbeat and Transport-quiesce diagnostics
         # from the same role snapshot used by readiness.
-        quiescing_devices = {cuda_device for cuda_device in config.atn.devices if transport.is_quiescing(cuda_device)}
+        quiescing_devices = {device for device in config.atn.devices if transport.is_quiescing(device)}
         warnings: list[ControlPlaneWarning] = []
         for entry in atnagents:
             if entry.status is not ReadinessStatus.ONLINE:
                 warnings.append(
                     ControlPlaneWarning(
                         kind="stale_atnagent",
-                        cuda_device=entry.cuda_device,
-                        message=f"AtnAgent on CUDA device {entry.cuda_device} is not heartbeating",
+                        device=entry.device,
+                        message=f"AtnAgent on device {entry.device} is not heartbeating",
                     )
                 )
-            elif entry.cuda_device in quiescing_devices:
+            elif entry.device in quiescing_devices:
                 warnings.append(
                     ControlPlaneWarning(
                         kind="quiescing_atnagent",
-                        cuda_device=entry.cuda_device,
-                        message=f"AtnAgent on CUDA device {entry.cuda_device} is quiescing transport leases",
+                        device=entry.device,
+                        message=f"AtnAgent on device {entry.device} is quiescing transport leases",
                     )
                 )
         warnings.extend(
             ControlPlaneWarning(
                 kind="stale_ffnagent",
-                cuda_device=entry.cuda_device,
-                message=f"FfnAgent on CUDA device {entry.cuda_device} is not heartbeating",
+                device=entry.device,
+                message=f"FfnAgent on device {entry.device} is not heartbeating",
             )
             for entry in ffnagents
             if entry.status is not ReadinessStatus.ONLINE
@@ -130,11 +126,8 @@ class ControlPlaneProjection:
         warnings.extend(
             ControlPlaneWarning(
                 kind="stale_instance",
-                cuda_device=entry.cuda_device,
-                message=(
-                    f"instance {entry.model_id} rank {entry.rank} on CUDA device "
-                    f"{entry.cuda_device} is not heartbeating"
-                ),
+                device=entry.device,
+                message=(f"instance {entry.model_id} rank {entry.rank} on device {entry.device} is not heartbeating"),
             )
             for entry in instances
             if entry.status is not ReadinessStatus.ONLINE
@@ -144,11 +137,11 @@ class ControlPlaneProjection:
         # complete Fabric initialization barrier for every configured rank.
         transport_ready = all(
             (registration := instance_by_rank.get(instance_rank)) is not None
-            and atnagent_by_device.get(cuda_device) is not None
-            and cuda_device not in quiescing_devices
-            and (publication := transport.published_for(cuda_device, instance_rank)) is not None
+            and atnagent_by_device.get(device) is not None
+            and device not in quiescing_devices
+            and (publication := transport.published_for(device, instance_rank)) is not None
             and publication.transport == registration.transport
-            for model_id, rank, cuda_device in instance_slots
+            for model_id, rank, device in instance_slots
             for instance_rank in (InstanceRankId(model_id=model_id, rank=rank),)
         )
         expected_initialized = {InstanceRankId(model_id=model_id, rank=rank) for model_id, rank, _ in instance_slots}
@@ -156,6 +149,9 @@ class ControlPlaneProjection:
         invocation_failure = None if generation is None else generation.invocation_failure
         owner_failure = None if generation is None else generation.owner_failure
         control_failure = None if generation is None else generation.control_failure
+        mps_status: ReadinessStatus | None = None
+        if mps_online is not None:
+            mps_status = ReadinessStatus.ONLINE if mps_online else ReadinessStatus.OFFLINE
         processes_ready = all(entry.status is ReadinessStatus.ONLINE for entry in (*atnagents, *ffnagents, *instances))
         fabric_executable = generation is not None and generation.phase is FabricGenerationPhase.EXECUTABLE
         ready = (
@@ -163,7 +159,7 @@ class ControlPlaneProjection:
             and transport_ready
             and fabric_executable
             and instances_initialized
-            and mps_online
+            and mps_online is True
             and invocation_failure is None
             and owner_failure is None
             and control_failure is None
@@ -179,8 +175,8 @@ class ControlPlaneProjection:
             fabric_control_failure=control_failure,
             transport_ready=transport_ready,
             instances_initialized=instances_initialized,
-            mps_status=ReadinessStatus.ONLINE if mps_online else ReadinessStatus.OFFLINE,
-            cuda_devices=config.cuda_devices,
+            mps_status=mps_status,
+            devices=config.devices,
             atnagents=atnagents,
             ffnagents=ffnagents,
             instances=instances,

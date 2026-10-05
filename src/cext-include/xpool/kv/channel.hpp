@@ -49,7 +49,7 @@ struct KvCapacityCompletion {
   bool operator==(const KvCapacityCompletion &) const = default;
 };
 
-/// One attention GPU's post-capture memory observation.
+/// One attention device's post-capture memory observation.
 struct KvDeviceMemoryReport {
   /// Total device memory in bytes.
   std::uint64_t total_bytes;

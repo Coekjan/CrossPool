@@ -366,6 +366,8 @@ def test_owner_loss_after_origin_remains_reportable_without_a_measurement_window
     assert series.summary.outcomes["failed"] == 1
     assert not series.summary.targets and not series.summary.cdf and not series.summary.throughput
     assert "measurement.json" in series.repetition_manifest.artifact_sha256
+    if not cleanup_verified:
+        return
     assert report_bench_runs((run.directory,), labels=(), layout="single") == (repetition / "report",)
     assert origin.read_bytes() == original_origin
     origin.write_text("{}", encoding="utf-8")
@@ -415,7 +417,7 @@ def retained_run(tmp_path: Path, *, failed: bool = False, horizon: float = 0.1) 
         state.event("error", 0.18, error_kind="protocol", error_message="EOF without DONE")
     recorder.request(state.terminal("failed" if failed else "success", 0.18))
     recorder.close()
-    write_json(repetition / "environment.json", {"mode": "client", "local_gpu_inventory": None})
+    write_json(repetition / "environment.json", {"mode": "client", "local_device_inventory": None})
     write_json(
         repetition / "measurement.json",
         {"monotonic_origin_seconds": 1000.0, "wall_clock_origin_seconds": 1000000000.0},

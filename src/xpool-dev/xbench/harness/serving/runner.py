@@ -34,11 +34,10 @@ from xbench.harness.serving.measure import (
 )
 from xbench.harness.serving.workload import PreparedWorkload, ScheduledRequest, file_digest, prepare_workload
 from xkit.config import resolve_model_weights
-from xkit.gpu import GpuLease, GpuPool
+from xkit.device import DeviceLease, DevicePool
 from xkit.results import RunStore, write_json, write_jsonl
 from xkit.supervisor import SupervisedTaskScope, TaskCompletionKind, TaskScopeFailure
 from xpool.config import ConfigSourceRecord, MissingRequiredConfig, XpoolConfig
-from xpool.mps import probe_mps_controller
 
 
 class BenchmarkCancelled(BaseException):
@@ -201,9 +200,14 @@ def run_benchmarks(cases: tuple[BenchCase, ...], *, root: Path, catalogue_path: 
     result = 0
     infrastructure_error = None
     safe = True
+    cancelled = False
     handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
 
     def cancel(signum: int, frame: FrameType | None) -> None:
+        nonlocal cancelled
+        if cancelled:
+            return
+        cancelled = True
         raise BenchmarkCancelled(signum)
 
     for signum in handlers:
@@ -271,7 +275,7 @@ def run_benchmarks(cases: tuple[BenchCase, ...], *, root: Path, catalogue_path: 
                 )
                 write_json(case_directory / "case.json", case_manifest.model_dump(mode="json"))
                 env = dict(os.environ)
-                lease: GpuLease | None = None
+                lease: DeviceLease | None = None
                 worker_code = 2
                 repetition_error = None
                 try:
@@ -283,16 +287,12 @@ def run_benchmarks(cases: tuple[BenchCase, ...], *, root: Path, catalogue_path: 
                             config = XpoolConfig.from_file(Path(configured_path).expanduser())
                         for model_id in program.requirements.model_ids:
                             resolve_model_weights(config, model_id)
-                    if workload.requests and program.requirements.cuda_count:
-                        if program.requirements.requires_mps:
-                            mps = probe_mps_controller()
-                            if not mps.online:
-                                raise RuntimeError(mps.diagnostic)
+                    if workload.requests and program.requirements.device_count:
                         if pool is None:
-                            pool = GpuPool.from_environment()
-                        lease = pool.try_lease(program.requirements.cuda_count)
+                            pool = DevicePool.from_environment()
+                        lease = pool.try_lease(program.requirements.device_count)
                         if lease is None:
-                            raise RuntimeError(f"case requires {program.requirements.cuda_count} visible GPUs")
+                            raise RuntimeError(f"case requires {program.requirements.device_count} visible devices")
                         env["CUDA_VISIBLE_DEVICES"] = ",".join(lease.uuids)
                     if isinstance(case, ClientBenchCase):
                         env["XBENCH_ENDPOINTS"] = json.dumps(
@@ -330,7 +330,7 @@ def run_benchmarks(cases: tuple[BenchCase, ...], *, root: Path, catalogue_path: 
                     # A scope failure retains the lease: absence was not proven.
                     if lease is not None and safe:
                         if pool is None:
-                            raise RuntimeError("GPU lease lost its pool")
+                            raise RuntimeError("device lease lost its pool")
                         pool.release(lease)
                 code = finalize_repetition(
                     directory,

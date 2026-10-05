@@ -10,11 +10,11 @@ KV Cache and FFN weights/execution are governed by different sizing axes:
 
 | Resource | Main sizing driver | CrossPool treatment |
 | --- | --- | --- |
-| Attention and KV Cache | Active requests, context lengths, and generation histories | SGLang keeps logical cache ownership; physical backing can be lent and reclaimed among Instances on one attention GPU. |
+| Attention and KV Cache | Active requests, context lengths, and generation histories | SGLang keeps logical cache ownership; physical backing can be lent and reclaimed among Instances on one attention device. |
 | FFN weights and execution | Model layer geometry, weight size, and FFN parallelism | FfnAgents retain model-specific true-TP shards on a shared FFN execution tier. |
 
 A conventional co-located deployment binds these two axes to the same process and
-GPU reservation. One model may need large KV capacity while another mainly
+device reservation. One model may need large KV capacity while another mainly
 contributes resident FFN weights, yet each Instance must reserve both sides
 independently.
 
@@ -62,10 +62,10 @@ and readiness contracts.
 - [uv](https://docs.astral.sh/uv/) 0.12.17 or newer
 - An uv-managed Python 3.12 interpreter
 - CUDA Toolkit 13.2 and CCCL 3.2
-- NVIDIA GPUs able to execute the selected kernels and CUDA graphs, with CUDA
+- NVIDIA devices able to execute the selected kernels and CUDA Graphs, with CUDA
   IPC and NVSHMEM access required by the selected topology; the example uses
-  one attention-side GPU and one FFN-side GPU
-- An externally managed CUDA MPS controller for runtime and GPU validation
+  one attention-side device and one FFN-side device
+- `nvidia-cuda-mps-control` on PATH for daemon-owned attention MPS
 - Local model weights for serving and model-dependent validation
 
 The native extension is built through uv and scikit-build-core, which obtains
@@ -77,9 +77,10 @@ the native C++/CUDA implementation; Python NVSHMEM bindings are not required.
 
 ## Quick Start
 
-Follow the [two-GPU Qwen3-0.6B quick start](docs/tutorials/quick-start.md) to
-configure a local checkpoint, start MPS and the four serving roles, send an HTTP
+Follow the [two-device Qwen3-0.6B quick start](docs/tutorials/quick-start.md) to
+configure a local checkpoint, start the four serving roles, send an HTTP
 request through real FFN execution, and shut everything down in order.
+The daemon starts and stops attention-side MPS; FFN processes run directly.
 
 ## Configuration
 
@@ -87,7 +88,7 @@ For the complete user-facing reference, see
 [Configuration](docs/configuration.md). Start from
 [`configs/xpool.example.toml`](configs/xpool.example.toml) and
 [`.env.example`](.env.example); the [Quick Start](docs/tutorials/quick-start.md)
-shows a complete two-GPU setup.
+shows a complete two-device setup.
 
 ## SGLang Integration
 
@@ -98,10 +99,15 @@ attention, KV Cache, and output processing; CrossPool adds the shared FFN
 execution path and elastic physical KV Cache backing. See
 [Supported Models](docs/supported-models.md) for currently qualified model IDs.
 
+Select `xpool` through `SGLANG_PLUGINS` and launch with
+`uv run xpool exec -- sglang serve ...`. The generic wrapper normalizes complete
+deployment visibility and prepares attention MPS before the target imports its
+runtime, preserving arguments, process identity and the inherited process group.
+
 ## Validation and Development
 
 `xtest run` is the canonical composition root. It runs native CTest,
-Unit, Integration, and E2E stages in their accepted order, schedules GPU work
+Unit, Integration, and E2E stages in their accepted order, schedules device work
 against explicit resource requirements, and retains artifacts under
 `.xpool-cache/test-runs/`.
 
@@ -118,12 +124,12 @@ uv run xtest run --suite e2e --strict-requirements
 
 See [tests/README.md](tests/README.md) for suite placement, requirements, and
 commands, and [Test and Benchmark Tooling](docs/designs/tooling.md) for process,
-GPU lease, endpoint, and artifact ownership.
+device allocation, endpoint, and artifact ownership.
 
 CMake uses ccache for C, C++, and CUDA when available and no compiler launcher
 is already configured. To disable it for a build, add
 `--config-settings-package xpool:cmake.define.XPOOL_ENABLE_CCACHE=OFF`
-to the [Quick Start sync command](docs/tutorials/quick-start.md#install-and-start-mps).
+to the [Quick Start sync command](docs/tutorials/quick-start.md#install).
 
 ## Serving Benchmarks
 
@@ -152,8 +158,9 @@ uv run xbench clean --dry-run
 
 The checked-in [catalogue](benches/benches.toml) uses the
 [two-Qwen deployment](configs/deployments/Qwen%252FQwen2.5-0.5B+Qwen%252FQwen3-0.6B/atn1-ffn1-lanes2.toml),
-one attention GPU, one FFN GPU, external MPS and local checkpoints resolved from
-`XPOOL_CONFIG`. Owned cases inherit machine paths and runtime policy from that
+one attention device, one direct FFN device, daemon-owned MPS and local
+checkpoints resolved from `XPOOL_CONFIG`. Owned cases inherit machine paths
+and runtime policy from that
 complete configuration while their portable deployment supplies topology and
 SLO; optional `runtime_config` selects an explicit base.
 Supply `--catalog FILE` for other scenarios; relative input paths resolve against

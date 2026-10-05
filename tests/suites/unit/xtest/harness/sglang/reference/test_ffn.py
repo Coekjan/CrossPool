@@ -10,7 +10,6 @@ import pytest
 import safetensors.torch
 import torch
 
-from xkit.child import PythonChildProcess
 from xtest.harness.sglang.reference import ffn, ffn_protocol
 
 
@@ -39,59 +38,49 @@ def install_fake_child(
         "job": None,
     }
 
-    def start(
-        cls: type[PythonChildProcess],
-        name: str,
-        target: Callable[[Connection, ffn_protocol.FfnReferenceJob], None],
-        spec: ffn_protocol.FfnReferenceJob,
-        *,
-        log_path: Path,
-    ) -> PythonChildProcess:
-        del cls, target
-        assert name == "sglang-ffn-reference"
-        assert log_path == spec.workdir / "child.log"
-        state["job"] = spec
-        state["alive"] = receive_error is not None
+    class Child:
+        def __init__(
+            self,
+            name: str,
+            target: Callable[[Connection, ffn_protocol.FfnReferenceJob], None],
+            spec: ffn_protocol.FfnReferenceJob,
+            *,
+            log_path: Path,
+        ) -> None:
+            assert name == "sglang-ffn-reference"
+            assert log_path == spec.workdir / "child.log"
+            self.spec = spec
+            self.process = types.SimpleNamespace(is_alive=lambda: state["alive"])
+            state["job"] = spec
 
-        def receive(expected: type[object], *, timeout_seconds: float) -> object:
+        def start(self) -> None:
+            state["alive"] = receive_error is not None
+
+        def receive(self, expected: type[object], *, timeout_seconds: float) -> object:
             assert expected is ffn_protocol.FfnReferenceCompleted
             state["timeouts"].append(timeout_seconds)
             if receive_error is not None:
                 raise receive_error
-            for case in spec.cases:
+            for case in self.spec.cases:
                 with case.output_path.open("xb") as output_file:
                     output_file.write(safetensors.torch.save(output_factory(case)))
             return ffn_protocol.FfnReferenceCompleted(
-                case_count=len(spec.cases) if completed_count is None else completed_count
+                case_count=len(self.spec.cases) if completed_count is None else completed_count
             )
 
-        def wait(*, timeout_seconds: float) -> None:
+        def wait(self, *, timeout_seconds: float) -> None:
             state["timeouts"].append(timeout_seconds)
 
-        def close() -> None:
+        def close(self) -> None:
             state["closed"] = True
 
-        return typing.cast(
-            PythonChildProcess,
-            types.SimpleNamespace(
-                process=types.SimpleNamespace(is_alive=lambda: state["alive"]),
-                receive=receive,
-                wait=wait,
-                close=close,
-            ),
-        )
+        @classmethod
+        def terminate_all(cls, processes: tuple[Child, ...]) -> None:
+            assert len(processes) == 1
+            state["terminated"] = True
+            state["alive"] = False
 
-    def terminate_all(
-        cls: type[PythonChildProcess],
-        processes: tuple[PythonChildProcess, ...],
-    ) -> None:
-        del cls
-        assert len(processes) == 1
-        state["terminated"] = True
-        state["alive"] = False
-
-    monkeypatch.setattr(PythonChildProcess, "start", classmethod(start))
-    monkeypatch.setattr(PythonChildProcess, "terminate_all", classmethod(terminate_all))
+    monkeypatch.setattr(ffn, "PythonChildProcess", Child)
     monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
     return state
 

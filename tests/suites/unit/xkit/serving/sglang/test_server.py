@@ -61,7 +61,9 @@ def test_server_command_projects_pinned_cli_policy(
         endpoint=SglangEndpointFamily("127.0.0.1", 19_000, 19_001, 19_002, dp_size),
     )
 
-    assert command[:2] == ["sglang", "serve"]
+    assert command[:5] == ["xpool", "exec", "--", "sglang", "serve"]
+    assert command[command.index("--base-gpu-id") + 1] == "0"
+    assert command[command.index("--gpu-id-step") + 1] == "1"
     assert "--max-total-tokens" not in command
     assert command[command.index("--nccl-port") + 1] == "19001"
     assert command[command.index("--tensor-parallel-size") + 1] == str(launch.config.atn_world_size)
@@ -114,7 +116,11 @@ def test_server_start_prepares_process_environment_and_log_directory(
     )
 
     assert events == ["released", "spawned"]
-    assert captured["env"] == {"SGLANG_GRPC_PORT": "19002", "XPOOL_TEST_VALUE": "preserved"}
+    assert captured["env"] == {
+        "SGLANG_GRPC_PORT": "19002",
+        "SGLANG_PLUGINS": "xpool",
+        "XPOOL_TEST_VALUE": "preserved",
+    }
     assert launch.environment == {"SGLANG_GRPC_PORT": "discarded", "XPOOL_TEST_VALUE": "preserved"}
     assert server.endpoint is family
     assert captured["cwd"] == launch.cwd
@@ -234,9 +240,10 @@ def test_server_close_signals_only_live_leader_on_orderly_path(monkeypatch: pyte
     assert events == [f"signal:{xkit.serving.sglang.server.signal.SIGTERM}", "process-close"]
 
 
-def test_server_close_falls_back_to_process_group_after_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_server_close_retains_owner_past_deadline_until_confirmed_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 1)
     events: list[str] = []
+    clock = [0.0]
     process = SimpleNamespace(
         pid=123,
         poll=lambda: None,
@@ -247,7 +254,6 @@ def test_server_close_falls_back_to_process_group_after_timeout(monkeypatch: pyt
         SimpleNamespace(
             name="sglang-test",
             process=process,
-            terminate=lambda: events.append("fallback"),
             close=lambda: events.append("process-close"),
         ),
     )
@@ -256,11 +262,24 @@ def test_server_close_falls_back_to_process_group_after_timeout(monkeypatch: pyt
         owner=owner,
         endpoint=family,
     )
-    monkeypatch.setattr(xkit.serving.sglang.server, "wait_for_process_group", lambda process, timeout: False)
 
-    server.close()
+    def wait(process: object, timeout: float) -> bool:
+        assert timeout == 0.0
+        assert not server.closed
+        assert "process-close" not in events
+        if clock[0] == 0.0:
+            clock[0] = 2.0
+            return False
+        return True
 
-    assert events == [f"signal:{xkit.serving.sglang.server.signal.SIGTERM}", "fallback", "process-close"]
+    monkeypatch.setattr(xkit.serving.sglang.server, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(xkit.serving.sglang.server, "wait_for_process_group", wait)
+
+    server.close(deadline=1.0)
+
+    assert server.closed
+    assert server.cleanup_deadline == 1.0
+    assert events == [f"signal:{xkit.serving.sglang.server.signal.SIGTERM}", "process-close"]
 
 
 def server_launch(tmp_path: Path, *, dp_size: int = 1) -> XpoolClusterLaunch:

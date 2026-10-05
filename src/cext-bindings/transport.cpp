@@ -30,7 +30,7 @@ void bind_transport(py::module_ &module) {
         TORCH_CHECK(xpool::ffn::is_supported_payload_dtype(payload_dtype),
                     "xpool Transport payload dtype must be torch.float16 or torch.bfloat16");
         return xpool::transport::AtnAgentRuntime::singleton()
-            .create_arena(xpool::RuntimeState::singleton().cuda_device("xpool.native.transport.create_arena"),
+            .create_arena(xpool::RuntimeState::singleton().device("xpool.native.transport.create_arena"),
                           instance_index, instance_rank, payload_row_capacity, hidden_size, payload_dtype, atn_tp_rank,
                           atn_tp_size, atn_dp_rank, atn_dp_size)
             .encode();

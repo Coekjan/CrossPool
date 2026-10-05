@@ -77,14 +77,14 @@ class AtnAgentTransportRuntime:
         self,
         *,
         client: XpoolClient,
-        cuda_device: int,
+        device: int,
         local_rank: int,
         publisher: ProcessRef,
     ) -> None:
         """Create an empty runtime bound to one daemon registration slot."""
 
         self.client = client
-        self.cuda_device = cuda_device
+        self.device = device
         self.local_rank = local_rank
         self.publisher = publisher
         self.entries: dict[ModelId, AtnAgentTransportArenaState] = {}
@@ -182,9 +182,9 @@ class AtnAgentTransportRuntime:
             except Exception as cleanup_error:
                 error.add_note(f"transport arena rollback also failed: {type(cleanup_error).__name__}: {cleanup_error}")
                 raise AgentError(
-                    f"failed to create transport arenas for CUDA device {self.cuda_device} and release partial arenas"
+                    f"failed to create transport arenas for device {self.device} and release partial arenas"
                 ) from error
-            raise AgentError(f"failed to create transport arenas for CUDA device {self.cuda_device}") from error
+            raise AgentError(f"failed to create transport arenas for device {self.device}") from error
 
         self.entries.update((entry.model_id, entry) for entry in created)
         publishable = [
@@ -195,7 +195,7 @@ class AtnAgentTransportRuntime:
         if publishable:
             try:
                 self.client.upsert_atnagent_transport_arenas(
-                    self.cuda_device,
+                    self.device,
                     [entry.binding() for entry in publishable],
                     publisher=self.publisher,
                 )
@@ -216,7 +216,7 @@ class AtnAgentTransportRuntime:
             if missing:
                 logger.debug(
                     "waiting for local instance registrations device=%s rank=%s missing=%s",
-                    self.cuda_device,
+                    self.device,
                     self.local_rank,
                     ", ".join(str(model_id) for model_id in sorted(missing)),
                 )
@@ -230,7 +230,7 @@ class AtnAgentTransportRuntime:
         try:
             xpool.native.transport.activate()
         except Exception as error:
-            raise AgentError(f"transport Resident launch failed on CUDA device {self.cuda_device}") from error
+            raise AgentError(f"transport Resident launch failed on device {self.device}") from error
 
     def check_health(self) -> None:
         """Reject unexpected completion of the process-wide Transport Resident."""
@@ -240,7 +240,7 @@ class AtnAgentTransportRuntime:
         try:
             xpool.native.transport.check_health()
         except Exception as error:
-            raise AgentError(f"transport Resident failed on CUDA device {self.cuda_device}") from error
+            raise AgentError(f"transport Resident failed on device {self.device}") from error
 
     def quiesce_leases(self) -> None:
         """Close lease admission and wait for every live Instance-rank owner."""
@@ -249,7 +249,7 @@ class AtnAgentTransportRuntime:
         while time.monotonic() < deadline:
             try:
                 response = self.client.quiesce_atnagent_transport_leases(
-                    self.cuda_device,
+                    self.device,
                     publisher=self.publisher,
                 )
             except (XpoolClientError, XpoolDaemonError) as error:
@@ -280,7 +280,7 @@ class AtnAgentTransportRuntime:
                 return
             if time.monotonic() < deadline:
                 time.sleep(AGENT_SHUTDOWN_POLL_INTERVAL_S)
-        raise AgentError(f"timed out draining Transport Resident on CUDA device {self.cuda_device}")
+        raise AgentError(f"timed out draining Transport Resident on device {self.device}")
 
     def rollback(self, entries: Sequence[AtnAgentTransportArenaState]) -> None:
         """Destroy newly created Dormant arenas before Resident activation."""
@@ -308,23 +308,19 @@ class AtnAgentTransportRuntime:
 class AtnAgent(Agent):
     """Attention-side agent owning one rank-local transport runtime."""
 
-    def __init__(self, *, cuda_device: int) -> None:
-        """Create an AtnAgent for one configured attention CUDA device."""
+    def __init__(self, *, device: int) -> None:
+        """Create an AtnAgent for one configured attention device."""
 
-        super().__init__(cuda_device=cuda_device, runtime_role=RuntimeRole.ATNAGENT)
+        super().__init__(device=device, runtime_role=RuntimeRole.ATNAGENT)
         self.registration = AtnAgentRegistration(
-            cuda_device=cuda_device,
+            device=device,
             abi_version=ABI_VERSION,
             pid=self.proc_id.pid,
         )
-        try:
-            self.local_rank = get_global_config().atn.devices.index(cuda_device)
-        except ValueError as error:
-            raise AgentError(f"CUDA device {cuda_device} has no local instance-rank arenas") from error
         self.registration_epoch = 0
         self.transport = AtnAgentTransportRuntime(
             client=self.client,
-            cuda_device=cuda_device,
+            device=device,
             local_rank=self.local_rank,
             publisher=self.process_ref,
         )
@@ -341,16 +337,16 @@ class AtnAgent(Agent):
             self.registered = False
             if not error.is_recoverable:
                 raise AgentError(f"AtnAgent registration received unrecoverable daemon error: {error}") from error
-            logger.debug("registration failed device=%s detail=%s", self.cuda_device, error)
+            logger.debug("registration failed device=%s detail=%s", self.device, error)
             return
         self.registered = True
         self.registration_epoch += 1
-        logger.info("registered device=%s pid=%s", self.cuda_device, self.proc_id.pid)
+        logger.info("registered device=%s pid=%s", self.device, self.proc_id.pid)
 
     def send_heartbeat(self) -> HeartbeatResponse:
         """Publish this AtnAgent's heartbeat."""
 
-        return self.client.heartbeat_atnagent(self.cuda_device, self.process_ref)
+        return self.client.heartbeat_atnagent(self.device, self.process_ref)
 
     def prepare_fabric_join(self) -> bool:
         """Reconcile all local arenas before collective Fabric join."""
@@ -367,7 +363,7 @@ class AtnAgent(Agent):
         if prepared:
             logger.info(
                 "transport prepared device=%s rank=%s instance_count=%s",
-                self.cuda_device,
+                self.device,
                 self.local_rank,
                 len(instance_ranks),
             )
@@ -395,7 +391,7 @@ class AtnAgent(Agent):
         self.capacity_memory_published = False
         logger.info(
             "kv control attached device=%s pool=%s partition_count=%s",
-            self.cuda_device,
+            self.device,
             self.local_rank,
             len(config.instances),
         )
@@ -420,12 +416,12 @@ class AtnAgent(Agent):
             or not self.control_channel.captures_complete()
         ):
             return
-        free_bytes, total_bytes = torch.cuda.mem_get_info(self.cuda_device)
+        free_bytes, total_bytes = torch.cuda.mem_get_info(self.local_rank)
         self.control_channel.publish_device_memory(total_bytes, free_bytes)
         self.capacity_memory_published = True
         logger.info(
             "kv memory observed device=%s total_bytes=%s free_bytes=%s",
-            self.cuda_device,
+            self.device,
             total_bytes,
             free_bytes,
         )

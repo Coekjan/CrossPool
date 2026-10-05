@@ -46,7 +46,14 @@ class CliCommandGroup(CliCommand):
 
 
 class RunnableCliCommand(CliCommand, ABC):
-    """CLI command that executes a handler after config resolution."""
+    """CLI command that executes a handler after config resolution.
+
+    Attributes:
+        config_cli_options: Whether to expose configuration flags on this parser.
+            Command wrappers resolve TOML/environment configuration only.
+    """
+
+    config_cli_options: ClassVar[bool] = True
 
     @abstractmethod
     def run(self, args: argparse.Namespace, config: XpoolConfig) -> int:

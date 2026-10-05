@@ -8,7 +8,14 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from xpool import ffn
-from xpool.fabric import FabricGenerationId, FabricGenerationPhase, FabricParticipantPhase, InstanceFfnProfile
+from xpool.config import XpoolConfig
+from xpool.fabric import (
+    FabricGenerationId,
+    FabricGenerationPhase,
+    FabricParticipantPhase,
+    FabricRole,
+    InstanceFfnProfile,
+)
 from xpool.model import ModelId
 from xpool.native.ffn import ResultCode
 from xpool.runtime.transport import InstanceRankTransportProfile
@@ -20,6 +27,13 @@ class WireModel(BaseModel):
     """Base class for daemon control-plane wire models."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class ConfigCheckRequest(WireModel):
+    """Effective participant configuration and complete ordered UUID visibility."""
+
+    config: XpoolConfig = Field(description="Resolved effective configuration; provenance is excluded from comparison.")
+    visible_devices: list[str] = Field(description="Complete prepared physical UUID selection in deployment order.")
 
 
 class XpoolDaemonErrorDetail(WireModel):
@@ -52,6 +66,36 @@ class ProcessRef(WireModel):
     abi_version: int = Field(ge=1, description="CrossPool native ABI version used by the registering process.")
 
 
+class MpsClientTermination(WireModel):
+    """Request context termination of one exact client of the owned MPS scope.
+
+    The daemon validates its retained endpoint and actual server association.
+    The monotonic deadline bounds this retirement attempt on the shared host;
+    success supplies no permission to signal another or subsequently reused PID.
+    """
+
+    pid: int = Field(strict=True, ge=1, description="Target in the daemon's PID namespace.")
+    create_time: float = Field(
+        strict=True, gt=0, allow_inf_nan=False, description="Exact target's process creation timestamp."
+    )
+    abi_version: int = Field(strict=True, ge=1, description="CrossPool native ABI version of the request.")
+    deadline: float = Field(
+        strict=True, gt=0, allow_inf_nan=False, description="Absolute monotonic deadline for this retirement attempt."
+    )
+
+
+class AgentStartupAdmission(WireModel):
+    """Admit an exact Agent identity and configured deployment device before initialization."""
+
+    pid: int = Field(strict=True, ge=1, description="Starting Agent in the daemon's PID namespace.")
+    create_time: float = Field(
+        strict=True, gt=0, allow_inf_nan=False, description="Agent creation timestamp from the process identity."
+    )
+    abi_version: int = Field(strict=True, ge=1, description="CrossPool native ABI version before bootstrap.")
+    role: FabricRole = Field(description="Configured Agent role being initialized.")
+    device: int = Field(strict=True, ge=0, description="Deployment-visible device declared by this Agent.")
+
+
 class AtnAgentTransportArenaUpsertRequest(WireModel):
     """Request body for upserting an AtnAgent's transport arenas."""
 
@@ -73,7 +117,7 @@ class ControlPlaneWarning(WireModel):
     """Device-scoped warning returned during daemon heartbeat."""
 
     kind: ControlPlaneWarningKind = Field(description="General control-plane warning kind.")
-    cuda_device: int = Field(ge=0, description="CUDA device whose local control-plane state produced this warning.")
+    device: int = Field(ge=0, description="device whose local control-plane state produced this warning.")
     message: str = Field(description="Human-readable warning detail.")
 
 
@@ -162,7 +206,7 @@ class FabricQuiesceRequest(WireModel):
 class AtnAgentRegistration(ProcessRef):
     """AtnAgent registration payload and list-entry view."""
 
-    cuda_device: int = Field(ge=0, description="CUDA device index owned by the AtnAgent.")
+    device: int = Field(ge=0, description="device index owned by the AtnAgent.")
 
 
 class KvCapacityPartitionProfile(WireModel):
@@ -208,9 +252,9 @@ class KvControlChannelRef(WireModel):
 class FfnAgentRegistration(ProcessRef):
     """FfnAgent registration payload and list-entry view."""
 
-    cuda_device: int = Field(ge=0, description="CUDA device index owned by the FfnAgent.")
-    cuda_total_memory_bytes: int = Field(ge=1, description="Total bytes reported by the owned CUDA device.")
-    cuda_free_memory_bytes: int = Field(ge=1, description="Free bytes reported by the owned CUDA device.")
+    device: int = Field(ge=0, description="device index owned by the FfnAgent.")
+    device_total_memory_bytes: int = Field(ge=1, description="Total bytes reported by the owned device.")
+    device_free_memory_bytes: int = Field(ge=1, description="Free bytes reported by the owned device.")
     model_specs: tuple[ffn.FfnModelSpec, ...] = Field(
         min_length=1,
         description="Generation-independent FFN Model Specs loaded by this FfnAgent.",
@@ -220,7 +264,7 @@ class FfnAgentRegistration(ProcessRef):
     def validate_memory_and_specs(self) -> FfnAgentRegistration:
         """Require one legal memory observation and unique ordered Model IDs."""
 
-        if self.cuda_free_memory_bytes > self.cuda_total_memory_bytes:
+        if self.device_free_memory_bytes > self.device_total_memory_bytes:
             raise ValueError("FfnAgent free CUDA memory exceeds total CUDA memory")
         model_ids = tuple(spec.model_id for spec in self.model_specs)
         if len(set(model_ids)) != len(model_ids):
@@ -302,20 +346,20 @@ class ReadinessEntry(WireModel):
 class ReadinessAtnAgent(ReadinessEntry):
     """One configured AtnAgent slot reported by readiness."""
 
-    cuda_device: int = Field(ge=0, description="CUDA device index owned by this AtnAgent.")
+    device: int = Field(ge=0, description="device index owned by this AtnAgent.")
 
 
 class ReadinessFfnAgent(ReadinessEntry):
     """One configured FfnAgent slot reported by readiness."""
 
-    cuda_device: int = Field(ge=0, description="CUDA device index owned by this FfnAgent.")
+    device: int = Field(ge=0, description="device index owned by this FfnAgent.")
 
 
 class ReadinessInstanceRank(ReadinessEntry):
     """One configured instance rank slot reported by the readiness endpoint."""
 
     model_id: ModelId = Field(description="Model ID from the resolved CrossPool config.")
-    cuda_device: int = Field(ge=0, description="Attention CUDA device assigned to this instance rank.")
+    device: int = Field(ge=0, description="Attention device assigned to this instance rank.")
     rank: int = Field(ge=0, description="Rank-local process index within the instance.")
 
 
@@ -338,10 +382,10 @@ class ReadinessSnapshot(WireModel):
     )
     transport_ready: bool = Field(description="Whether every configured Transport publication accepts leases.")
     instances_initialized: bool = Field(description="Whether every Instance rank completed initialization.")
-    mps_status: ReadinessStatus = Field(
-        description="CUDA MPS controller status; only online and offline are produced.",
+    mps_status: ReadinessStatus | None = Field(
+        description="MPS controller availability; null means unavailable or not yet observed.",
     )
-    cuda_devices: tuple[int, ...] = Field(description="Configured CUDA devices managed by CrossPool.")
+    devices: tuple[int, ...] = Field(description="Configured devices managed by CrossPool.")
     atnagents: list[ReadinessAtnAgent] = Field(description="AtnAgent readiness entries ordered by rank.")
     ffnagents: list[ReadinessFfnAgent] = Field(description="FfnAgent readiness entries ordered by rank.")
     instances: list[ReadinessInstanceRank] = Field(

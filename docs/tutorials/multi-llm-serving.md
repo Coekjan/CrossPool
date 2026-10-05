@@ -1,17 +1,16 @@
-# Multi-LLM Serving on Two GPUs
+# Multi-LLM Serving on Two Devices
 
 This guide extends the [single-model quick start](quick-start.md) to serve
 `Qwen/Qwen3-0.6B` and `Qwen/Qwen2.5-0.5B` together. Both Instances use the same
-AtnAgent GPU and FfnAgent GPU. Complete the quick-start installation, model-root,
-`.env`, and external MPS setup first.
+AtnAgent device and FfnAgent device. Complete the quick-start installation,
+model-root and `.env` setup first.
 
 ## Configure both models
 
-Stop the single-model SGLang process, AtnAgent, FfnAgent, and daemon before
-editing their shared configuration. Leave the MPS controller running if other
-CUDA clients use it.
+Stop the single-model SGLang process, then request daemon shutdown and wait for
+its Agent/Fabric and MPS retirement before editing the shared configuration.
 
-Keep the same two GPU UUIDs in `.env` and the same device roles in
+Keep the same two physical UUIDs in `.env` and the same device roles in
 `configs/dev.local.toml`:
 
 ```toml
@@ -43,11 +42,11 @@ uv run xpool daemon serve
 ```
 
 ```bash
-uv run xpool atnagent --cuda-device 0
+uv run xpool atnagent --device 0
 ```
 
 ```bash
-uv run xpool ffnagent --cuda-device 1
+uv run xpool ffnagent --device 1
 ```
 
 Then start both SGLang Instances in separate terminals, before waiting for
@@ -55,14 +54,14 @@ either one to become healthy. Replace `/absolute/path/to/models` with the
 `vendor.model_base_uri` selected above:
 
 ```bash
-uv run sglang serve \
+uv run xpool exec -- sglang serve \
   --model-path /absolute/path/to/models/Qwen/Qwen3-0.6B \
   --host 127.0.0.1 \
   --port 30000
 ```
 
 ```bash
-uv run sglang serve \
+uv run xpool exec -- sglang serve \
   --model-path /absolute/path/to/models/Qwen/Qwen2.5-0.5B \
   --host 127.0.0.1 \
   --port 31000
@@ -90,19 +89,20 @@ Send one request to each listener:
 ```bash
 curl -sS http://127.0.0.1:30000/generate \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Explain shared GPU serving in one sentence.","sampling_params":{"temperature":0,"max_new_tokens":24}}'
+  -d '{"text":"Explain shared device serving in one sentence.","sampling_params":{"temperature":0,"max_new_tokens":24}}'
 
 curl -sS http://127.0.0.1:31000/generate \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Explain shared GPU serving in one sentence.","sampling_params":{"temperature":0,"max_new_tokens":24}}'
+  -d '{"text":"Explain shared device serving in one sentence.","sampling_params":{"temperature":0,"max_new_tokens":24}}'
 ```
 
 The two Instances keep separate logical KV contents and prefix caches while
-sharing the attention GPU's physical KV Capacity Pool. Their model-specific
-FFN weight shards coexist on the FFN GPU. This smoke topology covers concurrent
-two-model startup and inference on those two GPU roles. Dynamic KV-capacity
+sharing the attention device's physical KV Capacity Pool. Their model-specific
+FFN weight shards coexist on the FFN device. This smoke topology covers concurrent
+two-model startup and inference on those two device roles. Dynamic KV-capacity
 borrowing is covered by the dedicated Elastic KV qualification.
 
-Stop both SGLang processes first, then the AtnAgent and FfnAgent, and finally
-the daemon. Stop MPS only after every CUDA client using its controller has
-exited.
+Finish or cancel startup, then stop both SGLang Instances and wait for their
+workers and helpers to exit before requesting daemon shutdown. Start no new
+clients during retirement. The daemon retires the shared Agents and Fabric before
+stopping its attention MPS scope.

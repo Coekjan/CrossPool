@@ -61,7 +61,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     resources = program.requirements
                     print(
                         f"{case.id}\tmode={case.mode} targets={models} "
-                        f"gpus={resources.cuda_count} mps={resources.requires_mps} config={resources.requires_config}"
+                        f"devices={resources.device_count} config={resources.requires_config}"
                     )
             case "run":
                 catalogue_path = options.catalog.expanduser().resolve()

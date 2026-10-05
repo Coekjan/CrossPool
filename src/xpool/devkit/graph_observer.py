@@ -48,8 +48,8 @@ class FfnGraphObserverSnapshot(BaseModel):
 
     generation: FabricGenerationId
     pe: int = Field(ge=0)
-    cuda_device: int = Field(ge=0)
-    gpu_uuid: str = Field(min_length=1)
+    device: int = Field(ge=0)
+    device_uuid: str = Field(min_length=1)
     primary_graphs: tuple[FfnPrimaryGraphSnapshot, ...]
     lane_graphs: tuple[FfnLaneGraphSnapshot, ...] = Field(min_length=1)
 
@@ -88,8 +88,8 @@ def graph_snapshot(
     return FfnGraphObserverSnapshot(
         generation=plan.generation,
         pe=agent.fabric_pe(),
-        cuda_device=agent.cuda_device,
-        gpu_uuid=str(torch.cuda.get_device_properties(agent.cuda_device).uuid),
+        device=agent.device,
+        device_uuid=str(torch.cuda.get_device_properties(agent.local_rank).uuid),
         primary_graphs=primary_graphs,
         lane_graphs=lane_graphs,
     )

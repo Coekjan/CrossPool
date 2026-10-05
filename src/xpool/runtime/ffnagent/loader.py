@@ -205,14 +205,14 @@ def materialize_local_layer_weights(
             pinned staging, projection, allocation, or copy fails.
 
     Side Effects:
-        Allocates final tensors on the current CUDA device and a temporary
+        Allocates final tensors on the current device and a temporary
         bounded pinned Host pool. Reader threads never issue CUDA operations.
     """
 
     if not requests:
         return ()
     try:
-        cuda_device = torch.cuda.current_device()
+        device = torch.cuda.current_device()
         model_paths = tuple(dict.fromkeys(request.model_path for request in requests))
         key_views = {model_path: checkpoint.read_checkpoint_key_view(model_path) for model_path in model_paths}
         layer_weights: list[weights.FfnLayerWeights] = []
@@ -221,7 +221,7 @@ def materialize_local_layer_weights(
             materialized, layer_descriptors = prepare_layer_weight_request(
                 request,
                 key_view=key_views[request.model_path],
-                cuda_device=cuda_device,
+                device=device,
             )
             layer_weights.append(materialized)
             descriptors.extend(layer_descriptors)
@@ -249,7 +249,7 @@ def prepare_layer_weight_request(
     request: LocalLayerWeightRequest,
     *,
     key_view: dict[str, Path],
-    cuda_device: int,
+    device: int,
 ) -> tuple[weights.FfnLayerWeights, tuple[TensorReadDescriptor, ...]]:
     """Allocate one canonical destination and resolve all exact-key reads."""
 
@@ -263,18 +263,18 @@ def prepare_layer_weight_request(
         )
     local_intermediate_size = intermediate_size // request.tp_size
     local_start = request.tp_rank * local_intermediate_size
-    device = torch.device("cuda", cuda_device)
+    torch_device = torch.device("cuda", device)
 
     if isinstance(layer, ffn.DenseFfnSpec):
         gate_up_weight = torch.empty(
             (2 * local_intermediate_size, request.hidden_size),
             dtype=request.payload_dtype,
-            device=device,
+            device=torch_device,
         )
         down_weight = torch.empty(
             (request.hidden_size, local_intermediate_size),
             dtype=request.payload_dtype,
-            device=device,
+            device=torch_device,
         )
         materialized = weights.DenseFfnWeights(gate_up_weight=gate_up_weight, down_weight=down_weight)
         checkpoints = layer.checkpoint
@@ -314,12 +314,12 @@ def prepare_layer_weight_request(
     expert_gate_up_weight = torch.empty(
         (total_expert_count, 2 * local_intermediate_size, request.hidden_size),
         dtype=request.payload_dtype,
-        device=device,
+        device=torch_device,
     )
     expert_down_weight = torch.empty(
         (total_expert_count, request.hidden_size, local_intermediate_size),
         dtype=request.payload_dtype,
-        device=device,
+        device=torch_device,
     )
     descriptors = []
     for expert_id, checkpoints in enumerate(layer.checkpoint.routed_experts):
@@ -357,7 +357,7 @@ def prepare_layer_weight_request(
         router_weight = torch.empty(
             (routed_expert_count, request.hidden_size),
             dtype=request.router_weight_dtype,
-            device=device,
+            device=torch_device,
         )
         correction_bias = None
         descriptors.append(
@@ -372,7 +372,7 @@ def prepare_layer_weight_request(
             )
         )
         if layer.checkpoint.router_correction_bias_key is not None:
-            correction_bias = torch.empty((routed_expert_count,), dtype=torch.float32, device=device)
+            correction_bias = torch.empty((routed_expert_count,), dtype=torch.float32, device=torch_device)
             descriptors.append(
                 projected_descriptor(
                     key_view,

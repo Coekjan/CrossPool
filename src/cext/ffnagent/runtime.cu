@@ -56,7 +56,7 @@ void validate_cuda_address(std::uintptr_t address, int expected_device, const ch
   auto attributes = cudaPointerAttributes{};
   C10_CUDA_CHECK(cudaPointerGetAttributes(&attributes, reinterpret_cast<const void *>(address)));
   TORCH_CHECK(attributes.type == cudaMemoryTypeDevice && attributes.device == expected_device, "xpool ", name,
-              " is not Device memory on CUDA device ", expected_device);
+              " is not Device memory on device ", expected_device);
 }
 
 LayerBindingValues materialize_binding_values(const BindingResourceProjection &resources) {

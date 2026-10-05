@@ -60,7 +60,7 @@ auto storage_plan(std::size_t record_capacity, std::size_t instance_count, std::
 }
 
 struct HostState {
-  c10::DeviceIndex cuda_device;
+  c10::DeviceIndex device;
   int pe;
   std::uint8_t *allocation;
   Storage storage;
@@ -87,7 +87,7 @@ XPOOL_HOST_HOOK_FN(xpool::hooks::FabricJoinPostEvent, HostAdapter::observe, cont
   }
   const auto lock = std::lock_guard<std::mutex>{state_mutex};
   TORCH_CHECK(!host_state.has_value(), "xpool Fabric Observer is already open");
-  const auto device_guard = c10::cuda::CUDAGuard{context.cuda_device};
+  const auto device_guard = c10::cuda::CUDAGuard{context.device};
   const auto plan = storage_plan(xpool::debug::options().fabric_observer.record_capacity, context.layout.instance_count,
                                  context.layout.executor_lane_count);
   auto index = std::size_t{0};
@@ -114,7 +114,7 @@ XPOOL_HOST_HOOK_FN(xpool::hooks::FabricJoinPostEvent, HostAdapter::observe, cont
   for (const auto &instance : context.projection.instances) {
     model_topologies.push_back({.atn_tp_size = instance.atn_tp_size, .atn_dp_size = instance.atn_dp_size});
   }
-  host_state.emplace(HostState{.cuda_device = context.cuda_device,
+  host_state.emplace(HostState{.device = context.device,
                                .pe = context.pe,
                                .allocation = allocation,
                                .storage = observer_storage,
@@ -128,7 +128,7 @@ XPOOL_HOST_HOOK_FN(xpool::hooks::FabricFinalizePreEvent, HostAdapter::observe, c
     return;
   }
   const auto lock = std::lock_guard<std::mutex>{state_mutex};
-  const auto device_guard = c10::cuda::CUDAGuard{context.cuda_device};
+  const auto device_guard = c10::cuda::CUDAGuard{context.device};
   const auto empty = Storage{};
   C10_CUDA_CHECK(cudaMemcpyToSymbol(storage, &empty, sizeof(empty)));
   C10_CUDA_CHECK(cudaFree(host_state->allocation));
@@ -320,7 +320,7 @@ std::optional<Snapshot> read() {
   if (!host_state.has_value()) {
     return std::nullopt;
   }
-  const auto device_guard = c10::cuda::CUDAGuard{host_state->cuda_device};
+  const auto device_guard = c10::cuda::CUDAGuard{host_state->device};
   auto state = xpool::utils::trace::BufferState{};
   C10_CUDA_CHECK(cudaMemcpy(&state, host_state->storage.state, sizeof(state), cudaMemcpyDeviceToHost));
   const auto retained = std::min<std::size_t>(state.sequence, host_state->storage.record_capacity);

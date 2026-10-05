@@ -20,21 +20,20 @@ std::string_view name(RuntimeRole role) {
   TORCH_CHECK(false, "xpool received an invalid runtime role");
 }
 
-void RuntimeState::initialize(RuntimeRole role, const std::optional<c10::DeviceIndex> &cuda_device) {
+void RuntimeState::initialize(RuntimeRole role, const std::optional<c10::DeviceIndex> &device) {
   if (role == RuntimeRole::Daemon) {
-    TORCH_CHECK(!cuda_device.has_value(), "xpool daemon init requires a null CUDA device");
+    TORCH_CHECK(!device.has_value(), "xpool daemon init requires a null device");
   } else {
-    TORCH_CHECK(cuda_device.has_value() && *cuda_device >= 0,
-                "xpool GPU runtime init requires a non-negative CUDA device");
+    TORCH_CHECK(device.has_value() && *device >= 0, "xpool runtime init requires a non-negative device");
   }
   std::lock_guard<std::mutex> lock(mutex_);
   if (role_.has_value()) {
     TORCH_CHECK(*role_ == role, "xpool op init requires runtime role ", name(role),
                 " but current process was initialized as ", name(*role_));
-    TORCH_CHECK(device_ == cuda_device, "xpool init CUDA device differs from the first init call");
+    TORCH_CHECK(device_ == device, "xpool init device differs from the first init call");
   }
   role_ = role;
-  device_ = cuda_device;
+  device_ = device;
 }
 
 RuntimeRole RuntimeState::role() const {
@@ -57,7 +56,7 @@ void RuntimeState::require_role(std::initializer_list<RuntimeRole> expected, std
               name(*role_));
 }
 
-c10::DeviceIndex RuntimeState::cuda_device(std::string_view op_name) const {
+c10::DeviceIndex RuntimeState::device(std::string_view op_name) const {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(device_.has_value(), "xpool op ", op_name, " requires xpool.init first");
   return *device_;

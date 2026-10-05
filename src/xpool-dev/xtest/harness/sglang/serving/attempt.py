@@ -81,9 +81,8 @@ class ProbeAttempt:
                 workdir=self.workdir,
                 graph_settings=self.graph_settings,
             )
-            self.system = XpoolServingSystem.start(
-                launch, workdir=self.workdir, startup_timeout_seconds=PROBE_TIMEOUT_SECONDS
-            )
+            self.system = XpoolServingSystem()
+            self.system.start(launch, workdir=self.workdir, startup_timeout_seconds=PROBE_TIMEOUT_SECONDS)
             assert self.system.cluster is not None
             config = self.system.launch.config
             servers = [
@@ -106,7 +105,7 @@ class ProbeAttempt:
                 raise AssertionError(f"SGLang E2E inference failed: {error}") from error
             daemon_startup_seconds = self.system.cluster.daemon_startup_seconds
         finally:
-            if self.system is not None:
+            if self.system is not None and not self.system.closed:
                 try:
                     self.system.close()
                 except Exception as error:

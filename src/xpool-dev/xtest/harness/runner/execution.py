@@ -12,12 +12,9 @@ import time
 from contextlib import ExitStack
 from pathlib import Path
 
-import torch
-
-from xkit.gpu import GpuLease, GpuPool
+from xkit.device import DevicePool
 from xkit.results import RunStore
-from xkit.supervisor import SupervisedTaskScope, TaskCompletionKind, TaskScopeFailure
-from xpool.mps import probe_mps_controller
+from xkit.supervisor import TaskScopeFailure
 from xpool.utils.sighandler import sighandle
 from xtest.harness.report import TaskReportRecord, TestResultWriter, TestRunManifest
 from xtest.harness.runner.collection import CollectionFailure
@@ -28,31 +25,9 @@ from xtest.harness.runner.suite import SuiteRunner
 from xtest.harness.runner.task import compile_execution_tasks
 from xtest.harness.sglang.serving.alignment import ServingGraphAdapter
 
-MPS_POOL_PROBE_TIMEOUT_SECONDS = 60.0
-
-
-def run_mps_pool_probe() -> int:
-    """Initialize and synchronize every runner-visible GPU in one fresh client."""
-
-    visible = tuple(entry for entry in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",") if entry)
-    if not visible:
-        raise RuntimeError("MPS pool probe requires nonempty CUDA_VISIBLE_DEVICES")
-    if torch.cuda.device_count() != len(visible):
-        raise RuntimeError(f"MPS pool probe expected {len(visible)} visible GPUs, received {torch.cuda.device_count()}")
-    for device_index in range(len(visible)):
-        with torch.cuda.device(device_index):
-            torch.empty(1, device="cuda")
-            torch.cuda.synchronize()
-    return 0
-
 
 def run_tests(options: argparse.Namespace, selectors: tuple[str, ...], parser: argparse.ArgumentParser) -> int:
     """Collect, plan, and execute the selected test suites."""
-
-    if options.mps_pool_probe:
-        if selectors or options.strict_requirements:
-            parser.error("--mps-pool-probe is an internal standalone mode")
-        return run_mps_pool_probe()
 
     configure_console()
 
@@ -141,12 +116,12 @@ def execute_test_run(
             result_writer.fail(str(error))
         return 2
 
-    needs_gpu_pool = "cext" in selected_suites or (
-        plan is not None and any(case.requirements.cuda_count for case in plan.cases)
+    needs_device_pool = "cext" in selected_suites or (
+        plan is not None and any(case.requirements.device_count for case in plan.cases)
     )
-    gpu_pool: GpuPool | None = None
+    device_pool: DevicePool | None = None
     runner: SuiteRunner | None = None
-    gpu_resources_releasable = True
+    device_resources_releasable = True
     try:
         if result_writer is not None:
             native_cases = CtestSuite(Path.cwd()).inventory() if "cext" in selected_suites else ()
@@ -162,12 +137,11 @@ def execute_test_run(
                 native_cases=native_cases,
                 tasks=tasks,
             )
-        if needs_gpu_pool:
-            gpu_pool = GpuPool.from_environment()
-            prove_gpu_pool(gpu_pool, run_directory)
+        if needs_device_pool:
+            device_pool = DevicePool.from_environment()
         if "cext" in selected_suites:
-            assert gpu_pool is not None
-            ctest_result = CtestSuite(Path.cwd()).run(gpu_pool=gpu_pool, run_directory=run_directory / "cext")
+            assert device_pool is not None
+            ctest_result = CtestSuite(Path.cwd()).run(device_pool=device_pool, run_directory=run_directory / "cext")
             if result_writer is not None:
                 result_writer.task(
                     TaskReportRecord(
@@ -195,7 +169,7 @@ def execute_test_run(
             run_directory=run_directory,
             strict_requirements=strict_requirements,
             artifact_group_adapters=(ServingGraphAdapter(),),
-            gpu_pool=gpu_pool,
+            device_pool=device_pool,
             result_writer=result_writer,
             catalogue_path=catalogue_path,
         )
@@ -204,8 +178,8 @@ def execute_test_run(
             stack.enter_context(sighandle(signal.SIGTERM, runner.request_stop))
             return runner.run()
     except TaskScopeFailure as error:
-        gpu_resources_releasable = False
-        print(f"xpool test cannot release GPU resources after unproven task cleanup: {error}", file=sys.stderr)
+        device_resources_releasable = False
+        print(f"xpool test cannot release device resources after unproven task cleanup: {error}", file=sys.stderr)
         if result_writer is not None:
             result_writer.fail(str(error))
         return 2
@@ -216,38 +190,12 @@ def execute_test_run(
         return 2
     finally:
         runner_resources_releasable = runner is None or runner.resources_releasable
-        cleanup_verified = gpu_resources_releasable and runner_resources_releasable
-        if gpu_pool is not None:
-            cleanup_verified = cleanup_verified and not gpu_pool.active_leases
+        cleanup_verified = device_resources_releasable and runner_resources_releasable
+        if device_pool is not None:
+            cleanup_verified = cleanup_verified and not device_pool.active_leases
             if cleanup_verified:
-                gpu_pool.close()
+                device_pool.close()
             else:
-                print("xpool test could not prove GPU resources releasable", file=sys.stderr)
+                print("xpool test could not prove device resources releasable", file=sys.stderr)
         if result_writer is not None:
             result_writer.cleanup(cleanup_verified)
-
-
-def prove_gpu_pool(gpu_pool: GpuPool, run_directory: Path) -> None:
-    """Prove MPS controller readiness and CUDA usability over the complete pool."""
-
-    mps = probe_mps_controller()
-    if not mps.online:
-        raise RuntimeError(f"MPS is unhealthy during initial suite preflight: {mps.diagnostic}")
-    probe_directory = run_directory / "mps-pool-probe"
-    probe_directory.mkdir(parents=True, exist_ok=False)
-    environment = os.environ.copy()
-    environment["CUDA_VISIBLE_DEVICES"] = ",".join(GpuLease(gpu_pool.uuids).uuids)
-    environment["PYTHONPYCACHEPREFIX"] = str(Path.cwd() / ".xpool-cache" / "pycache")
-    completion = SupervisedTaskScope.run(
-        "mps-pool-probe",
-        [sys.executable, "-m", "xtest.cli", "run", "--mps-pool-probe"],
-        cwd=Path.cwd(),
-        env=environment,
-        log_path=probe_directory / "probe.log",
-        timeout_seconds=MPS_POOL_PROBE_TIMEOUT_SECONDS,
-    )
-    if completion.kind is not TaskCompletionKind.EXITED or completion.returncode != 0:
-        raise RuntimeError(
-            f"MPS pool usability probe failed ({completion.kind.value}, {completion.returncode}); "
-            f"see {probe_directory / 'probe.log'}"
-        )

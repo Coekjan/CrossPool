@@ -70,7 +70,7 @@ class DenseFfnWeights:
         if self.down_weight.shape != (hidden_size, local_intermediate_size):
             raise ValueError("Dense down_weight dimensions disagree with gate_up_weight")
         if self.down_weight.device != self.gate_up_weight.device:
-            raise ValueError("Dense weights must share one CUDA device")
+            raise ValueError("Dense weights must share one device")
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +104,7 @@ class MoeRouterWeights:
         if self.correction_bias.shape[0] != self.weight.shape[0]:
             raise ValueError("Router correction bias cardinality disagrees with Router weight")
         if self.correction_bias.device != self.weight.device:
-            raise ValueError("Router weights must share one CUDA device")
+            raise ValueError("Router weights must share one device")
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,10 +148,10 @@ class MoeFfnWeights:
         if self.expert_down_weight.shape != expected_down_shape:
             raise ValueError("MoE expert_down_weight dimensions disagree with expert_gate_up_weight")
         if self.expert_down_weight.device != self.expert_gate_up_weight.device:
-            raise ValueError("MoE Expert weights must share one CUDA device")
+            raise ValueError("MoE Expert weights must share one device")
         if self.router is not None:
             if self.router.weight.device != self.expert_gate_up_weight.device:
-                raise ValueError("MoE Expert and Router weights must share one CUDA device")
+                raise ValueError("MoE Expert and Router weights must share one device")
             if self.router.weight.shape[1] != hidden_size or self.router.weight.shape[0] > expert_count:
                 raise ValueError("MoE Router dimensions disagree with Expert weights")
 

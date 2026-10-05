@@ -6,7 +6,7 @@ import pytest
 import tomli_w
 from tests import TEST_CATALOG_PATH
 
-import xkit.gpu
+import xkit.device
 from xkit.serving.sglang.graph import SglangGraphMode, SglangGraphSettings
 from xpool.config import XpoolConfig
 from xtest.harness.runner.requirements import ResolvedConfig
@@ -38,8 +38,8 @@ def test_prepare_applies_deployment_policy_and_sanitizes_environment(
     for name, value in inherited.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(
-        xkit.gpu,
-        "query_visible_gpu_total_memory_bytes",
+        xkit.device,
+        "query_visible_device_total_memory_bytes",
         lambda: (40 * 1024**3, 40 * 1024**3, 40 * 1024**3),
     )
     monkeypatch.setenv("XPOOL_DEBUG_TRANSPORT_OBSERVER_RECORD_CAPACITY", "1")
@@ -97,9 +97,9 @@ def test_prepare_elastic_kv_preserves_absolute_memory_budget(
     manifest = TestCatalog.load(TEST_CATALOG_PATH)
     case = next(case for case in manifest.serving_cases if case.elastic_kv is not None)
     monkeypatch.setattr(
-        xkit.gpu,
-        "query_visible_gpu_total_memory_bytes",
-        lambda: (total_memory_bytes,) * case.required_gpu_count,
+        xkit.device,
+        "query_visible_device_total_memory_bytes",
+        lambda: (total_memory_bytes,) * case.required_device_count,
     )
 
     launch = prepare(
@@ -115,7 +115,7 @@ def test_prepare_elastic_kv_preserves_absolute_memory_budget(
 @pytest.mark.parametrize(
     ("visible_memory", "message"),
     [
-        ((40 * 1024**3,), "requires 2 visible Attention GPUs"),
+        ((40 * 1024**3,), "requires 2 visible attention devices"),
         ((40 * 1024**3, 80 * 1024**3), "equal total memory"),
     ],
 )
@@ -128,8 +128,8 @@ def test_prepare_rejects_incompatible_elastic_kv_gpu_capacity(
     manifest = TestCatalog.load(TEST_CATALOG_PATH)
     case = next(case for case in manifest.serving_cases if case.elastic_kv is not None and case.atnagent_count == 2)
     monkeypatch.setattr(
-        xkit.gpu,
-        "query_visible_gpu_total_memory_bytes",
+        xkit.device,
+        "query_visible_device_total_memory_bytes",
         lambda: visible_memory,
     )
 

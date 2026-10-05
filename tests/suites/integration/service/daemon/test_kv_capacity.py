@@ -21,6 +21,7 @@ from xtest.harness.support.service.daemon import (
     deterministic_daemon_dependencies,
     ffnagent_registration,
     instance_registration,
+    register,
     register_fabric_world,
     request,
 )
@@ -91,12 +92,11 @@ def capacity_policy_world(
     )
     app = create_app(config)
     for device in range(atn_world_size):
-        assert request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=device)).is_success
-    assert request(
+        assert register(app, "/atnagent/register", atnagent_registration(device=device)).is_success
+    assert register(
         app,
-        "POST",
         "/ffnagent/register",
-        json=ffnagent_registration(cuda_device=atn_world_size, model_ids=tuple(bundle_bytes_by_instance)),
+        ffnagent_registration(device=atn_world_size, model_ids=tuple(bundle_bytes_by_instance)),
     ).is_success
     for model_id, bundle_bytes in bundle_bytes_by_instance.items():
         for rank in range(atn_world_size):
@@ -111,7 +111,7 @@ def capacity_policy_world(
             )
             profile = kv_capacity_profile().model_copy(update={"bundle_bytes": bundle_bytes})
             registration["kv_capacity"] = profile.model_dump(mode="json")
-            assert request(app, "POST", "/instance/register", json=registration).is_success
+            assert register(app, "/instance/register", registration).is_success
     control = app.state.control_plane
     fabric = control.fabric_controller.generation
     assert fabric is not None

@@ -36,7 +36,6 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if name == "run":
             command_parser.add_argument("--result-root", type=Path, default=Path(".xpool-cache/test-runs"))
             command_parser.add_argument("--strict-requirements", action="store_true")
-            command_parser.add_argument("--mps-pool-probe", action="store_true", help=argparse.SUPPRESS)
     report_parser = subparsers.add_parser("report", help="report retained test results offline")
     report_parser.add_argument("inputs", nargs="+", type=Path)
     report_parser.add_argument("--output", required=True, type=Path)
@@ -117,8 +116,8 @@ def list_tests(
                     if case.stage.value == stage:
                         requirement = case.requirements
                         print(
-                            f"{stage}\t{case.nodeid}\tgpus={requirement.cuda_count} "
-                            f"mps={requirement.requires_mps} config={requirement.requires_config} "
+                            f"{stage}\t{case.nodeid}\tdevices={requirement.device_count} "
+                            f"config={requirement.requires_config} "
                             f"models={','.join(str(model_id) for model_id in requirement.model_ids)}"
                         )
     return 0

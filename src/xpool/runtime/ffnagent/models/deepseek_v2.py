@@ -77,7 +77,7 @@ class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
             raise ValueError(f"DeepSeek Router workspace must contain exactly {expected_bytes} bytes")
         tensors = (router_weights.weight, workspace, routed_ids, routed_weights)
         if any(tensor.device != hidden_states.device for tensor in tensors):
-            raise ValueError("DeepSeek Router tensors must share one CUDA device")
+            raise ValueError("DeepSeek Router tensors must share one device")
         logits = workspace.view(torch.float32).view(row_capacity, routed_expert_count)
         torch.mm(hidden_states, router_weights.weight.t(), out=logits, out_dtype=torch.float32)
         operators.compute_softmax_topk(

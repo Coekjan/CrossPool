@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterator
 
 import pytest
@@ -19,7 +20,7 @@ from xpool.runtime.atnagent import (
     AtnAgent,
     AtnAgentTransportArenaState,
 )
-from xpool.service.wire import HeartbeatResponse, InstanceRankRegistration
+from xpool.service.wire import AgentStartupAdmission, HeartbeatResponse, InstanceRankRegistration
 from xpool.transport import TransportArenaHandle
 from xtest.harness.support.config import install_test_config
 from xtest.harness.support.kv import kv_capacity_profile
@@ -72,7 +73,27 @@ def reset_agent_runtime(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr(xpool.runtime.agent.bootstrap, "init", lambda cuda_device, role: None)
+        def check_config(self) -> None:
+            pass
+
+        def admit_agent_startup(self, request: AgentStartupAdmission) -> None:
+            pass
+
+    for name in ("CUDA_VISIBLE_DEVICES", "CUDA_MPS_PIPE_DIRECTORY", "CUDA_MPS_LOG_DIRECTORY"):
+        monkeypatch.setenv(name, os.environ.get(name, ""))
+    monkeypatch.setattr(
+        xpool.runtime.agent,
+        "visible_uuids",
+        lambda: tuple(f"GPU-00000000-0000-0000-0000-{index:012x}" for index in range(8)),
+    )
+
+    monkeypatch.setattr(xpool.runtime.agent.bootstrap, "init", lambda device, role: None)
+    monkeypatch.setattr(
+        xpool.runtime.agent,
+        "normalize_environment",
+        lambda: monkeypatch.setenv("CUDA_VISIBLE_DEVICES", ",".join(xpool.runtime.agent.visible_uuids())),
+    )
+    monkeypatch.setattr(xpool.runtime.agent.MpsEndpoint, "require_client", lambda self: None)
     monkeypatch.setattr(xpool.runtime.agent.devkit, "install", lambda: None)
     monkeypatch.setattr(xpool.runtime.agent, "XpoolClient", HealthyClient)
     yield
@@ -89,11 +110,11 @@ def reset_atnagent_runtime(
     yield
 
 
-def create_atnagent(config: XpoolConfig, *, cuda_device: int) -> AtnAgent:
+def create_atnagent(config: XpoolConfig, *, device: int) -> AtnAgent:
     """Install config and construct one production AtnAgent for tests."""
 
     install_test_config(config)
-    return AtnAgent(cuda_device=cuda_device)
+    return AtnAgent(device=device)
 
 
 def instance_registration_view(*, model_id: str, rank: int) -> dict[str, object]:

@@ -23,7 +23,7 @@ def test_model_suite_collects_only_its_literal_model_directory(
         path=f"{model_directory}/test_sglang_model_qualification.py",
         nodeid=f"{model_directory}/test_sglang_model_qualification.py::test_ffn_numerical[example]",
         stage=xtest.harness.runner.plan.TestStage.MODELS,
-        requirements=ResourceRequirements(0, False, False, ()),
+        requirements=ResourceRequirements(0, False, ()),
         estimated_duration_seconds=1,
         timeout_seconds=10,
         artifact_group=None,

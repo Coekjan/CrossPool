@@ -58,7 +58,7 @@ def register_cli_commands(subparsers: argparse._SubParsersAction, commands: Sequ
         parent_subparsers = group_subparsers[parent]
         for command in children_by_parent.get(parent, []):
             parser = parent_subparsers.add_parser(command.name, help=command.help)
-            if isinstance(command, RunnableCliCommand):
+            if isinstance(command, RunnableCliCommand) and command.config_cli_options:
                 XpoolConfig.add_cli_args(parser)
             command.configure_parser(parser)
             if isinstance(command, CliCommandGroup):

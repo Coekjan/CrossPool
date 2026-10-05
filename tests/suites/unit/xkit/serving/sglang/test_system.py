@@ -14,18 +14,20 @@ from xkit.serving.sglang.system import XpoolServingSystem
 
 
 @pytest.mark.parametrize("cleanup_failure", [False, True])
-def test_system_cleanup_releases_endpoints_after_process_failure_or_bind_conflict(cleanup_failure: bool) -> None:
+def test_system_cleanup_retains_live_clients_and_classifies_conflicts_after_retirement(cleanup_failure: bool) -> None:
     system = XpoolServingSystem()
     events: list[str] = []
     family = SglangEndpointFamily("127.0.0.1", 20000, 21000, 22000, 1)
 
-    def close_server() -> None:
+    def close_server(**kwargs: object) -> None:
         events.append("server-close")
         if cleanup_failure:
             raise RuntimeError("process still live")
 
     system.servers.append(cast(SglangServerProcess, SimpleNamespace(close=close_server)))
-    system.cluster = cast(XpoolCluster, SimpleNamespace(close=lambda: events.append("cluster-close")))
+    system.cluster = cast(
+        XpoolCluster, SimpleNamespace(cleanup_deadline=None, close=lambda **kwargs: events.append("cluster-close"))
+    )
     system.server_endpoints.append(
         cast(
             SglangEndpointFamilyLease,
@@ -40,18 +42,22 @@ def test_system_cleanup_releases_endpoints_after_process_failure_or_bind_conflic
     if cleanup_failure:
         with pytest.raises(RuntimeError, match="process still live"):
             system.close()
-        assert events == ["server-close", "cluster-close", "endpoint-close"]
+        assert events == ["server-close"]
+        assert not system.closed
     else:
         with pytest.raises(TcpEndpointConflict) as error:
             system.close()
         assert error.value.addresses == ((family.host, family.nccl_port),)
         assert events == ["server-close", "cluster-close", "endpoint-inspect", "endpoint-close"]
+        assert system.closed
 
 
 def test_system_rejects_process_exit_and_preserves_inspection_error() -> None:
     system = XpoolServingSystem()
     owner = SimpleNamespace(name="daemon", process=SimpleNamespace(poll=lambda: 1))
-    system.cluster = cast(XpoolCluster, SimpleNamespace(processes=[owner], close=lambda: None))
+    system.cluster = cast(
+        XpoolCluster, SimpleNamespace(processes=[owner], cleanup_deadline=None, close=lambda **kwargs: None)
+    )
     with pytest.raises(RuntimeError, match="daemon exited"):
         system.check_alive()
     events: list[str] = []

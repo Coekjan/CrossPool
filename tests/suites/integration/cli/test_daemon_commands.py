@@ -10,6 +10,7 @@ import xpool.cli.subcommands.daemon
 from xpool.cli import main
 from xpool.fabric import FabricGenerationId
 from xpool.service.client import XpoolClientError
+from xpool.service.daemon.control import ControlPlane
 from xpool.service.wire import ReadinessSnapshot
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
 
@@ -30,15 +31,15 @@ def ready_snapshot(*, ready: bool) -> ReadinessSnapshot:
             "transport_ready": ready,
             "instances_initialized": ready,
             "mps_status": "online" if ready else "offline",
-            "cuda_devices": [0, 1],
-            "atnagents": [{"pid": 100, "status": "online", "cuda_device": 0}],
-            "ffnagents": [{"pid": 300, "status": "online", "cuda_device": 1}],
+            "devices": [0, 1],
+            "atnagents": [{"pid": 100, "status": "online", "device": 0}],
+            "ffnagents": [{"pid": 300, "status": "online", "device": 1}],
             "instances": [
                 {
                     "pid": 200 if ready else None,
                     "status": instance_status,
                     "model_id": str(TEST_MODEL_ID),
-                    "cuda_device": 0,
+                    "device": 0,
                     "rank": 0,
                 }
             ],
@@ -67,12 +68,12 @@ def test_daemon_check_reports_ready_snapshot(monkeypatch, capsys) -> None:
     assert payload["ready"] is True
     assert payload["error"] is None
     assert payload["daemon"] == {"host": "127.0.0.1", "port": 9810}
-    assert payload["readiness"]["cuda_devices"] == [0, 1]
+    assert payload["readiness"]["devices"] == [0, 1]
     assert payload["readiness"]["mps_status"] == "online"
-    assert payload["readiness"]["atnagents"] == [{"cuda_device": 0, "pid": 100, "status": "online"}]
+    assert payload["readiness"]["atnagents"] == [{"device": 0, "pid": 100, "status": "online"}]
     assert payload["readiness"]["instances"] == [
         {
-            "cuda_device": 0,
+            "device": 0,
             "model_id": str(TEST_MODEL_ID),
             "pid": 200,
             "rank": 0,
@@ -112,13 +113,15 @@ def test_daemon_check_reports_daemon_error(monkeypatch, capsys) -> None:
 
 
 def test_daemon_serve_runs_uvicorn(monkeypatch) -> None:
-    failure = xpool.cli.subcommands.daemon.DaemonFailure()
-    app = SimpleNamespace(state=SimpleNamespace(daemon_failure=failure))
-    calls: list[tuple[object, str, int, bool, object]] = []
+    control = ControlPlane()
+    control.close()
+    failure = xpool.cli.subcommands.daemon.DaemonFailure(control)
+    app = SimpleNamespace(state=SimpleNamespace(daemon_failure=failure, control_plane=control))
+    calls: list[tuple[object, str, int, bool, object, object]] = []
 
     class FakeDaemonServer:
-        def __init__(self, config, server_failure) -> None:
-            calls.append((config.app, config.host, config.port, config.access_log, server_failure))
+        def __init__(self, config, server_failure, server_control) -> None:
+            calls.append((config.app, config.host, config.port, config.access_log, server_failure, server_control))
 
         def run(self) -> None:
             pass
@@ -128,14 +131,14 @@ def test_daemon_serve_runs_uvicorn(monkeypatch) -> None:
 
     assert main(["daemon", "serve", "--config", "configs/xpool.example.toml"]) == 0
 
-    assert calls == [(app, "127.0.0.1", 9810, False, failure)]
+    assert calls == [(app, "127.0.0.1", 9810, False, failure, control)]
 
 
 def test_atnagent_run_reports_daemon_transport_error(monkeypatch, capsys) -> None:
     monkeypatch.setenv("XPOOL_CONFIG", "configs/xpool.example.toml")
 
     class FakeAtnAgent:
-        def __init__(self, *, cuda_device: int) -> None:
+        def __init__(self, *, device: int) -> None:
             return None
 
         def run(self) -> None:
@@ -143,7 +146,7 @@ def test_atnagent_run_reports_daemon_transport_error(monkeypatch, capsys) -> Non
 
     monkeypatch.setattr(xpool.cli.subcommands.atnagent, "AtnAgent", FakeAtnAgent)
 
-    assert main(["atnagent", "--cuda-device", "0"]) == 2
+    assert main(["atnagent", "--device", "0"]) == 2
 
     captured = capsys.readouterr()
     assert captured.out == ""

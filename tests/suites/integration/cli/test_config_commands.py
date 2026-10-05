@@ -98,7 +98,7 @@ def test_missing_config_path_returns_cli_error(monkeypatch, capsys) -> None:
     [
         ("missing", "No such file"),
         ("malformed", "line 1"),
-        ("schema", "overlapping devices"),
+        ("schema", "immediately follow the attention device block"),
     ],
 )
 def test_config_dump_reports_configuration_errors_without_traceback(

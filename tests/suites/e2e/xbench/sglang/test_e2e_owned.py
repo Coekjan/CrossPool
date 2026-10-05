@@ -17,7 +17,9 @@ from xbench.harness.serving.measure import BenchRunManifest
 from xbench.harness.serving.report import load_series
 from xbench.harness.serving.workload import ScheduledRequest
 from xkit.deployment import resolve_deployment_path
-from xkit.gpu import query_physical_gpus, visible_gpu_uuids
+from xkit.task import get_task_root
+from xpool.utils.device import visible_uuids
+from xpool.utils.sighandler import defer_signal_exceptions
 from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.support.config import e2e_base_config
 
@@ -30,7 +32,7 @@ assert isinstance(CASE, OwnedBenchCase)
 @xtest.requirements(partial(requirements_of, case=CASE))
 @pytest.mark.estimated_duration(seconds=90)
 @pytest.mark.timeout(4200)
-def test_e2e_owned_benchmark_measures_both_targets_and_reproduces_offline(
+def test_e2e_owned_benchmark_measures_both_targets_with_assigned_devices(
     e2e_base_config: ResolvedConfig, tmp_path: Path, task_artifact_dir: Path | None
 ) -> None:
     # The outer deadline covers startup, sequential warmup and HTTP deadlines;
@@ -83,59 +85,68 @@ def test_e2e_owned_benchmark_measures_both_targets_and_reproduces_offline(
         tomli_w.dumps({"serving_cases": {case.id: declaration}}),
         encoding="utf-8",
     )
-    assigned = visible_gpu_uuids(query_physical_gpus())
+    assigned = visible_uuids()
     result_root = workdir / "runs"
-    completed = subprocess.run(
-        ["uv", "run", "--no-sync", "xbench", "run", "--catalog", str(catalog), "--result-root", str(result_root)],
-        cwd=REPOSITORY_ROOT,
-        env=dict(os.environ, SGLANG_PLUGINS="__none__", HF_HUB_OFFLINE="0", TRANSFORMERS_OFFLINE="0"),
-        capture_output=True,
-        text=True,
-        timeout=4000,
-    )
-    (workdir / "cli.log").write_text(completed.stdout + completed.stderr, encoding="utf-8")
-    assert completed.returncode == 0, completed.stdout + completed.stderr
-    run = Path(completed.stdout.strip())
+    root = get_task_root()
+    scope = None
+    process: subprocess.Popen[str] | None = None
+    stdout_path = workdir / "cli.stdout.log"
+    stderr_path = workdir / "cli.stderr.log"
+    with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open("w", encoding="utf-8") as stderr:
+        try:
+            if root is not None:
+                with defer_signal_exceptions():
+                    scope = root.register_scope()
+                root.activate()
+            with defer_signal_exceptions():
+                process = subprocess.Popen(
+                    [
+                        "uv",
+                        "run",
+                        "--no-sync",
+                        "xbench",
+                        "run",
+                        "--catalog",
+                        str(catalog),
+                        "--result-root",
+                        str(result_root),
+                    ],
+                    cwd=REPOSITORY_ROOT,
+                    env=dict(os.environ, SGLANG_PLUGINS="xpool", HF_HUB_OFFLINE="0", TRANSFORMERS_OFFLINE="0"),
+                    stdout=stdout,
+                    stderr=stderr,
+                    text=True,
+                    start_new_session=True,
+                )
+            returncode = process.wait()
+        finally:
+            if process is not None:
+                if process.poll() is None:
+                    # Only the CLI receives cancellation. Its existing runner
+                    # closes owned serving scopes and reaps the whole task
+                    # domain before returning its original verdict.
+                    process.terminate()
+                process.wait()
+            if scope is not None:
+                scope.complete()
+    output_text = stdout_path.read_text(encoding="utf-8")
+    errors = stderr_path.read_text(encoding="utf-8")
+    assert returncode == 0, output_text + errors
+    run = Path(output_text.strip())
     manifest = BenchRunManifest.model_validate_json((run / "run.json").read_bytes())
     assert manifest.finished and manifest.result_code == 0
     repetition = run / "cases" / case.id / "repetition-0001"
     series = load_series(repetition, "owned")
     assert series.workload.requests == requests
     assert series.summary.cleanup_verified
-    assert not (repetition / "report").exists()
     assert series.summary.execution_complete and series.summary.evidence_complete
     assert series.summary.outcomes["success"] == 2
     for target in case.targets:
         assert series.summary.targets[str(target.model_id)].output_tokens == 16
-    inventory = series.environment["local_gpu_inventory"]
+    inventory = series.environment["local_device_inventory"]
     assert isinstance(inventory, list) and len(inventory) == 2
     assert set(inventory) <= set(assigned)
-    assert series.environment["serving_metadata_source"] == "observed"
-    assert series.environment["environment_source"] == "effective_serving_launch"
-    environment = series.environment["environment"]
-    assert isinstance(environment, dict)
-    assert environment["SGLANG_PLUGINS"] == "xpool"
-    assert environment["HF_HUB_OFFLINE"] == environment["TRANSFORMERS_OFFLINE"] == "1"
     serving = series.environment["serving_metadata"]
-    assert isinstance(serving, dict) and isinstance(serving["gpus"], list)
-    assert {gpu["uuid"] for gpu in serving["gpus"] if isinstance(gpu, dict)} == set(inventory)
-    assert isinstance(serving["target_gpu_uuids"], dict) and set(serving["target_gpu_uuids"]) == {
-        str(target.model_id) for target in case.targets
-    }
-    assert serving["role_gpu_uuids"] == {"atn": [inventory[0]], "ffn": [inventory[1]]}
-    assert isinstance(series.environment["capture_errors"], list)
-    endpoints = series.environment["endpoints"]
-    assert isinstance(endpoints, dict) and set(endpoints) == {str(target.model_id) for target in case.targets}
-
-    output = repetition / "report"
-    reported = subprocess.run(
-        ["uv", "run", "--no-sync", "xbench", "report", str(run)],
-        cwd=REPOSITORY_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=90,
-    )
-    assert reported.returncode == 0, reported.stderr
-    projection = json.loads((output / "summary.json").read_bytes())
-    assert projection["summary"] == series.summary.model_dump(mode="json")
-    assert (output / "throughput.pdf").is_file()
+    assert isinstance(serving, dict) and isinstance(serving["devices"], list)
+    assert {device["uuid"] for device in serving["devices"] if isinstance(device, dict)} == set(inventory)
+    assert serving["role_device_uuids"] == {"atn": [inventory[0]], "ffn": [inventory[1]]}

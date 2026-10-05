@@ -6,8 +6,7 @@ from pathlib import Path
 import pytest
 
 import xtest.harness.runner.ctest_launcher
-from xpool.mps import MpsProbeResult
-from xtest.harness.runner.ctest_launcher import configure_cuda_visibility
+from xtest.harness.runner.ctest_launcher import configure_device_visibility
 
 
 def test_launch_prepends_native_dependency_paths(
@@ -35,7 +34,7 @@ def test_launch_prepends_native_dependency_paths(
     assert executable == "native-test"
     assert arguments == ["native-test", "--gtest_filter=Suite.Case"]
     assert environment["LD_LIBRARY_PATH"] == "/torch/lib:/nvshmem/lib:/existing"
-    assert "GPU ASSIGNMENT gpus=none" in capsys.readouterr().out
+    assert "DEVICE ASSIGNMENT devices=none" in capsys.readouterr().out
 
 
 def test_launch_requires_an_executable() -> None:
@@ -46,25 +45,20 @@ def test_launch_requires_an_executable() -> None:
 def test_ctest_launcher_hides_cuda_from_canonical_cpu_test() -> None:
     environment = {"XPOOL_CTEST_CANONICAL": "1", "CUDA_VISIBLE_DEVICES": "GPU-old"}
 
-    configure_cuda_visibility(environment)
+    configure_device_visibility(environment)
 
     assert environment["CUDA_VISIBLE_DEVICES"] == ""
 
 
-def test_ctest_launcher_projects_one_gpu_and_preflights_mps(monkeypatch: pytest.MonkeyPatch) -> None:
-    identifier = "gpu_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee"
+def test_ctest_launcher_projects_one_device() -> None:
+    identifier = "device_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee"
     environment = {
         "XPOOL_CTEST_CANONICAL": "1",
         "CTEST_RESOURCE_GROUP_COUNT": "1",
-        "CTEST_RESOURCE_GROUP_0": "gpus",
-        "CTEST_RESOURCE_GROUP_0_GPUS": f"id:{identifier},slots:1",
+        "CTEST_RESOURCE_GROUP_0": "devices",
+        "CTEST_RESOURCE_GROUP_0_DEVICES": f"id:{identifier},slots:1",
     }
-    monkeypatch.setattr(
-        xtest.harness.runner.ctest_launcher,
-        "probe_mps_controller",
-        lambda: MpsProbeResult(True, 100, "online"),
-    )
 
-    configure_cuda_visibility(environment)
+    configure_device_visibility(environment)
 
     assert environment["CUDA_VISIBLE_DEVICES"] == "GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"

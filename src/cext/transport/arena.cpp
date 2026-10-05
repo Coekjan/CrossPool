@@ -11,9 +11,9 @@
 
 namespace xpool::transport {
 
-Arena Arena::create(c10::DeviceIndex cuda_device, const ArenaLayout &layout) {
+Arena Arena::create(c10::DeviceIndex device, const ArenaLayout &layout) {
   layout.validate();
-  c10::cuda::CUDAGuard device_guard(cuda_device);
+  c10::cuda::CUDAGuard device_guard(device);
   auto allocation = static_cast<void *>(nullptr);
   C10_CUDA_CHECK(cudaMalloc(&allocation, layout.header.total_bytes));
   auto *arena = static_cast<std::uint8_t *>(allocation);
@@ -49,7 +49,7 @@ Arena Arena::from_handle(const ArenaHandle &handle) {
   return Arena{arena, Kind::Attached, layout};
 }
 
-c10::DeviceIndex Arena::cuda_device() const {
+c10::DeviceIndex Arena::device() const {
   TORCH_CHECK(base_ != nullptr, "xpool cannot query an empty transport arena device");
   cudaPointerAttributes attributes{};
   C10_CUDA_CHECK(cudaPointerGetAttributes(&attributes, base_));

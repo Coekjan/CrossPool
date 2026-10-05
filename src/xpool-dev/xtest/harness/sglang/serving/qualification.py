@@ -37,7 +37,7 @@ def requirements_of(
     """Declare the complete deployment and local checkpoints for a serving row."""
 
     del graph_mode
-    return ResourceRequirements(case.required_gpu_count, True, True, case.models)
+    return ResourceRequirements(case.required_device_count, True, case.models)
 
 
 def graph_rows(

@@ -16,7 +16,7 @@ from xpool.native import RuntimeRole
 from xpool.runtime.agent import Agent, AgentError
 from xpool.service.client import XpoolClient
 from xpool.service.wire import HeartbeatResponse
-from xtest.harness.support.config import reset_global_config
+from xtest.harness.support.config import install_test_config, reset_global_config, synthetic_config
 from xtest.harness.support.runtime.atnagent import reset_agent_runtime
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, reset_agent_runtime.__name__)
@@ -82,7 +82,8 @@ class RunLoopAgent(Agent):
         request_shutdown: Callable[[], None],
         shutdown_point: ShutdownPoint,
     ) -> None:
-        super().__init__(cuda_device=0, runtime_role=RuntimeRole.ATNAGENT)
+        install_test_config(synthetic_config())
+        super().__init__(device=0, runtime_role=RuntimeRole.ATNAGENT)
         self.events = events
         self.request_shutdown = request_shutdown
         self.shutdown_point = shutdown_point

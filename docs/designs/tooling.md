@@ -92,9 +92,11 @@ input matrices use native `pytest.mark.parametrize`. Resources use
 [`ResourceRequirements`](../../src/xpool-dev/xkit/requirements.py), either static
 or returned by a callback receiving all concrete parameter values as keyword
 arguments, including native pytest parameterization. The shared value validates
-nonnegative integer CUDA counts, excluding booleans, and typed, unique Model IDs.
-MPS requires CUDA; local checkpoints require configuration. Registration performs
-no catalogue I/O, resource probing or configuration installation; callbacks
+nonnegative integer device counts, excluding booleans, and typed, unique Model IDs.
+Local checkpoints require configuration. Role-aware owners select MPS during
+execution; requirements declare resources rather than controller policy.
+Registration performs no catalogue I/O, resource probing or configuration
+installation; callbacks
 receive neither fixtures nor workdirs.
 
 Repository-owned tests use function-level `xtest.requirements` for complete
@@ -134,7 +136,7 @@ inputs. The discovered function and caller-owned import roots accompany the
 supervised worker, which preserves the invocation directory. No function name
 or dispatch registry is declared in the catalogue.
 
-The runner prepares fixed workload inputs once per case and owns GPU admission,
+The runner prepares fixed workload inputs once per case and owns device admission,
 repetition supervision and final evidence sealing. The
 [`serving suite program`](../../benches/suites/serving/multi_model.py) owns actual
 startup, warmup, measurement and local shutdown, using installed serving and
@@ -184,7 +186,7 @@ before defaults and registered overrides; an effective preflight configuration
 cannot replace that input without changing source precedence. Serving tests,
 native qualification and owned benchmarks consume the deployment's complete
 topology and SLO. Elastic KV tests additionally
-project a byte budget using the assigned attention GPUs' total memory.
+project a byte budget using the assigned attention devices' total memory.
 
 For a selected pytest item declaring configuration, resource setup resolves
 `XPOOL_CONFIG` with registered process-environment inputs once and retains one
@@ -196,7 +198,8 @@ changes do not implicitly refresh the retained base. The retained path supplies
 scene assembly; the effective configuration supplies base policy and checkpoint
 paths. The base is not installed as global runtime configuration; serving startup
 owns installation of the assembled runtime configuration.
-GPU, MPS and checkpoint availability are checked during selected-item setup.
+Device and checkpoint availability are checked during selected-item setup.
+MPS preparation and actual membership belong to the runtime owner, not preflight.
 
 Both tools use `xkit.config.resolve_model_weights` to resolve a checkpoint through
 the configuration owner and return its path after requiring its directory and
@@ -228,51 +231,82 @@ tool runner (fallback child subreaper, resource owner)
         └── clients, daemon, Agents, SGLang and further descendants
 ```
 
-The runner owns admission, terminal signals and GPU leases. The supervisor owns
-normal timeout, cancellation and descendant cleanup. It repeatedly discovers
-exact PID/create-time identities, signals TERM and then KILL under bounded
-deadlines, and reaps adopted children. After the root exits, kernel `waitpid`
-reporting `ECHILD` is the empty-domain proof. A group leader's exit, recursive
-process snapshot or endpoint bind check alone cannot authorize GPU release.
+The runner owns admission, terminal signals and tool-local device allocations.
+The supervisor owns execution limits, cancellation and complete-domain recovery.
+For ordinary unprotected tasks, it signals exact PID/create-time identities
+with bounded TERM/KILL and reaps adopted children. Managed resource retirement
+uses the actual owners instead of this generic descendant path.
 
-Runner fallback handles supervisor or owner loss. Multiprocessing infrastructure
-is protected by its exact identity, including a resource tracker started before
-supervision initialization; unrelated existing children remain eligible for
-cleanup. An inherited tracker belongs to its ancestor. Failure to prove the
-owned domain empty stops admission and retains the affected lease.
+[`xkit.task`](../../src/xpool-dev/xkit/task.py) carries the task root's aggregate
+resource proof, independently of its test or benchmark verdict. Before controller
+creation or a nested owned launch, the owner retains a cleanup scope and the root
+announces `ACTIVE`. Supervisor acknowledgement commits protection before resource
+startup. Cancellation reaches the root and existing owners cooperatively.
+Protection remains active through invocation teardown; nested owners do not
+maintain a parallel controller registry.
+
+The root seals resource creation and sends `CLEANED` only after every actual
+owner and nested tool reports verified retirement. That acknowledged transition
+permits generic recovery of remaining host descendants. After root exit,
+kernel `waitpid` reporting `ECHILD` proves complete-domain retirement. Resource
+proof and this empty-domain proof both precede allocation return. Root exit,
+EOF, a process snapshot or an endpoint bind alone supplies neither proof.
+
+Missing proof or supervisor loss during a protected task seals scheduling and
+retains the allocation and living owners for manual resolution. It does not
+trigger device-blind fallback signals. Unprotected runner fallback retains its
+existing bounded domain recovery. Multiprocessing infrastructure is protected by
+exact identity, including a tracker started before supervision initialization;
+an inherited tracker belongs to its ancestor.
 
 `SupervisedTaskScope` accepts a positive finite total deadline or `None`.
 `xtest` retains finite task deadlines. Normal benchmark queue drain uses `None`;
 startup, HTTP requests and exceptional cleanup retain their separate bounds.
+Protected item or aggregate expiry requests cooperative retirement; direct
+pytest and unprotected tasks retain their existing bounded expiry actions.
+The first cancellation establishes one cleanup envelope without renewal.
 A supervisor-local infrastructure failure can publish a terminal completion
-only after local cleanup. Otherwise the runner performs fallback and records
-an infrastructure failure. Only the outer resource owner seals cleanup evidence.
+only after verified local cleanup. Unconfirmed cleanup follows the protected
+retention or unprotected fallback policy above and records infrastructure
+failure. Only the outer resource owner seals cleanup evidence.
 
-Typed Python children use a fresh spawn interpreter and an acknowledgement after
-session/log setup. Installed callbacks need no source path. Source-only callbacks
+Typed Python children retain their Process, Pipe and log owner before `start()`.
+Short signal deferral covers creation and caller publication, not readiness
+waiting or device work. Startup acknowledgement failures leave the actual child
+with its caller for role-aware rollback. Async serving callers retain and join
+the actual startup/close Future when an asyncio waiter is cancelled.
+Children use a fresh spawn interpreter and an acknowledgement after session/log
+setup. Installed callbacks need no source path. Source-only callbacks
 receive explicit caller-owned import roots; artifact locations and installed
 module parents do not determine a subprocess's working directory.
 
-### GPUs and endpoints
+### Devices and endpoints
 
-`xkit.gpu` derives eligibility from startup `CUDA_VISIBLE_DEVICES`, accepts
-physical ordinals or full GPU UUIDs, and normalizes leases to physical UUIDs.
-Every eligible selected device must execute through the externally managed MPS
-controller. Task visibility contains only its leased UUIDs, and release follows
-complete domain drain. The externally supplied allocation must be exclusive;
-the tools do not coordinate GPUs across invocations or manage MPS compute mode
-or controller lifetime.
+`xkit.device` derives eligibility from startup `CUDA_VISIBLE_DEVICES` through
+the shared [runtime device utility](control-plane.md#managed-mps-and-role-preparation).
+It reuses physical inventory querying and orders capacity observations by the
+selected UUID view without creating contexts. Task visibility contains only its
+allocated UUIDs. `DevicePool` schedules those devices in memory within one tool
+invocation; operators coordinate independent invocations. Managed endpoint ownership is not
+a physical-device exclusion guarantee. Role preparation and controller lifetime
+belong to [Control Plane](control-plane.md#startup-and-shutdown).
 
-Owned benchmark placement uses lease-local ordinals whose attention/FFN union
-is exactly `0..N-1`. Physical UUID mapping and logical role placement are
-retained separately. Nested benchmark E2E execution stays within its outer test
-lease; inner cleanup does not replace the outer supervisor's proof.
+Daemon-backed deployments use daemon-owned attention MPS and direct FFN execution.
+Daemon-free native topology and calibration owners retain their own MPS scope
+and participants, retiring clients before stopping their controller. Cases that
+do not need MPS run directly. Allocation return follows verified resource
+retirement and complete task-domain drain.
+
+Owned benchmark placement uses the shared attention-first consecutive role
+blocks within lease-local ordinals `0..N-1`. Physical UUID mapping and logical
+role placement are retained separately. Nested benchmark E2E execution stays
+within its outer test lease; inner cleanup does not replace the outer supervisor's proof.
 
 `xkit.network` reserves listeners through `bind -> listen -> local connect ->
 accept` qualification. `xkit.serving.sglang.endpoints` groups SGLang HTTP, NCCL,
 gRPC, handshake and derived ZMQ endpoints into one owned family.
 A bindable but unreachable endpoint rejects the family;
-only a post-cleanup `EADDRINUSE` is a retryable conflict.
+during startup, only a post-cleanup `EADDRINUSE` is a retryable conflict.
 Serving startup passes one absolute monotonic deadline through daemon and every
 endpoint-family allocation. Candidate traversal and each blocking connect/accept
 probe consume that same budget; expiration raises `TimeoutError` and rolls back
@@ -294,8 +328,9 @@ containing effective configuration, environment, invocation working directory
 and ordered `SglangLaunchModel` declarations before resource binding.
 Models cover every effective runtime Instance exactly once;
 each attention TP-by-DP geometry agrees with the configured attention devices.
-Graph mode remains attention-side policy. Shared command construction derives
-the CUDA base and step from the admitted arithmetic attention placement.
+Graph mode remains attention-side policy. Shared command construction uses
+`xpool exec -- sglang serve` with attention-local base zero and step one; runtime
+preparation normalizes the complete deployment visibility before engine import.
 
 `XpoolServingSystem.start` reserves all endpoint families, starts the daemon and
 Agents, starts all Instance servers, then establishes System Ready and every
@@ -303,14 +338,26 @@ public HTTP health check under one complete startup deadline. Ordered endpoints
 are available only after readiness. Child exit, public HTTP health and that
 deadline determine server startup; log lines supply diagnostic evidence.
 `check_alive` reports unexpected owned process exits independently of HTTP
-request completion. `close` stops server
-groups before Agents and daemon and releases local endpoint resources; the
-enclosing supervisor still owns escaped-descendant recovery and emptiness proof.
+request completion. `close` seals and joins startup, retires each server domain,
+then signals the retained daemon PID. The daemon coordinates Agent/Fabric and
+MPS retirement; the System releases local endpoint resources after verified close.
+Concurrent callers share one retained close operation and its first deadline.
+The enclosing supervisor still owns complete-domain recovery and emptiness proof.
 
-SGLang startup sets `SGLANG_PLUGINS=xpool`, `HF_HUB_OFFLINE=1` and
-`TRANSFORMERS_OFFLINE=1` in its child environment. After reserving the daemon
-endpoint, it calls shared `snapshot_cluster_launch`
-once to bind its port, write the runtime TOML and freeze child inputs. The running
+Failed startup joins ordered rollback before reporting its operation failure or
+a confirmed endpoint conflict. A failed deployment verdict alone does not make
+verified resource retirement an unconfirmed cleanup. Other endpoint inspection
+errors remain failures. Once readiness publishes endpoints, deployment and
+inference failures retain their execution verdict even when a released binding
+is occupied.
+The test probe closes Systems whose resource retirement remains pending.
+Unconfirmed retirement retains ownership and prevents replay.
+
+Owned SGLang startup selects `SGLANG_PLUGINS=xpool` and sets `HF_HUB_OFFLINE=1`
+and `TRANSFORMERS_OFFLINE=1` in its child environment. The generic command wrapper
+preserves that selection and forwards engine arguments unchanged. After reserving
+the daemon endpoint, it calls shared `snapshot_cluster_launch` once to bind its
+port, write the runtime TOML and freeze child inputs. The running
 cluster owns the resulting `XpoolClusterLaunch`; `XpoolServingSystem.launch`
 exposes that cluster-owned launch.
 Launch snapshots use the configuration-owned serialization contract in
@@ -352,11 +399,11 @@ completeness, ordering and correspondence checks. Native Graph readers reuse
 `xtest list` uses isolated collection to list concrete parameterized node IDs
 and declared requirements. Engine filtering precedes imports. Native inventory
 comes from the configured CTest manifest. Listing runs no test bodies or fixtures
-and acquires no GPU/MPS resources; native collection prerequisites still apply.
+and acquires no device/MPS resources; native collection prerequisites still apply.
 
 `xtest run` compiles the typed collection plan, performs required resource
 preflight and executes CTest, Unit, Integration, E2E and explicitly selected
-Models in canonical order. GPU tasks are ordered by resource count and estimated
+Models in canonical order. Device tasks are ordered by resource count and estimated
 duration and backfilled over idle leases. Test strictness, JUnit classification
 and cross-task qualification verdicts remain test-owned.
 
@@ -384,10 +431,10 @@ failed run successfully does not change its original result.
 [`case.py`](../../src/xpool-dev/xbench/harness/serving/case.py) owns strict, immutable catalogue
 declarations. Owned cases reference a portable deployment plus Instance/graph
 launch settings and an optional explicit runtime base. Client cases name
-externally owned endpoints and take no serving, GPU or MPS ownership.
+externally owned endpoints and take no serving, device or MPS ownership.
 Their workload and metric definitions are the
 same. The checked-in family uses Qwen2.5-0.5B and Qwen3-0.6B on one attention
-and one FFN GPU; this small deployment does not establish representative
+and one FFN device; this small deployment does not establish representative
 large-model performance.
 
 Prompt and arrival inputs are independent. Prompt JSONL supplies target-scoped
@@ -483,7 +530,7 @@ use population standard deviation and linear percentile rank
 sample count zero and nullable statistics.
 
 Logical input throughput includes successful requests' prompt tokens, including
-cache hits, attributed at completion. It does not estimate GPU Prefill work.
+cache hits, attributed at completion. It does not estimate device Prefill work.
 Output throughput attributes positive count increments at their observed times,
 with failed/cancelled partial output separate. The retained window classification
 distinguishes three lifecycle facts:
@@ -578,7 +625,7 @@ the actual `system.launch.environment`; before startup establishes that launch,
 the source is `unknown` with an empty mapping. Client execution records
 `local_client`, describing load-generator inputs rather than external serving
 conditions. Owned hardware observations capture
-the leased GPUs' UUID/name, memory bytes, PCI identity, links, CPU/NUMA affinity
+the allocated devices' UUID/name, memory bytes, PCI identity, links, CPU/NUMA affinity
 and target/role placement once before timing, using bounded read-only queries.
 Client `serving_metadata_path` optionally supplies declared external hardware and
 package/build versions; absent values remain unknown. The tool does not substitute
@@ -664,5 +711,5 @@ case counts. Real CPU CLI cycles use small source tests or local native streamin
 servers through the editable `xpool-dev` development installation, including
 report and cleanup from another working directory. The owned benchmark regression
 uses the ordinary E2E
-seam with its outer GPU visibility and finite deadline; it does not replace
+seam with its outer device visibility and finite deadline; it does not replace
 product numerical, graph or topology qualification.

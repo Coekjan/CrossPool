@@ -357,7 +357,7 @@ class FabricPePlacement(FabricModel):
     """One Fabric PE placement; tuple position is the PE."""
 
     role: FabricRole = Field(description="Agent role assigned to this Fabric PE.")
-    cuda_device: int = Field(ge=0, description="Process-visible CUDA device assigned to this Fabric PE.")
+    device: int = Field(ge=0, description="Process-visible device assigned to this Fabric PE.")
 
     @classmethod
     def validate_order(cls, placements: tuple[FabricPePlacement, ...]) -> tuple[int, int]:

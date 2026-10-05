@@ -64,8 +64,8 @@ class CollectedTestCase:
             raise ValueError(f"collected test stage disagrees with path: {self.path!r}")
         if not self.nodeid.startswith(f"{self.path}::"):
             raise ValueError(f"collected test nodeid does not belong to path: {self.nodeid!r}")
-        if self.stage is TestStage.UNIT and self.requirements.cuda_count != 0:
-            raise ValueError("unit tests cannot require CUDA")
+        if self.stage is TestStage.UNIT and self.requirements.device_count != 0:
+            raise ValueError("unit tests cannot require devices")
         if self.estimated_duration_seconds is not None and self.estimated_duration_seconds <= 0:
             raise ValueError("estimated test duration must be positive")
         if self.timeout_seconds <= 0:

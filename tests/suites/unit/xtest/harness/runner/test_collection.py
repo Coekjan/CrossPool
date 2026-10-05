@@ -95,7 +95,7 @@ def unit_case() -> xtest.harness.runner.plan.CollectedTestCase:
         path="tests/suites/unit/test_example.py",
         nodeid="tests/suites/unit/test_example.py::test_example",
         stage=xtest.harness.runner.plan.TestStage.UNIT,
-        requirements=ResourceRequirements(0, False, False, ()),
+        requirements=ResourceRequirements(0, False, ()),
         estimated_duration_seconds=None,
         timeout_seconds=10,
         artifact_group=None,

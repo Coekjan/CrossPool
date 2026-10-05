@@ -55,19 +55,19 @@ PYBIND11_MODULE(native, module) {
 
   module.def(
       "initialize",
-      [](xpool::RuntimeRole role, const std::optional<std::int64_t> &cuda_device,
+      [](xpool::RuntimeRole role, const std::optional<std::int64_t> &device,
          const std::optional<xpool::debug::Options> &debug_options) {
         auto parsed_device = std::optional<c10::DeviceIndex>{};
-        if (cuda_device.has_value()) {
-          TORCH_CHECK(*cuda_device >= 0, "xpool initialize requires a non-negative CUDA device");
-          parsed_device = c10::checked_convert<c10::DeviceIndex>(*cuda_device, "cuda_device");
+        if (device.has_value()) {
+          TORCH_CHECK(*device >= 0, "xpool initialize requires a non-negative device");
+          parsed_device = c10::checked_convert<c10::DeviceIndex>(*device, "device");
         }
         TORCH_CHECK(xpool::is_valid(role), "xpool initialize received an invalid runtime role");
         xpool::RuntimeState::singleton().initialize(role, parsed_device);
         xpool::debug::configure(debug_options.value_or(xpool::debug::Options{}), parsed_device);
       },
-      py::arg("role"), py::arg("cuda_device") = py::none(), py::arg("debug_options") = py::none(),
-      "Initialize the process role, optional CUDA device, and debug options.");
+      py::arg("role"), py::arg("device") = py::none(), py::arg("debug_options") = py::none(),
+      "Initialize the process role, optional device, and debug options.");
 
   module.def(
       "runtime_role", []() { return xpool::RuntimeState::singleton().role(); }, "Return the initialized process role.");

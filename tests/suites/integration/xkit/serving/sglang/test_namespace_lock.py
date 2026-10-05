@@ -31,7 +31,7 @@ def test_endpoint_family_lock_coordinates_independent_interpreters(tmp_path: Pat
     )
     endpoint = (lease.family.host, lease.family.http_port)
     try:
-        occupied = PythonChildProcess.start(
+        occupied = PythonChildProcess(
             "occupied-endpoint-lock",
             probe_namespace_lock,
             endpoint,
@@ -39,6 +39,7 @@ def test_endpoint_family_lock_coordinates_independent_interpreters(tmp_path: Pat
             import_paths=(TEST_CATALOG_PATH.resolve().parent.parent,),
         )
         try:
+            occupied.start()
             assert occupied.receive(int, timeout_seconds=5) == errno.EADDRINUSE
             occupied.wait(timeout_seconds=5)
         finally:
@@ -48,7 +49,7 @@ def test_endpoint_family_lock_coordinates_independent_interpreters(tmp_path: Pat
     finally:
         lease.close()
 
-    available = PythonChildProcess.start(
+    available = PythonChildProcess(
         "available-endpoint-lock",
         probe_namespace_lock,
         endpoint,
@@ -56,6 +57,7 @@ def test_endpoint_family_lock_coordinates_independent_interpreters(tmp_path: Pat
         import_paths=(TEST_CATALOG_PATH.resolve().parent.parent,),
     )
     try:
+        available.start()
         assert available.receive(type(None), timeout_seconds=5) is None
         available.wait(timeout_seconds=5)
     finally:

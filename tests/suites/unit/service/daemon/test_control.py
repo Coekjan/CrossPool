@@ -13,13 +13,51 @@ from xtest.harness.support.config import install_test_config, reset_global_confi
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
 
+def test_first_retirement_trigger_seals_admission_and_owns_the_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    control = ControlPlane()
+    monkeypatch.setattr(xpool.service.daemon.control, "monotonic", lambda: 1000.0)
+    deadline = control.begin_close()
+
+    assert control.admission_closed
+    assert not control.closed
+    assert deadline == 1000.0 + xpool.service.daemon.control.MPS_CLEANUP_TIMEOUT_S
+    monkeypatch.setattr(xpool.service.daemon.control, "monotonic", lambda: 2000.0)
+    assert control.begin_close(deadline=3000.0) == deadline
+    control.close(deadline=4000.0)
+    assert control.closed
+    assert control.cleanup_deadline == deadline
+
+
+@pytest.mark.parametrize("deadline", [None, 1001.0, 999.0], ids=["no-cleanup", "live-budget", "expired"])
+def test_mps_cleanup_expiry_is_unavailable_without_hiding_other_timeouts(
+    deadline: float | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    control = ControlPlane()
+    error = TimeoutError("observation failed")
+
+    def probe() -> None:
+        raise error
+
+    monkeypatch.setattr(control, "mps_scope", SimpleNamespace(cleanup_deadline=deadline, probe=probe))
+    monkeypatch.setattr(xpool.service.daemon.control, "monotonic", lambda: 1000.0)
+    if deadline is None or deadline > 1000.0:
+        with pytest.raises(TimeoutError) as raised:
+            control.refresh_mps_status(1000.0)
+        assert raised.value is error
+        assert control.mps_cache_result is None
+    else:
+        control.refresh_mps_status(1000.0)
+        assert control.mps_cache_result is not None
+        assert control.mps_cache_result.online is None
+
+
 def test_global_warning_logs_first_entry_and_final_clearance(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     install_test_config(synthetic_config())
-    first = ControlPlaneWarning(kind="stale_instance", cuda_device=0, message="first rank")
-    second = ControlPlaneWarning(kind="stale_instance", cuda_device=0, message="second rank")
+    first = ControlPlaneWarning(kind="stale_instance", device=0, message="first rank")
+    second = ControlPlaneWarning(kind="stale_instance", device=0, message="second rank")
     warning_snapshots = iter(((first, second), (second,), ()))
     monkeypatch.setattr(
         xpool.service.daemon.control.ControlPlaneProjection,

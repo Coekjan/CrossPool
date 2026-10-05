@@ -39,7 +39,7 @@ def snapshot_cluster_launch(
     inputs and the invocation working directory preserve their meaning.
     Callers own original configuration provenance. Reloading ``xpool.toml``
     establishes new CONFIG provenance. This function
-    neither installs global configuration nor acquires process/GPU resources.
+    neither installs global configuration nor acquires process/device resources.
     """
 
     if isinstance(daemon_port, bool) or not 1 <= daemon_port <= 65_535:

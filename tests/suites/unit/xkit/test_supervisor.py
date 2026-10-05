@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import signal
-import time
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
+from types import SimpleNamespace
 from typing import cast
 
+import psutil
 import pytest
 
 import xkit.process
@@ -14,9 +15,36 @@ from xkit.supervisor import (
     SupervisedTaskScope,
     TaskCompletion,
     TaskCompletionKind,
+    TaskProtectionState,
     TaskScopeState,
     drain_subreaper_descendants,
 )
+
+
+@pytest.mark.parametrize("resource_state", (TaskProtectionState.ACTIVE, TaskProtectionState.RETIRING))
+def test_supervisor_loss_retains_resource_protection(resource_state: TaskProtectionState) -> None:
+    class DeadSupervisor:
+        def is_alive(self) -> bool:
+            return False
+
+    class RootChannel:
+        def poll(self, timeout: float = 0.0) -> bool:
+            raise AssertionError("lost supervision cannot acknowledge resource cleanup")
+
+    scope = SupervisedTaskScope(
+        name="supervisor-lost",
+        supervisor=cast(BaseProcess, DeadSupervisor()),
+        connection=cast(Connection, RootChannel()),
+        root_connection=cast(Connection, RootChannel()),
+        state=TaskScopeState.FAILED,
+        resource_state=resource_state,
+    )
+
+    scope.service_root_control()
+
+    assert scope.is_protected
+    with pytest.raises(RuntimeError, match="cannot close unproven"):
+        scope.close()
 
 
 def test_scope_cancellation_accepts_completion_after_broken_pipe() -> None:
@@ -119,10 +147,43 @@ def test_subreaper_drain_signals_each_identity_once_per_phase(monkeypatch: pytes
     monkeypatch.setattr(xkit.supervisor, "PROCESS_KILL_TIMEOUT_SECONDS", 1.0)
     monkeypatch.setattr(xkit.supervisor, "subreaper_direct_roots", roots)
     monkeypatch.setattr(xkit.supervisor, "process_tree_ids", lambda process_roots: (target, target))
-    monkeypatch.setattr(time, "monotonic", lambda: now)
-    monkeypatch.setattr(time, "sleep", advance)
+    monkeypatch.setattr(xkit.supervisor, "time", SimpleNamespace(monotonic=lambda: now, sleep=advance))
 
     drain_subreaper_descendants(frozenset(), context="test descendants")
 
     assert target.signals == [signal.SIGTERM, signal.SIGKILL]
     assert polls["term"] >= 2 and polls["kill"] >= 2
+
+
+def test_managed_fallback_keeps_expired_clock_until_domain_proof(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ProcessIdentity:
+        def __init__(self) -> None:
+            self.signals: list[signal.Signals] = []
+
+        def send_signal(self, signum: signal.Signals) -> None:
+            self.signals.append(signum)
+
+    target = ProcessIdentity()
+    now = 10.0
+    observations = 0
+
+    def roots(excluded: frozenset[object]) -> tuple[ProcessIdentity, ...]:
+        nonlocal observations
+        observations += 1
+        if observations == 1:
+            raise psutil.AccessDenied(123)
+        return (target,) if now < 10.2 else ()
+
+    def advance(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr(xkit.supervisor, "subreaper_direct_roots", roots)
+    monkeypatch.setattr(xkit.supervisor, "process_tree_ids", lambda process_roots: (target,))
+    monkeypatch.setattr(xkit.supervisor, "time", SimpleNamespace(monotonic=lambda: now, sleep=advance))
+
+    drain_subreaper_descendants(frozenset(), context="managed descendants", cleanup_deadline=9.0)
+
+    assert not target.signals
+    assert observations >= 3
+    assert now >= 10.2

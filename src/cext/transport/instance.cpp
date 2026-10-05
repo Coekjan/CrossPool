@@ -53,7 +53,7 @@ void InstanceRankRuntime::Attachment::attach(std::size_t instance_index, std::si
       kEndpointStartupPollInterval);
   TORCH_CHECK(result == xpool::utils::wait::Status::Ready,
               "xpool Transport endpoint startup exceeded the bounded deadline");
-  xpool::hooks::TransportEndpointOpenPostEvent::hooks({.cuda_device = arena.cuda_device(),
+  xpool::hooks::TransportEndpointOpenPostEvent::hooks({.device = arena.device(),
                                                        .arena = arena.view(),
                                                        .layout = arena.layout(),
                                                        .site = xpool::hooks::TransportEndpointSite::Instance});
@@ -65,9 +65,9 @@ void InstanceRankRuntime::Attachment::detach() {
   if (!*this) {
     return;
   }
-  c10::cuda::CUDAGuard device_guard(arena_.cuda_device());
+  c10::cuda::CUDAGuard device_guard(arena_.device());
   C10_CUDA_CHECK(cudaDeviceSynchronize());
-  xpool::hooks::TransportEndpointClosePreEvent::hooks({.cuda_device = arena_.cuda_device(),
+  xpool::hooks::TransportEndpointClosePreEvent::hooks({.device = arena_.device(),
                                                        .arena = arena_.view(),
                                                        .layout = arena_.layout(),
                                                        .site = xpool::hooks::TransportEndpointSite::Instance});
@@ -76,7 +76,7 @@ void InstanceRankRuntime::Attachment::detach() {
 }
 
 xpool::ffn::ResultCode InstanceRankRuntime::Attachment::read_generation_failure() const {
-  c10::cuda::CUDAGuard device_guard(arena_.cuda_device());
+  c10::cuda::CUDAGuard device_guard(arena_.device());
   return arena_.read_generation_failure();
 }
 
@@ -104,7 +104,7 @@ void InstanceRankRuntime::Attachment::submit(const at::Tensor &hidden_states,
               "xpool FFN shim hidden size does not match the attached Transport arena");
   TORCH_CHECK(hidden_states.scalar_type() == layout.payload_dtype,
               "xpool FFN shim dtype does not match the attached Transport arena");
-  TORCH_CHECK(hidden_states.get_device() == arena_.cuda_device(),
+  TORCH_CHECK(hidden_states.get_device() == arena_.device(),
               "xpool FFN shim hidden states must be on the attached Transport arena device");
 
   if (dp_rank_payload_rows_present) {

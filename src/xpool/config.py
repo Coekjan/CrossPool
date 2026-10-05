@@ -52,6 +52,7 @@ __all__ = [
     "XpoolDaemonConfig",
     "get_global_config",
     "init_global_config",
+    "validate_device_layout",
 ]
 
 logger = logging.getLogger(__name__)
@@ -433,7 +434,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="raw",
         allowed_sources=CONFIG_REQUIRED,
         required=True,
-        description="CUDA devices that host attention execution and attention-side CrossPool agents.",
+        description="devices that host attention execution and attention-side CrossPool agents.",
     ),
     ConfigSetting(
         name="atn_device_memory_utilization",
@@ -449,7 +450,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         parser="raw",
         allowed_sources=CONFIG_REQUIRED,
         required=True,
-        description="CUDA devices that host FFN-side CrossPool agents.",
+        description="devices that host FFN-side CrossPool agents.",
     ),
     ConfigSetting(
         name="ffn_device_memory_calibration",
@@ -720,18 +721,6 @@ class FfnPlacementConfig(BaseModel):
     )
 
 
-def validate_device_sequence(devices: list[int]) -> list[int]:
-    """Validate one role's rank-ordered CUDA device sequence."""
-
-    if any(device < 0 for device in devices):
-        raise ValueError("devices must contain non-negative CUDA device indices")
-    if len(devices) != len(set(devices)):
-        raise ValueError("devices must be unique")
-    if devices != sorted(devices):
-        raise ValueError("devices must be sorted in ascending order")
-    return devices
-
-
 class AtnConfig(BaseModel):
     """ATN-owned device assignment and memory policy."""
 
@@ -739,7 +728,7 @@ class AtnConfig(BaseModel):
 
     devices: list[int] = Field(
         min_length=1,
-        description="CUDA device indices that host attention execution and attention-side CrossPool agents.",
+        description="device indices that host attention execution and attention-side CrossPool agents.",
     )
     device_memory_utilization: float = Field(
         default=0.95,
@@ -753,7 +742,9 @@ class AtnConfig(BaseModel):
     def validate_devices(cls, devices: list[int]) -> list[int]:
         """Validate the rank-ordered AtnAgent device sequence."""
 
-        return validate_device_sequence(devices)
+        if devices != list(range(len(devices))):
+            raise ValueError("attention devices must be consecutive indices starting at zero")
+        return devices
 
 
 class FfnConfig(BaseModel):
@@ -763,7 +754,7 @@ class FfnConfig(BaseModel):
 
     devices: list[int] = Field(
         min_length=1,
-        description="CUDA device indices that host CrossPool FFN execution agents.",
+        description="device indices that host CrossPool FFN execution agents.",
     )
     device_memory_calibration: Path | None = Field(
         default=None,
@@ -788,7 +779,9 @@ class FfnConfig(BaseModel):
     def validate_devices(cls, devices: list[int]) -> list[int]:
         """Validate the rank-ordered FfnAgent device sequence."""
 
-        return validate_device_sequence(devices)
+        if devices[0] < 0 or devices != list(range(devices[0], devices[0] + len(devices))):
+            raise ValueError("FFN devices must be nonnegative consecutive indices")
+        return devices
 
     @model_validator(mode="after")
     def validate_device_memory_calibration(self) -> FfnConfig:
@@ -801,6 +794,17 @@ class FfnConfig(BaseModel):
             raise ValueError(f"ffn.device_memory_calibration must be absolute: {self.device_memory_calibration}")
         self.device_memory_calibration = path
         return self
+
+
+def validate_device_layout(atn: AtnConfig, ffn: FfnConfig) -> None:
+    """Require validated role blocks to form one attention-first device layout.
+
+    Raises ValueError when the FFN block does not immediately follow attention.
+    Role configuration types own their individual sequence constraints.
+    """
+
+    if ffn.devices[0] != len(atn.devices):
+        raise ValueError("FFN devices must immediately follow the attention device block")
 
 
 class ModelConfig(BaseModel):
@@ -861,7 +865,7 @@ class AtnAgentConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    cuda_device: int = Field(ge=0, description="CUDA device index owned by this AtnAgent.")
+    device: int = Field(ge=0, description="device index owned by this AtnAgent.")
     rank: int = Field(ge=0, description="Rank in the configured attention-device list.")
 
 
@@ -870,7 +874,7 @@ class FfnAgentConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    cuda_device: int = Field(ge=0, description="CUDA device index owned by this FfnAgent.")
+    device: int = Field(ge=0, description="device index owned by this FfnAgent.")
     rank: int = Field(ge=0, description="Rank in the configured FFN-device list.")
 
 
@@ -1300,10 +1304,10 @@ class XpoolConfig(BaseModel):
         return cast(dict[str, JsonValue], project(payload, paths))
 
     @cached_property
-    def cuda_devices(self) -> tuple[int, ...]:
-        """Return all CUDA devices managed by CrossPool, ordered by CUDA device index."""
+    def devices(self) -> tuple[int, ...]:
+        """Return all devices managed by CrossPool, ordered by device index."""
 
-        return tuple(sorted({*self.atn.devices, *self.ffn.devices}))
+        return tuple(self.atn.devices + self.ffn.devices)
 
     @cached_property
     def atnagents(self) -> tuple[AtnAgentConfig, ...]:
@@ -1313,15 +1317,13 @@ class XpoolConfig(BaseModel):
             Immutable AtnAgent placement tuple.
         """
 
-        return tuple(
-            AtnAgentConfig(cuda_device=cuda_device, rank=rank) for rank, cuda_device in enumerate(self.atn.devices)
-        )
+        return tuple(AtnAgentConfig(device=device, rank=rank) for rank, device in enumerate(self.atn.devices))
 
     @cached_property
-    def atnagent_by_cuda_device(self) -> Mapping[int, AtnAgentConfig]:
-        """Return AtnAgent placements keyed by CUDA device index."""
+    def atnagent_by_device(self) -> Mapping[int, AtnAgentConfig]:
+        """Return AtnAgent placements keyed by device index."""
 
-        return MappingProxyType({agent.cuda_device: agent for agent in self.atnagents})
+        return MappingProxyType({agent.device: agent for agent in self.atnagents})
 
     @cached_property
     def ffnagents(self) -> tuple[FfnAgentConfig, ...]:
@@ -1331,15 +1333,13 @@ class XpoolConfig(BaseModel):
             Immutable FfnAgent placement tuple.
         """
 
-        return tuple(
-            FfnAgentConfig(cuda_device=cuda_device, rank=rank) for rank, cuda_device in enumerate(self.ffn.devices)
-        )
+        return tuple(FfnAgentConfig(device=device, rank=rank) for rank, device in enumerate(self.ffn.devices))
 
     @cached_property
-    def ffnagent_by_cuda_device(self) -> Mapping[int, FfnAgentConfig]:
-        """Return FfnAgent placements keyed by CUDA device index."""
+    def ffnagent_by_device(self) -> Mapping[int, FfnAgentConfig]:
+        """Return FfnAgent placements keyed by device index."""
 
-        return MappingProxyType({agent.cuda_device: agent for agent in self.ffnagents})
+        return MappingProxyType({agent.device: agent for agent in self.ffnagents})
 
     @cached_property
     def instances(self) -> tuple[InstanceConfig, ...]:
@@ -1384,9 +1384,7 @@ class XpoolConfig(BaseModel):
     def validate_device_assignments(self) -> XpoolConfig:
         """Validate role separation and each model's complete attention World."""
 
-        overlap = sorted(set(self.atn.devices) & set(self.ffn.devices))
-        if overlap:
-            raise ValueError(f"CUDA devices may host only one xpool role; overlapping devices: {overlap}")
+        validate_device_layout(self.atn, self.ffn)
         for model in self.models:
             if self.atn_world_size % model.atn_dp_size != 0:
                 raise ValueError(f"{model.id}: attention DP must divide the configured attention World")

@@ -119,7 +119,7 @@ def validate_layer_weights_against_plan(
     payload_dtype: torch.dtype,
     router_weight_dtype: torch.dtype | None,
     tp_rank: int,
-    cuda_device: int,
+    device: int,
 ) -> None:
     """Require one retained weight owner to match its exact local Plan role."""
 
@@ -163,8 +163,8 @@ def validate_layer_weights_against_plan(
             if router.correction_bias is not None:
                 tensors += (router.correction_bias,)
 
-    if any(tensor.device.index != cuda_device for tensor in tensors):
-        raise ValueError("local FFN weights must reside on the current CUDA device")
+    if any(tensor.device.index != device for tensor in tensors):
+        raise ValueError("local FFN weights must reside on the current device")
 
 
 def capture_graph(launch: Callable[[], None]) -> torch.cuda.CUDAGraph:
@@ -496,7 +496,7 @@ class FfnExecutionRegistry:
                     payload_dtype=profile.payload_dtype,
                     router_weight_dtype=router_weight_dtype,
                     tp_rank=tp_rank,
-                    cuda_device=torch.cuda.current_device(),
+                    device=torch.cuda.current_device(),
                 )
                 layer_signature_indices = []
                 for capacity in capacities:

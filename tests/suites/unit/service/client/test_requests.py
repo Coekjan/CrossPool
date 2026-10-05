@@ -1,21 +1,27 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+from types import SimpleNamespace
 
 import pytest
 
-from xpool.fabric import FabricGenerationId
+import xpool.service.client
+from xpool.fabric import FabricGenerationId, FabricRole
 from xpool.native import ABI_VERSION
 from xpool.service.client import ATNAGENT_TRANSPORT_LEASE_QUIESCE_TIMEOUT_S, XpoolClient
+from xpool.service.errors import XpoolClientError
 from xpool.service.wire import (
+    AgentStartupAdmission,
     AtnAgentRegistration,
     AtnAgentTransportArenaBinding,
     AtnAgentTransportLeaseQuiesceResponse,
     FfnAgentRegistration,
     InstanceRankRegistration,
+    MpsClientTermination,
     ProcessRef,
 )
-from xtest.harness.support.config import TEST_MODEL_ID, minimal_config, reset_global_config
+from xpool.utils.mps import MPS_STARTUP_TIMEOUT_S, MPS_TERMINATION_TIMEOUT_S
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
 from xtest.harness.support.kv import kv_capacity_profile
 from xtest.harness.support.runtime.instance import ffn_profile, transport_attributes
 from xtest.harness.support.service.client import (
@@ -29,8 +35,69 @@ from xtest.harness.support.service.daemon import ffnagent_registration
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, initialize_client_config.__name__)
 
 
+def test_agent_startup_admission_http_preserves_management_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    probe = install_scripted_http_client(
+        monkeypatch, [response(HTTPStatus.OK, None), response(HTTPStatus.NO_CONTENT, None)]
+    )
+    payload = AgentStartupAdmission(
+        pid=11,
+        create_time=1.0,
+        abi_version=ABI_VERSION,
+        role=FabricRole.ATNAGENT,
+        device=0,
+    )
+    client = XpoolClient()
+    try:
+        client.admit_agent_startup(payload)
+    finally:
+        client.close()
+    assert probe.calls == [("GET", "/health", None), ("POST", "/startup/agent", payload.model_dump(mode="json"))]
+    assert probe.post_timeouts == [("/startup/agent", MPS_STARTUP_TIMEOUT_S)]
+
+
+@pytest.mark.parametrize("status", [HTTPStatus.NO_CONTENT, HTTPStatus.OK])
+def test_mps_termination_requires_explicit_acknowledgement_within_cleanup_budget(
+    status: HTTPStatus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(xpool.service.client, "time", SimpleNamespace(monotonic=lambda: 1000.0))
+    probe = install_scripted_http_client(
+        monkeypatch,
+        [response(HTTPStatus.OK, None), response(status, None)],
+    )
+    payload = MpsClientTermination(pid=11, create_time=1.0, abi_version=ABI_VERSION, deadline=1100.0)
+    client = XpoolClient()
+    try:
+        if status == HTTPStatus.NO_CONTENT:
+            client.terminate_serving_client(payload)
+        else:
+            with pytest.raises(XpoolClientError, match="did not confirm MPS client termination"):
+                client.terminate_serving_client(payload)
+    finally:
+        client.close()
+
+    assert probe.calls == [
+        ("GET", "/health", None),
+        ("POST", "/serving/mps/terminate-client", payload.model_dump(mode="json")),
+    ]
+    assert probe.post_timeouts == [("/serving/mps/terminate-client", MPS_TERMINATION_TIMEOUT_S)]
+
+
+def test_expired_mps_termination_does_not_send_an_operation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(xpool.service.client, "time", SimpleNamespace(monotonic=lambda: 1000.0))
+    probe = install_scripted_http_client(monkeypatch, [response(HTTPStatus.OK, None)])
+    payload = MpsClientTermination(pid=11, create_time=1.0, abi_version=ABI_VERSION, deadline=1000.0)
+    client = XpoolClient()
+    try:
+        with pytest.raises(TimeoutError, match="deadline expired"):
+            client.terminate_serving_client(payload)
+    finally:
+        client.close()
+
+    assert probe.calls == [("GET", "/health", None)]
+
+
 @pytest.mark.parametrize("participant", ["atnagent", "ffnagent", "instance"])
-def test_participant_registration_follows_config_check(
+def test_participant_registration_sends_declared_contract(
     monkeypatch: pytest.MonkeyPatch,
     participant: str,
 ) -> None:
@@ -46,7 +113,7 @@ def test_participant_registration_follows_config_check(
     client = XpoolClient()
     try:
         if participant == "atnagent":
-            registration = AtnAgentRegistration(pid=11, abi_version=ABI_VERSION, cuda_device=0)
+            registration = AtnAgentRegistration(pid=11, abi_version=ABI_VERSION, device=0)
             client.register_atnagent(registration)
             expected_path = "/atnagent/register"
         elif participant == "ffnagent":
@@ -71,7 +138,6 @@ def test_participant_registration_follows_config_check(
 
     assert probe.calls == [
         ("GET", "/health", None),
-        ("POST", "/config/check", minimal_config().model_dump(mode="json")),
         ("POST", expected_path, registration.model_dump(mode="json")),
     ]
 

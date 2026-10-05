@@ -18,25 +18,25 @@ Options options_h{};
 namespace {
 
 std::mutex options_mutex;
-std::optional<c10::DeviceIndex> configured_cuda_device;
+std::optional<c10::DeviceIndex> configured_device;
 bool configured = false;
 
 } // namespace
 
-void configure(const Options &debug_options, std::optional<c10::DeviceIndex> cuda_device) {
+void configure(const Options &debug_options, std::optional<c10::DeviceIndex> device) {
   std::lock_guard<std::mutex> lock(options_mutex);
   if (configured) {
-    TORCH_CHECK(configured_cuda_device == cuda_device, "xpool debug CUDA device differs from the first configure call");
+    TORCH_CHECK(configured_device == device, "xpool debug device differs from the first configure call");
     TORCH_CHECK(options_h == debug_options, "xpool debug options differ from the first configure call");
     return;
   }
-  if (cuda_device.has_value()) {
-    TORCH_CHECK(*cuda_device >= 0, "xpool debug options require a non-negative CUDA device");
-    c10::cuda::CUDAGuard device_guard(*cuda_device);
+  if (device.has_value()) {
+    TORCH_CHECK(*device >= 0, "xpool debug options require a non-negative device");
+    c10::cuda::CUDAGuard device_guard(*device);
     C10_CUDA_CHECK(cudaMemcpyToSymbol(options_d, &debug_options, sizeof(debug_options)));
   }
   options_h = debug_options;
-  configured_cuda_device = cuda_device;
+  configured_device = device;
   configured = true;
 }
 

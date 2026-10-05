@@ -36,6 +36,9 @@ def run_failing_watchdog_daemon(connection: Connection, spec: FailingWatchdogSpe
             raise RuntimeError("injected watchdog failure")
 
     setattr(xpool.service.daemon.control.ControlPlane, "watchdog", watchdog)
+    # This host-only test owns watchdog failure and daemon exit, not device or
+    # MPS startup. Resource lifecycle has its own integration qualification.
+    setattr(xpool.service.daemon.control.ControlPlane, "start", lambda self: None)
     connection.send(main(["daemon", "serve", "--config", str(spec.config_path)]))
 
 
@@ -43,7 +46,7 @@ def test_daemon_exits_nonzero_after_watchdog_failure(tmp_path: Path) -> None:
     endpoint = TcpEndpointReservation.reserve("127.0.0.1", port_space=TcpPortSpace.local())
     config_path = write_minimal_config(tmp_path / "xpool.toml", daemon_port=endpoint.port)
     endpoint.release_for_spawn()
-    process = PythonChildProcess.start(
+    process = PythonChildProcess(
         "failing-watchdog-daemon",
         run_failing_watchdog_daemon,
         FailingWatchdogSpec(config_path),
@@ -51,6 +54,7 @@ def test_daemon_exits_nonzero_after_watchdog_failure(tmp_path: Path) -> None:
         import_paths=(Path(__file__).resolve().parents[5],),
     )
     try:
+        process.start()
         deadline = time.monotonic() + DAEMON_EXIT_TIMEOUT_SECONDS
         health_observed = False
         while time.monotonic() < deadline and process.process.is_alive():
@@ -63,7 +67,7 @@ def test_daemon_exits_nonzero_after_watchdog_failure(tmp_path: Path) -> None:
                 health_observed = True
                 break
         assert health_observed, process.tail()
-        assert process.receive(int, timeout_seconds=DAEMON_EXIT_TIMEOUT_SECONDS) == 1
+        assert process.receive(int, timeout_seconds=DAEMON_EXIT_TIMEOUT_SECONDS) == 20
         process.wait(timeout_seconds=DAEMON_EXIT_TIMEOUT_SECONDS)
     finally:
         if process.process.is_alive():

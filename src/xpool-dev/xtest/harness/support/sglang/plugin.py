@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import signal
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from sglang.srt.plugins.hook_registry import HookRegistry
 
 import xpool.config
 import xpool.integrations.sglang.hooks.lifecycle
+import xpool.integrations.sglang.hooks.shutdown
 import xpool.integrations.sglang.plugin
 from xpool.fabric import InstanceFfnLayerProfile, InstanceFfnProfile
 from xpool.integrations.sglang.adapter import (
@@ -22,7 +24,8 @@ from xpool.integrations.sglang.hooks.registry import SglangHook
 from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
-from xtest.harness.support.config import TEST_MODEL_ID, write_minimal_config
+from xpool.utils.mps import MpsEndpoint
+from xtest.harness.support.config import TEST_MODEL_ID, synthetic_config, write_minimal_config
 
 
 @pytest.fixture
@@ -31,13 +34,36 @@ def reset_plugin_required_hook_targets(
     reset_global_config: None,
 ) -> Iterator[None]:
     apply_hooks = HookRegistry.__dict__["apply_hooks"]
+    signal_handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
     HookRegistry.reset()
     monkeypatch.setenv("SGLANG_ENABLE_POST_CAPTURE_KV_SIZING", "false")
-    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.bootstrap, "init", lambda cuda_device, role: None)
+    monkeypatch.setenv("SGLANG_ONE_VISIBLE_DEVICE_PER_PROCESS", "true")
+    monkeypatch.setenv("SGLANG_KILLPG_ON_SCHEDULER_EXCEPTION", "true")
+    visibility = tuple(f"GPU-00000000-0000-0000-0000-{index:012x}" for index in range(8))
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", ",".join(visibility))
+    for name, value in MpsEndpoint(visibility[:1]).environment().items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(xpool.integrations.sglang.plugin, "visible_uuids", lambda: visibility)
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle, "visible_uuids", lambda: visibility)
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.shutdown, "visible_uuids", lambda: visibility)
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.shutdown, "get_global_config", synthetic_config)
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.bootstrap, "init", lambda device, role: None)
     monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.devkit, "install", lambda package=None: None)
+
+    class ConfigClient:
+        def check_config(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(xpool.integrations.sglang.plugin, "XpoolClient", ConfigClient)
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.MpsEndpoint, "require_client", lambda self: None)
     monkeypatch.setattr(xpool.integrations.sglang.plugin, "discover_sglang_hooks", lambda: ())
     xpool.integrations.sglang.plugin.XPOOL_REQUIRED_HOOK_TARGETS.clear()
     yield
+    for signum, handler in signal_handlers.items():
+        signal.signal(signum, handler)
     HookRegistry.reset()
     setattr(HookRegistry, "apply_hooks", apply_hooks)
     xpool.integrations.sglang.plugin.XPOOL_REQUIRED_HOOK_TARGETS.clear()
@@ -48,8 +74,8 @@ def configure_xpool_model(
     monkeypatch: pytest.MonkeyPatch,
     model_path: str,
     *,
-    atn_cuda_devices: tuple[int, ...] = (0,),
-    ffn_cuda_devices: tuple[int, ...] = (1,),
+    atn_devices: tuple[int, ...] = (0,),
+    ffn_devices: tuple[int, ...] = (1,),
     atn_kind: SglangAttentionKind = SglangAttentionKind.GQA,
     num_key_value_heads: int = 2,
     model_slo: tuple[int, int] | None = None,
@@ -72,8 +98,8 @@ def configure_xpool_model(
     config_path = write_minimal_config(
         tmp_path / "xpool.toml",
         model_path=resolved_model_path,
-        atn_cuda_devices=atn_cuda_devices,
-        ffn_cuda_devices=ffn_cuda_devices,
+        atn_devices=atn_devices,
+        ffn_devices=ffn_devices,
         model_slo=model_slo,
     )
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
@@ -99,10 +125,8 @@ def binding() -> SglangInstanceRankBinding:
         model_path=Path("/tmp/xpool/fake-model"),
         instance_index=0,
         worker_rank=0,
-        cuda_device=0,
+        device=0,
         worker_world_size=1,
-        sglang_base_gpu_id=0,
-        sglang_gpu_id_step=1,
         atn_tp_rank=0,
         atn_tp_size=1,
         atn_dp_rank=0,

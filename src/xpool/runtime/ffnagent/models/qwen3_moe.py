@@ -77,7 +77,7 @@ class Qwen3MoeAdapter(architecture.MoeFfnModelAdapter):
             raise ValueError(f"Qwen3-MoE Router workspace must contain exactly {expected_bytes} bytes")
         tensors = (router_weights.weight, workspace, routed_ids, routed_weights)
         if any(tensor.device != hidden_states.device for tensor in tensors):
-            raise ValueError("Qwen3-MoE Router tensors must share one CUDA device")
+            raise ValueError("Qwen3-MoE Router tensors must share one device")
         logits = workspace.view(payload_dtype).view(row_capacity, routed_expert_count)
         torch.mm(hidden_states, router_weights.weight.t(), out=logits)
         operators.compute_softmax_topk(

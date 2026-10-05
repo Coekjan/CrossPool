@@ -34,10 +34,10 @@ constexpr auto kResidentStartupPollInterval = std::chrono::milliseconds{1};
 
 } // namespace
 
-AtnAgentRuntime::Resident::Resident(c10::DeviceIndex cuda_device, std::span<const ArenaView> arenas,
+AtnAgentRuntime::Resident::Resident(c10::DeviceIndex device, std::span<const ArenaView> arenas,
                                     xpool::fabric::ArenaView fabric_arena)
-    : cuda_device_(cuda_device) {
-  const auto device_guard = c10::cuda::CUDAGuard{cuda_device_};
+    : device_(device) {
+  const auto device_guard = c10::cuda::CUDAGuard{device_};
   try {
     auto *arena_allocation = static_cast<void *>(nullptr);
     C10_CUDA_CHECK(cudaMalloc(&arena_allocation, arenas.size_bytes()));
@@ -81,7 +81,7 @@ bool AtnAgentRuntime::Resident::pending() const {
   if (released()) {
     return false;
   }
-  const auto device_guard = c10::cuda::CUDAGuard{cuda_device_};
+  const auto device_guard = c10::cuda::CUDAGuard{device_};
   return !control_stream_.query() || !resident_stream_.query();
 }
 
@@ -89,7 +89,7 @@ void AtnAgentRuntime::Resident::request_drain() {
   if (host_drain_requested_) {
     return;
   }
-  const auto device_guard = c10::cuda::CUDAGuard{cuda_device_};
+  const auto device_guard = c10::cuda::CUDAGuard{device_};
   auto *drain_requested = reinterpret_cast<std::uint32_t *>(reinterpret_cast<std::uint8_t *>(state_) +
                                                             offsetof(ResidentState, drain_requested));
   control_stream_.write_value(drain_requested, 1);
@@ -100,7 +100,7 @@ void AtnAgentRuntime::Resident::release() {
   if (released()) {
     return;
   }
-  const auto device_guard = c10::cuda::CUDAGuard{cuda_device_};
+  const auto device_guard = c10::cuda::CUDAGuard{device_};
   // Device arrays remain valid until both lifecycle publication and resident
   // execution have completed. Stream destruction precedes allocation release.
   control_stream_.destroy();
@@ -149,15 +149,14 @@ bool AtnAgentRuntime::generation_failed() const {
   return false;
 }
 
-ArenaHandle AtnAgentRuntime::create_arena(c10::DeviceIndex cuda_device, std::size_t instance_index,
+ArenaHandle AtnAgentRuntime::create_arena(c10::DeviceIndex device, std::size_t instance_index,
                                           std::size_t instance_rank, std::size_t payload_row_capacity,
                                           std::size_t hidden_size, c10::ScalarType payload_dtype,
                                           std::size_t atn_tp_rank, std::size_t atn_tp_size, std::size_t atn_dp_rank,
                                           std::size_t atn_dp_size) {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(!resident_.has_value(), "xpool cannot create a Transport arena after Resident activation");
-  TORCH_CHECK(!cuda_device_.has_value() || *cuda_device_ == cuda_device,
-              "xpool AtnAgent Transport arenas must share one CUDA device");
+  TORCH_CHECK(!device_.has_value() || *device_ == device, "xpool AtnAgent Transport arenas must share one device");
   for (const auto &entry : arenas_) {
     TORCH_CHECK(entry.second.layout().instance_index != instance_index,
                 "xpool AtnAgent already owns a Transport arena for this instance index");
@@ -165,26 +164,26 @@ ArenaHandle AtnAgentRuntime::create_arena(c10::DeviceIndex cuda_device, std::siz
 
   const auto layout = ArenaLayout::create(instance_index, instance_rank, atn_tp_rank, atn_tp_size, atn_dp_rank,
                                           atn_dp_size, payload_row_capacity, hidden_size, payload_dtype);
-  auto arena = Arena::create(cuda_device, layout);
-  xpool::hooks::TransportEndpointOpenPostEvent::hooks({.cuda_device = cuda_device,
+  auto arena = Arena::create(device, layout);
+  xpool::hooks::TransportEndpointOpenPostEvent::hooks({.device = device,
                                                        .arena = arena.view(),
                                                        .layout = arena.layout(),
                                                        .site = xpool::hooks::TransportEndpointSite::AtnAgent});
   const auto handle = arena.handle();
   TORCH_CHECK(arenas_.try_emplace(handle, std::move(arena)).second,
               "xpool AtnAgent created a duplicate Transport arena handle");
-  cuda_device_ = cuda_device;
+  device_ = device;
   return handle;
 }
 
 void AtnAgentRuntime::activate() {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(!resident_.has_value(), "xpool Transport Resident is already active or terminal");
-  TORCH_CHECK(cuda_device_.has_value() && !arenas_.empty(), "xpool Transport Resident requires a non-empty arena set");
+  TORCH_CHECK(device_.has_value() && !arenas_.empty(), "xpool Transport Resident requires a non-empty arena set");
 
   const auto fabric_arena = xpool::fabric::Runtime::singleton().arena();
   const auto views = ordered_views();
-  resident_.emplace(*cuda_device_, std::span<const ArenaView>{views}, fabric_arena);
+  resident_.emplace(*device_, std::span<const ArenaView>{views}, fabric_arena);
 
   const auto ready = [&] {
     auto ready = true;
@@ -268,7 +267,7 @@ void AtnAgentRuntime::destroy_arenas(std::span<const ArenaHandle> handles) {
   for (const auto &handle : handles) {
     try {
       auto &resolved = arena(handle);
-      xpool::hooks::TransportEndpointClosePreEvent::hooks({.cuda_device = *cuda_device_,
+      xpool::hooks::TransportEndpointClosePreEvent::hooks({.device = *device_,
                                                            .arena = resolved.view(),
                                                            .layout = resolved.layout(),
                                                            .site = xpool::hooks::TransportEndpointSite::AtnAgent});
@@ -281,7 +280,7 @@ void AtnAgentRuntime::destroy_arenas(std::span<const ArenaHandle> handles) {
     }
   }
   if (!resident_.has_value() && arenas_.empty()) {
-    cuda_device_.reset();
+    device_.reset();
   }
   if (!failures.empty()) {
     auto message = std::ostringstream{};

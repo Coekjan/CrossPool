@@ -13,7 +13,7 @@ import torch
 import xtest
 from xkit import ResourceRequirements
 from xkit.config import assemble_config
-from xkit.gpu import GpuPool
+from xkit.device import DevicePool
 from xkit.network import TcpEndpointReservation, TcpPortSpace
 from xpool.config import XpoolConfig
 from xpool.devkit.graph_observer import FfnGraphObserverSnapshot
@@ -59,8 +59,7 @@ def requirements_of(case: E2eFfnTopologyCase) -> ResourceRequirements:
     """Declare the topology lease and its distinct local model resources."""
 
     return ResourceRequirements(
-        case.required_gpu_count,
-        True,
+        case.required_device_count,
         True,
         tuple(dict.fromkeys(instance.model_id for instance in case.instances)),
     )
@@ -169,7 +168,7 @@ def test_e2e_ffn_topology(
         execution_groups=execution_groups,
     )
     outputs = compare_outputs(case, references, output_paths)
-    processes, mps_servers = platform_evidence(live_observations[0])
+    processes, mps_servers = platform_evidence(live_observations[0], config=task_config)
     evidence = FfnTopologyEvidence(
         case_id=case.id,
         generation=generation,
@@ -543,26 +542,28 @@ def output_evidence(
 
 def platform_evidence(
     observation: FfnLiveTopologyObservation,
+    *,
+    config: XpoolConfig,
 ) -> tuple[
     tuple[FfnTopologyProcessEvidence, ...],
     tuple[FfnTopologyMpsServerEvidence, ...],
 ]:
-    """Join supervised process, visible GPU, and live MPS observations."""
+    """Prove attention MPS attachment and direct FFN execution."""
 
-    pool = GpuPool.from_environment()
+    pool = DevicePool.from_environment()
     try:
         visible_uuids = pool.uuids
     finally:
         pool.close()
     process_name_by_id = {process.process_id: process.name for process in observation.processes}
-    process_devices = {process.name: process.cuda_device for process in observation.processes}
+    process_devices = {process.name: process.device for process in observation.processes}
     process_uuids = {name: visible_uuids[device] for name, device in process_devices.items()}
     processes = tuple(
         FfnTopologyProcessEvidence(
             name=process.name,
             process_id=process.process_id,
-            cuda_device=process.cuda_device,
-            gpu_uuid=process_uuids[process.name],
+            device=process.device,
+            device_uuid=process_uuids[process.name],
         )
         for process in observation.processes
     )
@@ -576,4 +577,8 @@ def platform_evidence(
         )
         for server in observation.mps_servers
     )
+    expected_clients = {process.name for process in observation.processes if process.device in config.atn.devices}
+    observed_clients = {name for server in servers for name in server.client_process_names}
+    if observed_clients != expected_clients:
+        raise AssertionError("topology MPS membership must cover attention clients and exclude FFN clients")
     return processes, servers

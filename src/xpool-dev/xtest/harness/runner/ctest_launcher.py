@@ -8,8 +8,6 @@ from importlib.metadata import distribution
 from pathlib import Path
 from typing import NoReturn
 
-from xpool.mps import probe_mps_controller
-
 
 def native_library_paths() -> tuple[Path, ...]:
     """Return runtime library directories for native Python dependencies."""
@@ -27,20 +25,20 @@ def launch(arguments: list[str]) -> NoReturn:
         raise RuntimeError("native CTest launcher requires an executable")
     environment = os.environ.copy()
     try:
-        configure_cuda_visibility(environment)
+        configure_device_visibility(environment)
     except (OSError, RuntimeError, ValueError) as error:
         report_infrastructure_failure(str(error))
         raise SystemExit(125) from error
     if environment.get("XPOOL_CTEST_CANONICAL") == "1":
-        print(f"GPU ASSIGNMENT gpus={environment['CUDA_VISIBLE_DEVICES'] or 'none'}", flush=True)
+        print(f"DEVICE ASSIGNMENT devices={environment['CUDA_VISIBLE_DEVICES'] or 'none'}", flush=True)
     paths = tuple(str(path) for path in native_library_paths())
     existing = environment.get("LD_LIBRARY_PATH")
     environment["LD_LIBRARY_PATH"] = os.pathsep.join((*paths, *((existing,) if existing else ())))
     os.execvpe(arguments[0], arguments, environment)
 
 
-def configure_cuda_visibility(environment: dict[str, str]) -> None:
-    """Project one CTest GPU resource and preflight MPS for CUDA tests."""
+def configure_device_visibility(environment: dict[str, str]) -> None:
+    """Project one CTest device resource into driver visibility."""
 
     if environment.get("XPOOL_CTEST_CANONICAL") != "1":
         return
@@ -48,27 +46,24 @@ def configure_cuda_visibility(environment: dict[str, str]) -> None:
     if resource_count == 0:
         environment["CUDA_VISIBLE_DEVICES"] = ""
         return
-    if resource_count != 1 or environment.get("CTEST_RESOURCE_GROUP_0") != "gpus":
-        raise RuntimeError("native CUDA test requires exactly one CTest gpus resource group")
-    resource = environment.get("CTEST_RESOURCE_GROUP_0_GPUS")
+    if resource_count != 1 or environment.get("CTEST_RESOURCE_GROUP_0") != "devices":
+        raise RuntimeError("native device test requires exactly one CTest devices resource group")
+    resource = environment.get("CTEST_RESOURCE_GROUP_0_DEVICES")
     if resource is None:
-        raise RuntimeError("native CUDA test received no CTest GPU resource")
+        raise RuntimeError("native device test received no CTest device resource")
     fields = dict(field.split(":", maxsplit=1) for field in resource.split(","))
     identifier = fields.get("id")
     if identifier is None or fields.get("slots") != "1":
-        raise RuntimeError(f"native CUDA test received an invalid CTest GPU resource: {resource!r}")
-    environment["CUDA_VISIBLE_DEVICES"] = decode_ctest_gpu_id(identifier)
-    mps = probe_mps_controller()
-    if not mps.online:
-        raise RuntimeError(f"MPS is unhealthy before native CUDA test: {mps.diagnostic}")
+        raise RuntimeError(f"native device test received an invalid CTest device resource: {resource!r}")
+    environment["CUDA_VISIBLE_DEVICES"] = decode_ctest_device_id(identifier)
 
 
-def decode_ctest_gpu_id(identifier: str) -> str:
+def decode_ctest_device_id(identifier: str) -> str:
     """Decode one resource identifier written by ``CtestResourceSpec``."""
 
-    if not identifier.startswith("gpu_"):
-        raise ValueError(f"invalid CTest GPU resource ID: {identifier!r}")
-    return "GPU-" + identifier.removeprefix("gpu_").replace("_", "-")
+    if not identifier.startswith("device_"):
+        raise ValueError(f"invalid CTest device resource ID: {identifier!r}")
+    return "GPU-" + identifier.removeprefix("device_").replace("_", "-")
 
 
 def report_infrastructure_failure(diagnostic: str) -> None:

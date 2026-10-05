@@ -14,10 +14,10 @@ import httpx
 from pydantic import JsonValue
 
 from xbench.harness.serving.api import create_api_adapter
-from xbench.harness.serving.case import BenchCase, ServingGpu, ServingGpuLink, ServingMetadata
+from xbench.harness.serving.case import BenchCase, ServingDevice, ServingDeviceLink, ServingMetadata
 from xbench.harness.serving.client import MeasurementRecorder, RequestState, observe_system, send_request
 from xbench.harness.serving.workload import PreparedWorkload
-from xkit.gpu import query_physical_gpu_details, query_physical_gpu_topology
+from xkit.device import query_physical_device_details, query_physical_device_topology
 from xkit.results import write_json
 from xpool.model import ModelId
 
@@ -96,8 +96,8 @@ def package_versions(names: tuple[str, ...], errors: list[str]) -> dict[str, str
 def capture_owned_metadata(
     uuids: tuple[str, ...],
     *,
-    target_gpu_uuids: dict[ModelId, tuple[str, ...]],
-    role_gpu_uuids: dict[Literal["atn", "ffn"], tuple[str, ...]],
+    target_device_uuids: dict[ModelId, tuple[str, ...]],
+    role_device_uuids: dict[Literal["atn", "ffn"], tuple[str, ...]],
     errors: list[str],
 ) -> ServingMetadata:
     """Observe once before timing and project host facts onto a validated lease.
@@ -106,45 +106,45 @@ def capture_owned_metadata(
     append diagnostics; this snapshot never starts CUDA or changes visibility.
     """
 
-    gpus = {uuid: ServingGpu(uuid=uuid) for uuid in uuids}
+    devices = {uuid: ServingDevice(uuid=uuid) for uuid in uuids}
     links = None
     driver_version = None
     try:
-        devices = query_physical_gpu_details()
+        inventory = query_physical_device_details()
     except (OSError, RuntimeError, ValueError) as error:
         errors.append(str(error))
     else:
-        selected = [device for device in devices if device.uuid in gpus]
+        selected = [device for device in inventory if device.uuid in devices]
         for device in selected:
-            gpus[device.uuid] = ServingGpu(
+            devices[device.uuid] = ServingDevice(
                 uuid=device.uuid,
                 name=device.name,
                 total_memory_bytes=device.total_memory_bytes,
                 pci_bus_id=device.pci_bus_id,
             )
         if len(selected) != len(uuids):
-            errors.append("GPU details unavailable for part of the assigned lease")
+            errors.append("device details unavailable for part of the assigned lease")
         drivers = {device.driver_version for device in selected}
         driver_version = next(iter(drivers)) if len(drivers) == 1 else None
         try:
-            topology = query_physical_gpu_topology({device.index: device.uuid for device in devices})
+            topology = query_physical_device_topology({device.index: device.uuid for device in inventory})
         except (OSError, RuntimeError, ValueError) as error:
             errors.append(str(error))
         else:
             for uuid in uuids:
                 cpu, numa = topology.affinities.get(uuid, (None, None))
-                gpus[uuid] = gpus[uuid].model_copy(update={"cpu_affinity": cpu, "numa_affinity": numa})
+                devices[uuid] = devices[uuid].model_copy(update={"cpu_affinity": cpu, "numa_affinity": numa})
             links = tuple(
-                ServingGpuLink(source_uuid=source, destination_uuid=destination, link=link)
+                ServingDeviceLink(source_uuid=source, destination_uuid=destination, link=link)
                 for (source, destination), link in topology.links.items()
-                if source in gpus and destination in gpus
+                if source in devices and destination in devices
             )
     # Use available distribution metadata; do not infer CUDA builds from package suffixes.
     return ServingMetadata(
-        gpus=tuple(gpus[uuid] for uuid in uuids),
+        devices=tuple(devices[uuid] for uuid in uuids),
         links=links,
-        target_gpu_uuids=target_gpu_uuids,
-        role_gpu_uuids=role_gpu_uuids,
+        target_device_uuids=target_device_uuids,
+        role_device_uuids=role_device_uuids,
         driver_version=driver_version,
         packages=package_versions(("sglang", "torch"), errors),
     )

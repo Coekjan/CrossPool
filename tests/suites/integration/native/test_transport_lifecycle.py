@@ -19,7 +19,7 @@ pytestmark = pytest.mark.timeout(180)
 def isolated_transport_activation_requires_joined_fabric() -> None:
     xpool.native.initialize(
         RuntimeRole.ATNAGENT,
-        cuda_device=torch.cuda.current_device(),
+        device=torch.cuda.current_device(),
         debug_options=DebugConfig().native_options(),
     )
     arena = xpool.native.transport.create_arena(0, 0, 8, 4, torch.bfloat16, 0, 1, 0, 1)
@@ -30,6 +30,6 @@ def isolated_transport_activation_requires_joined_fabric() -> None:
         xpool.native.transport.destroy_arenas([arena])
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_transport_activation_requires_joined_fabric(tmp_path: Path) -> None:
     run_native_case(isolated_transport_activation_requires_joined_fabric, workdir=tmp_path / "case")

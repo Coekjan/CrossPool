@@ -42,33 +42,23 @@ def write_config(path: Path, model_base_uri: Path) -> None:
     )
 
 
-def test_cuda_requirement_rejects_unavailable_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_device_requirement_rejects_unavailable_devices(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
 
-    with pytest.raises(RequirementUnavailable, match="CUDA is not available"):
-        RequirementResolver().require_cuda(1)
+    with pytest.raises(RequirementUnavailable, match="no supported devices"):
+        RequirementResolver().require_devices(1)
 
 
-def test_cuda_requirement_checks_count(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_device_requirement_checks_count(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("torch.cuda.is_available", lambda: True)
     monkeypatch.setattr("torch.cuda.device_count", lambda: 2)
     resolver = RequirementResolver()
 
-    resolver.require_cuda(2)
+    resolver.require_devices(2)
     with pytest.raises(RequirementUnavailable, match="requires 3"):
-        resolver.require_cuda(3)
+        resolver.require_devices(3)
     with pytest.raises(RequirementMisconfigured, match="at least 1"):
-        resolver.require_cuda(0)
-
-
-def test_mps_requirement_uses_controller_probe(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "xtest.harness.runner.requirements.probe_mps_controller",
-        lambda: type("Probe", (), {"online": False, "diagnostic": "MPS unavailable"})(),
-    )
-
-    with pytest.raises(RequirementUnavailable, match="MPS unavailable"):
-        RequirementResolver().require_mps()
+        resolver.require_devices(0)
 
 
 def test_config_requires_exact_environment_variable(monkeypatch: pytest.MonkeyPatch) -> None:

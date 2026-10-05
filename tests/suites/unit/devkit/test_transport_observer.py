@@ -275,7 +275,7 @@ def create_transport_runtime(*resources: AtnAgentTransportArenaState) -> AtnAgen
 
     runtime = AtnAgentTransportRuntime(
         client=cast(XpoolClient, SimpleNamespace()),
-        cuda_device=0,
+        device=0,
         local_rank=0,
         publisher=ProcessRef(abi_version=ABI_VERSION, pid=1),
     )

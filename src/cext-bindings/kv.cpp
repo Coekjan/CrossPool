@@ -71,7 +71,7 @@ void bind_kv(py::module_ &module) {
                     "Actual physical backing after applying the command.");
 
   py::class_<xpool::kv::KvDeviceMemoryReport>(kv, "KvDeviceMemoryReport",
-                                              "One attention GPU's post-capture memory observation.")
+                                              "One attention device's post-capture memory observation.")
       .def_readonly("total_bytes", &xpool::kv::KvDeviceMemoryReport::total_bytes,
                     "Total physical device memory in bytes.")
       .def_readonly("free_bytes", &xpool::kv::KvDeviceMemoryReport::free_bytes,

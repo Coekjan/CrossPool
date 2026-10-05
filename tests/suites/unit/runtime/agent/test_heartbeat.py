@@ -16,7 +16,7 @@ from xtest.harness.support.wait import wait_until, wait_until_raise
 class HeartbeatAgent:
     """Minimal agent boundary consumed by the heartbeat worker."""
 
-    cuda_device = 0
+    device = 0
 
     def __init__(self, sender: Callable[[], HeartbeatResponse]) -> None:
         self.sender = sender

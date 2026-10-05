@@ -30,10 +30,14 @@ Bootstrap environment variables are separate from the TOML schema:
 | --- | --- |
 | `XPOOL_CONFIG` | Selects the runtime TOML file. |
 | `SGLANG_PLUGINS=xpool` | Loads the CrossPool SGLang plugin. |
-| `CUDA_MPS_PIPE_DIRECTORY` / `CUDA_MPS_LOG_DIRECTORY` | Selects the externally managed MPS controller's directories. |
+| `CUDA_VISIBLE_DEVICES` | Selects ordered physical devices by `nvidia-smi` index or full UUID. |
 
-All processes in one deployment must use the same resolved configuration and
-CUDA device numbering.
+All entries in one deployment use the same resolved configuration and original
+device visibility. Runtime entries normalize the complete view to UUIDs and
+install MPS pipe/log variables before driver initialization: attention uses the
+daemon-owned endpoint, while FFN uses an empty pipe value to bypass MPS. Keep
+endpoint selection out of machine-local `.env` files. See
+[managed startup](designs/control-plane.md#startup-and-shutdown).
 
 ## Native build settings
 
@@ -45,12 +49,12 @@ A100-only build, append this option to `uv sync`:
 --config-settings-package xpool:cmake.define.XPOOL_CUDA_ARCHITECTURES=80-real
 ```
 
-Choose the architectures required by the selected GPUs; this is not a runtime
+Choose the architectures required by the selected devices; this is not a runtime
 configuration setting. To reuse the override across builds in one shell,
 including the pre-commit native-build hook, export
 `CMAKE_ARGS=-DXPOOL_CUDA_ARCHITECTURES=80-real` before running the commands.
 Without that export, the hook builds the default architecture list. See the
-[Quick Start installation step](tutorials/quick-start.md#install-and-start-mps)
+[Quick Start installation step](tutorials/quick-start.md#install)
 for a complete `uv sync` command.
 
 ## TOML overview
@@ -67,7 +71,7 @@ reference:
 | `models[].atn_dp_size` | Partitions the Attention World into DP groups; defaults to one. |
 | `models[].ffn_tp_size` | Fixes the model's FFN tensor-parallel width; omission uses the number of FfnAgents. |
 | `scheduler.slo` / `models[].slo` | Sets default TTFT/TBT targets; models may override both for Elastic KV arbitration. |
-| `atn.devices` / `ffn.devices` | Assigns attention-side and FFN-side CUDA devices. |
+| `atn.devices` / `ffn.devices` | Assigns attention-side and FFN-side deployment-visible device indices. |
 | `scheduler.ffn_concurrency` | Sets the Executor Lane count, not a row or token budget. |
 | `scheduler.ffn_policy` | Selects `fifo` or `random` admission. |
 | `atn.device_memory_utilization` | Sets the maximum attention-device memory fraction used to freeze the Elastic KV Capacity Pool. |
@@ -78,8 +82,11 @@ reference:
 | `ffn.device_memory_extra_margin_bytes` | Adds an explicit device-memory admission margin. |
 | `ffn.device_memory_calibration` | Selects an optional environment-qualified memory calibration profile. |
 
-Each device list must be nonempty, unique, and ascending, and the two roles
-cannot share a device. Attention geometry must satisfy the
+Both device lists must be nonempty. Attention forms a consecutive block starting
+at zero; FFN forms the consecutive block immediately after attention. For example,
+`atn.devices = [0, 1]` and `ffn.devices = [2, 3]` select the first two and next
+two positions in the ordered deployment view, regardless of their host inventory
+indices. Attention geometry must satisfy the
 [complete-World contract](designs/control-plane.md#configuration-and-integration).
 
 ## Model paths
@@ -98,15 +105,16 @@ Run the configuration dump to inspect resolved values and their sources as JSON:
 uv run xpool config dump
 ```
 
-The [Quick Start](tutorials/quick-start.md) shows a complete two-GPU setup.
+The [Quick Start](tutorials/quick-start.md) shows a complete two-device setup.
 
 ## Memory calibration
 
 Memory calibration is optional: leave `ffn.device_memory_calibration` unset to
 use analytic admission. To generate a profile, set it to an absolute output
-path and run `uv run xpool memory-profile` with MPS running and the daemon and
-serving processes stopped. The profiler uses a fixed model-independent corpus
-and runs without loading the configured model weights.
+path and run `uv run xpool memory-profile` with the daemon and serving processes
+stopped. The profiler owns its attention MPS scope and executes FFN participants
+directly. It uses a fixed model-independent corpus without loading the configured
+model weights.
 
 At startup, an explicitly configured profile must exist and match the
 deployment environment; startup reports missing, malformed, or incompatible

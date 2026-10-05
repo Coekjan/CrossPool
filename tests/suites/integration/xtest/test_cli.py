@@ -116,14 +116,14 @@ def test_list_declares_unavailable_requirements_without_resolving_them(source_ch
     (suite / "test_resource.py").write_text(
         "import xtest\n"
         "from xpool.model import ModelId\n"
-        "@xtest.requirements(cuda_count=2, requires_config=True, requires_mps=True, "
+        "@xtest.requirements(device_count=2, requires_config=True, "
         "model_ids=(ModelId('missing/model'),))\n"
         "def test_resource():\n    raise AssertionError('inventory executed a test')\n",
         encoding="utf-8",
     )
     listed = command(source_checkout, "list", "--suite", "integration")
     assert listed.returncode == 0, listed.stderr
-    assert "test_resource.py::test_resource\tgpus=2 mps=True config=True models=missing/model" in listed.stdout
+    assert "test_resource.py::test_resource\tdevices=2 config=True models=missing/model" in listed.stdout
     assert not (source_checkout / ".xpool-cache/test-runs").exists()
 
 
@@ -191,7 +191,7 @@ def test_interrupted_cli_retains_original_outcome_and_cleanup_proof(source_check
             assert process.poll() is None, (source_checkout / "cli.log").read_text()
             descendants = psutil.Process(process.pid).children(recursive=True)
             if worker_loss:
-                worker = next(child for child in descendants if "pytest" in child.cmdline())
+                worker = next(child for child in descendants if "xtest.harness.runner.worker" in child.cmdline())
                 worker.kill()
             else:
                 process.send_signal(signal.SIGTERM)

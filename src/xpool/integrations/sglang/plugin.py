@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import os
+
 from sglang.srt.environ import envs
 from sglang.srt.plugins.hook_registry import HookRegistry
 
 from xpool.config import init_global_config
 from xpool.integrations.sglang.hooks.registry import discover_sglang_hooks
+from xpool.service.client import XpoolClient
+from xpool.utils.device import visible_uuids
+from xpool.utils.mps import MpsEndpoint
 
 XPOOL_REQUIRED_HOOK_TARGETS: set[str] = set()
 
@@ -16,7 +21,17 @@ def install() -> None:
 
     try:
         envs.SGLANG_ENABLE_POST_CAPTURE_KV_SIZING.set(True)
-        init_global_config()
+        envs.SGLANG_ONE_VISIBLE_DEVICE_PER_PROCESS.set(False)
+        envs.SGLANG_KILLPG_ON_SCHEDULER_EXCEPTION.set(False)
+        config = init_global_config()
+        visibility = visible_uuids()
+        endpoint = MpsEndpoint(tuple(visibility[index] for index in config.atn.devices))
+        endpoint.require_environment(os.environ)
+        client = XpoolClient()
+        try:
+            client.check_config()
+        finally:
+            client.close()
         hooks = discover_sglang_hooks()
         for hook in hooks:
             HookRegistry.register(hook.target, hook.handler, hook.kind)

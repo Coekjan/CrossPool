@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import signal
+import sys
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -22,6 +25,7 @@ from xbench.harness.serving.measure import BenchCaseManifest, RepetitionManifest
 from xbench.harness.serving.runner import finalize_repetition
 from xbench.harness.serving.workload import PreparedWorkload, prepare_workload, read_jsonl
 from xkit.results import write_json, write_jsonl
+from xkit.supervisor import SupervisedTaskScope, TaskCompletionKind, TaskScopeState
 from xtest.harness.support.config import TEST_MODEL_ID
 
 
@@ -363,6 +367,94 @@ def test_cancellation_after_requests_finish_does_not_claim_the_unelapsed_horizon
             window_kind="interrupted",
         )
         assert summary.outcomes["success"] == 3 and not summary.execution_complete
+
+
+def test_program_signal_adapter_keeps_async_cleanup_and_original_cancelled_verdict(tmp_path: Path) -> None:
+    program = """
+import asyncio
+import sys
+from pathlib import Path
+import httpx
+from benches.suites.serving.multi_model import run_serving
+from xbench.harness.serving.measure import BenchCaseManifest
+from xkit.task import TaskRoot
+
+directory = Path(sys.argv[1])
+case = BenchCaseManifest.model_validate_json((directory.parent / "case.json").read_bytes()).case
+root = TaskRoot.from_environment()
+assert root is not None
+scope = root.register_scope()
+root.activate()
+original_close = httpx.AsyncClient.__aexit__
+
+async def close(client, exc_type, exc_value, traceback):
+    measured = (directory / "measurement.json").exists()
+    if measured:
+        (directory / "retiring").touch()
+        while not (directory / "allow-cleanup").exists():
+            await asyncio.sleep(0.01)
+    await original_close(client, exc_type, exc_value, traceback)
+    if measured:
+        (directory / "client-cleaned").touch()
+
+httpx.AsyncClient.__aexit__ = close
+try:
+    asyncio.run(run_serving(case, directory))
+finally:
+    if (directory / "client-cleaned").exists():
+        scope.complete()
+    root.finish()
+"""
+    with FakeServingServer(block_first=True) as server:
+        case = client_case(tmp_path, server.url, future=True)
+        repetition = tmp_path / "case/repetition-0001"
+        retain_workload(case, repetition)
+        scope = SupervisedTaskScope.start(
+            "benchmark-async-cancel",
+            [sys.executable, "-c", program, str(repetition)],
+            cwd=Path(__file__).resolve().parents[6],
+            env=dict(os.environ, XBENCH_ENDPOINTS=json.dumps({str(TEST_MODEL_ID): server.url})),
+            log_path=tmp_path / "task.log",
+            timeout_seconds=30,
+        )
+        try:
+            observation_deadline = time.monotonic() + 10
+            while not server.first_started.is_set() and time.monotonic() < observation_deadline:
+                assert scope.poll() is None
+                time.sleep(0.01)
+            assert server.first_started.is_set(), (tmp_path / "task.log").read_text(encoding="utf-8")
+            assert scope.root is not None
+            os.kill(scope.root.pid, signal.SIGTERM)
+            while not (repetition / "retiring").exists() and time.monotonic() < observation_deadline:
+                assert scope.poll() is None
+                time.sleep(0.01)
+            assert (repetition / "retiring").exists()
+            # The real benchmark asyncio adapter now owns signals. Its second
+            # delivery must leave the awaited HTTP-client cleanup running.
+            os.kill(scope.root.pid, signal.SIGINT)
+            os.kill(scope.root.pid, signal.SIGTERM)
+            observation_deadline = time.monotonic() + 0.2
+            while time.monotonic() < observation_deadline:
+                assert scope.poll() is None
+                assert scope.root.is_alive()
+                time.sleep(0.01)
+            (repetition / "allow-cleanup").touch()
+            completion = scope.wait()
+            assert completion.kind is TaskCompletionKind.EXITED and completion.returncode == 143
+            assert not scope.is_protected
+            assert (repetition / "client-cleaned").is_file()
+            records = read_jsonl(repetition / "requests.jsonl", RequestRecord)
+            assert records[0].outcome == "cancelled"
+            assert all(record.outcome == "not_sent" for record in records[1:])
+            assert server.thread.is_alive()
+        finally:
+            # Only a CPU HTTP peer and an explicit stand-in cleanup scope exist.
+            (repetition / "allow-cleanup").touch()
+            server.gate.set()
+            if scope.state not in (TaskScopeState.COMPLETED, TaskScopeState.DRAINED, TaskScopeState.CLOSED):
+                SupervisedTaskScope.terminate_all((scope,))
+            if scope.state in (TaskScopeState.COMPLETED, TaskScopeState.DRAINED):
+                scope.close()
 
 
 def test_warmup_observes_process_loss_while_a_response_is_pending(tmp_path: Path) -> None:

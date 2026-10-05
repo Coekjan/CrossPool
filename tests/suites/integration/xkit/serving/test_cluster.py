@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import signal
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,17 +22,30 @@ class FakeProcess:
 
     next_pid = 12000
 
-    def __init__(self) -> None:
+    def __init__(
+        self, name: str = "daemon", events: list[str] | None = None, *, retirement_returncode: int = 0
+    ) -> None:
         self.pid = FakeProcess.next_pid
         FakeProcess.next_pid += 1
         self.returncode: int | None = None
         self.stdout = None
         self.stderr = None
+        self.name = name
+        self.events = events
+        self.retirement_returncode = retirement_returncode
 
     def poll(self) -> int | None:
         """Return the synthetic process status."""
 
         return self.returncode
+
+    def send_signal(self, signum: int) -> None:
+        """Model the daemon's controlled retirement response to direct SIGTERM."""
+
+        assert signum == signal.SIGTERM
+        if self.events is not None:
+            self.events.append(f"signal:{self.name}")
+        self.returncode = self.retirement_returncode
 
 
 @dataclass(slots=True)
@@ -113,7 +127,7 @@ def test_cluster_starts_complete_agent_set_and_closes_in_role_order(
         log_path: Path,
     ) -> OwnedProcessGroup:
         launches.append((name, command))
-        process = FakeProcess()
+        process = FakeProcess(name, events)
         name_by_pid[process.pid] = name
         return FakeOwnedProcessGroup(
             name=name,
@@ -123,7 +137,7 @@ def test_cluster_starts_complete_agent_set_and_closes_in_role_order(
         )
 
     def wait(process: subprocess.Popen[str], timeout_seconds: float) -> bool:
-        assert f"signal:{name_by_pid[process.pid]}" in events
+        assert "signal:daemon" in events
         events.append(f"wait:{name_by_pid[process.pid]}")
         process.returncode = 0
         return True
@@ -135,31 +149,24 @@ def test_cluster_starts_complete_agent_set_and_closes_in_role_order(
         return client
 
     monkeypatch.setattr(xkit.serving.cluster.httpx, "Client", create_client)
-    monkeypatch.setattr(
-        xkit.serving.cluster,
-        "signal_process_group",
-        lambda pid, number: events.append(f"signal:{name_by_pid[pid]}"),
-    )
     monkeypatch.setattr(xkit.serving.cluster, "wait_for_process_group", wait)
 
-    cluster = XpoolCluster.start(launch, endpoint)
+    cluster = XpoolCluster(launch)
+    cluster.start(endpoint)
     cluster.close()
 
     assert [name for name, command in launches] == ["daemon", "atnagent-0", "ffnagent-1", "ffnagent-2"]
     assert launches[0][1] == ["xpool", "daemon", "serve"]
-    assert launches[1][1][-3:] == ["atnagent", "--cuda-device", "0"]
-    assert launches[2][1][-3:] == ["ffnagent", "--cuda-device", "1"]
-    daemon_signal = events.index("signal:daemon")
-    assert set(events[:daemon_signal]) == {
-        "signal:atnagent-0",
-        "signal:ffnagent-1",
-        "signal:ffnagent-2",
+    assert launches[1][1][-3:] == ["atnagent", "--device", "0"]
+    assert launches[2][1][-3:] == ["ffnagent", "--device", "1"]
+    assert events[:5] == [
+        "signal:daemon",
+        "wait:daemon",
         "wait:atnagent-0",
         "wait:ffnagent-1",
         "wait:ffnagent-2",
-    }
-    assert events[daemon_signal : daemon_signal + 2] == ["signal:daemon", "wait:daemon"]
-    assert events[daemon_signal + 2 :] == [
+    ]
+    assert events[5:] == [
         "close:daemon",
         "close:atnagent-0",
         "close:ffnagent-1",
@@ -172,7 +179,9 @@ def test_cluster_starts_complete_agent_set_and_closes_in_role_order(
     endpoint.close()
 
 
+@pytest.mark.parametrize("retirement_returncode", [0, 20])
 def test_cluster_classifies_port_conflict_only_after_cleanup(
+    retirement_returncode: int,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -184,26 +193,31 @@ def test_cluster_classifies_port_conflict_only_after_cleanup(
     def spawn(*args: object, **kwargs: object) -> OwnedProcessGroup:
         return FakeOwnedProcessGroup(
             name="daemon",
-            process=cast(subprocess.Popen[str], FakeProcess()),
+            process=cast(
+                subprocess.Popen[str], FakeProcess(events=events, retirement_returncode=retirement_returncode)
+            ),
             log_path=tmp_path / "daemon.log",
             events=events,
         )
 
     def reacquire(reservation: TcpEndpointReservation) -> None:
-        assert events == ["terminate:daemon", "close:daemon"]
+        assert events == ["signal:daemon", "close:daemon"]
         raise OSError(errno.EADDRINUSE, "address in use")
 
     monkeypatch.setattr(OwnedProcessGroup, "spawn_logged", spawn)
     monkeypatch.setattr(xkit.serving.cluster.httpx, "Client", lambda **kwargs: client)
     monkeypatch.setattr(xkit.serving.cluster, "DAEMON_STARTUP_TIMEOUT_SECONDS", 0.0)
     monkeypatch.setattr(TcpEndpointReservation, "reacquire", reacquire)
+    monkeypatch.setattr(xkit.serving.cluster, "wait_for_process_group", lambda process, timeout: True)
 
+    cluster = XpoolCluster(launch)
     with pytest.raises(TcpEndpointConflict) as error:
-        XpoolCluster.start(launch, endpoint)
+        cluster.start(endpoint)
 
     assert error.value.addresses == ((endpoint.host, endpoint.port),)
     assert isinstance(error.value.__cause__, RuntimeError)
     assert client.closed
+    assert cluster.closed
     endpoint.close()
 
 
@@ -220,7 +234,7 @@ def test_cluster_preserves_startup_failure_when_endpoint_probe_fails(
     def spawn(*args: object, **kwargs: object) -> OwnedProcessGroup:
         return FakeOwnedProcessGroup(
             name="daemon",
-            process=cast(subprocess.Popen[str], FakeProcess()),
+            process=cast(subprocess.Popen[str], FakeProcess(retirement_returncode=20)),
             log_path=tmp_path / "daemon.log",
         )
 
@@ -231,9 +245,11 @@ def test_cluster_preserves_startup_failure_when_endpoint_probe_fails(
     monkeypatch.setattr(xkit.serving.cluster.httpx, "Client", lambda **kwargs: client)
     monkeypatch.setattr(xkit.serving.cluster, "DAEMON_STARTUP_TIMEOUT_SECONDS", 0.0)
     monkeypatch.setattr(TcpEndpointReservation, "reacquire", fail_endpoint_probe)
+    monkeypatch.setattr(xkit.serving.cluster, "wait_for_process_group", lambda process, timeout: True)
 
+    cluster = XpoolCluster(launch)
     with pytest.raises(OSError, match="endpoint inspection denied") as error:
-        XpoolCluster.start(launch, endpoint)
+        cluster.start(endpoint)
 
     assert error.value.errno == errno.EACCES
     assert isinstance(error.value.__cause__, RuntimeError)
@@ -278,11 +294,11 @@ def online_readiness() -> dict[str, object]:
         "transport_ready": False,
         "instances_initialized": False,
         "mps_status": "online",
-        "cuda_devices": [0, 1, 2],
-        "atnagents": [{"pid": 12001, "status": "online", "cuda_device": 0}],
+        "devices": [0, 1, 2],
+        "atnagents": [{"pid": 12001, "status": "online", "device": 0}],
         "ffnagents": [
-            {"pid": 12002, "status": "online", "cuda_device": 1},
-            {"pid": 12003, "status": "online", "cuda_device": 2},
+            {"pid": 12002, "status": "online", "device": 1},
+            {"pid": 12003, "status": "online", "device": 2},
         ],
         "instances": [],
     }

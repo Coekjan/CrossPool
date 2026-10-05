@@ -47,7 +47,7 @@ def dense_values(
 
 
 @pytest.mark.parametrize("payload_dtype", (torch.bfloat16, torch.float16), ids=("bfloat16", "float16"))
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_compute_dense_partial_matches_reference_without_steady_allocation(payload_dtype: torch.dtype) -> None:
     torch.manual_seed(17)
     hidden_states, layer_weights, workspace, output = dense_values(payload_dtype)
@@ -91,7 +91,7 @@ def test_compute_dense_partial_matches_reference_without_steady_allocation(paylo
     torch.testing.assert_close(output, expected, rtol=0.02, atol=0.1)
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_compute_dense_partial_keeps_live_prefix_independent_of_capacity_tail() -> None:
     torch.manual_seed(23)
     hidden_states, layer_weights, workspace, output = dense_values()
@@ -115,7 +115,7 @@ def test_compute_dense_partial_keeps_live_prefix_independent_of_capacity_tail() 
     torch.testing.assert_close(output[:2], first_prefix, rtol=0, atol=0)
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_compute_dense_partial_rejects_misaligned_workspace() -> None:
     hidden_states, layer_weights, workspace, output = dense_values()
     storage = torch.empty(workspace.numel() + 1, device="cuda", dtype=torch.uint8)
@@ -131,7 +131,7 @@ def test_compute_dense_partial_rejects_misaligned_workspace() -> None:
         )
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_finalize_moe_routing_replays_one_graph_for_dynamic_live_rows() -> None:
     routed_ids = torch.tensor(
         ((0, 2), (1, 3), (2, 0), (3, 1)),
@@ -206,7 +206,7 @@ def test_finalize_moe_routing_replays_one_graph_for_dynamic_live_rows() -> None:
 
 
 @pytest.mark.parametrize("payload_dtype", (torch.bfloat16, torch.float16), ids=("bfloat16", "float16"))
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_compute_moe_partial_matches_reference_with_overlapped_workspace_and_graph(
     payload_dtype: torch.dtype,
 ) -> None:

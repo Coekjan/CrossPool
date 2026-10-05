@@ -26,8 +26,8 @@ def install_loader_config() -> None:
         XpoolConfig.from_mapping(
             {
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
-                "atn": {"devices": [1]},
-                "ffn": {"devices": [0], "loader": {"parallelism": 2}},
+                "atn": {"devices": [0]},
+                "ffn": {"devices": [1], "loader": {"parallelism": 2}},
                 "models": [{"id": str(TEST_MODEL_ID), "path": "/models/model"}],
             }
         )
@@ -89,7 +89,7 @@ def tensor_values(shape: tuple[int, ...], start: int) -> torch.Tensor:
     return torch.arange(start, start + torch.Size(shape).numel(), dtype=torch.float32).reshape(shape).to(torch.bfloat16)
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path) -> None:
     install_loader_config()
     hidden_size = 4
@@ -168,7 +168,7 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     torch.testing.assert_close(moe_weights.expert_down_weight.cpu()[2:], expected_shared_down)
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_materialize_non_router_rank_and_shape_failure(tmp_path: Path) -> None:
     install_loader_config()
     correction_bias_key = "model.layers.1.mlp.gate.e_score_correction_bias"

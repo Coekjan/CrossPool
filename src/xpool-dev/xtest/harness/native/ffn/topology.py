@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import signal
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,14 +18,20 @@ from xkit.child import PythonChildProcess
 from xkit.network import TcpEndpointReservation
 from xkit.serving.cluster import XpoolCluster, XpoolClusterLaunch
 from xkit.serving.launch import snapshot_cluster_launch
+from xkit.task import get_task_root
 from xpool import bootstrap, devkit
 from xpool.config import XpoolConfig, init_global_config
 from xpool.model import ModelId
-from xpool.native import RuntimeRole
+from xpool.native import ABI_VERSION, RuntimeRole
 from xpool.ops import ffn_shim
 from xpool.runtime.instance import InstanceRankRuntime
-from xpool.service.wire import ServingListener
+from xpool.service.client import XpoolClient
+from xpool.service.wire import MpsClientTermination, ServingListener
 from xpool.transport import FfnRequestMetadata
+from xpool.utils.device import normalize_environment, visible_uuids
+from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S, MpsEndpoint
+from xpool.utils.procs import ProcUniqId
+from xpool.utils.sighandler import defer_signal_exceptions
 from xtest.harness.native.ffn.protocol import (
     FfnInstanceClosed,
     FfnInstanceCommand,
@@ -35,14 +43,16 @@ from xtest.harness.native.mps import MpsServerObservation, query_mps_servers
 from xtest.harness.support.kv import kv_capacity_profile
 from xtest.harness.support.wait import remaining_seconds
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class FfnProcessObservation:
-    """One live supervised CUDA client and its configured CUDA device."""
+    """One live supervised CUDA client and its configured device."""
 
     name: str
     process_id: int
-    cuda_device: int
+    device: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,19 +139,23 @@ def run_ffn_topology(
     cluster: XpoolCluster | None = None
     children: list[PythonChildProcess] = []
     try:
-        cluster = XpoolCluster.start(launch, endpoint)
+        with defer_signal_exceptions():
+            cluster = XpoolCluster(launch)
+        cluster.start(endpoint)
         instance_ordinals: dict[ModelId, int] = {}
         for spec in instance_specs:
             instance_ordinal = instance_ordinals.setdefault(spec.model_id, len(instance_ordinals))
             child_name = f"instance-{instance_ordinal}-rank-{spec.rank}"
-            children.append(
-                PythonChildProcess.start(
-                    child_name,
-                    run_ffn_instance,
-                    spec,
-                    log_path=workdir / f"{child_name}.log",
+            with defer_signal_exceptions():
+                children.append(
+                    PythonChildProcess(
+                        child_name,
+                        run_ffn_instance,
+                        spec,
+                        log_path=workdir / f"{child_name}.log",
+                    )
                 )
-            )
+            children[-1].start()
         ready = tuple(
             child.receive(
                 FfnInstanceReady,
@@ -162,7 +176,7 @@ def run_ffn_topology(
             if completed.case_ids != expected:
                 raise RuntimeError(f"FFN Instance completed {completed.case_ids}, expected {expected}")
         if observation_sink is not None:
-            observation_sink(observe_live_topology(cluster, children, instance_specs))
+            observation_sink(observe_live_topology(cluster, children, instance_specs, deadline=deadline))
         for child in children:
             child.send(FfnInstanceCommand.CLOSE)
         for child in children:
@@ -171,39 +185,82 @@ def run_ffn_topology(
                 timeout_seconds=remaining_seconds(deadline, "FFN qualification Instance close"),
             )
             child.wait(timeout_seconds=remaining_seconds(deadline, "FFN qualification Instance child exit"))
-        cluster.close()
-        cluster = None
         return ready
     finally:
-        PythonChildProcess.terminate_all(tuple(children))
-        for child in children:
-            if not child.process.is_alive():
+        root = get_task_root()
+        cleanup_deadline = (
+            root.cleanup_deadline
+            if root is not None and root.cleanup_deadline is not None
+            else time.monotonic() + MPS_CLEANUP_TIMEOUT_S
+        )
+        deployment_error: Exception | None = None
+        try:
+            live = [
+                ProcUniqId(child.process.pid)
+                for child in children
+                if child.process.pid is not None and child.process.is_alive()
+            ]
+            if live and cluster is None:
+                raise RuntimeError("FFN Instance cleanup has lost its daemon owner")
+            if cluster is not None:
+                for identity in live:
+                    response = cluster.client.post(
+                        "/serving/mps/terminate-client",
+                        json=MpsClientTermination(
+                            pid=identity.pid,
+                            create_time=identity.create_time,
+                            abi_version=ABI_VERSION,
+                            deadline=cleanup_deadline,
+                        ).model_dump(mode="json"),
+                        timeout=remaining_seconds(cleanup_deadline, "FFN Instance context termination"),
+                    )
+                    response.raise_for_status()
+            for identity in live:
+                identity.send_signal(signal.SIGKILL)
+            for child in children:
+                if child.process.pid is not None:
+                    child.process.join(max(0.0, cleanup_deadline - time.monotonic()))
+                if child.process.is_alive():
+                    raise TimeoutError("FFN Instance host retirement is unconfirmed")
                 child.close()
-        if cluster is not None:
-            cluster.close()
-        endpoint.close()
+            if cluster is not None:
+                try:
+                    cluster.close(deadline=cleanup_deadline)
+                except Exception as error:
+                    if not cluster.closed:
+                        raise
+                    deployment_error = error
+            endpoint.close()
+        except BaseException as error:
+            logger.error("FFN topology cleanup unconfirmed; retaining owner and deployment: %s", error)
+            while True:
+                time.sleep(1.0)
+        if deployment_error is not None:
+            raise deployment_error
 
 
 def observe_live_topology(
     cluster: XpoolCluster,
     children: list[PythonChildProcess],
     instance_specs: tuple[FfnInstanceSpec, ...],
+    *,
+    deadline: float,
 ) -> FfnLiveTopologyObservation:
     """Observe supervised CUDA clients and their actual MPS membership."""
 
     configured_devices = {
-        **{f"atnagent-{agent.cuda_device}": agent.cuda_device for agent in cluster.launch.config.atnagents},
-        **{f"ffnagent-{agent.cuda_device}": agent.cuda_device for agent in cluster.launch.config.ffnagents},
+        **{f"atnagent-{agent.device}": agent.device for agent in cluster.launch.config.atnagents},
+        **{f"ffnagent-{agent.device}": agent.device for agent in cluster.launch.config.ffnagents},
     }
     processes = []
     for process in cluster.processes:
         if process.name == "daemon":
             continue
         try:
-            cuda_device = configured_devices[process.name]
+            device = configured_devices[process.name]
         except KeyError as error:
             raise RuntimeError(f"FFN topology observed unknown Agent process {process.name!r}") from error
-        processes.append(FfnProcessObservation(process.name, process.process.pid, cuda_device))
+        processes.append(FfnProcessObservation(process.name, process.process.pid, device))
     for child, spec in zip(children, instance_specs, strict=True):
         process_id = child.process.pid
         if process_id is None:
@@ -216,6 +273,8 @@ def observe_live_topology(
             )
         )
     supervised_ids = {process.process_id for process in processes}
+    visibility = visible_uuids()
+    endpoint = MpsEndpoint(tuple(visibility[device] for device in cluster.launch.config.atn.devices))
     servers = tuple(
         MpsServerObservation(
             process_id=server.process_id,
@@ -224,7 +283,7 @@ def observe_live_topology(
             ),
             active_thread_percentage=server.active_thread_percentage,
         )
-        for server in query_mps_servers()
+        for server in query_mps_servers(endpoint, deadline=deadline)
         if any(process_id in supervised_ids for process_id in server.client_process_ids)
     )
     return FfnLiveTopologyObservation(tuple(processes), servers)
@@ -236,8 +295,18 @@ def run_ffn_instance(connection: Connection, spec: FfnInstanceSpec) -> None:
     os.environ.clear()
     os.environ.update(spec.environment)
     config = init_global_config()
-    cuda_device = config.atn.devices[spec.rank]
-    bootstrap.init(cuda_device, RuntimeRole.INSTANCE)
+    normalize_environment()
+    visibility = visible_uuids()
+    endpoint = MpsEndpoint(tuple(visibility[device] for device in config.atn.devices))
+    os.environ.update(endpoint.environment())
+    client = XpoolClient()
+    try:
+        client.check_config()
+    finally:
+        client.close()
+    device = spec.rank
+    bootstrap.init(device, RuntimeRole.INSTANCE)
+    endpoint.require_client()
     devkit.install()
     runtime = InstanceRankRuntime.start(
         model_id=spec.model_id,
@@ -272,11 +341,11 @@ def run_ffn_instance(connection: Connection, spec: FfnInstanceSpec) -> None:
             tensors = safetensors.torch.load_file(invocation.input_path, device="cpu")
             if set(tensors) != {"hidden_states"}:
                 raise RuntimeError(f"FFN production input has invalid tensor keys: {sorted(tensors)}")
-            hidden_states = tensors["hidden_states"].to(device=cuda_device)
+            hidden_states = tensors["hidden_states"].to(device=device)
             dp_rank_payload_rows = (
                 None
                 if invocation.dp_rank_payload_rows is None
-                else torch.tensor(invocation.dp_rank_payload_rows, dtype=torch.int64, device=cuda_device)
+                else torch.tensor(invocation.dp_rank_payload_rows, dtype=torch.int64, device=device)
             )
             output = ffn_shim(
                 hidden_states,

@@ -143,10 +143,10 @@ def execution_fabric_plan(
         generation=FabricGenerationId(high=1, low=1),
         uid=FabricUid(uid),
         pe_placements=tuple(
-            FabricPePlacement(role=FabricRole.ATNAGENT, cuda_device=index) for index in range(atnagent_count)
+            FabricPePlacement(role=FabricRole.ATNAGENT, device=index) for index in range(atnagent_count)
         )
         + tuple(
-            FabricPePlacement(role=FabricRole.FFNAGENT, cuda_device=atnagent_count + index)
+            FabricPePlacement(role=FabricRole.FFNAGENT, device=atnagent_count + index)
             for index in range(ffnagent_count)
         ),
         executor_lane_count=executor_lane_count,

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import signal
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic, sleep
 
 import httpx
 
@@ -13,21 +16,24 @@ from xkit.serving.cluster import XpoolClusterLaunch, process_diagnostics
 from xkit.serving.readiness import ReadinessEvidence
 from xkit.serving.sglang.endpoints import SglangEndpointFamily, SglangEndpointFamilyLease
 from xkit.serving.sglang.launch import SglangLaunchModel
-from xpool.integrations.sglang.placement import SglangCudaPlacement
+from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S
 
 HTTP_TIMEOUT_SECONDS = 30.0
-PROCESS_EXIT_TIMEOUT_SECONDS = 30.0
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
 class SglangServerProcess:
-    """Own one installed ``sglang serve`` process and public HTTP endpoint."""
+    """Own one installed, environment-wrapped SGLang process and public HTTP endpoint."""
 
     model: SglangLaunchModel
     owner: OwnedProcessGroup
     endpoint: SglangEndpointFamily
     command: tuple[str, ...] = ()
     closed: bool = False
+    cleanup_deadline: float | None = None
+    cleanup_lock: threading.Lock = field(default_factory=threading.Lock)
+    shutdown_requested: bool = False
 
     @classmethod
     def start(
@@ -41,6 +47,7 @@ class SglangServerProcess:
         """Consume one reservation and launch the pinned installed CLI."""
 
         environment = dict(launch.environment)
+        environment["SGLANG_PLUGINS"] = "xpool"
         environment["SGLANG_GRPC_PORT"] = str(endpoint.family.grpc_port)
         command = server_command(
             launch=launch,
@@ -91,21 +98,50 @@ class SglangServerProcess:
 
         return process_diagnostics([self.owner])
 
-    def close(self) -> None:
-        """Request orderly server shutdown, then close owned process resources."""
+    def close(self, *, deadline: float | None = None) -> None:
+        """Notify only this serving leader and retain clients until confirmed exit.
 
-        if self.closed:
-            return
-        self.closed = True
-        try:
-            if self.owner.process.poll() is None:
-                self.owner.process.send_signal(signal.SIGTERM)
-                if not wait_for_process_group(self.owner.process, PROCESS_EXIT_TIMEOUT_SECONDS):
-                    self.owner.terminate()
-            elif not wait_for_process_group(self.owner.process, PROCESS_EXIT_TIMEOUT_SECONDS):
-                raise RuntimeError(f"{self.owner.name} left live descendants after exit")
-        finally:
+        The enclosing System supplies its single retirement deadline. Expiry
+        stops automatic signaling and retains logs and ownership for manual
+        resolution. A later confirmed process-domain exit permits housekeeping;
+        the daemon/controller remain owned by the enclosing deployment.
+        """
+
+        with self.cleanup_lock:
+            if self.closed:
+                return
+            if self.cleanup_deadline is None:
+                self.cleanup_deadline = monotonic() + MPS_CLEANUP_TIMEOUT_S if deadline is None else deadline
+            expiry_reported = False
+            last_diagnostic: tuple[type[Exception], str] | None = None
+            while True:
+                now = monotonic()
+                if now >= self.cleanup_deadline and not expiry_reported:
+                    logger.error(
+                        "serving cleanup expired; retaining clients; manual resolution required pid=%s",
+                        self.owner.process.pid,
+                    )
+                    expiry_reported = True
+                try:
+                    if not self.shutdown_requested and now < self.cleanup_deadline:
+                        if self.owner.process.poll() is None:
+                            self.owner.process.send_signal(signal.SIGTERM)
+                        self.shutdown_requested = True
+                    if wait_for_process_group(self.owner.process, 0.0):
+                        break
+                    last_diagnostic = None
+                except Exception as error:
+                    diagnostic = type(error), str(error)
+                    if diagnostic != last_diagnostic:
+                        logger.error(
+                            "serving cleanup incomplete; retaining owner pid=%s detail=%s",
+                            self.owner.process.pid,
+                            error,
+                        )
+                        last_diagnostic = diagnostic
+                sleep(0.1)
             self.owner.close()
+            self.closed = True
 
     def url(self) -> str:
         """Return this server's loopback URL."""
@@ -122,10 +158,12 @@ def server_command(
 ) -> list[str]:
     """Project one E2E model and graph mode to the pinned SGLang CLI."""
 
-    placement = SglangCudaPlacement.derive(launch.config.atn.devices)
     model_config = launch.config.model_by_id[model.model_id]
     graph_settings = model.graph_mode.settings()
     command = [
+        "xpool",
+        "exec",
+        "--",
         "sglang",
         "serve",
         "--model-path",
@@ -144,9 +182,9 @@ def server_command(
         "--attention-context-parallel-size",
         "1",
         "--base-gpu-id",
-        str(placement.base_gpu_id),
+        "0",
         "--gpu-id-step",
-        str(placement.gpu_id_step),
+        "1",
         "--random-seed",
         "0",
         "--log-level",

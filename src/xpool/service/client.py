@@ -16,10 +16,12 @@ from xpool.fabric import FabricGenerationId, FabricPlan
 from xpool.model import ModelId
 from xpool.service.errors import XpoolClientError, XpoolDaemonError
 from xpool.service.wire import (
+    AgentStartupAdmission,
     AtnAgentRegistration,
     AtnAgentTransportArenaBinding,
     AtnAgentTransportArenaUpsertRequest,
     AtnAgentTransportLeaseQuiesceResponse,
+    ConfigCheckRequest,
     FabricParticipantReport,
     FabricQuiesceRequest,
     FfnAgentRegistration,
@@ -27,11 +29,14 @@ from xpool.service.wire import (
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
     KvControlChannelRef,
+    MpsClientTermination,
     ProcessRef,
     ReadinessSnapshot,
     XpoolDaemonErrorDetail,
 )
 from xpool.transport import TransportArenaHandle
+from xpool.utils.device import visible_uuids
+from xpool.utils.mps import MPS_STARTUP_TIMEOUT_S, MPS_TERMINATION_TIMEOUT_S
 
 __all__ = ["XpoolClient"]
 
@@ -187,18 +192,20 @@ class XpoolClient:
         return self.decode_model(response, ReadinessSnapshot, "readiness")
 
     def check_config(self) -> None:
-        """Require the daemon to accept this client's effective config.
+        """Require agreement on effective config and the ordered deployment UUID view.
 
         Raises:
             XpoolClientError: If the daemon cannot be reached or returns an
                 invalid error response.
-            XpoolDaemonError: If the daemon rejects the effective config.
+            XpoolDaemonError: If the daemon rejects the config or device view.
         """
 
         self.request(
             "POST",
             "/config/check",
-            json=get_global_config().model_dump(mode="json"),
+            json=ConfigCheckRequest(config=get_global_config(), visible_devices=list(visible_uuids())).model_dump(
+                mode="json"
+            ),
         )
 
     def fabric_plan(self) -> FabricPlan:
@@ -206,6 +213,45 @@ class XpoolClient:
 
         response = self.request("GET", "/fabric/plan")
         return self.decode_model(response, FabricPlan, "fabric plan")
+
+    def admit_agent_startup(self, request: AgentStartupAdmission) -> None:
+        """Require retained exact ownership before initializing an Agent device.
+
+        Admission validates configured role/device placement and exact process
+        identity. It returns no endpoint or configuration metadata.
+        """
+
+        self.request("POST", "/startup/agent", json=request.model_dump(mode="json"), timeout_s=MPS_STARTUP_TIMEOUT_S)
+
+    def terminate_serving_client(self, request: MpsClientTermination) -> None:
+        """Confirm this scope client's MPS contexts are safe for forced exit.
+
+        The daemon remains the MPS owner, including after admission closes.
+        A successful response does not kill the process or release resources.
+        The caller rechecks its exact identity before signaling and reaps its
+        actual process domain. Errors, timeouts and unknown replies authorize
+        neither host signals nor reservation release.
+
+        Args:
+            request: Exact target, native ABI and retained cleanup deadline.
+
+        Raises:
+            TimeoutError: The caller's cleanup budget is already exhausted.
+            XpoolClientError: HTTP transport or the acknowledgement is invalid.
+            XpoolDaemonError: Target ownership or termination is unconfirmed.
+        """
+
+        remaining = request.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("serving client termination deadline expired")
+        response = self.request(
+            "POST",
+            "/serving/mps/terminate-client",
+            json=request.model_dump(mode="json"),
+            timeout_s=min(remaining, MPS_TERMINATION_TIMEOUT_S),
+        )
+        if response.status_code != HTTPStatus.NO_CONTENT:
+            raise XpoolClientError("protocol", "xpool daemon did not confirm MPS client termination")
 
     def kv_control_channel(self, generation: FabricGenerationId) -> KvControlChannelRef:
         """Return the native KV control channel for one current generation."""
@@ -230,13 +276,11 @@ class XpoolClient:
             registration: AtnAgent registration payload to send.
 
         Raises:
-            XpoolClientError: If config validation or registration cannot reach
-                the daemon or receives an invalid response.
-            XpoolDaemonError: If the daemon rejects the effective config or
-                registration.
+            XpoolClientError: If registration cannot reach the daemon or receives
+                an invalid response.
+            XpoolDaemonError: If the daemon rejects the registration.
         """
 
-        self.check_config()
         self.request("POST", "/atnagent/register", json=registration.model_dump(mode="json"))
 
     def register_ffnagent(self, registration: FfnAgentRegistration) -> None:
@@ -246,25 +290,24 @@ class XpoolClient:
             registration: FfnAgent registration payload to send.
 
         Raises:
-            XpoolClientError: If config validation or registration cannot reach
-                the daemon or receives an invalid response.
+            XpoolClientError: If registration cannot reach the daemon or receives
+                an invalid response.
             XpoolDaemonError: If the daemon rejects the registration.
         """
 
-        self.check_config()
         self.request("POST", "/ffnagent/register", json=registration.model_dump(mode="json"))
 
-    def heartbeat_ffnagent(self, cuda_device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
+    def heartbeat_ffnagent(self, device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
         """Refresh one FfnAgent heartbeat and return daemon warnings."""
 
-        response = self.request("POST", f"/ffnagent/{cuda_device}/heartbeat", json=heartbeat.model_dump(mode="json"))
+        response = self.request("POST", f"/ffnagent/{device}/heartbeat", json=heartbeat.model_dump(mode="json"))
         return self.decode_model(response, HeartbeatResponse, "ffnagent heartbeat")
 
-    def heartbeat_atnagent(self, cuda_device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
+    def heartbeat_atnagent(self, device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
         """Refresh one AtnAgent heartbeat and return daemon warnings.
 
         Args:
-            cuda_device: CUDA device owned by the registered AtnAgent.
+            device: device owned by the registered AtnAgent.
             heartbeat: Process identity used to prove registration ownership.
 
         Returns:
@@ -276,12 +319,12 @@ class XpoolClient:
 
         """
 
-        response = self.request("POST", f"/atnagent/{cuda_device}/heartbeat", json=heartbeat.model_dump(mode="json"))
+        response = self.request("POST", f"/atnagent/{device}/heartbeat", json=heartbeat.model_dump(mode="json"))
         return self.decode_model(response, HeartbeatResponse, "atnagent heartbeat")
 
     def upsert_atnagent_transport_arenas(
         self,
-        cuda_device: int,
+        device: int,
         bindings: list[AtnAgentTransportArenaBinding],
         *,
         publisher: ProcessRef,
@@ -289,7 +332,7 @@ class XpoolClient:
         """Merge AtnAgent transport arena bindings into the daemon.
 
         Args:
-            cuda_device: CUDA device owned by the publishing AtnAgent.
+            device: device owned by the publishing AtnAgent.
             bindings: Transport arena bindings to upsert.
             publisher: Process identity for the publishing AtnAgent.
 
@@ -304,7 +347,7 @@ class XpoolClient:
 
         self.request(
             "POST",
-            f"/atnagent/{cuda_device}/transport-arenas",
+            f"/atnagent/{device}/transport-arenas",
             json=AtnAgentTransportArenaUpsertRequest(
                 publisher=publisher,
                 bindings=bindings,
@@ -313,18 +356,18 @@ class XpoolClient:
 
     def quiesce_atnagent_transport_leases(
         self,
-        cuda_device: int,
+        device: int,
         *,
         publisher: ProcessRef,
     ) -> AtnAgentTransportLeaseQuiesceResponse:
         """Close one AtnAgent's lease admission and return active leases.
 
         Args:
-            cuda_device: CUDA device owned by the publishing AtnAgent.
+            device: device owned by the publishing AtnAgent.
             publisher: Process identity that owns the arena generation.
 
         Returns:
-            Instance ranks that still hold fresh arena leases.
+            Instance ranks whose live processes still hold arena leases.
 
         Raises:
             XpoolClientError: If the bounded quiesce request fails or its
@@ -332,13 +375,12 @@ class XpoolClient:
             XpoolDaemonError: If the daemon rejects the quiesce request.
 
         Side Effects:
-            Closes lease admission for the arena generation and may stop
-            processes that retain stale leases.
+            Closes lease admission for the arena generation.
         """
 
         response = self.request(
             "POST",
-            f"/atnagent/{cuda_device}/transport-leases/quiesce",
+            f"/atnagent/{device}/transport-leases/quiesce",
             json=publisher.model_dump(mode="json"),
             timeout_s=ATNAGENT_TRANSPORT_LEASE_QUIESCE_TIMEOUT_S,
         )
@@ -367,13 +409,11 @@ class XpoolClient:
             registration: Instance-rank registration payload to send.
 
         Raises:
-            XpoolClientError: If config validation or registration cannot reach
-                the daemon or receives an invalid response.
-            XpoolDaemonError: If the daemon rejects the effective config or
-                registration.
+            XpoolClientError: If registration cannot reach the daemon or receives
+                an invalid response.
+            XpoolDaemonError: If the daemon rejects the registration.
         """
 
-        self.check_config()
         self.request("POST", "/instance/register", json=registration.model_dump(mode="json"))
 
     def deregister_instance(self, model_id: ModelId, *, rank: int, owner: ProcessRef) -> None:

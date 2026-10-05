@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from xpool.config import get_global_config
-from xpool.mps import probe_mps_controller
 from xpool.native import ABI_VERSION
 from xpool.utils import align_up
 
@@ -121,22 +120,22 @@ class FfnMemoryCalibrationCoefficients:
         return result
 
 
-class MemoryCalibrationGpu(BaseModel):
-    """One ordered FfnAgent GPU recorded by a calibration run."""
+class MemoryCalibrationDevice(BaseModel):
+    """One ordered FfnAgent device recorded by a calibration run."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    name: str = Field(min_length=1, description="CUDA device marketing name.")
+    name: str = Field(min_length=1, description="device marketing name.")
     compute_capability: tuple[int, int] = Field(description="CUDA major and minor compute capability.")
-    total_memory_bytes: int = Field(ge=1, description="Total CUDA device memory in bytes.")
-    uuid: str = Field(min_length=1, description="GPU UUID retained as non-matching provenance.")
+    total_memory_bytes: int = Field(ge=1, description="Total device memory in bytes.")
+    uuid: str = Field(min_length=1, description="device UUID retained as non-matching provenance.")
 
     @model_validator(mode="after")
-    def validate_compute_capability(self) -> MemoryCalibrationGpu:
+    def validate_compute_capability(self) -> MemoryCalibrationDevice:
         """Reject negative compute-capability components."""
 
         if any(value < 0 for value in self.compute_capability):
-            raise ValueError("GPU compute capability must contain non-negative integers")
+            raise ValueError("device compute capability must contain non-negative integers")
         return self
 
 
@@ -146,13 +145,12 @@ class MemoryCalibrationEnvironment(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     native_abi_version: int = Field(ge=1, description="CrossPool native ABI used for calibration.")
-    ffnagent_gpus: tuple[MemoryCalibrationGpu, ...] = Field(
+    ffnagent_devices: tuple[MemoryCalibrationDevice, ...] = Field(
         min_length=1,
-        description="FfnAgent GPUs in configured FfnAgent index order.",
+        description="FfnAgent devices in configured FfnAgent index order.",
     )
     cuda_driver_version: int = Field(ge=1, description="CUDA driver API integer version.")
     cuda_runtime_version: int = Field(ge=1, description="CUDA runtime API integer version.")
-    mps_active_thread_percentage: int = Field(ge=1, le=100, description="CUDA MPS active-thread percentage.")
     torch_version: str = Field(min_length=1, description="Installed Torch distribution version.")
     triton_version: str = Field(min_length=1, description="Installed Triton distribution version.")
     sglang_version: str = Field(min_length=1, description="Installed SGLang distribution version.")
@@ -220,14 +218,9 @@ def validate_memory_calibration_profile(profile: XpoolMemoryCalibrationProfile) 
         RuntimeError: If the Profile is incompatible or Host evidence cannot be
             observed.
 
-    Side Effects:
-        Runs the serialized CUDA MPS controller probe.
     """
 
     config = get_global_config()
-    mps = probe_mps_controller()
-    if not mps.online or mps.active_thread_percentage is None:
-        raise RuntimeError(f"memory calibration requires a reachable MPS controller: {mps.diagnostic}")
     driver_version, runtime_version = cuda_versions()
     environment = profile.environment
     expected = {
@@ -237,7 +230,6 @@ def validate_memory_calibration_profile(profile: XpoolMemoryCalibrationProfile) 
         "Executor Lane count": config.scheduler.ffn_concurrency,
         "CUDA driver": driver_version,
         "CUDA runtime": runtime_version,
-        "MPS active-thread percentage": mps.active_thread_percentage,
         "Torch": importlib.metadata.version("torch"),
         "Triton": importlib.metadata.version("triton"),
         "SGLang": importlib.metadata.version("sglang"),
@@ -246,12 +238,11 @@ def validate_memory_calibration_profile(profile: XpoolMemoryCalibrationProfile) 
     }
     actual = {
         "native ABI": environment.native_abi_version,
-        "FfnAgent count": len(environment.ffnagent_gpus),
+        "FfnAgent count": len(environment.ffnagent_devices),
         "AtnAgent count": profile.ffn.atnagent_count,
         "Executor Lane count": profile.ffn.executor_lane_count,
         "CUDA driver": environment.cuda_driver_version,
         "CUDA runtime": environment.cuda_runtime_version,
-        "MPS active-thread percentage": environment.mps_active_thread_percentage,
         "Torch": environment.torch_version,
         "Triton": environment.triton_version,
         "SGLang": environment.sglang_version,

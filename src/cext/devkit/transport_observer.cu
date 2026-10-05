@@ -50,7 +50,7 @@ XPOOL_DEVICE_CONST RegistryStorage storage{};
 
 struct Endpoint {
   xpool::hooks::TransportEndpointSite site;
-  c10::DeviceIndex cuda_device;
+  c10::DeviceIndex device;
   std::uint8_t *allocation;
   EndpointStorage storage;
 };
@@ -90,7 +90,7 @@ XPOOL_HOST_HOOK_FN(xpool::hooks::TransportEndpointOpenPostEvent, HostAdapter::ob
     return;
   }
   const auto lock = std::lock_guard<std::mutex>{state_mutex};
-  const auto device_guard = c10::cuda::CUDAGuard{context.cuda_device};
+  const auto device_guard = c10::cuda::CUDAGuard{context.device};
   using xpool::utils::layout::LayoutRegionSpec;
   const auto specs = std::to_array<LayoutRegionSpec>({
       LayoutRegionSpec::object<xpool::utils::trace::BufferState>("Transport Observer state"),
@@ -117,7 +117,7 @@ XPOOL_HOST_HOOK_FN(xpool::hooks::TransportEndpointOpenPostEvent, HostAdapter::ob
   };
   endpoints.push_back(Endpoint{
       .site = context.site,
-      .cuda_device = context.cuda_device,
+      .device = context.device,
       .allocation = allocation,
       .storage = endpoint_storage,
   });
@@ -129,7 +129,7 @@ XPOOL_HOST_HOOK_FN(xpool::hooks::TransportEndpointClosePreEvent, HostAdapter::ob
     return;
   }
   const auto lock = std::lock_guard<std::mutex>{state_mutex};
-  const auto device_guard = c10::cuda::CUDAGuard{context.cuda_device};
+  const auto device_guard = c10::cuda::CUDAGuard{context.device};
   const auto iterator = std::ranges::find_if(endpoints, [&](const auto &endpoint) {
     return endpoint.site == context.site && endpoint.storage.instance_index == context.layout.instance_index &&
            endpoint.storage.instance_rank == context.layout.instance_rank;
@@ -155,7 +155,7 @@ XPOOL_DEVICE_FN EndpointStorage *endpoint(const xpool::transport::ArenaView &are
 }
 
 EndpointSnapshot snapshot(const Endpoint &endpoint) {
-  const auto device_guard = c10::cuda::CUDAGuard{endpoint.cuda_device};
+  const auto device_guard = c10::cuda::CUDAGuard{endpoint.device};
   auto state = xpool::utils::trace::BufferState{};
   C10_CUDA_CHECK(cudaMemcpy(&state, endpoint.storage.state, sizeof(state), cudaMemcpyDeviceToHost));
   auto records = std::vector<Record>(std::min<std::size_t>(state.sequence, endpoint.storage.record_capacity));

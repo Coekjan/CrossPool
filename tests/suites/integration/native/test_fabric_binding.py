@@ -118,12 +118,12 @@ def isolated_enabled_observer_sizing() -> None:
     assert xpool.native.devkit.ffn_routing_observer.allocation_bytes(8) > 0
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_fabric_join_validates_metadata_before_collective_initialization(tmp_path: Path) -> None:
     run_native_case(isolated_fabric_binding_validation, workdir=tmp_path / "case")
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_fabric_binding_rejects_wrong_runtime_role(tmp_path: Path) -> None:
     run_native_case(isolated_fabric_role_guard, workdir=tmp_path / "case")
 

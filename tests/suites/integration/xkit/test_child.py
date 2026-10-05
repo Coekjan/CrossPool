@@ -21,11 +21,12 @@ def fail_spawned_process(connection: Connection, value: str) -> None:
 
 def test_spawned_process_exchanges_typed_message_and_closes(tmp_path: Path) -> None:
     prepare_task_supervision()
-    process = PythonChildProcess.start(
+    process = PythonChildProcess(
         "echo", echo_spawned_value, "hello", log_path=tmp_path / "echo.log", import_paths=(REPO_ROOT,)
     )
 
     try:
+        process.start()
         assert process.receive(str, timeout_seconds=5.0) == "hello"
         process.wait(timeout_seconds=5.0)
     finally:
@@ -36,7 +37,7 @@ def test_spawned_process_exchanges_typed_message_and_closes(tmp_path: Path) -> N
 
 def test_spawned_process_propagates_child_traceback(tmp_path: Path) -> None:
     prepare_task_supervision()
-    process = PythonChildProcess.start(
+    process = PythonChildProcess(
         "failure",
         fail_spawned_process,
         "expected child failure",
@@ -44,6 +45,7 @@ def test_spawned_process_propagates_child_traceback(tmp_path: Path) -> None:
         import_paths=(REPO_ROOT,),
     )
     try:
+        process.start()
         with pytest.raises(RuntimeError, match="expected child failure"):
             process.wait(timeout_seconds=5.0)
     finally:

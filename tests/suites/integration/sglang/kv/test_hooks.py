@@ -40,6 +40,7 @@ from xpool.integrations.sglang.hooks.kv import (
     around_retract_decode,
     capacity_reconciler_scope,
     compute_kv_reservation_budget,
+    current_capacity_reconciler,
     validate_kv_seams,
 )
 from xpool.integrations.sglang.kv.allocator import ElasticTokenToKVPoolAllocator
@@ -105,13 +106,21 @@ def test_pinned_sglang_kv_seams_match() -> None:
 
 def test_capacity_request_receiver_forwards_local_requests() -> None:
     local_requests = [AbortReq(rid="test-request")]
-    receiver = SimpleNamespace(recv_requests=lambda *, local_reqs: local_reqs)
+    # This scope-only substitute has no scheduling operations to emulate.
+    reconciler = cast(CapacityReconciler, object())
+
+    def receive(*, local_reqs: list[AbortReq] | None = None) -> list[object]:
+        assert current_capacity_reconciler() is reconciler
+        assert local_reqs == local_requests
+        return list(local_requests)
+
+    receiver = SimpleNamespace(recv_requests=receive)
     wrapped = CapacityRequestReceiver(
         cast(SchedulerRequestReceiver, receiver),
-        cast(CapacityReconciler, object()),
+        reconciler,
     )
 
-    assert wrapped.recv_requests(local_requests) is local_requests
+    assert wrapped.recv_requests(local_requests) == local_requests
 
 
 def test_elastic_prefill_adder_uses_active_prefix_budget(monkeypatch: pytest.MonkeyPatch) -> None:

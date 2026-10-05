@@ -71,7 +71,7 @@ class OwnedProcessGroup(OwnedProcess):
         env: Mapping[str, str],
         log_path: Path,
     ) -> Self:
-        """Start one dedicated process group with combined logged output."""
+        """Start one process group with retained log storage."""
 
         log_file = log_path.open("w", encoding="utf-8")
         try:

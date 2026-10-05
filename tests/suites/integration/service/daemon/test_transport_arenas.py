@@ -24,6 +24,7 @@ from xtest.harness.support.service.daemon import (
     instance_transport_arena,
     instance_transport_arena_acquire_path,
     process_ref,
+    register,
     request,
     transport_requirements,
 )
@@ -34,9 +35,9 @@ pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic
 def test_daemon_requires_executable_fabric_for_transport_arena() -> None:
     config = synthetic_config()
     app = create_app(config)
-    atnagent = atnagent_registration(cuda_device=0)
+    atnagent = atnagent_registration(device=0)
 
-    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
     not_ready = request(
         app,
         "POST",
@@ -49,7 +50,7 @@ def test_daemon_requires_executable_fabric_for_transport_arena() -> None:
         "message": "instance rank is not registered",
     }
 
-    assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
     publish_response = request(
         app,
         "POST",
@@ -85,19 +86,18 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
         }
     )
     app = create_app(config)
-    atnagent = atnagent_registration(cuda_device=0)
-    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
+    atnagent = atnagent_registration(device=0)
+    assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
     assert (
-        request(
+        register(
             app,
-            "POST",
             "/ffnagent/register",
-            json=ffnagent_registration(cuda_device=1, model_ids=(str(TEST_MODEL_ID),)),
+            ffnagent_registration(device=1, model_ids=(str(TEST_MODEL_ID),)),
         ).status_code
         == HTTPStatus.NO_CONTENT
     )
     assert (
-        request(app, "POST", "/instance/register", json=instance_registration(model_id=str(TEST_MODEL_ID))).status_code
+        register(app, "/instance/register", instance_registration(model_id=str(TEST_MODEL_ID))).status_code
         == HTTPStatus.NO_CONTENT
     )
     assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.OK
@@ -169,11 +169,10 @@ def test_daemon_rejects_transport_topology_disagreeing_with_configuration() -> N
     )
     app = create_app(config)
 
-    response = request(
+    response = register(
         app,
-        "POST",
         "/instance/register",
-        json=instance_registration(model_id=str(TEST_MODEL_ID), rank=0, atn_tp_size=1, atn_dp_size=2),
+        instance_registration(model_id=str(TEST_MODEL_ID), rank=0, atn_tp_size=1, atn_dp_size=2),
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
@@ -194,11 +193,10 @@ def test_daemon_accepts_dp_transport_with_tp_fastest_rank_order() -> None:
     app = create_app(config)
 
     for rank in (0, 1):
-        response = request(
+        response = register(
             app,
-            "POST",
             "/instance/register",
-            json=instance_registration(
+            instance_registration(
                 model_id=str(TEST_MODEL_ID),
                 rank=rank,
                 atn_tp_rank=0,
@@ -221,11 +219,10 @@ def test_daemon_rejects_transport_coordinates_that_do_not_use_tp_fastest_order()
     )
     app = create_app(config)
 
-    response = request(
+    response = register(
         app,
-        "POST",
         "/instance/register",
-        json=instance_registration(model_id=str(TEST_MODEL_ID), rank=0, atn_tp_rank=1, atn_tp_size=2),
+        instance_registration(model_id=str(TEST_MODEL_ID), rank=0, atn_tp_rank=1, atn_tp_size=2),
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
@@ -249,8 +246,8 @@ def test_daemon_rejects_cross_rank_transport_geometry_mismatch() -> None:
         "hidden_size": 8,
     }
 
-    assert request(app, "POST", "/instance/register", json=rank0).status_code == HTTPStatus.NO_CONTENT
-    response = request(app, "POST", "/instance/register", json=rank1)
+    assert register(app, "/instance/register", rank0).status_code == HTTPStatus.NO_CONTENT
+    response = register(app, "/instance/register", rank1)
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"]["message"] == "instance transport attributes disagree across ranks"
@@ -268,20 +265,19 @@ def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instan
     app = create_app(config)
     atnagents: dict[int, dict[str, int | float]] = {}
     for payload in (
-        atnagent_registration(cuda_device=0),
-        atnagent_registration(cuda_device=1),
+        atnagent_registration(device=0),
+        atnagent_registration(device=1),
     ):
-        atnagents[int(payload["cuda_device"])] = payload
-        assert request(app, "POST", "/atnagent/register", json=payload).status_code == HTTPStatus.NO_CONTENT
-    ffnagent = ffnagent_registration(cuda_device=2, model_ids=(str(TEST_MODEL_ID),))
-    assert request(app, "POST", "/ffnagent/register", json=ffnagent).status_code == HTTPStatus.NO_CONTENT
+        atnagents[int(payload["device"])] = payload
+        assert register(app, "/atnagent/register", payload).status_code == HTTPStatus.NO_CONTENT
+    ffnagent = ffnagent_registration(device=2, model_ids=(str(TEST_MODEL_ID),))
+    assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
     for rank in (0, 1):
         assert (
-            request(
+            register(
                 app,
-                "POST",
                 "/instance/register",
-                json=instance_registration(
+                instance_registration(
                     model_id=str(TEST_MODEL_ID),
                     rank=rank,
                     atn_tp_size=2,
@@ -321,16 +317,12 @@ def test_daemon_rejects_atnagent_transport_arena_with_wrong_rank_device() -> Non
         }
     )
     app = create_app(config)
+    assert register(app, "/atnagent/register", atnagent_registration(device=0)).status_code == HTTPStatus.NO_CONTENT
     assert (
-        request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=0)).status_code
-        == HTTPStatus.NO_CONTENT
-    )
-    assert (
-        request(
+        register(
             app,
-            "POST",
             "/instance/register",
-            json=instance_registration(model_id=str(TEST_MODEL_ID), rank=1, atn_tp_size=2),
+            instance_registration(model_id=str(TEST_MODEL_ID), rank=1, atn_tp_size=2),
         ).status_code
         == HTTPStatus.NO_CONTENT
     )
@@ -345,18 +337,15 @@ def test_daemon_rejects_atnagent_transport_arena_with_wrong_rank_device() -> Non
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"] == {
         "kind": "conflict",
-        "message": "atnagent transport arena handle rank 1 belongs to CUDA device 1, not 0",
+        "message": "atnagent transport arena handle rank 1 belongs to device 1, not 0",
     }
 
 
 def test_daemon_rejects_duplicate_atnagent_transport_arena() -> None:
     config = synthetic_config()
     app = create_app(config)
-    assert (
-        request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=0)).status_code
-        == HTTPStatus.NO_CONTENT
-    )
-    assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/atnagent/register", atnagent_registration(device=0)).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
 
     arenas = atnagent_transport_arena_bindings(
         (str(TEST_MODEL_ID), 0),
@@ -387,17 +376,13 @@ def test_daemon_rejects_duplicate_transport_arena_handle() -> None:
         }
     )
     app = create_app(config)
-    assert (
-        request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=0)).status_code
-        == HTTPStatus.NO_CONTENT
-    )
+    assert register(app, "/atnagent/register", atnagent_registration(device=0)).status_code == HTTPStatus.NO_CONTENT
     for model_id in ("test/a", "test/b"):
         assert (
-            request(
+            register(
                 app,
-                "POST",
                 "/instance/register",
-                json=instance_registration(model_id=model_id, rank=0),
+                instance_registration(model_id=model_id, rank=0),
             ).status_code
             == HTTPStatus.NO_CONTENT
         )
@@ -422,9 +407,9 @@ def test_daemon_rejects_duplicate_transport_arena_handle() -> None:
 def test_daemon_rejects_empty_atnagent_transport_arena_upsert() -> None:
     config = synthetic_config()
     app = create_app(config)
-    atnagent = atnagent_registration(cuda_device=0)
-    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
+    atnagent = atnagent_registration(device=0)
+    assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
 
     response = request(
         app,

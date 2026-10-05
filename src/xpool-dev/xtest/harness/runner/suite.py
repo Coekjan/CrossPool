@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from xkit.gpu import GpuLease, GpuPool
+from xkit.device import DeviceLease, DevicePool
 from xkit.supervisor import (
     SupervisedTaskScope,
     TaskCompletion,
@@ -23,7 +23,6 @@ from xkit.supervisor import (
     TaskSupervisionFailure,
     drain_unprotected_subreaper_descendants,
 )
-from xpool.mps import probe_mps_controller
 from xtest.harness.report import TaskReportRecord, TestResultWriter
 from xtest.harness.runner.artifact import ArtifactGroupAdapter, ArtifactGroupRef, ArtifactGroupResult
 from xtest.harness.runner.plan import CollectedTestCase, TestPlan, TestStage
@@ -67,18 +66,18 @@ class TaskOutcome:
 
 @dataclass(slots=True)
 class RunningTask:
-    """One live supervised task and its optional GPU lease."""
+    """One live supervised task and its optional device lease."""
 
     task: ExecutionTask
     directory: Path
     scope: SupervisedTaskScope
-    lease: GpuLease | None
-    gpu_assignments: str
+    lease: DeviceLease | None
+    device_assignments: str
     started_at: float
 
 
 class SuiteRunner:
-    """Own staged scheduling, supervised scopes, GPU leases, and suite artifacts."""
+    """Own staged scheduling, supervised scopes, device leases, and suite artifacts."""
 
     def __init__(
         self,
@@ -89,7 +88,7 @@ class SuiteRunner:
         strict_requirements: bool,
         catalogue_path: Path,
         artifact_group_adapters: Sequence[ArtifactGroupAdapter] = (),
-        gpu_pool: GpuPool | None = None,
+        device_pool: DevicePool | None = None,
         result_writer: TestResultWriter | None = None,
     ) -> None:
         self.plan = plan
@@ -106,19 +105,21 @@ class SuiteRunner:
         missing_kinds = declared_kinds - self.artifact_group_adapters.keys()
         if missing_kinds:
             raise ValueError(f"artifact groups have no injected adapter: {sorted(missing_kinds)}")
-        self.gpu_pool = gpu_pool
+        self.device_pool = device_pool
         self.active: dict[str, RunningTask] = {}
         self.outcomes: dict[str, TaskOutcome] = {}
-        self.retained_leases: list[GpuLease] = []
+        self.retained_leases: list[DeviceLease] = []
         self.stop_signal: int | None = None
-        gpu_tasks = tuple(task for task in self.tasks if task.requirements.cuda_count)
-        if gpu_tasks and self.gpu_pool is None:
-            raise ValueError("GPU execution tasks require a borrowed GPU pool")
-        if self.gpu_pool is not None:
-            oversized = tuple(task.key for task in gpu_tasks if task.requirements.cuda_count > len(self.gpu_pool.uuids))
+        device_tasks = tuple(task for task in self.tasks if task.requirements.device_count)
+        if device_tasks and self.device_pool is None:
+            raise ValueError("device execution tasks require a borrowed device pool")
+        if self.device_pool is not None:
+            oversized = tuple(
+                task.key for task in device_tasks if task.requirements.device_count > len(self.device_pool.uuids)
+            )
             if oversized:
                 raise ValueError(
-                    f"execution tasks exceed the eligible GPU pool of {len(self.gpu_pool.uuids)}: {oversized}"
+                    f"execution tasks exceed the eligible device pool of {len(self.device_pool.uuids)}: {oversized}"
                 )
 
     def request_stop(self, signal_number: int, frame: object) -> None:
@@ -177,30 +178,30 @@ class SuiteRunner:
             self.result_writer.stage(stage.value, result_code)
 
     def run_stage(self, stage: TestStage) -> int:
-        """Run one admitted stage, allowing deterministic GPU backfill."""
+        """Run one admitted stage, allowing deterministic device backfill."""
 
         pending = sorted(
             (task for task in self.tasks if task.stage is stage),
-            key=lambda task: (-task.requirements.cuda_count, -task.estimated_duration_seconds, task.key),
+            key=lambda task: (-task.requirements.device_count, -task.estimated_duration_seconds, task.key),
         )
         if not pending:
             return 0
         stage_code = 0
         try:
             while pending or self.active:
+                completed = self.collect_completed_tasks()
+                stage_code = max((stage_code, *(outcome.result_code for outcome in completed)))
                 if self.stop_signal is not None:
                     self.cancel_active_tasks()
                     return stage_code
-                launched = self.launch_fitting_tasks(pending)
-                completed = self.collect_completed_tasks()
-                stage_code = max((stage_code, *(outcome.result_code for outcome in completed)))
                 if stage_code == 2:
                     self.cancel_active_tasks()
                     return 2
+                launched = self.launch_fitting_tasks(pending)
                 if not launched and not completed:
                     if not self.active:
                         raise SuiteInfrastructureFailure(
-                            f"stage {stage.value} has pending tasks that cannot fit the idle GPU pool"
+                            f"stage {stage.value} has pending tasks that cannot fit the idle device pool"
                         )
                     time.sleep(SCHEDULER_POLL_INTERVAL_SECONDS)
         except BaseException as error:
@@ -224,8 +225,11 @@ class SuiteRunner:
                 (
                     index
                     for index, task in enumerate(pending)
-                    if task.requirements.cuda_count == 0
-                    or (self.gpu_pool is not None and task.requirements.cuda_count <= self.gpu_pool.available_count)
+                    if task.requirements.device_count == 0
+                    or (
+                        self.device_pool is not None
+                        and task.requirements.device_count <= self.device_pool.available_count
+                    )
                 ),
                 None,
             )
@@ -238,10 +242,9 @@ class SuiteRunner:
     def start_task(self, task: ExecutionTask) -> None:
         """Acquire resources and atomically start one supervised pytest root."""
 
-        if task.requirements.cuda_count:
-            self.require_mps_controller(f"before task {task.key}")
-            if self.gpu_pool is None:
-                raise SuiteInfrastructureFailure(f"GPU task {task.key} has no GPU pool")
+        if task.requirements.device_count:
+            if self.device_pool is None:
+                raise SuiteInfrastructureFailure(f"device task {task.key} has no device pool")
         directory = self.run_directory / task.key
         artifact_directory = directory / "artifacts"
         temporary_directory = directory / "pytest-tmp"
@@ -249,26 +252,26 @@ class SuiteRunner:
         command = [
             sys.executable,
             "-m",
-            "pytest",
+            "xtest.harness.runner.worker",
             *(case.nodeid for case in task.cases),
             f"--xpool-test-catalog={self.catalogue_path}",
             f"--basetemp={temporary_directory}",
             f"--junitxml={directory / 'pytest.xml'}",
         ]
-        if task.requirements.cuda_count:
+        if task.requirements.device_count:
             command.append("-v")
         if self.strict_requirements:
             command.append("--strict-requirements")
         command.append(f"--xpool-task-artifact-dir={artifact_directory}")
-        lease: GpuLease | None = None
-        if task.requirements.cuda_count:
-            assert self.gpu_pool is not None
-            lease = self.gpu_pool.try_lease(task.requirements.cuda_count)
+        lease: DeviceLease | None = None
+        if task.requirements.device_count:
+            assert self.device_pool is not None
+            lease = self.device_pool.try_lease(task.requirements.device_count)
             if lease is None:
-                raise SuiteInfrastructureFailure(f"scheduler selected GPU task {task.key} without capacity")
-        gpu_assignments = (
-            ",".join(f"{self.gpu_pool.physical_index_by_uuid[uuid]}:{uuid}" for uuid in lease.uuids)
-            if lease is not None and self.gpu_pool is not None
+                raise SuiteInfrastructureFailure(f"scheduler selected device task {task.key} without capacity")
+        device_assignments = (
+            ",".join(f"{self.device_pool.physical_index_by_uuid[uuid]}:{uuid}" for uuid in lease.uuids)
+            if lease is not None and self.device_pool is not None
             else "none"
         )
         try:
@@ -283,15 +286,15 @@ class SuiteRunner:
             )
         except TaskStartFailure:
             if lease is not None:
-                assert self.gpu_pool is not None
-                self.gpu_pool.release(lease)
+                assert self.device_pool is not None
+                self.device_pool.release(lease)
             raise
         except BaseException:
             if lease is not None:
                 self.retained_leases.append(lease)
             raise
-        self.active[task.key] = RunningTask(task, directory, scope, lease, gpu_assignments, started_at)
-        logger.info("%s gpus=%s", task.key, gpu_assignments, extra={"status": "RUNNING"})
+        self.active[task.key] = RunningTask(task, directory, scope, lease, device_assignments, started_at)
+        logger.info("%s devices=%s", task.key, device_assignments, extra={"status": "RUNNING"})
 
     def collect_completed_tasks(self) -> tuple[TaskOutcome, ...]:
         """Poll every active scope and release only proven-empty task leases."""
@@ -303,8 +306,8 @@ class SuiteRunner:
                 continue
             running.scope.close()
             if running.lease is not None:
-                assert self.gpu_pool is not None
-                self.gpu_pool.release(running.lease)
+                assert self.device_pool is not None
+                self.device_pool.release(running.lease)
             report: PytestTaskReport | None = None
             if completion.kind is TaskCompletionKind.EXITED and completion.returncode in {0, 1}:
                 try:
@@ -330,9 +333,9 @@ class SuiteRunner:
             status = "PASSED" if outcome.result_code == 0 else "FAILED"
             pytest_summary = outcome.report.summary() if outcome.report is not None else "pytest-report=unavailable"
             logger.info(
-                "%s gpus=%s elapsed=%.3fs (%s, returncode=%s); %s; log=%s junit=%s",
+                "%s devices=%s elapsed=%.3fs (%s, returncode=%s); %s; log=%s junit=%s",
                 key,
-                running.gpu_assignments,
+                running.device_assignments,
                 time.monotonic() - running.started_at,
                 completion.kind.value,
                 completion.returncode,
@@ -366,8 +369,8 @@ class SuiteRunner:
                     recovered_failures.append(str(error))
                     continue
                 if running.lease is not None:
-                    assert self.gpu_pool is not None
-                    self.gpu_pool.release(running.lease)
+                    assert self.device_pool is not None
+                    self.device_pool.release(running.lease)
                 self.active.pop(running.task.key, None)
         failed_scopes = tuple(
             running.scope for running in running_tasks if running.scope.state is TaskScopeState.FAILED
@@ -387,8 +390,8 @@ class SuiteRunner:
                         terminal_failures.append(str(error))
                         continue
                     if running.lease is not None:
-                        assert self.gpu_pool is not None
-                        self.gpu_pool.release(running.lease)
+                        assert self.device_pool is not None
+                        self.device_pool.release(running.lease)
                     self.active.pop(running.task.key, None)
         try:
             drain_unprotected_subreaper_descendants()
@@ -399,20 +402,13 @@ class SuiteRunner:
         if recovered_failures:
             raise SuiteInfrastructureFailure("; ".join(recovered_failures))
 
-    def task_environment(self, lease: GpuLease | None) -> dict[str, str]:
+    def task_environment(self, lease: DeviceLease | None) -> dict[str, str]:
         """Build one task-local process environment without ownership tokens."""
 
         environment = os.environ.copy()
         environment["PYTHONPYCACHEPREFIX"] = str(self.repository_root / ".xpool-cache" / "pycache")
         environment["CUDA_VISIBLE_DEVICES"] = "" if lease is None else ",".join(lease.uuids)
         return environment
-
-    def require_mps_controller(self, context: str) -> None:
-        """Fail infrastructure-wide when the externally owned controller is unhealthy."""
-
-        result = probe_mps_controller()
-        if not result.online:
-            raise SuiteInfrastructureFailure(f"MPS is unhealthy {context}: {result.diagnostic}")
 
     def artifact_group_results(self) -> tuple[ArtifactGroupResult, ...]:
         """Classify every complete cross-task artifact group."""
@@ -468,5 +464,7 @@ class SuiteRunner:
         """Return whether every borrowed task lease was safely returned."""
 
         return (
-            not self.retained_leases and not self.active and (self.gpu_pool is None or not self.gpu_pool.active_leases)
+            not self.retained_leases
+            and not self.active
+            and (self.device_pool is None or not self.device_pool.active_leases)
         )

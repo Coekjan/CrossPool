@@ -24,6 +24,7 @@ from xkit.process import (
     PROCESS_TERMINATE_TIMEOUT_SECONDS,
     signal_process_group,
 )
+from xpool.utils.sighandler import defer_signal_exceptions
 
 PYTHON_CHILD_START_TIMEOUT_SECONDS = 30.0
 spawn_import_lock = threading.Lock()
@@ -41,27 +42,23 @@ class PythonChildFailure:
     traceback: str
 
 
-@dataclass(slots=True)
 class PythonChildProcess:
-    """Own one typed-Pipe child started with a fresh Python interpreter."""
+    """Retain one typed-Pipe child before launching its fresh interpreter.
 
-    name: str
-    process: multiprocessing.process.BaseProcess
-    connection: Connection
-    log_path: Path
-    closed: bool = False
+    Construction allocates handles. The enclosing owner calls ``start`` and
+    retains responsibility for failed startup and ordered resource retirement.
+    """
 
-    @classmethod
-    def start[T](
-        cls,
+    def __init__[T](
+        self,
         name: str,
         target: Callable[[Connection, T], None],
         spec: T,
         *,
         log_path: Path,
         import_paths: Sequence[Path] = (),
-    ) -> Self:
-        """Start a fresh child with optional caller-owned source import paths.
+    ) -> None:
+        """Allocate a child with optional caller-owned source import paths.
 
         Installed targets require no extra paths. Source-only callbacks supply
         their import roots explicitly; those paths are copied into the spawn
@@ -70,27 +67,29 @@ class PythonChildProcess:
 
         log_path.parent.mkdir(parents=True, exist_ok=True)
         context = multiprocessing.get_context("spawn")
-        parent_connection, child_connection = context.Pipe(duplex=True)
-        process = context.Process(
+        self.name = name
+        self.log_path = log_path
+        self.import_paths = tuple(import_paths)
+        self.closed = False
+        self.connection, self.child_connection = context.Pipe(duplex=True)
+        self.process: multiprocessing.process.BaseProcess = context.Process(
             name=f"xpool-test-child:{name}",
             target=run_python_child,
-            args=(child_connection, target, spec, log_path),
+            args=(self.child_connection, target, spec, log_path),
         )
-        try:
-            start_spawn_process(process, import_paths=import_paths)
-        except BaseException:
-            parent_connection.close()
-            child_connection.close()
-            raise
-        child_connection.close()
-        owned = cls(name=name, process=process, connection=parent_connection, log_path=log_path)
-        try:
-            owned.receive(PythonChildStarted, timeout_seconds=PYTHON_CHILD_START_TIMEOUT_SECONDS)
-        except BaseException:
-            cls.terminate_all((owned,))
-            owned.close()
-            raise
-        return owned
+
+    def start(self) -> None:
+        """Launch the retained process and await group/log initialization.
+
+        A failed or cancelled acknowledgement leaves the actual handles on this
+        owner. Only the short process-publication operation defers exceptions;
+        readiness waiting remains cancellable.
+        """
+
+        with defer_signal_exceptions():
+            start_spawn_process(self.process, import_paths=self.import_paths)
+            self.child_connection.close()
+        self.receive(PythonChildStarted, timeout_seconds=PYTHON_CHILD_START_TIMEOUT_SECONDS)
 
     def send(self, message: object) -> None:
         """Send one typed subsystem command to the live child."""
@@ -179,8 +178,10 @@ class PythonChildProcess:
             return
         if self.process.is_alive():
             raise RuntimeError(f"cannot close live spawned process {self.name}")
-        self.process.join(0)
+        if self.process.pid is not None:
+            self.process.join(0)
         self.connection.close()
+        self.child_connection.close()
         self.process.close()
         self.closed = True
 

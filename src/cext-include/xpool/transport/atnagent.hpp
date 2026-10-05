@@ -50,7 +50,7 @@ public:
 
   /// Allocate and register one AtnAgent-owned Transport arena.
   /// The returned CUDA IPC handle remains valid until destroy_arenas().
-  ArenaHandle create_arena(c10::DeviceIndex cuda_device, std::size_t instance_index, std::size_t instance_rank,
+  ArenaHandle create_arena(c10::DeviceIndex device, std::size_t instance_index, std::size_t instance_rank,
                            std::size_t payload_row_capacity, std::size_t hidden_size, c10::ScalarType payload_dtype,
                            std::size_t atn_tp_rank, std::size_t atn_tp_size, std::size_t atn_dp_rank,
                            std::size_t atn_dp_size);
@@ -82,7 +82,7 @@ public:
 private:
   class Resident {
   public:
-    Resident(c10::DeviceIndex cuda_device, std::span<const ArenaView> arenas, xpool::fabric::ArenaView fabric_arena);
+    Resident(c10::DeviceIndex device, std::span<const ArenaView> arenas, xpool::fabric::ArenaView fabric_arena);
     ~Resident();
 
     Resident(const Resident &) = delete;
@@ -97,7 +97,7 @@ private:
     void release();
 
   private:
-    c10::DeviceIndex cuda_device_;
+    c10::DeviceIndex device_;
     cuda::std::span<ArenaView> arenas_{};
     ResidentState *state_ = nullptr;
     xpool::utils::device::OwnedCudaStream control_stream_;
@@ -114,7 +114,7 @@ private:
   const Arena &arena(const ArenaHandle &handle) const;
 
   mutable std::mutex mutex_;
-  std::optional<c10::DeviceIndex> cuda_device_;
+  std::optional<c10::DeviceIndex> device_;
   std::map<ArenaHandle, Arena> arenas_;
   std::optional<Resident> resident_;
 };

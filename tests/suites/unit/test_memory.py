@@ -12,11 +12,10 @@ from xpool.config import XpoolConfig
 from xpool.memory import (
     FfnMemoryCalibration,
     FfnMemoryCalibrationCoefficients,
+    MemoryCalibrationDevice,
     MemoryCalibrationEnvironment,
-    MemoryCalibrationGpu,
     XpoolMemoryCalibrationProfile,
 )
-from xpool.mps import MpsProbeResult
 from xpool.native import ABI_VERSION
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
 
@@ -29,8 +28,8 @@ def profile() -> XpoolMemoryCalibrationProfile:
     return XpoolMemoryCalibrationProfile(
         environment=MemoryCalibrationEnvironment(
             native_abi_version=ABI_VERSION,
-            ffnagent_gpus=(
-                MemoryCalibrationGpu(
+            ffnagent_devices=(
+                MemoryCalibrationDevice(
                     name="NVIDIA A100-SXM4-40GB",
                     compute_capability=(8, 0),
                     total_memory_bytes=40 * 1024**3,
@@ -39,7 +38,6 @@ def profile() -> XpoolMemoryCalibrationProfile:
             ),
             cuda_driver_version=13030,
             cuda_runtime_version=13030,
-            mps_active_thread_percentage=100,
             torch_version=importlib.metadata.version("torch"),
             triton_version=importlib.metadata.version("triton"),
             sglang_version=importlib.metadata.version("sglang"),
@@ -94,11 +92,6 @@ def test_absent_profile_selects_analytic_admission_without_host_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     install_config(None)
-    monkeypatch.setattr(
-        xpool.memory,
-        "probe_mps_controller",
-        lambda: pytest.fail("absent Profile must not probe Host compatibility"),
-    )
 
     assert xpool.memory.load_memory_calibration_profile() is None
 
@@ -111,11 +104,6 @@ def test_load_accepts_matching_host_and_config_profile(
     path.write_text(profile().model_dump_json(), encoding="utf-8")
     install_config(path)
     monkeypatch.setattr(xpool.memory, "cuda_versions", lambda: (13030, 13030))
-    monkeypatch.setattr(
-        xpool.memory,
-        "probe_mps_controller",
-        lambda: MpsProbeResult(True, 100, "online"),
-    )
 
     assert xpool.memory.load_memory_calibration_profile() == profile()
 
@@ -129,11 +117,6 @@ def test_configured_incompatible_profile_fails_without_fallback(
     path.write_text(incompatible.model_dump_json(), encoding="utf-8")
     install_config(path)
     monkeypatch.setattr(xpool.memory, "cuda_versions", lambda: (13030, 13030))
-    monkeypatch.setattr(
-        xpool.memory,
-        "probe_mps_controller",
-        lambda: MpsProbeResult(True, 100, "online"),
-    )
 
     with pytest.raises(RuntimeError, match="Executor Lane count"):
         xpool.memory.load_memory_calibration_profile()

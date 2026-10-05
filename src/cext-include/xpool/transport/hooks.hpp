@@ -39,8 +39,8 @@ enum class TransportProtocolEventKind : std::uint32_t {
 struct TransportEndpointOpenPostEvent final : HostObservePoint {
   /// Open endpoint metadata exposed to Host observers.
   struct Context {
-    /// CUDA device that owns the endpoint.
-    c10::DeviceIndex cuda_device;
+    /// device that owns the endpoint.
+    c10::DeviceIndex device;
     /// Process-local Transport arena.
     xpool::transport::ArenaView arena;
     /// Layout paired with the arena.
@@ -57,8 +57,8 @@ struct TransportEndpointOpenPostEvent final : HostObservePoint {
 struct TransportEndpointClosePreEvent final : HostObservePoint {
   /// Closing endpoint metadata exposed to Host observers.
   struct Context {
-    /// CUDA device that owns the endpoint.
-    c10::DeviceIndex cuda_device;
+    /// device that owns the endpoint.
+    c10::DeviceIndex device;
     /// Process-local Transport arena.
     xpool::transport::ArenaView arena;
     /// Layout paired with the arena.

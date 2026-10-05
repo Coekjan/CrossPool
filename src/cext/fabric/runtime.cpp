@@ -43,14 +43,14 @@ Uid create_uid() {
   return uid;
 }
 
-void Runtime::join(c10::DeviceIndex cuda_device, const ArenaProjection &projection, int pe) {
-  TORCH_CHECK(cuda_device >= 0, "xpool Fabric join requires a non-negative CUDA device");
+void Runtime::join(c10::DeviceIndex device, const ArenaProjection &projection, int pe) {
+  TORCH_CHECK(device >= 0, "xpool Fabric join requires a non-negative device");
   TORCH_CHECK(pe >= 0 && static_cast<std::size_t>(pe) < projection.pe_count(),
               "xpool Fabric join PE index is out of range");
 
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(phase_ == Phase::Empty, "xpool Fabric join requires an empty process runtime");
-  const auto device_guard = c10::cuda::CUDAGuard{cuda_device};
+  const auto device_guard = c10::cuda::CUDAGuard{device};
   try {
     // Phase: Materialize Layout - Project immutable Instance and Layer
     // topology into the typed tables and maximum storage geometry.
@@ -140,14 +140,14 @@ void Runtime::join(c10::DeviceIndex cuda_device, const ArenaProjection &projecti
 
     // Phase: Commit Runtime State - Publish Joined only after every resource is
     // complete, so an exception leaves no partially joined runtime visible.
-    cuda_device_ = cuda_device;
+    device_ = device;
     projection_ = projection;
     pe_ = pe;
     arena_ = std::move(arena);
     module_registration_ = std::move(module_registration);
     phase_ = Phase::Joined;
     xpool::hooks::FabricJoinPostEvent::hooks(
-        {.cuda_device = cuda_device, .pe = pe, .layout = arena_.layout(), .projection = *projection_});
+        {.device = device, .pe = pe, .layout = arena_.layout(), .projection = *projection_});
   } catch (...) {
     phase_ = Phase::Closed;
     throw;
@@ -159,7 +159,7 @@ void Runtime::install_ffnagent_execution(const xpool::ffnagent::ExecutionProject
   TORCH_CHECK(phase_ == Phase::Joined, "xpool FFN execution install requires a joined process runtime");
   TORCH_CHECK(static_cast<std::size_t>(*pe_) >= projection_->atnagent_count,
               "xpool FFN execution install is valid only for an FfnAgent PE");
-  const auto device_guard = c10::cuda::CUDAGuard{*cuda_device_};
+  const auto device_guard = c10::cuda::CUDAGuard{*device_};
   if (!ffnagent_control_) {
     ffnagent_control_ = FfnAgentControl::create(*pe_ == projection_->coordinator_pe(), projection_->scheduler,
                                                 projection_->instances.size(), projection_->executor_lane_count);
@@ -176,7 +176,7 @@ void Runtime::activate_ffnagent() {
               "xpool Fabric activate is valid only for an FfnAgent PE");
   TORCH_CHECK(!resident_stream_, "xpool FfnAgent Resident is already active");
 
-  const auto device_guard = c10::cuda::CUDAGuard{*cuda_device_};
+  const auto device_guard = c10::cuda::CUDAGuard{*device_};
   const auto is_coordinator = *pe_ == projection_->coordinator_pe();
   TORCH_CHECK(ffnagent_control_ && ffn_execution_runtime_.installed(),
               "xpool FfnAgent activation requires installed execution");
@@ -223,7 +223,7 @@ void Runtime::check_ffnagent_health() const {
   TORCH_CHECK(phase_ == Phase::Joined, "xpool Fabric health requires a joined process runtime");
   TORCH_CHECK(static_cast<std::size_t>(*pe_) >= projection_->atnagent_count,
               "xpool FfnAgent health is valid only for an FfnAgent PE");
-  const auto device_guard = c10::cuda::CUDAGuard{*cuda_device_};
+  const auto device_guard = c10::cuda::CUDAGuard{*device_};
   const auto state = arena_.state();
   if (state.failure.publication == 1) {
     return;
@@ -246,7 +246,7 @@ void Runtime::drain_async() {
     return;
   }
   TORCH_CHECK(phase_ == Phase::Joined, "xpool Fabric drain requires a joined process runtime");
-  const auto device_guard = c10::cuda::CUDAGuard{*cuda_device_};
+  const auto device_guard = c10::cuda::CUDAGuard{*device_};
   // Shutdown publication is asynchronous so the Python control plane can keep
   // reporting progress while all PEs cooperatively retire their residents.
   arena_.request_shutdown(drain_stream_);
@@ -259,7 +259,7 @@ bool Runtime::drain_pending() {
     return false;
   }
   TORCH_CHECK(phase_ == Phase::Draining, "xpool Fabric drain has not been started");
-  const auto device_guard = c10::cuda::CUDAGuard{*cuda_device_};
+  const auto device_guard = c10::cuda::CUDAGuard{*device_};
   if (!drain_stream_.query() || (resident_stream_ && !resident_stream_.query()) ||
       (ffn_execution_runtime_.installed() && ffn_execution_runtime_.drain_pending())) {
     return true;
@@ -276,7 +276,7 @@ std::optional<FailurePayload> Runtime::failure() const {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(phase_ == Phase::Joined || phase_ == Phase::Draining || phase_ == Phase::Drained,
               "xpool Fabric failure is unavailable outside a joined generation");
-  const auto device_guard = c10::cuda::CUDAGuard{*cuda_device_};
+  const auto device_guard = c10::cuda::CUDAGuard{*device_};
   const auto state = arena_.state();
   if (state.failure.publication == 0) {
     return std::nullopt;
@@ -301,19 +301,19 @@ void Runtime::finalize() {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(phase_ == Phase::Drained, "xpool Fabric finalize requires completed local drain");
   phase_ = Phase::Closed;
-  const auto device_guard = c10::cuda::CUDAGuard{*cuda_device_};
+  const auto device_guard = c10::cuda::CUDAGuard{*device_};
   // Teardown order is contractual: release symmetric allocations while
   // NVSHMEM and its CUDA module remain live, unregister the module, then
   // finalize the participant-local host library.
   if (ffn_execution_runtime_.installed()) {
     ffn_execution_runtime_.finalize();
   }
-  xpool::hooks::FabricFinalizePreEvent::hooks({.cuda_device = *cuda_device_});
+  xpool::hooks::FabricFinalizePreEvent::hooks({.device = *device_});
   ffnagent_control_.destroy();
   arena_.destroy();
   module_registration_.destroy();
   nvshmemx_hostlib_finalize();
-  cuda_device_.reset();
+  device_.reset();
   projection_.reset();
   pe_.reset();
 }

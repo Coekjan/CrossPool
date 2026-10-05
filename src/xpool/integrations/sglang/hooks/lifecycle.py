@@ -48,6 +48,8 @@ from xpool.native import RuntimeRole
 from xpool.runtime.instance import InstanceRankRuntime
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.wire import ServingListener
+from xpool.utils.device import visible_uuids
+from xpool.utils.mps import MpsEndpoint
 
 MODEL_RUNNER_LOAD_MODEL = "sglang.srt.model_executor.model_runner.ModelRunner.load_model"
 MODEL_RUNNER_ALLOC_MEMORY_POOL = "sglang.srt.model_executor.model_runner.ModelRunner.alloc_memory_pool"
@@ -170,7 +172,9 @@ def around_model_runner_load_model[**P, R](
         supports_dp_attention=adapter.supports_dp_attention,
     )
     binding.validate_server_args()
-    bootstrap.init(int(binding.cuda_device), RuntimeRole.INSTANCE)
+    visibility = visible_uuids()
+    MpsEndpoint(tuple(visibility[index] for index in get_global_config().atn.devices)).require_client()
+    bootstrap.init(binding.worker_rank, RuntimeRole.INSTANCE)
     devkit.install()
     devkit.install(SGLANG_DEVKIT_PACKAGE)
     adapter.validate_before_load(model_runner)
@@ -180,7 +184,7 @@ def around_model_runner_load_model[**P, R](
         "bound instance=%s rank=%s device=%s pid=%s",
         binding.model_id,
         binding.worker_rank,
-        binding.cuda_device,
+        binding.device,
         os.getpid(),
     )
     try:
@@ -235,7 +239,7 @@ def after_model_runner_alloc_memory_pool[R](
         request_pool = model_runner.req_to_token_pool
         if not isinstance(request_pool, ReqToTokenPool):
             raise RuntimeError("xpool SGLang request pool is unavailable after memory-pool allocation")
-        device_total_bytes = torch.cuda.get_device_properties(binding.cuda_device).total_memory
+        device_total_bytes = torch.cuda.get_device_properties(binding.worker_rank).total_memory
         atn_runtime_headroom_bytes = int(device_total_bytes * (1 - model_runner.mem_fraction_static))
         decode_graph = get_exec().graph.cuda_graph_config.decode
         if (
@@ -278,7 +282,7 @@ def after_model_runner_alloc_memory_pool[R](
             "transport arena attached instance=%s rank=%s device=%s pid=%s",
             binding.model_id,
             binding.worker_rank,
-            binding.cuda_device,
+            binding.device,
             os.getpid(),
         )
         runtime.instance_rank.start_failure_monitor()
@@ -324,7 +328,7 @@ def after_scheduler_get_init_info[R](
         "ready instance=%s rank=%s device=%s pid=%s generation=%s",
         binding.model_id,
         binding.worker_rank,
-        binding.cuda_device,
+        binding.device,
         os.getpid(),
         runtime.instance_rank.fabric_plan.generation.format()
         if runtime.instance_rank.fabric_plan is not None
@@ -337,17 +341,17 @@ def around_scheduler_release_host_resources[R](
     original_fn: Callable[[Scheduler], R],
     scheduler: Scheduler,
 ) -> R:
-    """Release runner-owned CrossPool resources after graceful SGLang teardown."""
+    """Detach only after engine release and local device synchronization succeed.
+
+    A failed release or synchronization retains the runner attachment so the
+    deployment cannot mistake uncertain local cleanup for normal retirement.
+    """
 
     model_runner = scheduler.tp_worker.model_runner
     runtime = SglangInstanceRankRuntime.require(model_runner)
-    try:
-        return original_fn(scheduler)
-    finally:
-        try:
-            torch.cuda.synchronize(model_runner.device)
-        finally:
-            runtime.detach(model_runner)
+    result = original_fn(scheduler)
+    runtime.detach(model_runner)
+    return result
 
 
 def derive_instance_ffn_profile(

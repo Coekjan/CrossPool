@@ -49,7 +49,7 @@ def test_instance_register_rejects_unknown_instance() -> None:
         )
 
 
-def test_instance_register_publishes_proc_uniq_id(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_instance_register_publishes_runtime_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     config = runtime_config()
     registrations: list[InstanceRankRegistration] = []
 
@@ -73,7 +73,6 @@ def test_instance_register_publishes_proc_uniq_id(monkeypatch: pytest.MonkeyPatc
     assert isinstance(payload["pid"], int)
     assert payload["transport"] == transport_attributes().model_dump(mode="json")
     assert payload["atn_runtime_headroom_bytes"] == 1024
-    assert "create_time" not in payload
 
 
 def test_instance_deregister_keeps_registration_when_runtime_clear_fails(
@@ -89,9 +88,23 @@ def test_instance_deregister_keeps_registration_when_runtime_clear_fails(
         detach=fail_clear,
     )
     instance = runtime_instance(config, monkeypatch)
-    instance.arena_handle = transport_arena()
+    registration = InstanceRankRegistration(
+        model_id=TEST_MODEL_ID,
+        rank=0,
+        abi_version=ABI_VERSION,
+        pid=instance.process_ref.pid,
+        transport=transport_attributes(),
+        ffn_profile=ffn_profile(),
+        kv_capacity=kv_capacity_profile(),
+        atn_runtime_headroom_bytes=0,
+    )
+    arena_handle = transport_arena()
+    instance.registration = registration
+    instance.arena_handle = arena_handle
     with pytest.raises(RuntimeError, match="runtime is still busy"):
         instance.deregister_runtime()
+    assert instance.registration is registration
+    assert instance.arena_handle is arena_handle
 
 
 def test_instance_deregister_detaches_before_publishing_departure(
@@ -200,7 +213,7 @@ def test_instance_waits_through_every_fabric_startup_phase(monkeypatch: pytest.M
             transport_ready=False,
             instances_initialized=False,
             mps_status=ReadinessStatus.ONLINE,
-            cuda_devices=(0, 1),
+            devices=(0, 1),
             atnagents=[],
             ffnagents=[],
             instances=[],

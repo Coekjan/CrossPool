@@ -16,6 +16,18 @@ Use `KV Cache` or `KV` in documentation, comments, and docstrings. Keep the
 phrase as two title-cased words; never hyphenate it or lowercase its second
 word. Executable identifiers may use `kv_cache` or `kv`.
 
+**Device**:
+A physical AI accelerator used for CrossPool computation, distinct from the
+process-local index used to address it. Platform-specific APIs and mechanisms
+retain their precise technical names.
+_Avoid_: GPU or CUDA device when referring to the platform-neutral domain concept
+
+**Deployment Device View**:
+The ordered physical Devices selected for one deployment. Configured Device
+indices identify positions in this view, distinct from host inventory indices
+and logical role ranks.
+_Avoid_: Host device numbering, Instance Rank order
+
 **Instance**:
 A configured model-serving deployment whose workers share the deployed model's
 Model ID and one Fabric Instance Plan.
@@ -105,19 +117,19 @@ _Avoid_: Shared KV Cache, KV Cache content sharing
 
 **KV Capacity Pool**:
 The physical-memory capacity available for KV mappings across the Instance
-Ranks colocated on one attention GPU.
+Ranks colocated on one attention device.
 _Avoid_: Global KV Cache, KV tensor pool
 
 **Attention Runtime Headroom**:
 One Instance Rank's immutable byte budget for service-time attention memory
-kept outside its attention GPU's KV Capacity Pool. The daemon sums these
-declarations per GPU. It is distinct from the configured utilization margin
+kept outside its attention device's KV Capacity Pool. The daemon sums these
+declarations per device. It is distinct from the configured utilization margin
 and the one-time device-memory observation.
 _Avoid_: KV margin, live memory usage, free-memory report
 
 **KV Control Channel**:
 The daemon-owned, Fabric-Generation-scoped host-local control surface that
-connects per-GPU KV Capacity Pools, logical KV Capacity Groups, and their
+connects per-device KV Capacity Pools, logical KV Capacity Groups, and their
 rank-local partitions. It carries capacity demand, adjustment commands, group
 coordination, and physical completion observations.
 _Avoid_: KV Capacity Channel, AtnAgent channel, TP-group channel, KV data channel
@@ -171,7 +183,7 @@ _Avoid_: VMM manager, elastic KV pool
 **KV Capacity Reconciliation**:
 The Instance-Rank-local convergence of a KV Capacity Target and KV Active
 Capacity to actual KV VMM Backing while preserving logical allocation and
-in-flight GPU access.
+in-flight device access.
 _Avoid_: KV resize, capacity application, VMM policy
 
 **FFN Execution Installation**:

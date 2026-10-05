@@ -262,10 +262,8 @@ def build_fabric_plan(
     return FabricPlan(
         generation=FabricGenerationId.create(),
         uid=FabricUid(uid),
-        pe_placements=tuple(
-            FabricPePlacement(role=FabricRole.ATNAGENT, cuda_device=device) for device in config.atn.devices
-        )
-        + tuple(FabricPePlacement(role=FabricRole.FFNAGENT, cuda_device=device) for device in config.ffn.devices),
+        pe_placements=tuple(FabricPePlacement(role=FabricRole.ATNAGENT, device=device) for device in config.atn.devices)
+        + tuple(FabricPePlacement(role=FabricRole.FFNAGENT, device=device) for device in config.ffn.devices),
         executor_lane_count=config.scheduler.ffn_concurrency,
         scheduler=FifoSchedulerPolicy(),
         model_plans=model_plans,

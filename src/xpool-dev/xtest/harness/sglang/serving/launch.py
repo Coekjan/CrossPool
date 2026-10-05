@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from types import MappingProxyType
 
-import xkit.gpu
+import xkit.device
 from xkit.config import assemble_config
 from xkit.serving.sglang.graph import SglangGraphMode, SglangGraphSettings
 from xkit.serving.sglang.launch import ServingLaunch, SglangLaunchModel
@@ -46,14 +46,14 @@ def prepare(
     atn_overrides: dict[str, object] = {}
     if case.elastic_kv is not None:
         atn_devices = scene.atn.devices
-        visible_memory = xkit.gpu.query_visible_gpu_total_memory_bytes()
+        visible_memory = xkit.device.query_visible_device_total_memory_bytes()
         atn_memory = tuple(visible_memory[device] for device in atn_devices if device < len(visible_memory))
         if len(atn_memory) != case.atnagent_count:
             raise ValueError(
-                f"E2E elastic KV case requires {case.atnagent_count} visible Attention GPUs, got {len(atn_memory)}"
+                f"E2E elastic KV case requires {case.atnagent_count} visible attention devices, got {len(atn_memory)}"
             )
         if len(set(atn_memory)) != 1:
-            raise ValueError("E2E elastic KV case requires Attention GPUs with equal total memory")
+            raise ValueError("E2E elastic KV case requires attention devices with equal total memory")
         utilization = base_config.config.atn.device_memory_utilization
         if "device_memory_utilization" in scene.atn.model_fields_set:
             utilization = scene.atn.device_memory_utilization

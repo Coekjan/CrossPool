@@ -19,7 +19,7 @@ from xtest.harness.support.native.fabric import assert_fabric_report
 pytestmark = pytest.mark.timeout(180)
 
 
-@xtest.requirements(cuda_count=2, requires_mps=True)
+@xtest.requirements(device_count=2)
 def test_pre_admission_rejection_preserves_attached_generation(tmp_path: Path) -> None:
     """Reject Arena-incompatible metadata before a following valid request."""
 
@@ -59,7 +59,7 @@ def repetition_bytes(values: tuple[float, ...], repetition_count: int, payload_d
     "layer_kind",
     [pytest.param(LayerKind.DENSE, id="dense"), pytest.param(LayerKind.MOE, id="moe")],
 )
-@xtest.requirements(cuda_count=2, requires_mps=True)
+@xtest.requirements(device_count=2)
 def test_execution_uses_installed_lane_graph(layer_kind: LayerKind, tmp_path: Path) -> None:
     """Run deterministic Dense and MoE requests through installed production execution."""
 
@@ -96,7 +96,7 @@ def test_execution_uses_installed_lane_graph(layer_kind: LayerKind, tmp_path: Pa
         assert ffnagent.routing is None
 
 
-@xtest.requirements(cuda_count=2, requires_mps=True)
+@xtest.requirements(device_count=2)
 def test_idle_executor_lane_remains_stable_during_repeated_execution(tmp_path: Path) -> None:
     """Keep one Lane idle while another completes repeated production Graph execution."""
 
@@ -122,7 +122,7 @@ def test_idle_executor_lane_remains_stable_during_repeated_execution(tmp_path: P
     assert {record.executor_lane_index for record in records} == {0}
 
 
-@xtest.requirements(cuda_count=3, requires_mps=True)
+@xtest.requirements(device_count=3)
 def test_moe_tp2_installs_router_owner_and_nonrouter_graphs(tmp_path: Path) -> None:
     """Execute one true-TP MoE request across both Primary Graph roles."""
 
@@ -152,7 +152,7 @@ def test_moe_tp2_installs_router_owner_and_nonrouter_graphs(tmp_path: Path) -> N
     assert nonrouter.routing.records == ()
 
 
-@xtest.requirements(cuda_count=2, requires_mps=True)
+@xtest.requirements(device_count=2)
 def test_fp16_tp1_uses_installed_lane_graph(tmp_path: Path) -> None:
     """Execute one FP16 request through installed production execution."""
 
@@ -175,7 +175,7 @@ def test_fp16_tp1_uses_installed_lane_graph(tmp_path: Path) -> None:
     assert ffnagent.graph_snapshot.primary_graph_binding_site_counts
 
 
-@xtest.requirements(cuda_count=3, requires_mps=True)
+@xtest.requirements(device_count=3)
 def test_fp16_tp2_delivers_complete_output(tmp_path: Path) -> None:
     """Execute and deliver one complete FP16 true-TP result."""
 
@@ -204,7 +204,7 @@ def test_fp16_tp2_delivers_complete_output(tmp_path: Path) -> None:
     assert deliveries == {xpool.native.fabric.DeliveryVariant.SINGLE_COMPLETE}
 
 
-@xtest.requirements(cuda_count=3, requires_mps=True)
+@xtest.requirements(device_count=3)
 def test_unselected_ffnagent_installs_empty_lane_root(tmp_path: Path) -> None:
     """Keep joined FfnAgents outside a Layer Execution Group drainable and silent."""
 
@@ -232,7 +232,7 @@ def test_unselected_ffnagent_installs_empty_lane_root(tmp_path: Path) -> None:
     assert unselected.lane_compute_branch_counts == (0,)
 
 
-@xtest.requirements(cuda_count=6, requires_mps=True)
+@xtest.requirements(device_count=6)
 @pytest.mark.parametrize(
     (
         "output_requirement",
@@ -349,7 +349,7 @@ def test_execution_reuses_1000_leases_across_delivery_shapes(
     "layer_kind",
     [pytest.param(LayerKind.DENSE, id="dense"), pytest.param(LayerKind.MOE, id="moe")],
 )
-@xtest.requirements(cuda_count=2, requires_mps=True)
+@xtest.requirements(device_count=2)
 def test_execution_rebinds_two_layers_a_b_a(layer_kind: LayerKind, tmp_path: Path) -> None:
     """Execute distinct same-Signature weight bindings in A-B-A order."""
 
@@ -396,7 +396,7 @@ def test_execution_rebinds_two_layers_a_b_a(layer_kind: LayerKind, tmp_path: Pat
     "layer_kind",
     [pytest.param(LayerKind.DENSE, id="dense"), pytest.param(LayerKind.MOE, id="moe")],
 )
-@xtest.requirements(cuda_count=2, requires_mps=True)
+@xtest.requirements(device_count=2)
 def test_execution_selects_smallest_compatible_capacity(layer_kind: LayerKind, tmp_path: Path) -> None:
     """Exercise both ends of two Capacity-selection intervals on both lanes."""
 

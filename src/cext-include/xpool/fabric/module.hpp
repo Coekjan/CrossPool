@@ -10,7 +10,7 @@
 
 namespace xpool::fabric {
 
-/// Process-local registration of CrossPool Fabric CUDA device code with NVSHMEM.
+/// Process-local registration of CrossPool Fabric device code with NVSHMEM.
 class ModuleRegistration {
 public:
   /// Construct an empty module registration.

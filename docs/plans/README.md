@@ -77,7 +77,7 @@ and a production monitoring service are outside this workstream.
 ## Live KV Cache Observability
 
 - **Class:** Platform Capability.
-- **Outcome:** Provide `xpool top` to show live KV Cache occupancy by GPU and
+- **Outcome:** Provide `xpool top` to show live KV Cache occupancy by device and
   model, with pool totals and each model's share clearly distinguished.
 - **Current seam:** Generation-scoped KV capacity accounting and the KV Control
   Channel already track physical pool budgets and partition capacity.
@@ -162,13 +162,13 @@ integration demonstrates a shared seam.
 - **Current seam:** The symmetric NVSHMEM Fabric, fixed PE world, Device-side
   publication protocol, and canonical generation failure.
 - **Requires:** A real two-host NVSHMEM/IBGDA prototype plus accepted host
-  identity, NIC/GPU topology, bootstrap, placement, lifecycle, failure, and
+  identity, NIC/device topology, bootstrap, placement, lifecycle, failure, and
   shutdown contracts.
 - **Benefits from:** Unified Timeline Observability and the existing Fabric
   protocol.
 
 Research must verify publication ordering and Graph replay over the remote
-transport, compare GPU-initiated and CPU-proxy behavior, measure NIC/QP and
+transport, compare device-initiated and CPU-proxy behavior, measure NIC/QP and
 completion costs, and determine whether generation-wide fail-stop remains the
 correct failure model. Candidate deliverables are environment qualification,
 raw two-host prototype evidence, a host-aware control-plane design, and an

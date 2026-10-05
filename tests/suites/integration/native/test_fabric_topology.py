@@ -30,7 +30,7 @@ def assert_exclusive_executor_leases(records: tuple[FabricCoordinatorTrace, ...]
             assert previous.lane_released_ns <= current.scheduled_ns
 
 
-@xtest.requirements(cuda_count=4, requires_mps=True)
+@xtest.requirements(device_count=4)
 def test_fabric_topology_executes_mixed_requests_with_exclusive_two_lane_leases(tmp_path: Path) -> None:
     """Exercise concurrent mixed requests in the largest component topology."""
 
@@ -56,7 +56,7 @@ def test_fabric_topology_executes_mixed_requests_with_exclusive_two_lane_leases(
     assert_exclusive_executor_leases(coordinator)
 
 
-@xtest.requirements(cuda_count=4, requires_mps=True)
+@xtest.requirements(device_count=4)
 def test_fabric_topology_quiesces_mixed_two_lane_requests_before_native_drain(tmp_path: Path) -> None:
     """Finish admitted mixed requests before native Fabric drain."""
 

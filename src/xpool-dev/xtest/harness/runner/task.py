@@ -51,19 +51,19 @@ def compile_execution_tasks(plan: TestPlan) -> tuple[ExecutionTask, ...]:
         tasks.append(build_task("unit", unit_cases))
 
     integration_cases = tuple(case for case in plan.cases if case.stage is TestStage.INTEGRATION)
-    integration_cpu_cases = tuple(case for case in integration_cases if case.requirements.cuda_count == 0)
+    integration_cpu_cases = tuple(case for case in integration_cases if case.requirements.device_count == 0)
     if integration_cpu_cases:
         tasks.append(build_task("integration-cpu", integration_cpu_cases))
 
-    integration_gpu_groups: dict[tuple[str, ResourceRequirements], list[CollectedTestCase]] = defaultdict(list)
+    integration_device_groups: dict[tuple[str, ResourceRequirements], list[CollectedTestCase]] = defaultdict(list)
     for case in integration_cases:
-        if case.requirements.cuda_count:
-            integration_gpu_groups[(case.path, case.requirements)].append(case)
+        if case.requirements.device_count:
+            integration_device_groups[(case.path, case.requirements)].append(case)
     for (path, requirements), cases in sorted(
-        integration_gpu_groups.items(), key=lambda item: (item[0][0], requirements_identity(item[0][1]))
+        integration_device_groups.items(), key=lambda item: (item[0][0], requirements_identity(item[0][1]))
     ):
         identity = f"{path}\0{requirements_identity(requirements)}"
-        tasks.append(build_task(task_key("integration-gpu", path, identity), tuple(cases)))
+        tasks.append(build_task(task_key("integration-device", path, identity), tuple(cases)))
 
     for case in plan.cases:
         if case.stage in {TestStage.E2E, TestStage.MODELS}:
@@ -96,8 +96,7 @@ def merge_requirements(cases: Iterable[CollectedTestCase]) -> ResourceRequiremen
         raise ValueError("cannot merge requirements for an empty case set")
     model_ids = tuple(dict.fromkeys(model_id for case in materialized for model_id in case.requirements.model_ids))
     return ResourceRequirements(
-        cuda_count=max(case.requirements.cuda_count for case in materialized),
-        requires_mps=any(case.requirements.requires_mps for case in materialized),
+        device_count=max(case.requirements.device_count for case in materialized),
         requires_config=any(case.requirements.requires_config for case in materialized),
         model_ids=model_ids,
     )

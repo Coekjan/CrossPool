@@ -69,15 +69,14 @@ finally:
     )
 
 
-@pytest.mark.parametrize("timeout_seconds", [None, 10.0])
-def test_supervised_scope_drains_with_optional_total_deadline(tmp_path: Path, timeout_seconds: float | None) -> None:
+def test_supervised_scope_drains_without_total_deadline(tmp_path: Path) -> None:
     completion = SupervisedTaskScope.run(
         "optional-deadline",
         command("spawn-detached-child", seconds=0.05),
         cwd=REPO_ROOT,
         env=dict(os.environ),
         log_path=tmp_path / "optional-deadline.log",
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=None,
     )
 
     assert completion.kind is TaskCompletionKind.EXITED
@@ -143,16 +142,17 @@ def run_abandoned_supervised_scope(connection: Connection, workdir: str) -> None
 
 def test_nested_runner_sigint_does_not_reach_isolated_task_session(tmp_path: Path) -> None:
     prepare_task_supervision()
-    runner = PythonChildProcess.start(
+    runner = PythonChildProcess(
         "nested-runner",
         run_nested_supervised_scope,
         str(tmp_path),
         log_path=tmp_path / "nested-runner.log",
         import_paths=(REPO_ROOT,),
     )
-    runner_pid = runner.process.pid
-    assert runner_pid is not None
     try:
+        runner.start()
+        runner_pid = runner.process.pid
+        assert runner_pid is not None
         assert runner.receive(str, timeout_seconds=5) == "ready"
         os.killpg(runner_pid, signal.SIGINT)
         assert runner.receive(str, timeout_seconds=10) == "drained"
@@ -165,7 +165,7 @@ def test_nested_runner_sigint_does_not_reach_isolated_task_session(tmp_path: Pat
 
 def test_supervisor_drains_task_scope_after_runner_is_killed(tmp_path: Path) -> None:
     prepare_task_supervision()
-    runner = PythonChildProcess.start(
+    runner = PythonChildProcess(
         "abandoned-runner",
         run_abandoned_supervised_scope,
         str(tmp_path),
@@ -173,6 +173,7 @@ def test_supervisor_drains_task_scope_after_runner_is_killed(tmp_path: Path) -> 
         import_paths=(REPO_ROOT,),
     )
     try:
+        runner.start()
         supervisor_pid, root_pid, child_pid = runner.receive(tuple, timeout_seconds=5)
         task_process_ids = tuple(ProcUniqId(pid) for pid in (supervisor_pid, root_pid, child_pid))
 

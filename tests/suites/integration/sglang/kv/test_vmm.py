@@ -153,7 +153,7 @@ def test_partial_bundle_mapping_retains_actual_progress_for_close(monkeypatch: p
     assert freed == [(4096, 4096)]
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_mha_pool_preserves_views_across_reversible_bundle_mapping() -> None:
     pool = ElasticMHATokenToKVPool(2048, 1, torch.float16, 8, 64, 2, "cuda", False)
     try:
@@ -187,7 +187,7 @@ def test_mha_pool_preserves_views_across_reversible_bundle_mapping() -> None:
         pool.close()
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 @pytest.mark.usefixtures(published_sglang_config.__name__)
 def test_mla_pool_writes_compound_strided_views() -> None:
     pool = ElasticMLATokenToKVPool(2048, 1, torch.float16, 512, 64, 2, "cuda", False)

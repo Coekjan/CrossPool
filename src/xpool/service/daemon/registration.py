@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import psutil
 
 from xpool import ffn
-from xpool.fabric import InstanceFfnProfile
+from xpool.fabric import FabricRole, InstanceFfnProfile
 from xpool.model import ModelId
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.errors import XpoolDaemonError
@@ -161,22 +161,22 @@ class InstanceRankRegistrationState(CommonRegistration):
 class AtnAgentRegistrationState(CommonRegistration):
     """One live AtnAgent registration."""
 
-    __slots__ = ("abi_version", "cuda_device")
+    __slots__ = ("abi_version", "device")
 
     abi_version: int
-    cuda_device: int
+    device: int
 
-    def __init__(self, *, cuda_device: int, abi_version: int, pid: int, now: float) -> None:
+    def __init__(self, *, device: int, abi_version: int, pid: int, now: float) -> None:
         """Create one AtnAgent registration."""
 
         super().__init__(pid, now=now)
         self.abi_version = abi_version
-        self.cuda_device = cuda_device
+        self.device = device
 
     def key(self) -> int:
-        """Return the owned CUDA device."""
+        """Return the owned device."""
 
-        return self.cuda_device
+        return self.device
 
     def conflicts_with(self, candidate: CommonRegistration) -> bool:
         """Return whether owner, device, or ABI differs."""
@@ -185,7 +185,7 @@ class AtnAgentRegistrationState(CommonRegistration):
             raise TypeError(f"expected AtnAgentRegistrationState, got {type(candidate).__name__}")
         return (
             super().conflicts_with(candidate)
-            or self.cuda_device != candidate.cuda_device
+            or self.device != candidate.device
             or self.abi_version != candidate.abi_version
         )
 
@@ -195,22 +195,22 @@ class FfnAgentRegistrationState(CommonRegistration):
 
     __slots__ = (
         "abi_version",
-        "cuda_device",
-        "cuda_free_memory_bytes",
-        "cuda_total_memory_bytes",
+        "device",
+        "device_free_memory_bytes",
+        "device_total_memory_bytes",
     )
 
     abi_version: int
-    cuda_device: int
-    cuda_total_memory_bytes: int
-    cuda_free_memory_bytes: int
+    device: int
+    device_total_memory_bytes: int
+    device_free_memory_bytes: int
 
     def __init__(
         self,
         *,
-        cuda_device: int,
-        cuda_total_memory_bytes: int,
-        cuda_free_memory_bytes: int,
+        device: int,
+        device_total_memory_bytes: int,
+        device_free_memory_bytes: int,
         abi_version: int,
         pid: int,
         now: float,
@@ -219,14 +219,14 @@ class FfnAgentRegistrationState(CommonRegistration):
 
         super().__init__(pid, now=now)
         self.abi_version = abi_version
-        self.cuda_device = cuda_device
-        self.cuda_total_memory_bytes = cuda_total_memory_bytes
-        self.cuda_free_memory_bytes = cuda_free_memory_bytes
+        self.device = device
+        self.device_total_memory_bytes = device_total_memory_bytes
+        self.device_free_memory_bytes = device_free_memory_bytes
 
     def key(self) -> int:
-        """Return the owned CUDA device."""
+        """Return the owned device."""
 
-        return self.cuda_device
+        return self.device
 
     def conflicts_with(self, candidate: CommonRegistration) -> bool:
         """Return whether owner, device, or ABI differs."""
@@ -235,10 +235,10 @@ class FfnAgentRegistrationState(CommonRegistration):
             raise TypeError(f"expected FfnAgentRegistrationState, got {type(candidate).__name__}")
         return (
             super().conflicts_with(candidate)
-            or self.cuda_device != candidate.cuda_device
+            or self.device != candidate.device
             or self.abi_version != candidate.abi_version
-            or self.cuda_total_memory_bytes != candidate.cuda_total_memory_bytes
-            or self.cuda_free_memory_bytes != candidate.cuda_free_memory_bytes
+            or self.device_total_memory_bytes != candidate.device_total_memory_bytes
+            or self.device_free_memory_bytes != candidate.device_free_memory_bytes
         )
 
 
@@ -298,7 +298,7 @@ class RegistrationTable[R: CommonRegistration]:
 class RegistrationBook:
     """Caller-synchronized process registrations composed by ``ControlPlane``."""
 
-    __slots__ = ("atnagents", "ffn_model_specs", "ffnagents", "instances")
+    __slots__ = ("agent_startups", "atnagents", "ffn_model_specs", "ffnagents", "instances")
 
     def __init__(self) -> None:
         """Create empty role-specific registration tables."""
@@ -307,6 +307,7 @@ class RegistrationBook:
         self.atnagents = RegistrationTable[AtnAgentRegistrationState]()
         self.ffnagents = RegistrationTable[FfnAgentRegistrationState]()
         self.ffn_model_specs: tuple[ffn.FfnModelSpec, ...] | None = None
+        self.agent_startups: dict[tuple[FabricRole, int], ProcUniqId] = {}
 
     def all_values(self) -> list[CommonRegistration]:
         """Return every registration in stable role order."""
@@ -336,7 +337,7 @@ class RegistrationBook:
         return [
             AtnAgentRegistration(
                 pid=registration.proc.pid,
-                cuda_device=registration.cuda_device,
+                device=registration.device,
                 abi_version=registration.abi_version,
             )
             for registration in self.atnagents.values()
@@ -351,9 +352,9 @@ class RegistrationBook:
         return [
             FfnAgentRegistration(
                 pid=registration.proc.pid,
-                cuda_device=registration.cuda_device,
-                cuda_total_memory_bytes=registration.cuda_total_memory_bytes,
-                cuda_free_memory_bytes=registration.cuda_free_memory_bytes,
+                device=registration.device,
+                device_total_memory_bytes=registration.device_total_memory_bytes,
+                device_free_memory_bytes=registration.device_free_memory_bytes,
                 model_specs=() if model_specs is None else model_specs,
                 abi_version=registration.abi_version,
             )

@@ -25,9 +25,9 @@ public:
   explicit TransportResident(std::span<const xpool::transport::ArenaView> arenas,
                              xpool::fabric::ArenaView fabric_arena = {}) {
     TORCH_CHECK(!arenas.empty(), "Transport Resident test requires at least one arena");
-    auto cuda_device = int{0};
-    C10_CUDA_CHECK(cudaGetDevice(&cuda_device));
-    cuda_device_ = static_cast<c10::DeviceIndex>(cuda_device);
+    auto device = int{0};
+    C10_CUDA_CHECK(cudaGetDevice(&device));
+    device_ = static_cast<c10::DeviceIndex>(device);
 
     try {
       auto *arena_allocation = static_cast<void *>(nullptr);
@@ -64,7 +64,7 @@ public:
     if (drain_requested_) {
       return;
     }
-    const auto device_guard = c10::cuda::CUDAGuard{cuda_device_};
+    const auto device_guard = c10::cuda::CUDAGuard{device_};
     auto *address = reinterpret_cast<std::uint32_t *>(reinterpret_cast<std::uint8_t *>(state_) +
                                                       offsetof(xpool::transport::ResidentState, drain_requested));
     control_stream_.write_value(address, 1);
@@ -72,7 +72,7 @@ public:
   }
 
   bool wait(std::chrono::milliseconds timeout = std::chrono::seconds{5}) const {
-    const auto device_guard = c10::cuda::CUDAGuard{cuda_device_};
+    const auto device_guard = c10::cuda::CUDAGuard{device_};
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
       if (control_stream_.query() && resident_stream_.query()) {
@@ -86,7 +86,7 @@ public:
   void release() {
     TORCH_CHECK(state_ != nullptr, "Transport Resident test is already released");
     TORCH_CHECK(drain_requested_, "Transport Resident test must be drained before release");
-    const auto device_guard = c10::cuda::CUDAGuard{cuda_device_};
+    const auto device_guard = c10::cuda::CUDAGuard{device_};
     TORCH_CHECK(control_stream_.query() && resident_stream_.query(),
                 "Transport Resident test cannot release pending resources");
     control_stream_.destroy();
@@ -103,7 +103,7 @@ private:
     if (state_ == nullptr && arenas_ == nullptr) {
       return;
     }
-    C10_CUDA_IGNORE_ERROR(cudaSetDevice(cuda_device_));
+    C10_CUDA_IGNORE_ERROR(cudaSetDevice(device_));
     if (launched_ && !drain_requested_ && state_ != nullptr && control_stream_) {
       auto *address = reinterpret_cast<std::uint32_t *>(reinterpret_cast<std::uint8_t *>(state_) +
                                                         offsetof(xpool::transport::ResidentState, drain_requested));
@@ -125,7 +125,7 @@ private:
     }
   }
 
-  c10::DeviceIndex cuda_device_ = 0;
+  c10::DeviceIndex device_ = 0;
   xpool::transport::ArenaView *arenas_ = nullptr;
   xpool::transport::ResidentState *state_ = nullptr;
   xpool::utils::device::OwnedCudaStream control_stream_;
@@ -159,7 +159,7 @@ protected:
     auto device_count = int{0};
     const auto error = cudaGetDeviceCount(&device_count);
     if (error != cudaSuccess || device_count == 0) {
-      GTEST_SKIP() << "CUDA device is not available: " << cudaGetErrorString(error);
+      GTEST_SKIP() << "device is not available: " << cudaGetErrorString(error);
     }
     ASSERT_TRUE(cuda_succeeded(cudaSetDevice(0)));
   }

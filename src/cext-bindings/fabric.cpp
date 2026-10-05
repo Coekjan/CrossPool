@@ -280,8 +280,8 @@ void bind_fabric(py::module_ &module) {
       [](const xpool::fabric::ArenaProjection &projection, int pe) {
         xpool::RuntimeState::singleton().require_role({xpool::RuntimeRole::AtnAgent, xpool::RuntimeRole::FfnAgent},
                                                       "xpool.native.fabric.join");
-        xpool::fabric::Runtime::singleton().join(
-            xpool::RuntimeState::singleton().cuda_device("xpool.native.fabric.join"), projection, pe);
+        xpool::fabric::Runtime::singleton().join(xpool::RuntimeState::singleton().device("xpool.native.fabric.join"),
+                                                 projection, pe);
       },
       py::arg("projection"), py::arg("pe"), "Join the exact Fabric generation described by the Projection.",
       py::call_guard<py::gil_scoped_release>());

@@ -66,8 +66,7 @@ def parameterize[F: Callable[..., object]](
 def requirements[F: Callable[..., object]](
     callback: Callable[..., ResourceRequirements] | None = None,
     *,
-    cuda_count: int = 0,
-    requires_mps: bool = False,
+    device_count: int = 0,
     requires_config: bool = False,
     model_ids: tuple[ModelId, ...] = (),
 ) -> Callable[[F], F]:
@@ -79,11 +78,9 @@ def requirements[F: Callable[..., object]](
     configuration, and preserves the decorated function's execution signature.
     """
 
-    if callback is not None and (cuda_count or requires_mps or requires_config or model_ids):
+    if callback is not None and (device_count or requires_config or model_ids):
         raise ValueError("requirements must use either a callback or static fields")
-    declaration = (
-        callback if callback is not None else ResourceRequirements(cuda_count, requires_mps, requires_config, model_ids)
-    )
+    declaration = callback if callback is not None else ResourceRequirements(device_count, requires_config, model_ids)
 
     def decorate(function: F) -> F:
         if hasattr(function, "xpool_requirements"):

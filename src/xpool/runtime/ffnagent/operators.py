@@ -230,7 +230,7 @@ def finalize_moe_routing(
         raise ValueError("routed scaling factor must be finite and positive")
     tensors = (routed_ids, routed_weights, final_ids, final_weights, payload_rows)
     if any(tensor.device != routed_ids.device for tensor in tensors):
-        raise ValueError("Routing Metadata tensors must share one CUDA device")
+        raise ValueError("Routing Metadata tensors must share one device")
     if not torch.cuda.is_current_stream_capturing():
         live_rows = int(payload_rows.item())
         if live_rows <= 0 or live_rows > row_capacity:
@@ -384,7 +384,7 @@ def compute_moe_partial(
         output,
     )
     if any(tensor.device != hidden_states.device for tensor in tensors):
-        raise ValueError("MoE Expert tensors must share one CUDA device")
+        raise ValueError("MoE Expert tensors must share one device")
 
     import sgl_kernel
     from sglang.kernels.ops.moe.fused_moe_triton_kernels import invoke_fused_moe_kernel
@@ -519,7 +519,7 @@ def compute_dense_partial(
         raise ValueError(f"Dense workspace must contain exactly {expected_workspace_bytes} bytes")
     device = hidden_states.device
     if output.device != device or workspace.device != device or layer_weights.gate_up_weight.device != device:
-        raise ValueError("Dense input, output, workspace, and weights must share one CUDA device")
+        raise ValueError("Dense input, output, workspace, and weights must share one device")
     for name, tensor in (
         ("hidden_states", hidden_states),
         ("Dense Partial output", output),

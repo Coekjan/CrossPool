@@ -24,13 +24,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     Returns:
         Process-style exit code: ``0`` for success, ``1`` for unhealthy
-        daemon readiness results, and ``2`` for CLI/config validation errors.
+        daemon readiness results, ``2`` for CLI/config validation errors, and
+        ``20`` for daemon deployment failure after verified resource retirement.
 
     Side Effects:
         May print config or daemon diagnostics, validation errors, or start a
-        resident process depending on the selected subcommand.
+        resident process depending on the selected subcommand. Wrapped
+        commands replace this process and retain the target exit status.
     """
 
+    argv = tuple(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(prog="xpool", description="CrossPool control tool")
     subparsers = parser.add_subparsers(dest="command")
 

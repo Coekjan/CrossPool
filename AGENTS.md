@@ -56,9 +56,10 @@ configuration owns exact dependency versions.
 
 The [supported deployment boundary](docs/designs/overview.md#supported-boundary)
 requires an accepted design change before adding another serving engine or
-platform. CUDA MPS is externally managed: the daemon observes readiness but does
-not start the controller or change GPU compute mode. Stop CUDA clients before
-stopping their MPS controller.
+platform. The daemon owns attention-side CUDA MPS; FFN participants execute
+directly. Follow [Control Plane](docs/designs/control-plane.md#startup-and-shutdown)
+for launch preparation and client-before-controller retirement. Runtime code
+does not change device compute mode.
 
 ## Pre-Commit
 

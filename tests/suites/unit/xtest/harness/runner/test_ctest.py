@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import xtest.harness.runner.ctest
-from xkit.gpu import GpuPool
+from xkit.device import DevicePool
 from xkit.supervisor import TaskCompletion, TaskCompletionKind
 from xtest.harness.runner.ctest import (
     CtestResourceSpec,
@@ -27,7 +27,7 @@ def test_ctest_case_timings_read_junit_gpu_assignment(tmp_path: Path) -> None:
     path = tmp_path / "ctest.xml"
     suite = xml.etree.ElementTree.Element("testsuites")
     case = xml.etree.ElementTree.SubElement(suite, "testcase", {"name": "cext.example", "time": "1.25"})
-    xml.etree.ElementTree.SubElement(case, "system-out").text = "GPU ASSIGNMENT gpus=GPU-example\n"
+    xml.etree.ElementTree.SubElement(case, "system-out").text = "DEVICE ASSIGNMENT devices=GPU-example\n"
     xml.etree.ElementTree.ElementTree(suite).write(path, encoding="utf-8")
 
     assert ctest_case_timings(path, {"GPU-example": 2}) == (("cext.example", "2:GPU-example", "1.25"),)
@@ -43,16 +43,16 @@ def test_ctest_resource_spec_preserves_reversible_gpu_mapping(tmp_path: Path) ->
     payload = json.loads(spec.path.read_text(encoding="utf-8"))
 
     assert spec.id_to_uuid == {
-        "gpu_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee": uuids[0],
-        "gpu_11111111_2222_3333_4444_555555555555": uuids[1],
+        "device_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee": uuids[0],
+        "device_11111111_2222_3333_4444_555555555555": uuids[1],
     }
     assert payload == {
         "version": {"major": 1, "minor": 0},
         "local": [
             {
-                "gpus": [
-                    {"id": "gpu_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee", "slots": 1},
-                    {"id": "gpu_11111111_2222_3333_4444_555555555555", "slots": 1},
+                "devices": [
+                    {"id": "device_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee", "slots": 1},
+                    {"id": "device_11111111_2222_3333_4444_555555555555", "slots": 1},
                 ]
             }
         ],
@@ -76,12 +76,12 @@ def test_ctest_suite_classifies_ordinary_failure_with_junit(
         return TaskCompletion(TaskCompletionKind.EXITED, 8, None)
 
     monkeypatch.setattr(xtest.harness.runner.ctest.SupervisedTaskScope, "run", run)
-    pool = GpuPool(
+    pool = DevicePool(
         uuids=("GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",),
         physical_index_by_uuid={"GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee": 0},
     )
 
-    result = CtestSuite(Path.cwd()).run(gpu_pool=pool, run_directory=tmp_path / "run")
+    result = CtestSuite(Path.cwd()).run(device_pool=pool, run_directory=tmp_path / "run")
 
     assert result.result_code == 1
 
@@ -117,11 +117,11 @@ def test_ctest_suite_classifies_infrastructure_failure(
         return completion
 
     monkeypatch.setattr(xtest.harness.runner.ctest.SupervisedTaskScope, "run", run)
-    pool = GpuPool(
+    pool = DevicePool(
         uuids=("GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",),
         physical_index_by_uuid={"GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee": 0},
     )
 
-    result = CtestSuite(Path.cwd()).run(gpu_pool=pool, run_directory=tmp_path / "run")
+    result = CtestSuite(Path.cwd()).run(device_pool=pool, run_directory=tmp_path / "run")
 
     assert result.result_code == 2

@@ -35,7 +35,7 @@ class KvVmmBacking:
         """Reserve the compound range, expose ordered views, and map the bootstrap floor."""
 
         if device.type != "cuda":
-            raise ValueError("xpool elastic kv backing requires a CUDA device")
+            raise ValueError("xpool elastic kv backing requires a device")
         if device.index is None:
             device = torch.device("cuda", torch.cuda.current_device())
         if token_page_size <= 0 or buffers_per_layer <= 0 or not descriptors:

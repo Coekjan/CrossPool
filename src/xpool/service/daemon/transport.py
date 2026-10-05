@@ -15,10 +15,9 @@ from xpool.utils.procs import ProcUniqId
 class TransportArenaLease:
     """One Instance rank's lease on an exact AtnAgent publication."""
 
-    cuda_device: int
+    device: int
     handle: TransportArenaHandle
     publisher: ProcUniqId
-    termination_requested: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,16 +49,16 @@ class TransportBroker:
         self.atnagents: dict[int, AtnAgentTransportState] = {}
         self.leases: dict[InstanceRankId, TransportArenaLease] = {}
 
-    def install_atnagent(self, cuda_device: int, owner: ProcUniqId) -> None:
+    def install_atnagent(self, device: int, owner: ProcUniqId) -> None:
         """Install or retain transport state for an exact owner generation."""
 
-        current = self.atnagents.get(cuda_device)
+        current = self.atnagents.get(device)
         if current is None or current.owner != owner:
-            self.atnagents[cuda_device] = AtnAgentTransportState(owner=owner)
+            self.atnagents[device] = AtnAgentTransportState(owner=owner)
 
     def publish(
         self,
-        cuda_device: int,
+        device: int,
         owner: ProcUniqId,
         publications: list[TransportArenaPublication],
     ) -> None:
@@ -67,7 +66,7 @@ class TransportBroker:
 
         if not publications:
             raise XpoolDaemonError("conflict", "atnagent transport arena upsert must not be empty")
-        state = self.require_owner(cuda_device, owner)
+        state = self.require_owner(device, owner)
         if not state.accepting_leases:
             raise XpoolDaemonError("not_ready", "atnagent transport leases are quiescing")
         by_handle = {publication.handle.handle: instance for instance, publication in state.publications.items()}
@@ -80,20 +79,20 @@ class TransportBroker:
                 raise XpoolDaemonError("conflict", "atnagent transport arenas contain duplicate arena handle")
         state.publications.update({publication.instance: publication for publication in publications})
 
-    def quiesce(self, cuda_device: int, owner: ProcUniqId) -> None:
+    def quiesce(self, device: int, owner: ProcUniqId) -> None:
         """Close publication and lease admission for one owner generation."""
 
-        self.require_owner(cuda_device, owner).accepting_leases = False
+        self.require_owner(device, owner).accepting_leases = False
 
     def publication(
         self,
-        cuda_device: int,
+        device: int,
         instance: InstanceRankId,
         owner: ProcUniqId,
     ) -> TransportArenaPublication:
         """Return one acquisition-eligible publication."""
 
-        state = self.require_owner(cuda_device, owner)
+        state = self.require_owner(device, owner)
         if not state.accepting_leases:
             raise XpoolDaemonError("not_ready", "local attention atnagent transport leases are quiescing")
         publication = state.publications.get(instance)
@@ -117,7 +116,7 @@ class TransportBroker:
         existing = self.leases.get(instance)
         if existing is not None:
             if (
-                existing.cuda_device == lease.cuda_device
+                existing.device == lease.device
                 and existing.handle == lease.handle
                 and existing.publisher == lease.publisher
             ):
@@ -131,48 +130,31 @@ class TransportBroker:
 
         return self.leases.pop(instance, None)
 
-    def leased_instances(self, cuda_device: int, publisher: ProcUniqId | None = None) -> list[InstanceRankId]:
+    def leased_instances(self, device: int, publisher: ProcUniqId | None = None) -> list[InstanceRankId]:
         """Return Instance ranks leasing from a device and optional owner."""
 
         return [
             instance
             for instance, lease in self.leases.items()
-            if lease.cuda_device == cuda_device and (publisher is None or lease.publisher == publisher)
+            if lease.device == device and (publisher is None or lease.publisher == publisher)
         ]
 
-    def mark_termination_requested(self, instances: list[InstanceRankId]) -> list[InstanceRankId]:
-        """Mark leases and return the subset requiring a first termination request."""
-
-        requested: list[InstanceRankId] = []
-        for instance in instances:
-            lease = self.leases.get(instance)
-            if lease is not None and not lease.termination_requested:
-                lease.termination_requested = True
-                requested.append(instance)
-        return requested
-
-    def termination_requested(self, instance: InstanceRankId) -> bool:
-        """Return whether lease quiesce requested this Instance rank's termination."""
-
-        lease = self.leases.get(instance)
-        return lease is not None and lease.termination_requested
-
-    def is_quiescing(self, cuda_device: int) -> bool:
+    def is_quiescing(self, device: int) -> bool:
         """Return whether the current owner has closed lease admission."""
 
-        state = self.atnagents.get(cuda_device)
+        state = self.atnagents.get(device)
         return state is not None and not state.accepting_leases
 
-    def published_for(self, cuda_device: int, instance: InstanceRankId) -> TransportArenaPublication | None:
+    def published_for(self, device: int, instance: InstanceRankId) -> TransportArenaPublication | None:
         """Return a publication without changing acquisition state."""
 
-        state = self.atnagents.get(cuda_device)
+        state = self.atnagents.get(device)
         return None if state is None else state.publications.get(instance)
 
-    def require_owner(self, cuda_device: int, owner: ProcUniqId) -> AtnAgentTransportState:
+    def require_owner(self, device: int, owner: ProcUniqId) -> AtnAgentTransportState:
         """Require transport state to belong to the expected process generation."""
 
-        state = self.atnagents.get(cuda_device)
+        state = self.atnagents.get(device)
         if state is None or state.owner != owner:
             raise XpoolDaemonError("not_ready", "atnagent registration changed during transport operation")
         return state

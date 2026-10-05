@@ -11,26 +11,26 @@ pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
 
 @pytest.mark.parametrize("command", ["atnagent", "ffnagent"])
-def test_agent_run_requires_cuda_device(monkeypatch, capsys, command: str) -> None:
+def test_agent_run_requires_device_device(monkeypatch, capsys, command: str) -> None:
     monkeypatch.setenv("XPOOL_CONFIG", "configs/xpool.example.toml")
 
     assert main([command]) == 2
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "--cuda-device" in captured.err
+    assert "--device" in captured.err
 
 
 @pytest.mark.parametrize(
-    ("command", "cuda_device"),
+    ("command", "device"),
     [("atnagent", 0), ("ffnagent", 1)],
 )
-def test_agent_run_dispatches_selected_role(monkeypatch, command: str, cuda_device: int) -> None:
+def test_agent_run_dispatches_selected_role(monkeypatch, command: str, device: int) -> None:
     calls: list[int] = []
 
     class FakeAgent:
-        def __init__(self, *, cuda_device: int) -> None:
-            calls.append(cuda_device)
+        def __init__(self, *, device: int) -> None:
+            calls.append(device)
 
         def run(self) -> None:
             return None
@@ -40,6 +40,6 @@ def test_agent_run_dispatches_selected_role(monkeypatch, command: str, cuda_devi
     else:
         monkeypatch.setattr(xpool.cli.subcommands.ffnagent, "FfnAgent", FakeAgent)
 
-    assert main([command, "--config", "configs/xpool.example.toml", "--cuda-device", str(cuda_device)]) == 0
+    assert main([command, "--config", "configs/xpool.example.toml", "--device", str(device)]) == 0
 
-    assert calls == [cuda_device]
+    assert calls == [device]

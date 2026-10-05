@@ -1,14 +1,24 @@
 from __future__ import annotations
 
+import logging
 import multiprocessing
+import signal
+import time
+from contextlib import ExitStack
 from pathlib import Path
+from types import FrameType
 
 import torch
 
 from xkit.child import PythonChildProcess
+from xkit.task import TaskCancelled, get_task_root
 from xpool.fabric import FabricUid
 from xpool.native import RuntimeRole
 from xpool.native.ffn import ForwardMode, LayerKind, OutputRequirement
+from xpool.utils.device import visible_uuids
+from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S, MpsEndpoint, MpsScope
+from xpool.utils.procs import ProcUniqId
+from xpool.utils.sighandler import defer_signal_exceptions, sighandle
 from xtest.harness.native.fabric.instance import run_fabric_instance
 from xtest.harness.native.fabric.participant import run_fabric_participant
 from xtest.harness.native.fabric.protocol import (
@@ -23,9 +33,13 @@ from xtest.harness.native.fabric.protocol import (
     FabricParticipantDrained,
     FabricParticipantQuiesced,
     FabricParticipantReady,
+    FabricParticipantReport,
     FabricParticipantSpec,
     FabricTopologyReport,
 )
+from xtest.harness.support.wait import remaining_seconds
+
+logger = logging.getLogger(__name__)
 
 
 def run_fabric_topology(
@@ -75,10 +89,21 @@ def run_fabric_topology(
     selected_tp_size = ffnagent_count if execution_tp_size is None else execution_tp_size
     if not 1 <= selected_tp_size <= ffnagent_count:
         raise ValueError("qualification FFN TP size must fit the FfnAgent Fleet")
+    visibility = visible_uuids()
+    if atnagent_count + ffnagent_count > len(visibility):
+        raise ValueError("Fabric topology exceeds the available device view")
+    scope = MpsScope(MpsEndpoint(visibility[:atnagent_count]))
+    attention_environment = scope.endpoint.environment()
+    attention_environment["CUDA_VISIBLE_DEVICES"] = ",".join(visibility)
+    ffn_environment = {
+        "CUDA_VISIBLE_DEVICES": ",".join(visibility),
+        "CUDA_MPS_PIPE_DIRECTORY": "",
+    }
     participant_specs = tuple(
         FabricParticipantSpec(
             role=RuntimeRole.ATNAGENT,
             device=index,
+            environment=attention_environment,
             uid=uid.value,
             pe=index,
             atnagent_count=atnagent_count,
@@ -97,6 +122,7 @@ def run_fabric_topology(
         FabricParticipantSpec(
             role=RuntimeRole.FFNAGENT,
             device=atnagent_count + index,
+            environment=ffn_environment,
             uid=uid.value,
             pe=atnagent_count + index,
             atnagent_count=atnagent_count,
@@ -116,16 +142,48 @@ def run_fabric_topology(
     log_directory = workdir
     participants: list[PythonChildProcess] = []
     instances: list[PythonChildProcess] = []
-    try:
-        for spec in participant_specs:
-            participants.append(
-                PythonChildProcess.start(
-                    f"{spec.role.name.lower()}-{spec.pe}",
-                    run_fabric_participant,
-                    spec,
-                    log_path=log_directory / f"participant-{spec.pe}.log",
-                )
+    root = get_task_root()
+    task_scope = None
+    participants_ready = False
+    participant_reports: tuple[FabricParticipantReport, ...] = ()
+    cleanup_deadline: float | None = None
+    cancelled: int | None = None
+    handlers = ExitStack()
+
+    def record_cancellation(signum: int, frame: FrameType | None) -> None:
+        nonlocal cleanup_deadline, cancelled
+        if cancelled is None:
+            cancelled = signum
+        if root is not None:
+            root.consume_cancellation()
+        if cleanup_deadline is None:
+            cleanup_deadline = (
+                root.cleanup_deadline
+                if root is not None and root.cleanup_deadline is not None
+                else time.monotonic() + MPS_CLEANUP_TIMEOUT_S
             )
+
+    try:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            handlers.enter_context(sighandle(signum, record_cancellation))
+        if root is not None:
+            with defer_signal_exceptions():
+                task_scope = root.register_scope()
+            root.activate()
+        scope.start()
+        if cancelled is not None:
+            raise TaskCancelled(f"Fabric topology cancelled by signal {cancelled}")
+        for spec in participant_specs:
+            with defer_signal_exceptions():
+                participants.append(
+                    PythonChildProcess(
+                        f"{spec.role.name.lower()}-{spec.pe}",
+                        run_fabric_participant,
+                        spec,
+                        log_path=log_directory / f"participant-{spec.pe}.log",
+                    )
+                )
+            participants[-1].start()
         for spec, process in zip(participant_specs, participants, strict=True):
             if spec.role is RuntimeRole.FFNAGENT:
                 process.receive(FabricParticipantReady, timeout_seconds=FABRIC_TIMEOUT_SECONDS)
@@ -142,11 +200,15 @@ def run_fabric_topology(
                 (atnagent_pe, instance_index, arena) for instance_index, arena in enumerate(published.arenas)
             )
 
+        participants_ready = True
+        if cancelled is not None:
+            raise TaskCancelled(f"Fabric topology cancelled by signal {cancelled}")
         context = multiprocessing.get_context("spawn")
         start_barrier = context.Barrier(len(published_arenas))
         for atnagent_pe, instance_index, arena in published_arenas:
             spec = FabricInstanceSpec(
                 device=atnagent_pe,
+                environment=attention_environment,
                 atnagent_pe=atnagent_pe,
                 arena=arena,
                 forward_mode=forward_modes[instance_index],
@@ -165,17 +227,21 @@ def run_fabric_topology(
                 layer_kind=layer_kind,
                 pre_admission_rejection=pre_admission_rejection,
             )
-            instances.append(
-                PythonChildProcess.start(
-                    f"instance-{atnagent_pe}-{instance_index}",
-                    run_fabric_instance,
-                    spec,
-                    log_path=log_directory / f"instance-{atnagent_pe}-{instance_index}.log",
+            with defer_signal_exceptions():
+                instances.append(
+                    PythonChildProcess(
+                        f"instance-{atnagent_pe}-{instance_index}",
+                        run_fabric_instance,
+                        spec,
+                        log_path=log_directory / f"instance-{atnagent_pe}-{instance_index}.log",
+                    )
                 )
-            )
+            instances[-1].start()
 
         for instance in instances:
             instance.receive(FabricInstanceReady, timeout_seconds=FABRIC_TIMEOUT_SECONDS)
+        if cancelled is not None:
+            raise TaskCancelled(f"Fabric topology cancelled by signal {cancelled}")
         for instance in instances:
             instance.send(FabricInstanceCommand.RUN)
         for instance in instances:
@@ -190,27 +256,65 @@ def run_fabric_topology(
         for instance in instances:
             instance.wait(timeout_seconds=FABRIC_TIMEOUT_SECONDS)
 
-        for participant in participants:
-            participant.send(FabricParticipantCommand.QUIESCE)
-        for participant in participants:
-            participant.receive(FabricParticipantQuiesced, timeout_seconds=FABRIC_TIMEOUT_SECONDS)
-        for participant in participants:
-            participant.send(FabricParticipantCommand.DRAIN)
-        participant_reports = tuple(
-            participant.receive(FabricParticipantDrained, timeout_seconds=FABRIC_TIMEOUT_SECONDS).report
-            for participant in participants
-        )
-        for participant in participants:
-            participant.wait(timeout_seconds=FABRIC_TIMEOUT_SECONDS)
-        return FabricTopologyReport(
-            atnagent_count=atnagent_count,
-            ffnagent_count=ffnagent_count,
-            executor_lane_count=executor_lane_count,
-            forward_modes=forward_modes,
-            instances=instance_results,
-            participants=participant_reports,
-        )
+        if cancelled is not None:
+            raise TaskCancelled(f"Fabric topology cancelled by signal {cancelled}")
     finally:
-        PythonChildProcess.terminate_all(tuple((*participants, *instances)))
-        for process in (*participants, *instances):
-            process.close()
+        if cleanup_deadline is None:
+            cleanup_deadline = time.monotonic() + MPS_CLEANUP_TIMEOUT_S
+        try:
+            if any(process.process.is_alive() for process in participants):
+                if not participants_ready:
+                    raise RuntimeError("Fabric startup did not publish a complete participant world")
+                live_instances = [
+                    ProcUniqId(process.process.pid)
+                    for process in instances
+                    if process.process.pid is not None and process.process.is_alive()
+                ]
+                # Fixed Instance handles are consumers, not collective PEs.
+                # Confirm all their contexts before issuing any host signal.
+                for identity in live_instances:
+                    scope.terminate_client(identity, deadline=cleanup_deadline)
+                for identity in live_instances:
+                    identity.send_signal(signal.SIGKILL)
+                for process in instances:
+                    if process.process.pid is not None:
+                        process.process.join(max(0.0, cleanup_deadline - time.monotonic()))
+                    if process.process.is_alive():
+                        raise TimeoutError("Fabric Instance retirement is unconfirmed")
+                for participant in participants:
+                    participant.send(FabricParticipantCommand.QUIESCE)
+                for participant in participants:
+                    participant.receive(
+                        FabricParticipantQuiesced,
+                        timeout_seconds=remaining_seconds(cleanup_deadline, "Fabric quiesce"),
+                    )
+                for participant in participants:
+                    participant.send(FabricParticipantCommand.DRAIN)
+                participant_reports = tuple(
+                    participant.receive(
+                        FabricParticipantDrained,
+                        timeout_seconds=remaining_seconds(cleanup_deadline, "Fabric drain"),
+                    ).report
+                    for participant in participants
+                )
+                for participant in participants:
+                    participant.wait(timeout_seconds=remaining_seconds(cleanup_deadline, "Fabric participant exit"))
+            for process in (*participants, *instances):
+                process.close()
+            scope.stop(deadline=cleanup_deadline)
+            if task_scope is not None:
+                task_scope.complete()
+        except BaseException as error:
+            logger.error("Fabric topology cleanup unconfirmed; retaining owner and MPS: %s", error)
+            while True:
+                time.sleep(1.0)
+        handlers.close()
+
+    return FabricTopologyReport(
+        atnagent_count=atnagent_count,
+        ffnagent_count=ffnagent_count,
+        executor_lane_count=executor_lane_count,
+        forward_modes=forward_modes,
+        instances=instance_results,
+        participants=participant_reports,
+    )

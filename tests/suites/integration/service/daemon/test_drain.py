@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from http import HTTPStatus
 
 import pytest
@@ -12,7 +11,6 @@ from xpool.native import ABI_VERSION
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
 from xtest.harness.support.service.daemon import (
     FakeMonotonicClock,
-    ProcUniqId,
     activate_fabric_world,
     atnagent_registration,
     atnagent_transport_arena_bindings,
@@ -25,6 +23,7 @@ from xtest.harness.support.service.daemon import (
     instance_registration,
     instance_transport_arena_acquire_path,
     process_ref,
+    register,
     request,
     start_sleeping_proc,
     stop_proc,
@@ -33,25 +32,17 @@ from xtest.harness.support.service.daemon import (
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
 
 
-def test_daemon_quiesce_atnagent_transport_leases_blocks_new_acquires_and_terminates_stale_owner(
-    monkeypatch: pytest.MonkeyPatch,
+def test_daemon_quiesce_atnagent_transport_leases_blocks_new_acquires_and_reports_live_owner(
     deterministic_daemon_dependencies: FakeMonotonicClock,
 ) -> None:
     config = synthetic_config()
     app = create_app(config)
-    atnagent = atnagent_registration(cuda_device=0)
+    atnagent = atnagent_registration(device=0)
     ffnagent = ffnagent_registration()
     registration = instance_registration()
-    terminated: list[tuple[int, float]] = []
-
-    def terminate_tree(self: ProcUniqId, *, term_grace_s: float) -> bool:
-        terminated.append((self.pid, term_grace_s))
-        return False
-
-    monkeypatch.setattr(ProcUniqId, "terminate_tree", terminate_tree)
-    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/ffnagent/register", json=ffnagent).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/instance/register", json=registration).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/instance/register", registration).status_code == HTTPStatus.NO_CONTENT
     plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
     assert (
@@ -109,7 +100,7 @@ def test_daemon_quiesce_atnagent_transport_leases_blocks_new_acquires_and_termin
             "rank": 0,
         }
     ]
-    assert terminated == [(registration["pid"], xpool.service.daemon.control.HEARTBEAT_WARNING_WATERMARK_S)]
+    assert app.state.control_plane.registrations.instances.values()[0].proc.is_alive()
     assert republish.status_code == HTTPStatus.SERVICE_UNAVAILABLE
     assert republish.json()["detail"] == {
         "kind": "not_ready",
@@ -122,9 +113,7 @@ def test_daemon_quiesce_atnagent_transport_leases_blocks_new_acquires_and_termin
     }
 
 
-def test_daemon_lease_quiesce_terminates_all_live_owners_concurrently(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_daemon_lease_quiesce_reports_all_live_owners() -> None:
     config = XpoolConfig.from_mapping(
         {
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
@@ -137,27 +126,16 @@ def test_daemon_lease_quiesce_terminates_all_live_owners_concurrently(
         }
     )
     app = create_app(config)
-    atnagent = atnagent_registration(cuda_device=0)
+    atnagent = atnagent_registration(device=0)
     ffnagent = ffnagent_registration(model_ids=("test/a", "test/b"))
     owner_processes = [start_sleeping_proc(), start_sleeping_proc()]
     owner_ids = {owner_id.pid for owner, owner_id in owner_processes}
-    owner_barrier = threading.Barrier(len(owner_processes))
-    terminated: list[int] = []
-
-    def terminate_tree(self: ProcUniqId, *, term_grace_s: float) -> bool:
-        assert term_grace_s == xpool.service.daemon.control.HEARTBEAT_WARNING_WATERMARK_S
-        if self.pid in owner_ids:
-            terminated.append(self.pid)
-            owner_barrier.wait(timeout=2.0)
-        return False
-
-    monkeypatch.setattr(ProcUniqId, "terminate_tree", terminate_tree)
     try:
-        assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
-        assert request(app, "POST", "/ffnagent/register", json=ffnagent).status_code == HTTPStatus.NO_CONTENT
+        assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
+        assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
         for model_id, (owner, owner_id) in zip(("test/a", "test/b"), owner_processes, strict=True):
             registration = instance_registration(model_id=model_id, pid=owner_id.pid)
-            assert request(app, "POST", "/instance/register", json=registration).status_code == HTTPStatus.NO_CONTENT
+            assert register(app, "/instance/register", registration).status_code == HTTPStatus.NO_CONTENT
         plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
         activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
 
@@ -192,29 +170,24 @@ def test_daemon_lease_quiesce_terminates_all_live_owners_concurrently(
 
         assert response.status_code == HTTPStatus.OK
         assert {entry["pid"] for entry in response.json()["in_use"]} == owner_ids
-        assert set(terminated) == owner_ids
+        assert all(owner.poll() is None for owner, owner_id in owner_processes)
     finally:
         for owner, owner_id in owner_processes:
             stop_proc(owner)
 
 
 def test_daemon_allows_stale_atnagent_to_quiesce_transport_leases(
-    monkeypatch: pytest.MonkeyPatch,
     deterministic_daemon_dependencies: FakeMonotonicClock,
 ) -> None:
     config = synthetic_config()
     app = create_app(config)
-    atnagent = atnagent_registration(cuda_device=0)
+    atnagent = atnagent_registration(device=0)
     ffnagent = ffnagent_registration()
     registration = instance_registration()
 
-    def terminate_tree(self: ProcUniqId, *, term_grace_s: float) -> bool:
-        return False
-
-    monkeypatch.setattr(ProcUniqId, "terminate_tree", terminate_tree)
-    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/ffnagent/register", json=ffnagent).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/instance/register", json=registration).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/instance/register", registration).status_code == HTTPStatus.NO_CONTENT
     plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
     assert (

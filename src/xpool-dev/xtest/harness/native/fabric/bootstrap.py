@@ -42,13 +42,14 @@ def create_fabric_uid(*, workdir: Path) -> FabricUid:
     """Create one native NVSHMEM UID in a fresh daemon-role child."""
 
     workdir.mkdir(parents=True, exist_ok=False)
-    process = PythonChildProcess.start(
+    process = PythonChildProcess(
         "fabric-uid",
         create_fabric_uid_child,
         None,
         log_path=workdir / "uid.log",
     )
     try:
+        process.start()
         created = process.receive(FabricUidCreated, timeout_seconds=FABRIC_TIMEOUT_SECONDS)
         process.wait(timeout_seconds=FABRIC_TIMEOUT_SECONDS)
         return FabricUid(value=created.value)
@@ -63,13 +64,14 @@ def fabric_bootstrap(*, workdir: Path) -> Generator[FabricUid, None, None]:
     """Keep the daemon-role owner of one UID alive for a Fabric generation."""
 
     workdir.mkdir(parents=True, exist_ok=False)
-    process = PythonChildProcess.start(
+    process = PythonChildProcess(
         "fabric-bootstrap",
         run_fabric_bootstrap,
         None,
         log_path=workdir / "bootstrap.log",
     )
     try:
+        process.start()
         created = process.receive(FabricUidCreated, timeout_seconds=FABRIC_TIMEOUT_SECONDS)
         yield FabricUid(value=created.value)
         process.send(FabricBootstrapCommand.STOP)

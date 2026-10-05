@@ -13,8 +13,7 @@ import pytest
 from xpool import ffn
 from xpool.config import XpoolConfig
 from xpool.fabric import FabricPlan, FabricRole
-from xpool.memory import FfnMemoryCalibrationCoefficients, MemoryCalibrationGpu
-from xpool.mps import MpsProbeResult
+from xpool.memory import FfnMemoryCalibrationCoefficients, MemoryCalibrationDevice
 from xpool.native import ABI_VERSION
 from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent.device_memory import DeviceMemoryFeatures, DeviceMemoryPoint
@@ -31,7 +30,6 @@ def software_environment() -> fitting.MemoryProfileSoftwareEnvironment:
         native_abi_version=ABI_VERSION,
         cuda_driver_version=1,
         cuda_runtime_version=1,
-        mps_active_thread_percentage=100,
         torch_version="1",
         triton_version="1",
         sglang_version="1",
@@ -40,14 +38,14 @@ def software_environment() -> fitting.MemoryProfileSoftwareEnvironment:
     )
 
 
-def gpu(index: int) -> MemoryCalibrationGpu:
-    """Return one ordered synthetic GPU record."""
+def device(index: int) -> MemoryCalibrationDevice:
+    """Return one ordered synthetic device record."""
 
-    return MemoryCalibrationGpu(
-        name="gpu",
+    return MemoryCalibrationDevice(
+        name="device",
         compute_capability=(8, 0),
         total_memory_bytes=100,
-        uuid=f"gpu-{index}",
+        uuid=f"device-{index}",
     )
 
 
@@ -81,12 +79,12 @@ def test_fit_worlds_covers_all_features_and_held_out_evidence() -> None:
         for index in range(10)
     )
     fit = fitting.MemoryProfileWorld(
-        gpus=(gpu(0),),
+        devices=(device(0),),
         environment=software_environment(),
         observations=observations,
     )
     held_out = fitting.MemoryProfileWorld(
-        gpus=(gpu(0),),
+        devices=(device(0),),
         environment=software_environment(),
         observations=(observations[0],),
     )
@@ -103,23 +101,18 @@ def test_profile_ffn_memory_runs_fixed_complete_fleet_matrix(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    config = synthetic_config(ffn_cuda_devices=(1, 2))
+    config = synthetic_config(ffn_devices=(1, 2))
     config = config.model_copy(
         update={"ffn": config.ffn.model_copy(update={"device_memory_calibration": tmp_path / "profile.json"})}
     )
     install_test_config(config)
     world = fitting.MemoryProfileWorld(
-        gpus=(gpu(0), gpu(1)),
+        devices=(device(0), device(1)),
         environment=software_environment(),
         observations=(),
     )
     coordinates = []
     monkeypatch.setattr(runner, "refuse_live_daemon", lambda config: None)
-    monkeypatch.setattr(
-        runner,
-        "probe_mps_controller",
-        lambda: MpsProbeResult(True, 100, "online"),
-    )
     monkeypatch.setattr(
         runner,
         "run_world",
@@ -131,13 +124,13 @@ def test_profile_ffn_memory_runs_fixed_complete_fleet_matrix(
     profile = runner.profile_ffn_memory()
 
     assert Counter(coordinates) == Counter({coordinate: 3 for coordinate in (*corpus.FIT_COORDINATES, "H0")})
-    assert profile.environment.ffnagent_gpus == (gpu(0), gpu(1))
+    assert profile.environment.ffnagent_devices == (device(0), device(1))
     assert profile.ffn.minimum_held_out_headroom_bytes == 7
     assert profile.ffn.coefficients == coefficients
 
 
 def test_profile_world_config_preserves_required_scheduler_slo(tmp_path: Path) -> None:
-    source = synthetic_config(ffn_cuda_devices=(1, 2))
+    source = synthetic_config(ffn_devices=(1, 2))
     path = tmp_path / "world.toml"
 
     runner.write_world_config(path, source, "C0a")
@@ -221,10 +214,10 @@ def test_participant_rejects_allocator_before_cuda_warmup(
     parent, child = multiprocessing.Pipe()
     plan = cast(
         FabricPlan,
-        SimpleNamespace(pe_placements=(SimpleNamespace(role=FabricRole.FFNAGENT, cuda_device=1),)),
+        SimpleNamespace(pe_placements=(SimpleNamespace(role=FabricRole.FFNAGENT, device=1),)),
     )
-    monkeypatch.setattr(runner, "init_global_config", lambda **kwargs: SimpleNamespace())
-    monkeypatch.setattr(runner.bootstrap, "init", lambda cuda_device, role: None)
+    monkeypatch.setattr(runner, "init_global_config", lambda **kwargs: synthetic_config())
+    monkeypatch.setattr(runner.bootstrap, "init", lambda device, role: None)
     monkeypatch.setattr(runner, "ensure_supported_cuda_allocator", reject_allocator)
     monkeypatch.setattr(
         runner.torch,
@@ -238,6 +231,7 @@ def test_participant_rejects_allocator_before_cuda_warmup(
             config_path=Path("config.toml"),
             fabric_plan=plan,
             pe=0,
+            environment={},
         )
 
     assert parent.recv() == ("failure", "RuntimeError: unsupported allocator")

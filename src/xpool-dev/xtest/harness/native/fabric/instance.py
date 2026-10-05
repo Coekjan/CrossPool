@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from multiprocessing.connection import Connection
 
 import torch
@@ -10,6 +11,8 @@ from xpool.cext import ensure_native_loaded
 from xpool.native import RuntimeRole
 from xpool.native.ffn import DpRowLayout, ResultCode
 from xpool.transport import FfnRequestMetadata
+from xpool.utils.device import visible_uuids
+from xpool.utils.mps import MpsEndpoint
 from xtest.harness.native.fabric.protocol import (
     FABRIC_TIMEOUT_SECONDS,
     FabricInstanceCommand,
@@ -25,8 +28,10 @@ from xtest.harness.native.ffn.qualification import EXECUTION_HIDDEN_SIZE, execut
 def run_fabric_instance(connection: Connection, spec: FabricInstanceSpec) -> None:
     """Attach one Instance rank and return repeated real FFN outputs."""
 
+    os.environ.update(spec.environment)
     ensure_native_loaded()
     torch.cuda.set_device(spec.device)
+    MpsEndpoint(visible_uuids()[: spec.atnagent_count]).require_client()
     xpool.native.initialize(
         RuntimeRole.INSTANCE,
         spec.device,

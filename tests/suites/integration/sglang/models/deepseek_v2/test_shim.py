@@ -96,7 +96,7 @@ def test_shim_forward_accepts_sglang_decoder_layer_call_contract() -> None:
     ``DeepseekV2DecoderLayer.forward`` calls its FFN module as
     ``self.mlp(hidden_states, forward_batch, gemm_output_zero_allocator)``.
     Binding that call to the shim signature guards the real integration
-    contract against SGLang drift without requiring a GPU.
+    contract against SGLang drift without requiring a device.
     """
 
     sentinel = object()
@@ -398,10 +398,8 @@ def test_bind_shim_runtime_binds_loaded_deepseek_shims() -> None:
         model_path=Path("/models/test/model"),
         instance_index=2,
         worker_rank=3,
-        cuda_device=6,
+        device=6,
         worker_world_size=1,
-        sglang_base_gpu_id=0,
-        sglang_gpu_id_step=2,
         atn_tp_rank=0,
         atn_tp_size=1,
         atn_dp_rank=0,

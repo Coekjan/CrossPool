@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from multiprocessing.synchronize import Barrier
@@ -51,6 +52,7 @@ class FabricParticipantSpec:
 
     role: RuntimeRole
     device: int
+    environment: Mapping[str, str]
     uid: str
     pe: int
     atnagent_count: int
@@ -202,6 +204,7 @@ class FabricInstanceSpec:
     """Complete startup configuration for one Fabric Instance-rank client."""
 
     device: int
+    environment: Mapping[str, str]
     atnagent_pe: int
     arena: str
     forward_mode: ForwardMode

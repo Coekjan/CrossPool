@@ -15,13 +15,13 @@ from xtest.harness.native.case import run_native_case
 
 
 def isolated_default_debug_options_are_frozen() -> None:
-    cuda_device = torch.cuda.current_device()
-    xpool.native.initialize(RuntimeRole.INSTANCE, cuda_device, None)
-    xpool.native.initialize(RuntimeRole.INSTANCE, cuda_device, None)
+    device = torch.cuda.current_device()
+    xpool.native.initialize(RuntimeRole.INSTANCE, device, None)
+    xpool.native.initialize(RuntimeRole.INSTANCE, device, None)
     with pytest.raises(RuntimeError, match="debug options differ"):
         xpool.native.initialize(
             RuntimeRole.INSTANCE,
-            cuda_device,
+            device,
             DebugConfig(
                 transport_observer=TransportObserverDebugConfig(enable=True, outdir=Path.cwd())
             ).native_options(),
@@ -34,6 +34,6 @@ def test_debug_options_are_read_only() -> None:
         setattr(options.transport_observer, "enable", True)
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_debug_defaults_are_frozen_by_first_initialization(tmp_path: Path) -> None:
     run_native_case(isolated_default_debug_options_are_frozen, workdir=tmp_path / "case")

@@ -7,7 +7,8 @@ current architecture while workflow history remains in version control.
 - [System Overview](overview.md) defines the supported boundary, process roles,
   public interface ownership, and cross-module invariants.
 - [Control Plane](control-plane.md) defines configuration, generation planning,
-  placement, memory admission, and lifecycle coordination.
+  placement, memory admission, role preparation, managed attention MPS, and
+  ordered participant retirement.
 - [Transport](transport.md) defines the Instance-to-AtnAgent mailbox.
 - [Fabric](fabric.md) defines distributed invocation, coordination, delivery,
   scheduling, and failure.

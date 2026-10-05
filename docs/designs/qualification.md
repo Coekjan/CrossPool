@@ -101,7 +101,7 @@ command, and daemon-policy behavior. Ordinary subprocess serving E2E proves
 mandatory Elastic KV startup under the combined graph mode. The dedicated
 Elastic KV E2E observes a confirmed prefix-cache hit decrease after peer
 pressure, a positive stable hit after repopulation within the current active
-capacity, and concurrent request completion by both models on the same GPU
+capacity, and concurrent request completion by both models on the same device
 under Decode Full plus Prefill Breakable. Absolute `cached_tokens` counts are
 diagnostic evidence, not fixed qualification thresholds. Native and
 integration tests own capacity commands, terminal completions, and physical
@@ -116,6 +116,16 @@ evidence, then continue authorized diagnosis and implementation fixes. Obtain a
 design decision before changing the estimator contract, production interfaces,
 or acceptance criteria. Runner adaptation that requires new telemetry likewise
 requires a design decision.
+
+Managed lifecycle evidence observes actual attention MPS membership and direct
+FFN execution, normal serving/daemon retirement, and cancellation at retained
+startup boundaries. Controlled termination evidence uses self-owned clients:
+one client's confirmed context termination and host exit must leave an
+independent peer and server usable. Cache-helper lifecycle evidence does not
+substitute for mode-specific model-loading or inference qualification.
+Resource cleanup, complete-domain exit and the original execution verdict are
+separate facts under [Control Plane](control-plane.md#startup-and-shutdown) and
+[Tooling](tooling.md#shared-process-and-resource-ownership).
 
 ## Acceptance and invalidation
 
@@ -143,7 +153,7 @@ another workflow step requests their result. Complete the strict suite on that
 final version rather than after every intermediate edit.
 
 Isolated agent-tool changes use focused tool-behavior and static checks; they
-do not require GPU qualification or serving-suite execution when runtime,
+do not require device qualification or serving-suite execution when runtime,
 build behavior, and test acceptance contracts are unchanged.
 
 Native CTest owns invalid Projection behavior; Unit does not duplicate the

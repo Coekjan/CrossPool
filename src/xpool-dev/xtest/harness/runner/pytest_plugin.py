@@ -71,8 +71,7 @@ def pytest_configure(config: pytest.Config) -> None:
     """Create one resource resolver for the pytest session."""
 
     config.addinivalue_line("markers", "requires_config: selects tests declaring local configuration")
-    config.addinivalue_line("markers", "requires_cuda(min_devices=1): selects tests declaring CUDA resources")
-    config.addinivalue_line("markers", "requires_mps: selects tests declaring CUDA MPS")
+    config.addinivalue_line("markers", "requires_device(min_devices=1): selects tests declaring device resources")
     config.addinivalue_line("markers", "requires_model_weights(model_id): selects tests declaring local checkpoints")
     config.addinivalue_line("markers", "estimated_duration(seconds): estimated test runtime used by tests")
     config.addinivalue_line(
@@ -195,7 +194,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Retain each declared resource value and emit marks before deselection."""
 
     for item in items:
-        resources = ResourceRequirements(0, False, False, ())
+        resources = ResourceRequirements(0, False, ())
         if isinstance(item, pytest.Function):
             declaration = cast(
                 ResourceRequirements | Callable[..., ResourceRequirements] | None,
@@ -210,12 +209,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     except (TypeError, ValueError) as error:
                         raise pytest.UsageError(f"{item.nodeid}: invalid declared resources: {error}") from error
         item.stash[resource_requirements_key] = resources
-        if resources.cuda_count:
-            item.add_marker(pytest.mark.requires_cuda(min_devices=resources.cuda_count))
+        if resources.device_count:
+            item.add_marker(pytest.mark.requires_device(min_devices=resources.device_count))
         if resources.requires_config:
             item.add_marker(pytest.mark.requires_config)
-        if resources.requires_mps:
-            item.add_marker(pytest.mark.requires_mps)
         for model_id in resources.model_ids:
             item.add_marker(pytest.mark.requires_model_weights(model_id))
         estimated_duration(item)
@@ -234,12 +231,10 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         fail=lambda reason: pytest.fail(reason, pytrace=False),
     )
     resources = item.stash[resource_requirements_key]
-    if resources.cuda_count:
-        guard.run(partial(resolver.require_cuda, resources.cuda_count))
+    if resources.device_count:
+        guard.run(partial(resolver.require_devices, resources.device_count))
     if resources.requires_config:
         item.stash[resolved_config_key] = guard.run(resolver.require_config)
-    if resources.requires_mps:
-        guard.run(resolver.require_mps)
     for model_id in resources.model_ids:
         guard.run(partial(resolver.require_model_weights, item.stash[resolved_config_key].config, model_id))
 

@@ -268,8 +268,8 @@ def test_init_global_config_is_idempotent_for_equal_effective_config(tmp_path: P
 
 
 def test_init_global_config_rejects_different_effective_config(tmp_path: Path) -> None:
-    first_path = write_minimal_config(tmp_path / "first", ffn_cuda_devices=(2,))
-    different_path = write_minimal_config(tmp_path / "different", ffn_cuda_devices=(3,))
+    first_path = write_minimal_config(tmp_path / "first", ffn_devices=(2,))
+    different_path = write_minimal_config(tmp_path / "different", ffn_devices=(2, 3))
 
     init_global_config(config_path=first_path)
     with pytest.raises(ConfigError, match="already initialized with different values"):
@@ -277,6 +277,7 @@ def test_init_global_config_rejects_different_effective_config(tmp_path: Path) -
 
 
 def test_init_global_config_tracks_effective_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("XPOOL_DEBUG_FABRIC_OBSERVER_RECORD_CAPACITY", raising=False)
     monkeypatch.setenv("XPOOL_DEBUG_TRANSPORT_OBSERVER_RECORD_CAPACITY", "64")
     config = init_global_config(
         config_path="configs/xpool.example.toml",

@@ -1,11 +1,11 @@
-# Quick Start: Qwen3-0.6B on Two GPUs
+# Quick Start: Qwen3-0.6B on Two Devices
 
-This guide starts one SGLang Instance with one attention GPU and one FFN GPU.
+This guide starts one SGLang Instance with one attention device and one FFN device.
 It exercises CrossPool FFN execution through the serving path. Use a Linux
 host meeting the [repository requirements](../../README.md#requirements),
-with the `Qwen/Qwen3-0.6B` checkpoint already stored locally. The two GPUs
-must be available to CUDA IPC, NVSHMEM, and the externally managed CUDA MPS
-controller.
+with the `Qwen/Qwen3-0.6B` checkpoint already stored locally. The two devices
+must support CUDA IPC and NVSHMEM, with `nvidia-cuda-mps-control` on PATH.
+The daemon manages attention-side MPS; FFN execution bypasses it.
 
 ## Configure the checkout
 
@@ -23,25 +23,17 @@ The first two commands must report uv 0.12.17 or newer and CUDA Toolkit 13.2.
 The Python environment supplies CMake and Ninja during the native build, while
 the CUDA compiler remains a host prerequisite.
 
-Choose two GPUs from the last command, in attention-then-FFN order. Physical
-ordinals and full GPU UUIDs are accepted in `CUDA_VISIBLE_DEVICES`; use UUIDs
-with CUDA MPS so physical identity remains unambiguous after visibility
-remapping. In `.env`, keep `XPOOL_CONFIG=configs/dev.local.toml` and
+Choose two devices from the last command, in attention-then-FFN order. Numeric
+selectors name the `nvidia-smi` indices shown by the query; runtime entries
+normalize the ordered selection to full physical UUIDs before initialization.
+In `.env`, keep `XPOOL_CONFIG=configs/dev.local.toml` and
 `SGLANG_PLUGINS=xpool`, and set `CUDA_VISIBLE_DEVICES` to the two selected UUIDs
-in that order. Their process-local CUDA indices are 0 and 1. Use the same
+in that order. Their deployment-visible indices are 0 and 1. Use the same
 `.env` in every terminal; do not independently remap devices for different
 roles.
 
-Create the MPS directories and display their expanded paths:
-
-```bash
-mkdir -p "/tmp/xpool-mps-$(id -u)"/{pipe,log}
-printf 'CUDA_MPS_PIPE_DIRECTORY=%s/pipe\nCUDA_MPS_LOG_DIRECTORY=%s/log\n' \
-  "/tmp/xpool-mps-$(id -u)" "/tmp/xpool-mps-$(id -u)"
-```
-
-Copy the two printed assignments into `.env`. Dotenv files do not evaluate
-`$(id -u)`, so write the expanded absolute paths, not the command text.
+Leave MPS pipe/log selection to the role entry points. They install the
+attention endpoint or direct FFN bypass before driver initialization.
 
 In `configs/dev.local.toml`, keep `atn.devices = [0]` and
 `ffn.devices = [1]`. Set `vendor.model_base_uri` to the absolute directory
@@ -56,7 +48,7 @@ id = "Qwen/Qwen3-0.6B"
 The resulting model path must contain `config.json`, for example
 `/absolute/path/to/models/Qwen/Qwen3-0.6B/config.json`.
 
-## Install and start MPS
+## Install
 
 Use the repository's uv-managed interpreter and pinned dependencies:
 
@@ -67,7 +59,7 @@ uv run xpool config dump
 ```
 
 `UV_ENV_FILE` loads `.env` for `uv run`, not for `uv sync`. The sync command
-builds for CMake's default CUDA architectures. If both selected GPUs are A100s,
+builds for CMake's default CUDA architectures. If both selected devices are A100s,
 you can instead limit that build to their architecture:
 
 ```bash
@@ -75,20 +67,13 @@ uv sync --group dev --reinstall-package xpool --no-build-isolation-package xpool
   --config-settings-package xpool:cmake.define.XPOOL_CUDA_ARCHITECTURES=80-real
 ```
 
-Select every required architecture when the GPUs differ; `80-real` is only the
+Select every required architecture when the devices differ; `80-real` is only the
 A100 example. The build option does not belong in `.env`.
 
 The config dump should show exactly one model and the selected attention and
-FFN device indices. Start MPS only if no controller already owns the selected
-pipe directory; do not restart a controller serving other CUDA clients.
-
-```bash
-uv run nvidia-cuda-mps-control -d
-printf 'get_default_active_thread_percentage\n' | uv run nvidia-cuda-mps-control
-```
-
-MPS starts its server lazily when the first CUDA client connects. The
-controller must cover both UUIDs selected in `.env`.
+FFN device indices. The daemon starts its own attention controller when serving
+begins. Independent deployments do not coordinate physical-device use; arrange
+their placement before launch. Do not stop a controller serving other clients.
 
 ## Start the serving processes
 
@@ -103,17 +88,17 @@ uv run xpool daemon serve
 
 ```bash
 # Terminal 2: attention-side transport participant.
-uv run xpool atnagent --cuda-device 0
+uv run xpool atnagent --device 0
 ```
 
 ```bash
 # Terminal 3: FFN execution participant.
-uv run xpool ffnagent --cuda-device 1
+uv run xpool ffnagent --device 1
 ```
 
 ```bash
 # Terminal 4: SGLang Instance. Use the path selected by vendor.model_base_uri.
-uv run sglang serve \
+uv run xpool exec -- sglang serve \
   --model-path /absolute/path/to/models/Qwen/Qwen3-0.6B \
   --host 127.0.0.1 \
   --port 30000
@@ -130,19 +115,20 @@ until curl --fail --silent --show-error --max-time 5 http://127.0.0.1:30000/heal
 curl -sS http://127.0.0.1:30000/generate \
   -H 'Content-Type: application/json' \
   -d '{
-    "text": "Explain pooled GPU execution in one sentence.",
+    "text": "Explain pooled device execution in one sentence.",
     "sampling_params": {"temperature": 0, "max_new_tokens": 32}
   }'
 ```
 
-Stop SGLang first, then the AtnAgent and FfnAgent, and finally the daemon.
-Stop the MPS controller only after every CUDA client using it has exited:
-
-```bash
-printf 'quit\n' | uv run nvidia-cuda-mps-control
-```
+Finish or cancel any in-flight startup, then stop SGLang and wait for its workers
+and helpers to exit. Start no new clients during retirement. Then send SIGTERM or
+press Ctrl-C in the daemon terminal. The daemon retires the Agents and Fabric, stops
+its MPS controller and removes its owned scope directory. Do not terminate
+joined Agents independently. An early daemon signal waits for known Instance
+exit; it does not initiate SGLang shutdown. Unconfirmed cleanup keeps the living
+owner and diagnostics available for manual resolution.
 
 ## Next Step
 
-To serve a second small model on these same two GPUs, follow
+To serve a second small model on these same two devices, follow
 [Multi-LLM Serving](multi-llm-serving.md).

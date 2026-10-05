@@ -208,15 +208,15 @@ def test_topology_evidence_writes_complete_process_and_output_facts(tmp_path: Pa
         case_id="single-rank-delivery",
         generation=FabricGenerationId(high=1, low=2),
         processes=(
-            FfnTopologyProcessEvidence(name="atnagent-0", process_id=10, cuda_device=0, gpu_uuid="GPU-a"),
-            FfnTopologyProcessEvidence(name="ffnagent-1", process_id=11, cuda_device=1, gpu_uuid="GPU-b"),
-            FfnTopologyProcessEvidence(name="instance-0-rank-0", process_id=12, cuda_device=0, gpu_uuid="GPU-a"),
+            FfnTopologyProcessEvidence(name="atnagent-0", process_id=10, device=0, device_uuid="GPU-a"),
+            FfnTopologyProcessEvidence(name="ffnagent-1", process_id=11, device=1, device_uuid="GPU-b"),
+            FfnTopologyProcessEvidence(name="instance-0-rank-0", process_id=12, device=0, device_uuid="GPU-a"),
         ),
         mps_servers=(
             FfnTopologyMpsServerEvidence(
                 process_id=20,
-                client_process_names=("atnagent-0", "ffnagent-1", "instance-0-rank-0"),
-                active_thread_percentage=50,
+                client_process_names=("atnagent-0", "instance-0-rank-0"),
+                active_thread_percentage=100,
             ),
         ),
         outputs=(FfnTopologyOutputEvidence(request_ordinal=0, output_ranks=(0,), comparison=comparison),),

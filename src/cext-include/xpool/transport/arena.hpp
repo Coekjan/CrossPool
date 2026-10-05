@@ -133,13 +133,13 @@ public:
   }
 
   /// Allocate and initialize one AtnAgent-owned CUDA IPC arena.
-  static Arena create(c10::DeviceIndex cuda_device, const ArenaLayout &layout);
+  static Arena create(c10::DeviceIndex device, const ArenaLayout &layout);
   /// Open one Instance-side CUDA IPC mapping.
   static Arena from_handle(const ArenaHandle &handle);
   /// Return a typed non-owning view over this mapping.
   ArenaView view() const { return ArenaView{base_}; }
-  /// Return the CUDA device that owns this mapping.
-  c10::DeviceIndex cuda_device() const;
+  /// Return the device that owns this mapping.
+  c10::DeviceIndex device() const;
   /// Release the owned allocation or attached IPC mapping.
   /// The release operation is selected by the mapping's ownership origin.
   void destroy();

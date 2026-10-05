@@ -1,25 +1,27 @@
 from __future__ import annotations
 
-import subprocess
-
 import pytest
 
 import xtest.harness.native.mps
+from xpool.utils.mps import MpsEndpoint
 
 
-def test_mps_query_preserves_server_clients_and_percentage(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mps_query_preserves_server_clients_percentage_and_owner_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     outputs = {
-        "get_server_list\n": "20\n",
-        "get_client_list 20\n": "10\n11\n",
-        "get_active_thread_percentage 20\n": "50.0\n",
+        "get_server_list": "20\n",
+        "get_client_list 20": "10\n11\n",
+        "get_active_thread_percentage 20": "50.0\n",
     }
 
-    def run(command: list[str], *, input: str, **options: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(command, 0, outputs[input], "")
+    def run(self: MpsEndpoint, command: str, *, deadline: float) -> str:
+        assert deadline == 1002.0
+        return outputs[command].strip()
 
-    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(MpsEndpoint, "run_control", run)
 
-    assert xtest.harness.native.mps.query_mps_servers() == (
+    assert xtest.harness.native.mps.query_mps_servers(
+        MpsEndpoint(("GPU-00000000-0000-0000-0000-000000000001",)), deadline=1002.0
+    ) == (
         xtest.harness.native.mps.MpsServerObservation(
             process_id=20,
             client_process_ids=(10, 11),

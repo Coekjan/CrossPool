@@ -102,8 +102,10 @@ protocol mismatches, invocation failures, participant loss, and control-plane
 failures converge to one canonical generation failure; the first publication
 wins. The AtnAgent leader attempts publication, every thread waits for and
 observes the canonical result, and the block returns one value. After failure,
-no new invocation is admitted and the process tree drains or terminates; there
-is no request retry or collective recovery.
+no new invocation is admitted. Actual owners coordinate quiesce, drain and
+retirement under [Control Plane](control-plane.md#startup-and-shutdown).
+Unresolved peer or collective state retains the living owner for manual
+resolution; there is no request retry or collective recovery.
 
 Host and Python failure readout exposes only the validated immutable failure
 payload. Atomic claim and publication words remain internal Fabric storage and

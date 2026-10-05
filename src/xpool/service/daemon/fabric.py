@@ -61,12 +61,8 @@ class FabricMembership:
         """Capture one complete, internally consistent configured membership."""
 
         instance_by_rank = {registration.instance: registration for registration in registrations.instances.values()}
-        atnagent_by_device = {
-            registration.cuda_device: registration for registration in registrations.atnagents.values()
-        }
-        ffnagent_by_device = {
-            registration.cuda_device: registration for registration in registrations.ffnagents.values()
-        }
+        atnagent_by_device = {registration.device: registration for registration in registrations.atnagents.values()}
+        ffnagent_by_device = {registration.device: registration for registration in registrations.ffnagents.values()}
         if any(device not in atnagent_by_device for device in config.atn.devices):
             return None
         if any(device not in ffnagent_by_device for device in config.ffn.devices):
@@ -125,20 +121,20 @@ class FabricMembership:
             instance_owners.extend((registration.instance, registration.proc) for registration in complete_ranks)
 
         placements = tuple(
-            FabricPePlacement(role=FabricRole.ATNAGENT, cuda_device=cuda_device) for cuda_device in config.atn.devices
+            FabricPePlacement(role=FabricRole.ATNAGENT, device=device) for device in config.atn.devices
         ) + tuple(
             FabricPePlacement(
                 role=FabricRole.FFNAGENT,
-                cuda_device=cuda_device,
+                device=device,
             )
-            for cuda_device in config.ffn.devices
+            for device in config.ffn.devices
         )
         agent_owners = tuple(
             (
                 pe,
-                atnagent_by_device[placement.cuda_device].proc
+                atnagent_by_device[placement.device].proc
                 if placement.role is FabricRole.ATNAGENT
-                else ffnagent_by_device[placement.cuda_device].proc,
+                else ffnagent_by_device[placement.device].proc,
             )
             for pe, placement in enumerate(placements)
         )
@@ -147,7 +143,7 @@ class FabricMembership:
             model_specs=model_specs,
             instance_plans=tuple(instance_plans),
             ffnagent_free_memory_bytes=tuple(
-                ffnagent_by_device[device].cuda_free_memory_bytes for device in config.ffn.devices
+                ffnagent_by_device[device].device_free_memory_bytes for device in config.ffn.devices
             ),
             pe_placements=placements,
             agent_owners=agent_owners,
@@ -292,7 +288,7 @@ class FabricController:
         instance: InstanceRankId,
         failure: FabricOwnerFailure,
         *,
-        termination_requested: bool,
+        leases_quiescing: bool,
         now: float,
     ) -> None:
         """Remove initialization state and select cleanup for an Instance-rank loss."""
@@ -301,7 +297,7 @@ class FabricController:
         if generation is None:
             return
         generation.initialized_instances.pop(instance, None)
-        if generation.phase is FabricGenerationPhase.QUIESCING and termination_requested:
+        if generation.phase is FabricGenerationPhase.QUIESCING and leases_quiescing:
             return
         if generation.phase in {
             FabricGenerationPhase.DRAINING,

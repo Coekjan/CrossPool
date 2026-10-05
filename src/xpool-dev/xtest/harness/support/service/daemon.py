@@ -3,25 +3,25 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from http import HTTPStatus
 
 import httpx
+import psutil
 import pytest
 from fastapi import FastAPI
 
 import xpool.native
 import xpool.service.daemon.app
 import xpool.service.daemon.control
-from xpool.config import XpoolConfig
-from xpool.fabric import FabricGenerationId, FabricParticipantPhase, FabricPlan
-from xpool.mps import MpsProbeResult
+from xpool.config import XpoolConfig, get_global_config
+from xpool.fabric import FabricGenerationId, FabricParticipantPhase, FabricPlan, FabricRole
 from xpool.native import ABI_VERSION
 from xpool.service.daemon.app import create_daemon
 from xpool.service.wire import KvControlChannelRef
+from xpool.utils.mps import MpsEndpoint, MpsProbeResult, MpsScope
 from xpool.utils.procs import ProcUniqId
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config
 from xtest.harness.support.kv import kv_capacity_profile
@@ -61,29 +61,19 @@ def deterministic_daemon_dependencies(
     """Replace daemon host dependencies with deterministic integration fakes."""
 
     clock = FakeMonotonicClock()
-    monkeypatch.setattr(xpool.service.daemon.app.bootstrap, "init", lambda device, role: None)
-    monkeypatch.setattr(xpool.service.daemon.app, "monotonic", clock)
-    monkeypatch.setattr(xpool.service.daemon.control, "monotonic", clock)
-    terminate_tree = ProcUniqId.terminate_tree
-    kill_tree = ProcUniqId.kill_tree
-
-    def terminate_non_test_process(process: ProcUniqId, *, term_grace_s: float) -> bool:
-        if process.pid == os.getpid():
-            return False
-        return terminate_tree(process, term_grace_s=term_grace_s)
-
-    monkeypatch.setattr(ProcUniqId, "terminate_tree", terminate_non_test_process)
-
-    def kill_non_test_process(process: ProcUniqId) -> bool:
-        if process.pid == os.getpid():
-            return False
-        return kill_tree(process)
-
-    monkeypatch.setattr(ProcUniqId, "kill_tree", kill_non_test_process)
     monkeypatch.setattr(
         xpool.service.daemon.control,
-        "probe_mps_controller",
-        lambda: MpsProbeResult(True, 100, "test MPS controller is online"),
+        "visible_uuids",
+        lambda: tuple(f"GPU-00000000-0000-0000-0000-{index:012x}" for index in get_global_config().devices),
+    )
+    monkeypatch.setattr(xpool.service.daemon.app.bootstrap, "init", lambda device, role: None)
+    monkeypatch.setattr(xpool.service.daemon.control.ControlPlane, "start", lambda self: None)
+    monkeypatch.setattr(xpool.service.daemon.app, "monotonic", clock)
+    monkeypatch.setattr(xpool.service.daemon.control, "monotonic", clock)
+    monkeypatch.setattr(
+        MpsScope,
+        "probe",
+        lambda self: MpsProbeResult(True, 100, "CPU route-test controller is online"),
     )
     monkeypatch.setattr(xpool.native.fabric, "create_uid", lambda: "ab" * 128)
 
@@ -115,8 +105,29 @@ def create_app(config: XpoolConfig) -> FastAPI:
 
     install_test_config(config)
     app = create_daemon()
+    control = app.state.control_plane
+    control.device_uuids = tuple(
+        f"GPU-00000000-0000-0000-0000-{device:012x}" for device in range(max(config.devices) + 1)
+    )
+    control.mps_scope = MpsScope(MpsEndpoint(tuple(control.device_uuids[device] for device in config.atn.devices)))
     app.state.control_plane.watchdog()
     return app
+
+
+def register(app: FastAPI, path: str, registration: Mapping[str, object]) -> httpx.Response:
+    """Exercise formal registration with prevalidated CPU Agent startup state."""
+
+    pid = registration["pid"]
+    if path != "/instance/register" and isinstance(pid, int) and pid > 0:
+        try:
+            identity = ProcUniqId(pid)
+        except psutil.NoSuchProcess:
+            pass
+        else:
+            book = app.state.control_plane.registrations
+            role = FabricRole.ATNAGENT if path == "/atnagent/register" else FabricRole.FFNAGENT
+            book.agent_startups[(role, registration["device"])] = identity
+    return request(app, "POST", path, json=registration)
 
 
 def run_watchdog(app: FastAPI) -> None:
@@ -159,13 +170,13 @@ def instance_registration(
 
 def atnagent_registration(
     *,
-    cuda_device: int,
+    device: int,
     pid: int | None = None,
     abi_version: int = ABI_VERSION,
 ) -> dict[str, int | float]:
     pid = process_pid(pid)
     return {
-        "cuda_device": cuda_device,
+        "device": device,
         "abi_version": abi_version,
         "pid": pid,
     }
@@ -173,7 +184,7 @@ def atnagent_registration(
 
 def ffnagent_registration(
     *,
-    cuda_device: int = 1,
+    device: int = 1,
     pid: int | None = None,
     abi_version: int = ABI_VERSION,
     model_ids: tuple[str, ...] = (str(TEST_MODEL_ID),),
@@ -183,9 +194,9 @@ def ffnagent_registration(
     return {
         "pid": process_pid(pid),
         "abi_version": abi_version,
-        "cuda_device": cuda_device,
-        "cuda_total_memory_bytes": 16 * 1024**3,
-        "cuda_free_memory_bytes": 12 * 1024**3,
+        "device": device,
+        "device_total_memory_bytes": 16 * 1024**3,
+        "device_free_memory_bytes": 12 * 1024**3,
         "model_specs": [ffn_model_spec(model_id=model_id) for model_id in model_ids],
     }
 
@@ -226,12 +237,12 @@ def ffn_profile(*, hidden_size: int = 4) -> dict[str, object]:
     }
 
 
-def atnagent_transport_arenas_path(cuda_device: int) -> str:
-    return f"/atnagent/{cuda_device}/transport-arenas"
+def atnagent_transport_arenas_path(device: int) -> str:
+    return f"/atnagent/{device}/transport-arenas"
 
 
-def atnagent_transport_leases_quiesce_path(cuda_device: int) -> str:
-    return f"/atnagent/{cuda_device}/transport-leases/quiesce"
+def atnagent_transport_leases_quiesce_path(device: int) -> str:
+    return f"/atnagent/{device}/transport-leases/quiesce"
 
 
 def instance_transport_arena_acquire_path(model_id: str, rank: int) -> str:
@@ -275,13 +286,11 @@ def register_fabric_world(
     """Register one complete 1x1x1 generation and return its plan."""
 
     instance_payload = dict(instance or instance_registration(model_id=str(TEST_MODEL_ID)))
-    atnagent_payload = dict(atnagent or atnagent_registration(cuda_device=0))
-    ffnagent_payload = dict(
-        ffnagent or ffnagent_registration(cuda_device=1, model_ids=(str(instance_payload["model_id"]),))
-    )
-    assert request(app, "POST", "/atnagent/register", json=atnagent_payload).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/ffnagent/register", json=ffnagent_payload).status_code == HTTPStatus.NO_CONTENT
-    response = request(app, "POST", "/instance/register", json=instance_payload)
+    atnagent_payload = dict(atnagent or atnagent_registration(device=0))
+    ffnagent_payload = dict(ffnagent or ffnagent_registration(device=1, model_ids=(str(instance_payload["model_id"]),)))
+    assert register(app, "/atnagent/register", atnagent_payload).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/ffnagent/register", ffnagent_payload).status_code == HTTPStatus.NO_CONTENT
+    response = register(app, "/instance/register", instance_payload)
     assert response.status_code == HTTPStatus.NO_CONTENT, response.text
     plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     return atnagent_payload, ffnagent_payload, instance_payload, plan

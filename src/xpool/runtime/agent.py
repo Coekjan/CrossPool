@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import threading
 import time
@@ -10,6 +11,7 @@ from abc import ABC, abstractmethod
 
 import xpool.native
 from xpool import bootstrap, devkit
+from xpool.config import get_global_config
 from xpool.fabric import (
     DenseFfnLayerPlan,
     FabricGenerationPhase,
@@ -23,6 +25,7 @@ from xpool.native import ABI_VERSION, RuntimeRole
 from xpool.service.client import XpoolClient, XpoolClientError
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
+    AgentStartupAdmission,
     FabricInvocationFailure,
     FabricParticipantReport,
     FabricQuiesceRequest,
@@ -30,6 +33,8 @@ from xpool.service.wire import (
     ProcessRef,
 )
 from xpool.utils.background import BackgroundThread
+from xpool.utils.device import normalize_environment, visible_uuids
+from xpool.utils.mps import MpsEndpoint
 from xpool.utils.procs import ProcUniqId, bail
 from xpool.utils.sighandler import sighandle
 
@@ -97,16 +102,63 @@ class AgentError(RuntimeError):
 class Agent(ABC):
     """Common process-local resources for one configured CrossPool Agent."""
 
-    def __init__(self, *, cuda_device: int, runtime_role: RuntimeRole) -> None:
-        """Initialize native state and daemon client for one Agent role."""
+    def __init__(self, *, device: int, runtime_role: RuntimeRole) -> None:
+        """Check the complete deployment view and admit placement before initialization.
 
-        bootstrap.init(cuda_device, runtime_role)
-        devkit.install()
-        self.cuda_device = cuda_device
+        Normalize visibility to ordered UUIDs without reducing either role's
+        environment. Attention uses the owned endpoint; FFN explicitly bypasses
+        MPS. ``device`` selects execution, while ``local_rank`` identifies the
+        Agent within its logical role Fleet.
+        """
+
+        config = get_global_config()
+        match runtime_role:
+            case RuntimeRole.ATNAGENT:
+                role = FabricRole.ATNAGENT
+                devices = config.atn.devices
+            case RuntimeRole.FFNAGENT:
+                role = FabricRole.FFNAGENT
+                devices = config.ffn.devices
+            case _:
+                raise AgentError("Agent startup requires an attention or FFN role")
+        try:
+            self.local_rank = devices.index(device)
+        except ValueError as error:
+            raise AgentError(f"device {device} is not configured for {role.value}") from error
+        normalize_environment()
+        visibility = visible_uuids()
+        if not visibility or max(config.devices) >= len(visibility):
+            raise AgentError("configured devices are outside the original deployment visibility")
+        role_uuids = tuple(visibility[i] for i in devices)
+        self.device = device
         self.runtime_role = runtime_role
         self.proc_id = ProcUniqId.current()
         self.process_ref = ProcessRef(abi_version=ABI_VERSION, pid=self.proc_id.pid)
         self.client = XpoolClient()
+        try:
+            self.client.check_config()
+            self.client.admit_agent_startup(
+                AgentStartupAdmission(
+                    pid=self.proc_id.pid,
+                    create_time=self.proc_id.create_time,
+                    abi_version=ABI_VERSION,
+                    role=role,
+                    device=device,
+                )
+            )
+            endpoint: MpsEndpoint | None = None
+            if role is FabricRole.ATNAGENT:
+                endpoint = MpsEndpoint(role_uuids)
+                os.environ.update(endpoint.environment())
+            else:
+                os.environ["CUDA_MPS_PIPE_DIRECTORY"] = ""
+            bootstrap.init(self.device, runtime_role)
+            if endpoint is not None:
+                endpoint.require_client()
+            devkit.install()
+        except Exception:
+            self.client.close()
+            raise
         self.registered = False
         self.fabric_plan: FabricPlan | None = None
         self.fabric_arena_projection: xpool.native.fabric.ArenaProjection | None = None
@@ -114,7 +166,7 @@ class Agent(ABC):
         self.participant_report: FabricParticipantReport | None = None
         self.fabric_stopped = False
         self.heartbeat_worker: AgentHeartbeat
-        logger.info("starting device=%s pid=%s", self.cuda_device, self.proc_id.pid)
+        logger.info("starting device=%s pid=%s", self.device, self.proc_id.pid)
 
     @abstractmethod
     def activate_fabric(self) -> None:
@@ -190,7 +242,7 @@ class Agent(ABC):
                 raise AgentError(f"Fabric plan acquisition failed: {error}") from error
             self.fabric_plan = plan
             self.fabric_phase = FabricGenerationPhase.PREPARING_JOIN
-            logger.info("fabric plan acquired generation=%s device=%s", plan.generation.format(), self.cuda_device)
+            logger.info("fabric plan acquired generation=%s device=%s", plan.generation.format(), self.device)
 
         report = self.participant_report
         try:
@@ -345,7 +397,7 @@ class Agent(ABC):
         pes = tuple(
             pe
             for pe, item in enumerate(self.fabric_plan.pe_placements)
-            if item.cuda_device == self.cuda_device and item.role is role
+            if item.device == self.device and item.role is role
         )
         if len(pes) != 1:
             raise AgentError("Fabric plan has no unique placement for this Agent")
@@ -400,7 +452,7 @@ class Agent(ABC):
         shutdown_requested = threading.Event()
 
         def request_shutdown(signal_number: int, frame: object) -> None:
-            logger.info("shutdown requested device=%s pid=%s", self.cuda_device, self.proc_id.pid)
+            logger.info("shutdown requested device=%s pid=%s", self.device, self.proc_id.pid)
             shutdown_requested.set()
 
         with (
@@ -412,7 +464,7 @@ class Agent(ABC):
             except Exception:
                 logger.exception(
                     "agent failed and will exit without unsafe native cleanup device=%s",
-                    self.cuda_device,
+                    self.device,
                 )
                 if self.participant_report is None:
                     owners = (
@@ -424,14 +476,14 @@ class Agent(ABC):
                         try:
                             close()
                         except Exception:
-                            logger.exception("failed to close pre-join %s device=%s", name, self.cuda_device)
+                            logger.exception("failed to close pre-join %s device=%s", name, self.device)
                 bail(code=1)
             try:
                 self.shutdown_fabric()
             except Exception:
                 logger.exception(
                     "coordinated fabric shutdown failed; skipping unsafe native cleanup device=%s",
-                    self.cuda_device,
+                    self.device,
                 )
                 bail(code=1)
             self.heartbeat_worker.close()
@@ -439,7 +491,7 @@ class Agent(ABC):
                 self.close_role()
             finally:
                 self.client.close()
-            logger.info("stopped device=%s pid=%s", self.cuda_device, self.proc_id.pid)
+            logger.info("stopped device=%s pid=%s", self.device, self.proc_id.pid)
 
 
 class AgentHeartbeat:
@@ -456,7 +508,7 @@ class AgentHeartbeat:
         self.agent = agent
         self.interval_s = interval_s
         self.worker = BackgroundThread.periodic(
-            name=f"xpool-agent-heartbeat-{agent.cuda_device}",
+            name=f"xpool-agent-heartbeat-{agent.device}",
             interval_s=interval_s,
             target=self.heartbeat_once,
             join_timeout_s=AGENT_HEARTBEAT_STOP_JOIN_TIMEOUT_S,
@@ -528,7 +580,7 @@ class AgentHeartbeat:
                 self.latest_response = response
         except XpoolDaemonError as error:
             if error.is_recoverable:
-                logger.debug("registration missing device=%s", self.agent.cuda_device)
+                logger.debug("registration missing device=%s", self.agent.device)
                 with self.lock:
                     self.registration_missing = True
                 return False
@@ -536,7 +588,7 @@ class AgentHeartbeat:
         except XpoolClientError as error:
             if not error.is_recoverable:
                 raise AgentError(f"Agent heartbeat received unrecoverable client error: {error}") from error
-            logger.debug("heartbeat failed device=%s detail=%s", self.agent.cuda_device, error)
+            logger.debug("heartbeat failed device=%s detail=%s", self.agent.device, error)
         except Exception as error:
             raise AgentError(f"Agent heartbeat failed with unexpected error: {error}") from error
         return True

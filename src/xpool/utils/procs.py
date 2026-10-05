@@ -89,12 +89,16 @@ class ProcUniqId:
         return cls(os.getpid())
 
     def is_alive(self) -> bool:
-        """Return whether this exact pid/create-time pair is still alive."""
+        """Return whether this exact pid/create-time pair is still alive.
+
+        Missing, reused and zombie processes are confirmed absent. Permission
+        and unexpected observation errors propagate; they are not exit proof.
+        """
 
         try:
             process = psutil.Process(self.pid)
             return process.create_time() == self.create_time and process.status() != psutil.STATUS_ZOMBIE
-        except (psutil.Error, ValueError):
+        except psutil.NoSuchProcess:
             return False
 
     def terminate_tree(self, *, term_grace_s: float) -> bool:
@@ -157,24 +161,32 @@ class ProcUniqId:
             return
         try:
             psutil.Process(self.pid).send_signal(sig)
-        except psutil.Error:
+        except psutil.NoSuchProcess:
             return
 
     def child_process_ids(self) -> list[ProcUniqId]:
-        """Return recursively captured identities for current child processes."""
+        """Return recursively captured identities for observed live descendants.
+
+        A confirmed absent, reused or zombie root returns an empty list; that
+        does not prove retirement of its former process domain. Children confirmed
+        gone during enumeration are skipped. Permission and unexpected observation
+        errors propagate to the owner.
+        """
 
         try:
             process = psutil.Process(self.pid)
-            if ProcUniqId(process.pid) != self:
+            if process.create_time() != self.create_time or process.status() == psutil.STATUS_ZOMBIE:
                 return []
             children = process.children()
-        except psutil.Error:
+        except psutil.NoSuchProcess:
             return []
         result: list[ProcUniqId] = []
         for child in children:
             try:
                 child_id = ProcUniqId(child.pid)
-            except (psutil.Error, ValueError):
+                if child_id.create_time != child.create_time() or child.status() == psutil.STATUS_ZOMBIE:
+                    continue
+            except psutil.NoSuchProcess:
                 continue
             result.append(child_id)
             result.extend(child_id.child_process_ids())

@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from typing import NoReturn
 
+import psutil
 import pytest
 
 from xpool.utils.procs import PROCESS_KILL_WAIT_S, ProcUniqId
@@ -17,8 +19,11 @@ def test_process_identity_treats_unreaped_zombie_as_not_alive() -> None:
         process.kill()
         os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
         assert not process_id.is_alive()
+        assert process_id.child_process_ids() == []
     finally:
         process.wait(timeout=5.0)
+    assert not process_id.is_alive()
+    assert process_id.child_process_ids() == []
 
 
 def test_pid_liveness_requires_matching_create_time(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -36,6 +41,39 @@ def test_pid_liveness_requires_matching_create_time(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr("xpool.utils.procs.psutil.Process", ReusedPidProcess)
 
     assert proc_id.is_alive() is False
+    assert proc_id.child_process_ids() == []
+
+
+@pytest.mark.parametrize("error", [psutil.AccessDenied(os.getpid()), RuntimeError("observation failed")])
+def test_process_observation_failure_is_not_exit_proof(error: Exception, monkeypatch: pytest.MonkeyPatch) -> None:
+    proc_id = ProcUniqId.current()
+
+    def unavailable(pid: int) -> NoReturn:
+        raise error
+
+    monkeypatch.setattr("xpool.utils.procs.psutil.Process", unavailable)
+    with pytest.raises(type(error)) as failure:
+        proc_id.is_alive()
+    assert failure.value is error
+    with pytest.raises(type(error)) as failure:
+        proc_id.child_process_ids()
+    assert failure.value is error
+
+
+def test_descendant_observation_failure_is_not_an_empty_domain(monkeypatch: pytest.MonkeyPatch) -> None:
+    proc_id = ProcUniqId.current()
+    process = psutil.Process(proc_id.pid)
+    error = psutil.AccessDenied(proc_id.pid)
+
+    def unavailable(recursive: bool = False) -> NoReturn:
+        raise error
+
+    monkeypatch.setattr(process, "children", unavailable)
+    monkeypatch.setattr("xpool.utils.procs.psutil.Process", lambda pid: process)
+    assert proc_id.is_alive()
+    with pytest.raises(psutil.AccessDenied) as failure:
+        proc_id.child_process_ids()
+    assert failure.value is error
 
 
 def test_kill_tree_directly_kills_captured_root_and_child_within_bound() -> None:

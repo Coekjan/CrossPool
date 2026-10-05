@@ -180,7 +180,7 @@ class CapacityReconciler:
         self.pending_retirement_event.record(stream)
 
     def finish_retirement(self) -> None:
-        """Unmap an accepted reclaim after all prior GPU users complete."""
+        """Unmap an accepted reclaim after all prior device users complete."""
 
         event = self.pending_retirement_event
         command = self.command

@@ -66,18 +66,18 @@ def test_declared_serving_metadata_validates_external_conditions(tmp_path: Path)
     assert isinstance(declared_case, ClientBenchCase)
     declaration = {
         "schema_version": 1,
-        "gpus": [{"uuid": "GPU-remote", "total_memory_bytes": 81920 * 1024 * 1024}],
-        "target_gpu_uuids": {"test/one": ["GPU-remote"]},
+        "devices": [{"uuid": "GPU-remote", "total_memory_bytes": 81920 * 1024 * 1024}],
+        "target_device_uuids": {"test/one": ["GPU-remote"]},
     }
     path.write_text(json.dumps(declaration), encoding="utf-8")
     metadata = declared_case.load_serving_metadata()
     assert metadata is not None and metadata.packages is None
-    assert metadata.target_gpu_uuids == {ModelId("test/one"): ("GPU-remote",)}
-    declaration["target_gpu_uuids"] = {"test/unknown": ["GPU-remote"]}
+    assert metadata.target_device_uuids == {ModelId("test/one"): ("GPU-remote",)}
+    declaration["target_device_uuids"] = {"test/unknown": ["GPU-remote"]}
     path.write_text(json.dumps(declaration), encoding="utf-8")
     with pytest.raises(ValueError, match="unknown benchmark target"):
         declared_case.load_serving_metadata()
-    declaration["gpus"][0]["total_memory_bytes"] = True
+    declaration["devices"][0]["total_memory_bytes"] = True
     path.write_text(json.dumps(declaration), encoding="utf-8")
     with pytest.raises(ValueError, match="total_memory_bytes"):
         declared_case.load_serving_metadata()

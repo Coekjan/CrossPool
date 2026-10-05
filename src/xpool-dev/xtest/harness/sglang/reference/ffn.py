@@ -81,7 +81,7 @@ class SglangFfnReferenceRunner:
         if tensor_parallel_size <= 0 or tensor_parallel_size > visible_device_count:
             raise ValueError(
                 "FFN reference tensor_parallel_size must be positive and no greater than "
-                f"the visible CUDA device count ({visible_device_count})"
+                f"the visible device count ({visible_device_count})"
             )
         normalized_cases = tuple(cases)
         if not normalized_cases:
@@ -118,7 +118,7 @@ class SglangFfnReferenceRunner:
                 )
             )
 
-        process = PythonChildProcess.start(
+        process = PythonChildProcess(
             "sglang-ffn-reference",
             ffn_child.run_ffn_reference_child,
             ffn_protocol.FfnReferenceJob(
@@ -130,6 +130,7 @@ class SglangFfnReferenceRunner:
             log_path=self.workdir / "child.log",
         )
         try:
+            process.start()
             completed = process.receive(
                 ffn_protocol.FfnReferenceCompleted,
                 timeout_seconds=remaining_seconds(deadline, "completion"),

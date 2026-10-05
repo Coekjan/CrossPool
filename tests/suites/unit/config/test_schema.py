@@ -21,8 +21,8 @@ def test_config_snapshot_round_trips_effective_fields_and_omits_env_only_debug(t
     config = XpoolConfig.from_mapping(
         {
             "scheduler": {"slo": {"ttft_ms": 900, "tbt_ms": 30}, "ffn_concurrency": 2},
-            "atn": {"devices": [2, 4]},
-            "ffn": {"devices": [3, 5], "loader": {"parallelism": 2}},
+            "atn": {"devices": [0, 1]},
+            "ffn": {"devices": [2, 3], "loader": {"parallelism": 2}},
             "models": [
                 {
                     "id": "test/model-a",
@@ -118,8 +118,8 @@ def test_derived_placements_follow_declared_order() -> None:
     config = XpoolConfig.from_mapping(
         {
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
-            "atn": {"devices": [2, 4]},
-            "ffn": {"devices": [3, 7, 10]},
+            "atn": {"devices": [0, 1]},
+            "ffn": {"devices": [2, 3, 4]},
             "models": [
                 {"id": "test/m1", "path": "/models/m1"},
                 {"id": "test/m2", "path": "/models/m2"},
@@ -127,14 +127,14 @@ def test_derived_placements_follow_declared_order() -> None:
         }
     )
 
-    assert [(agent.rank, agent.cuda_device) for agent in config.atnagents] == [(0, 2), (1, 4)]
-    assert [(agent.rank, agent.cuda_device) for agent in config.ffnagents] == [(0, 3), (1, 7), (2, 10)]
+    assert [(agent.rank, agent.device) for agent in config.atnagents] == [(0, 0), (1, 1)]
+    assert [(agent.rank, agent.device) for agent in config.ffnagents] == [(0, 2), (1, 3), (2, 4)]
     assert [(instance.instance_index, instance.model_id) for instance in config.instances] == [
         (0, ModelId("test/m1")),
         (1, ModelId("test/m2")),
     ]
-    assert config.atnagent_by_cuda_device[4].rank == 1
-    assert config.ffnagent_by_cuda_device[7].rank == 1
+    assert config.atnagent_by_device[1].rank == 1
+    assert config.ffnagent_by_device[3].rank == 1
     assert config.instance_by_model_id[ModelId("test/m2")].instance_index == 1
 
 
@@ -219,7 +219,7 @@ def test_derived_placement_views_are_immutable() -> None:
     with pytest.raises(AttributeError):
         cast(MutableSequence[object], config.atnagents).append(config.atnagents[0])
     with pytest.raises(TypeError):
-        cast(MutableMapping[int, object], config.atnagent_by_cuda_device)[2] = config.atnagents[0]
+        cast(MutableMapping[int, object], config.atnagent_by_device)[2] = config.atnagents[0]
     with pytest.raises(TypeError):
         cast(MutableMapping[ModelId, object], config.instance_by_model_id)[ModelId("test/other")] = config.instances[0]
 
@@ -228,9 +228,12 @@ def test_derived_placement_views_are_immutable() -> None:
     ("atn_devices", "ffn_devices", "message"),
     [
         ([], [1], "at least 1 item"),
-        ([-1], [1], "non-negative CUDA device indices"),
-        ([0, 0], [1], "devices must be unique"),
-        ([0], [7, 3], "devices must be sorted in ascending order"),
+        ([-1], [1], "consecutive indices starting at zero"),
+        ([0, 0], [1], "consecutive indices starting at zero"),
+        ([1], [2], "consecutive indices starting at zero"),
+        ([0, 2], [3], "consecutive indices starting at zero"),
+        ([0], [7, 3], "nonnegative consecutive indices"),
+        ([0], [1, 3], "nonnegative consecutive indices"),
     ],
 )
 def test_invalid_role_device_sequences_are_rejected(
@@ -249,13 +252,14 @@ def test_invalid_role_device_sequences_are_rejected(
         )
 
 
-def test_overlapping_role_devices_are_rejected() -> None:
-    with pytest.raises(ValidationError, match="overlapping devices"):
+@pytest.mark.parametrize("ffn_devices", [[0], [2]])
+def test_role_blocks_must_be_adjacent(ffn_devices: list[int]) -> None:
+    with pytest.raises(ValidationError, match="immediately follow"):
         XpoolConfig.from_mapping(
             {
                 "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
                 "atn": {"devices": [0]},
-                "ffn": {"devices": [0]},
+                "ffn": {"devices": ffn_devices},
                 "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
             }
         )

@@ -11,7 +11,7 @@ from xpool.memory import (
     MIB,
     SIGNED_INT64_MAX,
     FfnMemoryCalibrationCoefficients,
-    MemoryCalibrationGpu,
+    MemoryCalibrationDevice,
 )
 from xpool.runtime.ffnagent.device_memory import DeviceMemoryFeatures, DeviceMemoryPoint
 
@@ -33,7 +33,6 @@ class MemoryProfileSoftwareEnvironment:
     native_abi_version: int
     cuda_driver_version: int
     cuda_runtime_version: int
-    mps_active_thread_percentage: int
     torch_version: str
     triton_version: str
     sglang_version: str
@@ -45,7 +44,7 @@ class MemoryProfileSoftwareEnvironment:
 class MemoryProfileWorld:
     """Ephemeral evidence returned by one complete fresh calibration world."""
 
-    gpus: tuple[MemoryCalibrationGpu, ...]
+    devices: tuple[MemoryCalibrationDevice, ...]
     environment: MemoryProfileSoftwareEnvironment
     observations: tuple[MemoryObservation, ...]
 
@@ -55,7 +54,7 @@ class MemoryProfileParticipantEvidence:
     """One FfnAgent child's complete ephemeral evidence."""
 
     ffnagent_index: int
-    gpu: MemoryCalibrationGpu
+    device: MemoryCalibrationDevice
     environment: MemoryProfileSoftwareEnvironment
     observations: tuple[MemoryObservation, ...]
 

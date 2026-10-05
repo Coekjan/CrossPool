@@ -1,7 +1,7 @@
 #pragma once
 
 /// \file xpool/utils/device.hpp
-/// \brief Host-side CUDA device utility helpers.
+/// \brief Host-side device utility helpers.
 
 #include <cstdint>
 
@@ -11,7 +11,7 @@ namespace xpool::utils::device {
 
 /// Move-only owner for a host-created CUDA stream.
 ///
-/// The caller must install the intended CUDA device before creating, querying,
+/// The caller must install the intended device before creating, querying,
 /// or destroying a live stream. Destruction performs best-effort cleanup and
 /// never throws; call destroy() on the normal path when CUDA errors should be
 /// surfaced.
@@ -20,7 +20,7 @@ public:
   /// Construct an empty CUDA stream owner.
   OwnedCudaStream() = default;
 
-  /// Create an owned CUDA stream on the current CUDA device.
+  /// Create an owned CUDA stream on the current device.
   /// \throws c10::Error when CUDA cannot create the stream.
   static OwnedCudaStream create(unsigned int flags = cudaStreamNonBlocking);
 

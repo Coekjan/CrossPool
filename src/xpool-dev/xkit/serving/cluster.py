@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import errno
+import logging
 import signal
+import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -13,17 +16,19 @@ from types import TracebackType
 import httpx
 
 from xkit.network import TcpEndpointConflict, TcpEndpointReservation
-from xkit.process import OwnedProcessGroup, signal_process_group, wait_for_process_group
+from xkit.process import OwnedProcessGroup, wait_for_process_group
 from xkit.serving.readiness import ReadinessEvidence, ReadinessTimeout
+from xkit.task import TaskCleanupScope, get_task_root
 from xpool.config import XpoolConfig
 from xpool.service.wire import ReadinessSnapshot, ReadinessStatus
+from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S
+from xpool.utils.sighandler import defer_signal_exceptions
 
 DAEMON_STARTUP_TIMEOUT_SECONDS = 60.0
 AGENT_REGISTRATION_TIMEOUT_SECONDS = 120.0
-AGENT_SHUTDOWN_TIMEOUT_SECONDS = 75.0
-DAEMON_SHUTDOWN_TIMEOUT_SECONDS = 15.0
 POLL_INTERVAL_SECONDS = 0.1
 CONTROL_PLANE_HTTP_TIMEOUT_SECONDS = 1.0
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,36 +44,55 @@ class XpoolClusterLaunch:
 class XpoolCluster:
     """Own one atomically started daemon and complete configured Agent set."""
 
-    def __init__(
-        self,
-        launch: XpoolClusterLaunch,
-        processes: list[OwnedProcessGroup],
-        client: httpx.Client,
-        daemon_startup_seconds: float,
-    ) -> None:
-        self.launch = launch
-        self.processes = processes
-        self.client = client
-        self.daemon_startup_seconds = daemon_startup_seconds
-        self.closed = False
+    def __init__(self, launch: XpoolClusterLaunch) -> None:
+        """Create the retained owner before its first process is launched."""
 
-    @classmethod
+        self.launch = launch
+        self.processes: list[OwnedProcessGroup] = []
+        self.client = httpx.Client(base_url=daemon_url(launch), timeout=CONTROL_PLANE_HTTP_TIMEOUT_SECONDS)
+        self.daemon_startup_seconds = 0.0
+        self.startup_attempted = False
+        self.closed = False
+        self.task_scope: TaskCleanupScope | None = None
+        self.cleanup_lock = threading.Lock()
+        self.cleanup_deadline: float | None = None
+        self.cleanup_executor: ThreadPoolExecutor | None = None
+        self.cleanup_future: Future[None] | None = None
+
     def start(
-        cls,
-        launch: XpoolClusterLaunch,
+        self,
         endpoint: TcpEndpointReservation,
         *,
         startup_deadline: float | None = None,
-    ) -> XpoolCluster:
-        """Start one healthy daemon and complete live Agent registration set."""
+        enclosing_scope: TaskCleanupScope | None = None,
+    ) -> None:
+        """Retain protection before starting the daemon and all configured Agents.
 
-        processes: list[OwnedProcessGroup] = []
-        client = httpx.Client(base_url=daemon_url(launch), timeout=CONTROL_PLANE_HTTP_TIMEOUT_SECONDS)
+        Failed startup joins the same ordered close operation. The retained
+        scope covers controller creation and partial rollback; ownership is
+        released only after verified daemon cleanup.
+        An enclosing System retains its own scope through complete shutdown;
+        only standalone clusters register and complete a task scope here.
+        """
+
+        if self.closed or self.startup_attempted or self.cleanup_future is not None:
+            raise RuntimeError("cluster startup was already attempted or retired")
+        self.startup_attempted = True
+        launch = self.launch
+        processes = self.processes
+        client = self.client
         daemon_healthy = False
         daemon_started_at = time.monotonic()
         try:
+            root = get_task_root()
+            if root is not None and enclosing_scope is None:
+                with defer_signal_exceptions():
+                    self.task_scope = root.register_scope()
+                root.activate()
+            self.check_startup_active()
             endpoint.release_for_spawn()
-            processes.append(spawn_process("daemon", ["daemon", "serve"], launch=launch))
+            with defer_signal_exceptions():
+                processes.append(spawn_process("daemon", ["daemon", "serve"], launch=launch))
             readiness_directory = launch.config_path.parent / "readiness"
             wait_for_daemon_health(
                 client,
@@ -76,25 +100,30 @@ class XpoolCluster:
                 url=f"{daemon_url(launch)}/health",
                 evidence_path=readiness_directory / "daemon-health.json",
                 startup_deadline=startup_deadline,
+                check_startup_active=self.check_startup_active,
             )
-            daemon_startup_seconds = time.monotonic() - daemon_started_at
+            self.daemon_startup_seconds = time.monotonic() - daemon_started_at
             daemon_healthy = True
             for agent in launch.config.atnagents:
-                processes.append(
-                    spawn_process(
-                        f"atnagent-{agent.cuda_device}",
-                        ["atnagent", "--cuda-device", str(agent.cuda_device)],
-                        launch=launch,
+                self.check_startup_active()
+                with defer_signal_exceptions():
+                    processes.append(
+                        spawn_process(
+                            f"atnagent-{agent.device}",
+                            ["atnagent", "--device", str(agent.device)],
+                            launch=launch,
+                        )
                     )
-                )
             for agent in launch.config.ffnagents:
-                processes.append(
-                    spawn_process(
-                        f"ffnagent-{agent.cuda_device}",
-                        ["ffnagent", "--cuda-device", str(agent.cuda_device)],
-                        launch=launch,
+                self.check_startup_active()
+                with defer_signal_exceptions():
+                    processes.append(
+                        spawn_process(
+                            f"ffnagent-{agent.device}",
+                            ["ffnagent", "--device", str(agent.device)],
+                            launch=launch,
+                        )
                     )
-                )
             wait_for_agent_registrations(
                 client,
                 processes,
@@ -102,13 +131,21 @@ class XpoolCluster:
                 url=f"{daemon_url(launch)}/ready",
                 evidence_path=readiness_directory / "agent-registration.json",
                 startup_deadline=startup_deadline,
+                check_startup_active=self.check_startup_active,
             )
         except BaseException as error:
             diagnostics = process_diagnostics(processes)
-            client.close()
-            cleanup_failures = terminate_processes(processes)
-            close_process_logs(processes)
-            if not daemon_healthy and not cleanup_failures:
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                if not self.closed:
+                    cleanup_error.add_note(diagnostics)
+                    raise RuntimeError(
+                        f"cluster startup failed ({error}); ordered cleanup failed: {cleanup_error}"
+                    ) from error
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                raise
+            if not daemon_healthy:
                 try:
                     endpoint.reacquire()
                 except OSError as endpoint_error:
@@ -119,30 +156,101 @@ class XpoolCluster:
                     endpoint_error.add_note("failed to reacquire the daemon endpoint after startup failure")
                     raise endpoint_error from error
             details = [str(error)]
-            if cleanup_failures:
-                details.append("cleanup failures: " + "; ".join(cleanup_failures))
             if diagnostics:
                 details.append(diagnostics)
             raise RuntimeError("failed to start xpool E2E cluster:\n" + "\n".join(details)) from error
-        return cls(launch, processes, client, daemon_startup_seconds)
 
     def diagnostics(self) -> str:
         """Return bounded status and log tails for every owned process."""
 
         return process_diagnostics(self.processes)
 
-    def close(self) -> None:
-        """Drain the cluster normally and apply bounded process-group fallback."""
+    def check_startup_active(self) -> None:
+        """Stop creation and readiness waiting at the owner's retirement edge."""
 
-        if self.closed:
-            return
-        self.closed = True
-        self.client.close()
-        failures = close_cluster_processes(self.processes)
-        diagnostics = process_diagnostics(self.processes) if failures else ""
-        close_process_logs(self.processes)
+        root = get_task_root()
+        if self.cleanup_deadline is not None or (root is not None and root.sealed):
+            raise InterruptedError("cluster startup is retiring")
+
+    def close(self, *, deadline: float | None = None) -> None:
+        """Join one ordered cleanup operation without refreshing its deadline.
+
+        SGLang or native Instance owners have already retired their clients.
+        SIGTERM reaches only the daemon process; the daemon coordinates its
+        Agents and controller while control remains available. Expiry or an
+        unconfirmed daemon status retains this owner and its task proof. A
+        caller interruption leaves the retained cleanup operation running.
+
+        Args:
+            deadline: Enclosing owner's absolute monotonic retirement envelope.
+                Direct close reuses task retirement or starts the MPS budget.
+
+        Raises:
+            RuntimeError: A deployment failed after verified resource cleanup.
+        """
+
+        with self.cleanup_lock:
+            if self.cleanup_future is None:
+                root = get_task_root()
+                if deadline is None and root is not None:
+                    deadline = root.cleanup_deadline
+                if self.cleanup_deadline is None:
+                    self.cleanup_deadline = time.monotonic() + MPS_CLEANUP_TIMEOUT_S if deadline is None else deadline
+                with defer_signal_exceptions():
+                    self.cleanup_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="xpool-cluster-close")
+                    self.cleanup_future = self.cleanup_executor.submit(self.retire)
+            future = self.cleanup_future
+            executor = self.cleanup_executor
+        try:
+            future.result()
+        finally:
+            if future.done() and executor is not None:
+                executor.shutdown(wait=True)
+        failures = tuple(
+            f"{process.name} exited with code {process.process.returncode}"
+            for process in self.processes
+            if process.process.returncode != 0
+        )
         if failures:
-            raise RuntimeError("xpool E2E cluster cleanup failed: " + "; ".join(failures) + "\n" + diagnostics)
+            raise RuntimeError("xpool deployment failed after verified cleanup: " + "; ".join(failures))
+
+    def retire(self) -> None:
+        """Retain the actual handles until controlled daemon and domain retirement."""
+
+        deadline = self.cleanup_deadline
+        if deadline is None:
+            raise RuntimeError("cluster retirement requires its retained deadline")
+        daemons = tuple(process for process in self.processes if process.name == "daemon")
+        notified = False
+        expiry_reported = False
+        last_diagnostic: tuple[type[Exception], str] | None = None
+        while True:
+            now = time.monotonic()
+            if now >= deadline and not expiry_reported:
+                logger.error("cluster cleanup expired; retaining owner and device grant; manual resolution required")
+                expiry_reported = True
+            try:
+                if not notified and now < deadline:
+                    for daemon in daemons:
+                        if daemon.process.poll() is None:
+                            daemon.process.send_signal(signal.SIGTERM)
+                    notified = True
+                if all(daemon.process.poll() in (0, 20) for daemon in daemons) and all(
+                    wait_for_process_group(process.process, 0.0) for process in self.processes
+                ):
+                    self.client.close()
+                    close_process_logs(self.processes)
+                    self.closed = True
+                    if self.task_scope is not None:
+                        self.task_scope.complete()
+                    return
+                last_diagnostic = None
+            except Exception as error:
+                diagnostic = type(error), str(error)
+                if diagnostic != last_diagnostic:
+                    logger.error("cluster cleanup incomplete; retaining owner detail=%s", error)
+                    last_diagnostic = diagnostic
+            time.sleep(POLL_INTERVAL_SECONDS)
 
     def __enter__(self) -> XpoolCluster:
         return self
@@ -170,14 +278,19 @@ def daemon_url(launch: XpoolClusterLaunch) -> str:
     return f"http://{formatted_host}:{launch.config.daemon.port}"
 
 
-def spawn_process(name: str, arguments: list[str], *, launch: XpoolClusterLaunch) -> OwnedProcessGroup:
+def spawn_process(
+    name: str,
+    arguments: list[str],
+    *,
+    launch: XpoolClusterLaunch,
+) -> OwnedProcessGroup:
     """Start one CrossPool CLI process with task-local configuration and logging."""
 
     return OwnedProcessGroup.spawn_logged(
         name,
         ["xpool", *arguments],
         cwd=launch.cwd,
-        env=dict(launch.environment),
+        env=launch.environment,
         log_path=launch.config_path.parent / f"{name}.log",
     )
 
@@ -188,6 +301,7 @@ def wait_for_daemon_health(
     *,
     url: str,
     evidence_path: Path,
+    check_startup_active: Callable[[], None],
     startup_deadline: float | None = None,
 ) -> None:
     """Wait until the daemon health endpoint responds successfully."""
@@ -197,6 +311,7 @@ def wait_for_daemon_health(
     evidence = ReadinessEvidence("daemon health", url)
     try:
         while time.monotonic() < deadline:
+            check_startup_active()
             raise_for_exited_process(processes)
             try:
                 response = (
@@ -230,17 +345,19 @@ def wait_for_agent_registrations(
     launch: XpoolClusterLaunch,
     url: str,
     evidence_path: Path,
+    check_startup_active: Callable[[], None],
     startup_deadline: float | None = None,
 ) -> None:
     """Wait for every configured AtnAgent and FfnAgent registration to be live."""
 
-    expected_atn_devices = {agent.cuda_device for agent in launch.config.atnagents}
-    expected_ffn_devices = {agent.cuda_device for agent in launch.config.ffnagents}
+    expected_atn_devices = {agent.device for agent in launch.config.atnagents}
+    expected_ffn_devices = {agent.device for agent in launch.config.ffnagents}
     started_at = time.monotonic()
     deadline = started_at + AGENT_REGISTRATION_TIMEOUT_SECONDS if startup_deadline is None else startup_deadline
     evidence = ReadinessEvidence("agent registration", url)
     try:
         while time.monotonic() < deadline:
+            check_startup_active()
             raise_for_exited_process(processes)
             try:
                 response = (
@@ -254,10 +371,10 @@ def wait_for_agent_registrations(
                 if response.is_success:
                     readiness = ReadinessSnapshot.model_validate(response.json())
                     online_atn_devices = {
-                        entry.cuda_device for entry in readiness.atnagents if entry.status is ReadinessStatus.ONLINE
+                        entry.device for entry in readiness.atnagents if entry.status is ReadinessStatus.ONLINE
                     }
                     online_ffn_devices = {
-                        entry.cuda_device for entry in readiness.ffnagents if entry.status is ReadinessStatus.ONLINE
+                        entry.device for entry in readiness.ffnagents if entry.status is ReadinessStatus.ONLINE
                     }
                     if online_atn_devices == expected_atn_devices and online_ffn_devices == expected_ffn_devices:
                         return
@@ -282,60 +399,6 @@ def raise_for_exited_process(processes: list[OwnedProcessGroup]) -> None:
         returncode = process.process.poll()
         if returncode is not None:
             raise RuntimeError(f"{process.name} exited during startup with code {returncode}")
-
-
-def close_cluster_processes(processes: list[OwnedProcessGroup]) -> list[str]:
-    """Request coordinated Agent shutdown, then stop the daemon."""
-
-    agents = [process for process in processes if process.name.startswith(("atnagent-", "ffnagent-"))]
-    daemons = [process for process in processes if process.name == "daemon"]
-    failures = stop_process_set(agents, timeout_seconds=AGENT_SHUTDOWN_TIMEOUT_SECONDS, accepted_returncodes={0})
-    failures.extend(
-        stop_process_set(
-            daemons,
-            timeout_seconds=DAEMON_SHUTDOWN_TIMEOUT_SECONDS,
-            accepted_returncodes={0, -signal.SIGTERM},
-        )
-    )
-    return failures
-
-
-def stop_process_set(
-    processes: list[OwnedProcessGroup],
-    *,
-    timeout_seconds: float,
-    accepted_returncodes: set[int],
-) -> list[str]:
-    """Signal a related process set together and wait under one shared deadline."""
-
-    for process in processes:
-        signal_process_group(process.process.pid, signal.SIGTERM)
-    deadline = time.monotonic() + timeout_seconds
-    failures: list[str] = []
-    for process in reversed(processes):
-        remaining = max(0.0, deadline - time.monotonic())
-        if not wait_for_process_group(process.process, remaining):
-            try:
-                process.terminate()
-            except RuntimeError as error:
-                failures.append(str(error))
-                continue
-        returncode = process.process.returncode
-        if returncode is not None and returncode not in accepted_returncodes:
-            failures.append(f"{process.name} exited with code {returncode}")
-    return failures
-
-
-def terminate_processes(processes: list[OwnedProcessGroup]) -> list[str]:
-    """Apply bounded process-group termination to every partially acquired process."""
-
-    failures: list[str] = []
-    for process in reversed(processes):
-        try:
-            process.terminate()
-        except RuntimeError as error:
-            failures.append(str(error))
-    return failures
 
 
 def close_process_logs(processes: list[OwnedProcessGroup]) -> None:

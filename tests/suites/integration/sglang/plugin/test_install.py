@@ -13,7 +13,6 @@ import xpool.integrations.sglang.plugin
 import xtest.harness.support.config
 from xpool.integrations.sglang.hooks.lifecycle import around_runtime_context_publish
 from xpool.integrations.sglang.hooks.registry import SglangHook, discover_sglang_hooks
-from xpool.integrations.sglang.placement import SglangCudaPlacement
 from xtest.harness.support.config import reset_global_config
 from xtest.harness.support.sglang.fakes import server_args as make_server_args
 from xtest.harness.support.sglang.plugin import reset_plugin_required_hook_targets
@@ -37,15 +36,6 @@ def test_sglang_plugin_whitelist_finds_xpool(monkeypatch: pytest.MonkeyPatch) ->
     assert "xpool" in plugins
 
 
-def test_sglang_cuda_placement_is_derived_inside_sglang_integration() -> None:
-    placement = SglangCudaPlacement.derive([2, 4, 6])
-
-    assert placement.base_gpu_id == 2
-    assert placement.gpu_id_step == 2
-    with pytest.raises(RuntimeError, match="base_gpu_id"):
-        SglangCudaPlacement.derive([0, 2, 3])
-
-
 def test_hook_discovery_collects_kv_lifecycle_and_model_hooks() -> None:
     targets = {hook.target for hook in discover_sglang_hooks()}
 
@@ -53,6 +43,9 @@ def test_hook_discovery_collects_kv_lifecycle_and_model_hooks() -> None:
     assert "sglang.srt.model_executor.model_runner.ModelRunner.load_model" in targets
     assert "sglang.srt.models.qwen3.Qwen3MLP" in targets
     assert "sglang.srt.runtime_context.publish" in targets
+    assert "sglang.srt.entrypoints.engine.Engine._launch_subprocesses" in targets
+    assert "sglang.srt.utils.common.kill_process_tree" in targets
+    assert "sglang.srt.entrypoints.engine.Engine._terminate_weight_cache_daemons" in targets
 
 
 @pytest.mark.parametrize(
@@ -101,7 +94,7 @@ def test_plugin_applies_discovered_hooks_with_pinned_sglang_registry(
     assert xtest.harness.support.config.minimal_config() == "patched"
 
 
-def test_plugin_enables_upstream_post_capture_sizing(
+def test_plugin_sets_required_engine_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     install_fake_hook(monkeypatch, "xtest.harness.support.config.minimal_config")
@@ -109,6 +102,17 @@ def test_plugin_enables_upstream_post_capture_sizing(
     xpool.integrations.sglang.plugin.install()
 
     assert envs.SGLANG_ENABLE_POST_CAPTURE_KV_SIZING.get() is True
+    assert envs.SGLANG_ONE_VISIBLE_DEVICE_PER_PROCESS.get() is False
+    assert envs.SGLANG_KILLPG_ON_SCHEDULER_EXCEPTION.get() is False
+
+
+def test_plugin_rejects_incorrect_mps_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        xpool.integrations.sglang.plugin, "init_global_config", xtest.harness.support.config.minimal_config
+    )
+    monkeypatch.setenv("CUDA_MPS_PIPE_DIRECTORY", "/external/pipe")
+    with pytest.raises(SystemExit, match="CUDA_MPS_PIPE_DIRECTORY"):
+        xpool.integrations.sglang.plugin.install()
 
 
 def test_plugin_apply_hooks_guard_fails_closed_with_pinned_sglang_registry(

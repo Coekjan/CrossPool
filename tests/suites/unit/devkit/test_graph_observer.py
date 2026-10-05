@@ -30,7 +30,8 @@ def test_graph_snapshot_serializes_native_observations(
         FfnAgent,
         SimpleNamespace(
             fabric_plan=SimpleNamespace(generation=generation),
-            cuda_device=2,
+            device=2,
+            local_rank=0,
             fabric_pe=lambda: 5,
         ),
     )
@@ -52,17 +53,18 @@ def test_graph_snapshot_serializes_native_observations(
             ),
         ),
     )
-    monkeypatch.setattr(
-        graph_observer.torch.cuda,
-        "get_device_properties",
-        lambda device: SimpleNamespace(uuid="GPU-test"),
-    )
+
+    def get_device_properties(device: int) -> SimpleNamespace:
+        assert device == agent.local_rank
+        return SimpleNamespace(uuid="GPU-test")
+
+    monkeypatch.setattr(graph_observer.torch.cuda, "get_device_properties", get_device_properties)
 
     path = graph_observer.write_graph_snapshot(agent, snapshot)
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     assert path.name == f"xpool.graph-observer.{generation.format()}.5.json"
-    assert payload["gpu_uuid"] == "GPU-test"
+    assert payload["device_uuid"] == "GPU-test"
     assert payload["primary_graphs"][0]["node_counts"] == {"cudaGraphNodeTypeKernel": 3}
     assert payload["primary_graphs"][0]["binding_site_count"] == 7
     assert payload["lane_graphs"][0]["node_counts"] == {"cudaGraphNodeTypeConditional": 2}

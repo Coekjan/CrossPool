@@ -185,8 +185,8 @@ class FfnTopologyProcessEvidence(BaseModel):
 
     name: str = Field(min_length=1)
     process_id: int = Field(gt=0)
-    cuda_device: int = Field(ge=0)
-    gpu_uuid: str = Field(min_length=1)
+    device: int = Field(ge=0)
+    device_uuid: str = Field(min_length=1)
 
 
 class FfnTopologyMpsServerEvidence(BaseModel):
@@ -249,8 +249,8 @@ class FfnTopologyEvidence(BaseModel):
         if not self.mps_servers or len({server.process_id for server in self.mps_servers}) != len(self.mps_servers):
             raise ValueError("FFN topology MPS servers must be nonempty and unique")
         clients = tuple(name for server in self.mps_servers for name in server.client_process_names)
-        if len(clients) != len(set(clients)) or set(clients) != set(process_names):
-            raise ValueError("FFN topology MPS membership must cover every CUDA client exactly once")
+        if len(clients) != len(set(clients)) or not set(clients) <= set(process_names):
+            raise ValueError("FFN topology MPS membership must reference unique observed clients")
         output_coordinates = tuple((output.request_ordinal, output.output_ranks) for output in self.outputs)
         if not output_coordinates or len(output_coordinates) != len(set(output_coordinates)):
             raise ValueError("FFN topology Outputs must be nonempty and unique")

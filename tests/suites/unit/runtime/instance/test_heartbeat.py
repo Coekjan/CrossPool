@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 from http import HTTPStatus
+from types import SimpleNamespace
 
 import pytest
 
@@ -195,7 +196,7 @@ def test_instance_heartbeat_fail_closes_after_transport_error_deadline(
     )
 
     monotonic_values = iter([0.0, xpool.runtime.instance.TRANSPORT_METADATA_RECOVERY_DEADLINE_S + 1.0])
-    monkeypatch.setattr(xpool.runtime.instance.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(xpool.runtime.instance, "time", SimpleNamespace(monotonic=lambda: next(monotonic_values)))
     monkeypatch.setattr(xpool.utils.procs.os, "_exit", lambda code: (item for item in ()).throw(SystemExit(code)))
 
     with pytest.raises(SystemExit) as exc_info:

@@ -23,9 +23,9 @@ def test_catalogue_collects_deployment_resources_without_workspace_config(monkey
     catalogue = TestCatalog.load(TEST_CATALOG_PATH)
     serving = {case.id: case for case in catalogue.serving_cases}
     topology = {case.id: case for case in catalogue.topology_cases}
-    assert serving["serving-001"].required_gpu_count == 2
-    assert serving["serving-006"].required_gpu_count == 4
-    assert topology["topology-005"].required_gpu_count == 6
+    assert serving["serving-001"].required_device_count == 2
+    assert serving["serving-006"].required_device_count == 4
+    assert topology["topology-005"].required_device_count == 6
     assert all(
         case.deployment is not None and case.deployment.is_file()
         for case in (*catalogue.serving_cases, *catalogue.topology_cases)

@@ -126,7 +126,7 @@ def test_deepseek_model_binding_resolves_instance_from_config(
         encoding="utf-8",
     )
     config_path = write_minimal_config(
-        tmp_path / "xpool.toml", model_path=model_path, atn_cuda_devices=(0,), ffn_cuda_devices=(1,)
+        tmp_path / "xpool.toml", model_path=model_path, atn_devices=(0,), ffn_devices=(1,)
     )
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
     monkeypatch.setattr(

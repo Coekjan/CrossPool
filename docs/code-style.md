@@ -20,6 +20,12 @@ Executable identifiers use `Xpool` in PascalCase, `xpool` in lowercase, and
 `XPOOL` in uppercase. Do not use the CrossPool brand spelling in type, function,
 variable, or machine-readable policy identifiers.
 
+Use `device` for project-owned accelerator identities, placement, resources,
+and generic descriptions, following the domain glossary in `CONTEXT.md`.
+Preserve platform APIs, external data, and precise technical mechanisms under
+their actual names, including `torch.cuda`, `CUDA_VISIBLE_DEVICES`, CUDA Graph,
+and CUDA IPC. Neutral terminology does not justify a new backend abstraction.
+
 ## Documentation
 
 Document supported APIs at their declaration site. Documentation must explain

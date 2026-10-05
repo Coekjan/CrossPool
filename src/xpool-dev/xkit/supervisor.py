@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import math
 import multiprocessing
 import multiprocessing.process
+import multiprocessing.reduction
 import multiprocessing.resource_tracker
 import os
 import signal
@@ -30,6 +32,15 @@ from xkit.process import (
     PROCESS_POLL_INTERVAL_SECONDS,
     PROCESS_TERMINATE_TIMEOUT_SECONDS,
 )
+from xkit.task import (
+    TASK_ROOT_CONTROL_FD_ENV,
+    TaskCancellation,
+    TaskExecutionWindow,
+    TaskResourceEvent,
+    TaskRootAcknowledged,
+    TaskRootUpdate,
+)
+from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S
 from xpool.utils.procs import ProcUniqId
 
 TASK_NATURAL_DRAIN_TIMEOUT_SECONDS = 30.0
@@ -38,10 +49,11 @@ TASK_SUPERVISOR_EXIT_TIMEOUT_SECONDS = 5.0
 PR_SET_CHILD_SUBREAPER = 36
 task_supervision_lock = threading.Lock()
 protected_subreaper_process_ids: frozenset[ProcUniqId] | None = None
+logger = logging.getLogger(__name__)
 
 
 class TaskCompletionKind(StrEnum):
-    """Proven-empty terminal outcome of one supervised GPU task."""
+    """Proven-empty terminal outcome of one supervised device task."""
 
     EXITED = "exited"
     TIMED_OUT = "timed_out"
@@ -58,6 +70,16 @@ class TaskScopeState(StrEnum):
     DRAINED = "drained"
     FAILED = "failed"
     CLOSED = "closed"
+
+
+class TaskProtectionState(StrEnum):
+    """Protection retained across its commits and supervisor failure."""
+
+    INACTIVE = "inactive"
+    ACTIVATING = "activating"
+    ACTIVE = "active"
+    RETIRING = "retiring"
+    CLEANED = "cleaned"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +118,9 @@ class TaskSupervisionFailure(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class TaskSupervisorStarted:
-    """Supervisor acknowledgement sent after the task root is launched."""
+    """Launched root identity retained before task-control activation."""
+
+    root: ProcUniqId
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +129,7 @@ class TerminateTaskScope:
 
     term_deadline: float
     kill_deadline: float
+    cleanup_deadline: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +144,45 @@ class TaskSupervisorFailed:
     diagnostics: str
 
 
-TaskSupervisorMessage = TaskSupervisorStarted | TaskCompletion | TaskScopeDrained | TaskSupervisorFailed
+TaskSupervisorMessage = (
+    TaskSupervisorStarted
+    | TaskCompletion
+    | TaskScopeDrained
+    | TaskSupervisorFailed
+    | TaskRootAcknowledged
+    | TaskCancellation
+)
+
+
+@dataclass(slots=True)
+class TaskProtection:
+    """Supervisor-local commit and first retirement clock for one exact root."""
+
+    root: ProcUniqId
+    event: TaskResourceEvent | None = None
+    cleanup_deadline: float | None = None
+
+    def commit(self, update: TaskRootUpdate, connection: Connection) -> None:
+        """Commit before acknowledging the runner's protection handoff."""
+
+        if update.root != self.root:
+            raise TaskScopeFailure("task protection root identity does not match")
+        if update.event is TaskResourceEvent.ACTIVE:
+            if self.event is not None:
+                raise TaskScopeFailure("task protection cannot activate twice")
+        elif self.event is not TaskResourceEvent.ACTIVE:
+            raise TaskScopeFailure("task cleanup proof requires prior protection")
+        self.event = update.event
+        connection.send(TaskRootAcknowledged(update.event))
+
+    def retire(self, deadline: float | None = None) -> TaskCancellation:
+        """Retain the first absolute budget for cooperative owner retirement."""
+
+        if self.cleanup_deadline is None:
+            self.cleanup_deadline = time.monotonic() + MPS_CLEANUP_TIMEOUT_S if deadline is None else deadline
+        elif deadline is not None:
+            self.cleanup_deadline = min(self.cleanup_deadline, deadline)
+        return TaskCancellation(self.cleanup_deadline)
 
 
 @dataclass(slots=True)
@@ -129,8 +192,133 @@ class SupervisedTaskScope:
     name: str
     supervisor: multiprocessing.process.BaseProcess
     connection: Connection
+    root_connection: Connection | None = None
+    root: ProcUniqId | None = None
     state: TaskScopeState = TaskScopeState.STARTING
     completion: TaskCompletion | None = None
+    resource_state: TaskProtectionState = TaskProtectionState.INACTIVE
+    cleanup_deadline: float | None = None
+
+    @property
+    def is_protected(self) -> bool:
+        """Return whether resource proof still prohibits generic domain signals."""
+
+        return self.resource_state in (
+            TaskProtectionState.ACTIVATING,
+            TaskProtectionState.ACTIVE,
+            TaskProtectionState.RETIRING,
+        )
+
+    def service_root_control(self) -> None:
+        """Relay root updates while the supervision owner remains available."""
+
+        connection = self.root_connection
+        if connection is None or (self.is_protected and not self.supervisor.is_alive()):
+            return
+        while connection.poll():
+            try:
+                update = connection.recv()
+            except (EOFError, OSError):
+                connection.close()
+                self.root_connection = None
+                return
+            if isinstance(update, TaskCancellation):
+                self.request_retirement(update.deadline)
+                if self.supervisor.is_alive():
+                    try:
+                        self.connection.send(update)
+                    except (BrokenPipeError, EOFError, OSError):
+                        self.state = TaskScopeState.FAILED
+                continue
+            if isinstance(update, TaskExecutionWindow):
+                if update.root != self.root:
+                    raise TaskSupervisionFailure(f"{self.name} execution window root identity does not match")
+                if self.supervisor.is_alive():
+                    try:
+                        self.connection.send(update)
+                    except (BrokenPipeError, EOFError, OSError) as error:
+                        self.state = TaskScopeState.FAILED
+                        raise TaskSupervisionFailure(f"{self.name} execution timing relay failed: {error}") from error
+                continue
+            if not isinstance(update, TaskRootUpdate) or update.root != self.root:
+                raise TaskSupervisionFailure(f"{self.name} task root sent invalid update {update!r}")
+            if update.event is TaskResourceEvent.ACTIVE:
+                if self.resource_state is not TaskProtectionState.INACTIVE:
+                    raise TaskSupervisionFailure(f"{self.name} task protection already activated")
+                if self.cleanup_deadline is not None:
+                    connection.send(TaskCancellation(self.cleanup_deadline))
+                    continue
+                self.resource_state = TaskProtectionState.ACTIVATING
+                try:
+                    self.connection.send(update)
+                except (BrokenPipeError, EOFError, OSError) as error:
+                    self.state = TaskScopeState.FAILED
+                    raise TaskSupervisionFailure(f"{self.name} protection commit failed: {error}") from error
+            else:
+                if not self.is_protected and self.cleanup_deadline is None:
+                    raise TaskSupervisionFailure(f"{self.name} unexpected task cleanup proof")
+                never_committed = self.resource_state is TaskProtectionState.INACTIVE
+                self.resource_state = TaskProtectionState.RETIRING
+                if not never_committed:
+                    try:
+                        self.connection.send(update)
+                    except (BrokenPipeError, EOFError, OSError):
+                        self.state = TaskScopeState.FAILED
+                    continue
+                self.resource_state = TaskProtectionState.CLEANED
+                connection.send(TaskRootAcknowledged(TaskResourceEvent.CLEANED))
+
+    def request_retirement(self, deadline: float | None = None) -> None:
+        """Request the same owner-driven operation without refreshing its clock."""
+
+        if self.cleanup_deadline is None:
+            self.cleanup_deadline = time.monotonic() + MPS_CLEANUP_TIMEOUT_S if deadline is None else deadline
+        elif deadline is not None:
+            self.cleanup_deadline = min(self.cleanup_deadline, deadline)
+        if self.root_connection is not None and self.is_protected:
+            try:
+                self.root_connection.send(TaskCancellation(self.cleanup_deadline))
+            except (BrokenPipeError, EOFError, OSError) as error:
+                logger.error("task cancellation channel unavailable name=%s detail=%s", self.name, error)
+                self.root_connection.close()
+                self.root_connection = None
+
+    def accept_message(self, message: TaskSupervisorMessage) -> TaskCompletion | None:
+        """Apply one supervision transition, keeping proof distinct from verdict."""
+
+        if isinstance(message, TaskRootAcknowledged):
+            if message.event is TaskResourceEvent.ACTIVE:
+                if self.resource_state is TaskProtectionState.RETIRING:
+                    return None
+                if self.resource_state is not TaskProtectionState.ACTIVATING:
+                    raise TaskSupervisionFailure(f"{self.name} unexpected protection acknowledgement")
+                self.resource_state = TaskProtectionState.ACTIVE
+                if self.cleanup_deadline is not None:
+                    self.request_retirement()
+                    return None
+            elif self.resource_state is TaskProtectionState.RETIRING:
+                self.resource_state = TaskProtectionState.CLEANED
+            else:
+                raise TaskSupervisionFailure(f"{self.name} unexpected cleanup acknowledgement")
+            if self.root_connection is not None:
+                self.root_connection.send(message)
+            return None
+        if isinstance(message, TaskCancellation):
+            self.request_retirement(message.deadline)
+            return None
+        if isinstance(message, (TaskCompletion, TaskScopeDrained)):
+            if self.is_protected:
+                raise TaskSupervisionFailure(f"{self.name} reported empty scope without resource cleanup proof")
+            if isinstance(message, TaskCompletion):
+                self.completion = message
+                self.state = TaskScopeState.COMPLETED
+                return message
+            self.state = TaskScopeState.DRAINED
+            return None
+        self.state = TaskScopeState.FAILED
+        if isinstance(message, TaskSupervisorFailed):
+            raise TaskSupervisionFailure(f"{self.name} task supervisor failed: {message.diagnostics}")
+        raise TaskSupervisionFailure(f"{self.name} task supervisor sent invalid message: {message!r}")
 
     @classmethod
     def run(
@@ -186,7 +374,7 @@ class SupervisedTaskScope:
         log_path: Path,
         timeout_seconds: float | None,
     ) -> Self:
-        """Start one clean supervisor and wait until it launches the task root."""
+        """Start a supervisor and transfer the task's cleanup-control channel."""
 
         if timeout_seconds is not None and (not math.isfinite(timeout_seconds) or timeout_seconds <= 0):
             raise ValueError("supervised task timeout_seconds must be positive and finite, or None")
@@ -194,6 +382,7 @@ class SupervisedTaskScope:
         baseline_children = frozenset(direct_child_process_ids())
         context = multiprocessing.get_context("spawn")
         parent_connection, child_connection = context.Pipe(duplex=True)
+        root_connection, task_connection = context.Pipe(duplex=True)
         supervisor = context.Process(
             name=f"xpool-task-supervisor:{name}",
             target=run_task_supervisor,
@@ -207,20 +396,26 @@ class SupervisedTaskScope:
                 timeout_seconds,
             ),
         )
-        scope = cls(name=name, supervisor=supervisor, connection=parent_connection)
+        scope = cls(name=name, supervisor=supervisor, connection=parent_connection, root_connection=root_connection)
         try:
             start_spawn_process(supervisor)
+            if supervisor.pid is None:
+                raise TaskStartFailure("task supervisor has no process identity for descriptor transfer")
+            multiprocessing.reduction.send_handle(parent_connection, task_connection.fileno(), supervisor.pid)
+            task_connection.close()
             child_connection.close()
             if not parent_connection.poll(TASK_SUPERVISOR_START_TIMEOUT_SECONDS):
                 raise TaskSupervisionFailure(f"{name} task supervisor did not acknowledge startup")
             message = scope.receive_message()
             if isinstance(message, TaskSupervisorStarted):
+                scope.root = message.root
                 scope.state = TaskScopeState.RUNNING
                 return scope
             if isinstance(message, TaskSupervisorFailed):
                 raise TaskSupervisionFailure(f"{name} task supervisor failed during startup: {message.diagnostics}")
             raise TaskSupervisionFailure(f"{name} task supervisor sent an invalid startup message: {message!r}")
         except BaseException as startup_error:
+            task_connection.close()
             child_connection.close()
             try:
                 scope.abort_startup(baseline_children)
@@ -245,21 +440,17 @@ class SupervisedTaskScope:
             raise RuntimeError(f"{self.name} task scope is closed")
         if self.state is not TaskScopeState.RUNNING:
             raise RuntimeError(f"{self.name} task scope is not running: {self.state}")
+        self.service_root_control()
+        if self.is_protected and self.cleanup_deadline is not None and time.monotonic() >= self.cleanup_deadline:
+            self.state = TaskScopeState.FAILED
+            raise TaskSupervisionFailure(f"{self.name} cleanup expired; retaining owner and device grant")
         if self.connection.poll():
             try:
                 message = self.receive_message()
+                return self.accept_message(message)
             except TaskSupervisionFailure:
                 self.state = TaskScopeState.FAILED
                 raise
-            if isinstance(message, TaskCompletion):
-                self.completion = message
-                self.state = TaskScopeState.COMPLETED
-                return message
-            if isinstance(message, TaskSupervisorFailed):
-                self.state = TaskScopeState.FAILED
-                raise TaskSupervisionFailure(f"{self.name} task supervisor failed: {message.diagnostics}")
-            self.state = TaskScopeState.FAILED
-            raise TaskSupervisionFailure(f"{self.name} task supervisor sent an invalid completion message: {message!r}")
         if not self.supervisor.is_alive():
             if self.connection.poll():
                 return self.poll()
@@ -287,21 +478,24 @@ class SupervisedTaskScope:
             return
         term_deadline = time.monotonic() + PROCESS_TERMINATE_TIMEOUT_SECONDS
         kill_deadline = term_deadline + PROCESS_KILL_TIMEOUT_SECONDS
+        cleanup_deadline = time.monotonic() + MPS_CLEANUP_TIMEOUT_S
         supervision_failures: list[str] = []
-        waiting: list[SupervisedTaskScope] = []
         for scope in active:
-            if scope.state is TaskScopeState.FAILED:
-                supervision_failures.append(f"{scope.name} task scope requires runner fallback")
-                continue
             try:
+                scope.service_root_control()
+                scope.request_retirement(cleanup_deadline)
+                if scope.state is TaskScopeState.FAILED:
+                    supervision_failures.append(f"{scope.name} task scope requires runner fallback")
+                    continue
                 if scope.poll() is not None:
                     continue
-            except TaskSupervisionFailure as error:
+            except (TaskSupervisionFailure, EOFError, OSError) as error:
+                scope.request_retirement(cleanup_deadline)
                 scope.state = TaskScopeState.FAILED
                 supervision_failures.append(str(error))
                 continue
             try:
-                scope.connection.send(TerminateTaskScope(term_deadline, kill_deadline))
+                scope.connection.send(TerminateTaskScope(term_deadline, kill_deadline, scope.cleanup_deadline))
             except (BrokenPipeError, EOFError, OSError) as error:
                 try:
                     if scope.poll() is not None:
@@ -316,20 +510,60 @@ class SupervisedTaskScope:
                     scope.state = TaskScopeState.FAILED
                     supervision_failures.append(f"{scope.name}: cancellation send failed: {error}")
                 continue
-            waiting.append(scope)
-        for scope in waiting:
-            try:
-                scope.wait_for_termination(kill_deadline)
-            except TaskSupervisionFailure as error:
-                supervision_failures.append(str(error))
+        pending = list(active)
+        expiry_reported: set[str] = set()
+        response_deadline = kill_deadline + TASK_SUPERVISOR_EXIT_TIMEOUT_SECONDS
+        while pending:
+            for scope in tuple(pending):
+                try:
+                    scope.service_root_control()
+                    if scope.connection.poll():
+                        scope.accept_message(scope.receive_message())
+                    if scope.state in (TaskScopeState.DRAINED, TaskScopeState.COMPLETED):
+                        pending.remove(scope)
+                        continue
+                    if not scope.supervisor.is_alive():
+                        raise TaskSupervisionFailure(f"{scope.name} task supervisor exited during cancellation")
+                    if time.monotonic() >= response_deadline and not scope.is_protected:
+                        raise TaskSupervisionFailure(f"{scope.name} task supervisor exceeded its cancellation bound")
+                except Exception as error:
+                    if scope.state is not TaskScopeState.FAILED:
+                        supervision_failures.append(str(error))
+                    scope.state = TaskScopeState.FAILED
+                if scope.state is TaskScopeState.FAILED and not scope.is_protected:
+                    pending.remove(scope)
+                elif (
+                    scope.cleanup_deadline is not None
+                    and time.monotonic() >= scope.cleanup_deadline
+                    and scope.name not in expiry_reported
+                ):
+                    logger.error(
+                        "task cleanup expired; retaining owner name=%s; manual resolution required", scope.name
+                    )
+                    expiry_reported.add(scope.name)
+            if pending:
+                time.sleep(PROCESS_POLL_INTERVAL_SECONDS)
+        if not supervision_failures and any(scope.state is TaskScopeState.FAILED for scope in active):
+            supervision_failures.append("task cancellation requires runner fallback")
         if supervision_failures:
+            # Protected scopes remain in the wait above. Generic fallback only
+            # reaches tasks whose resource protection was never committed or
+            # whose cleanup has already been acknowledged by the supervisor.
+            retained_deadline = min(
+                (
+                    scope.cleanup_deadline
+                    for scope in active
+                    if scope.resource_state is not TaskProtectionState.INACTIVE and scope.cleanup_deadline is not None
+                ),
+                default=None,
+            )
             fallback_failures: list[str] = []
             try:
-                reap_task_supervisors(scopes)
+                reap_task_supervisors(scopes, cleanup_deadline=retained_deadline)
             except TaskScopeFailure as error:
                 fallback_failures.append(str(error))
             try:
-                drain_unprotected_subreaper_descendants()
+                drain_unprotected_subreaper_descendants(cleanup_deadline=retained_deadline)
             except TaskScopeFailure as error:
                 fallback_failures.append(str(error))
             if not fallback_failures:
@@ -351,11 +585,15 @@ class SupervisedTaskScope:
             return
         if self.state not in (TaskScopeState.COMPLETED, TaskScopeState.DRAINED):
             raise RuntimeError(f"cannot close unproven task scope {self.name}")
+        if self.is_protected:
+            raise RuntimeError(f"cannot close protected task scope {self.name}")
         self.supervisor.join(TASK_SUPERVISOR_EXIT_TIMEOUT_SECONDS)
         if self.supervisor.is_alive():
             self.state = TaskScopeState.FAILED
             raise TaskSupervisionFailure(f"{self.name} task supervisor did not exit after proving scope empty")
         self.connection.close()
+        if self.root_connection is not None:
+            self.root_connection.close()
         self.supervisor.close()
         self.state = TaskScopeState.CLOSED
 
@@ -368,43 +606,17 @@ class SupervisedTaskScope:
             raise TaskSupervisionFailure(f"{self.name} task supervisor channel failed: {error}") from error
         if not isinstance(
             message,
-            (TaskSupervisorStarted, TaskCompletion, TaskScopeDrained, TaskSupervisorFailed),
+            (
+                TaskSupervisorStarted,
+                TaskCompletion,
+                TaskScopeDrained,
+                TaskSupervisorFailed,
+                TaskRootAcknowledged,
+                TaskCancellation,
+            ),
         ):
             raise TaskSupervisionFailure(f"{self.name} task supervisor sent unknown message {message!r}")
         return message
-
-    def wait_for_termination(self, kill_deadline: float) -> None:
-        """Wait for cancellation acknowledgement under the shared cleanup deadline."""
-
-        response_deadline = kill_deadline + TASK_SUPERVISOR_EXIT_TIMEOUT_SECONDS
-        while time.monotonic() < response_deadline:
-            if self.connection.poll(PROCESS_POLL_INTERVAL_SECONDS):
-                try:
-                    message = self.receive_message()
-                except TaskSupervisionFailure:
-                    self.state = TaskScopeState.FAILED
-                    raise
-                if isinstance(message, TaskScopeDrained):
-                    self.state = TaskScopeState.DRAINED
-                    return
-                if isinstance(message, TaskCompletion):
-                    self.completion = message
-                    self.state = TaskScopeState.COMPLETED
-                    return
-                if isinstance(message, TaskSupervisorFailed):
-                    self.state = TaskScopeState.FAILED
-                    raise TaskSupervisionFailure(f"{self.name} task supervisor failed: {message.diagnostics}")
-                self.state = TaskScopeState.FAILED
-                raise TaskSupervisionFailure(
-                    f"{self.name} task supervisor sent invalid cancellation message {message!r}"
-                )
-            if not self.supervisor.is_alive():
-                self.state = TaskScopeState.FAILED
-                raise TaskSupervisionFailure(
-                    f"{self.name} task supervisor exited with code {self.supervisor.exitcode} during cancellation"
-                )
-        self.state = TaskScopeState.FAILED
-        raise TaskSupervisionFailure(f"{self.name} task supervisor exceeded the shared cleanup deadline")
 
     def kill_unresponsive_supervisor(self) -> None:
         """Bound parent-side cleanup to a supervisor that never established its contract."""
@@ -428,6 +640,8 @@ class SupervisedTaskScope:
             raise
         finally:
             self.connection.close()
+            if self.root_connection is not None:
+                self.root_connection.close()
             if self.supervisor.pid is None or not self.supervisor.is_alive():
                 self.supervisor.close()
         self.state = TaskScopeState.CLOSED
@@ -447,9 +661,14 @@ def run_task_supervisor(
     root: subprocess.Popen[str] | None = None
     log_file: TextIO | None = None
     started = False
+    task_connection: Connection | None = None
+    protection: TaskProtection | None = None
+    exit_code = 0
     try:
         os.setsid()
         set_child_subreaper()
+        task_connection = Connection(multiprocessing.reduction.recv_handle(connection))
+        env[TASK_ROOT_CONTROL_FD_ENV] = str(task_connection.fileno())
         log_file = log_path.open("w", encoding="utf-8")
         root = subprocess.Popen(
             command,
@@ -459,23 +678,34 @@ def run_task_supervisor(
             stdout=log_file,
             stderr=subprocess.STDOUT,
             process_group=0,
+            pass_fds=(task_connection.fileno(),),
             text=True,
         )
+        task_connection.close()
+        task_connection = None
         task_deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
-        connection.send(TaskSupervisorStarted())
+        protection = TaskProtection(ProcUniqId(root.pid))
+        connection.send(TaskSupervisorStarted(protection.root))
         started = True
-        connection.send(supervise_task(connection, root, task_deadline=task_deadline))
+        connection.send(supervise_task(connection, root, protection=protection, task_deadline=task_deadline))
     except BaseException:
+        exit_code = 1
         diagnostics = traceback.format_exc()
         scope_empty = root is None
         if root is not None:
             now = time.monotonic()
             try:
-                drain_task_scope(
-                    root,
-                    term_deadline=now + PROCESS_TERMINATE_TIMEOUT_SECONDS,
-                    kill_deadline=now + PROCESS_TERMINATE_TIMEOUT_SECONDS + PROCESS_KILL_TIMEOUT_SECONDS,
-                )
+                if protection is not None and protection.event is not None:
+                    with suppress(BrokenPipeError, EOFError, OSError):
+                        connection.send(protection.retire())
+                    wait_for_task_cleanup(connection, protection)
+                    drain_retired_task_scope(root, protection)
+                else:
+                    drain_task_scope(
+                        root,
+                        term_deadline=now + PROCESS_TERMINATE_TIMEOUT_SECONDS,
+                        kill_deadline=now + PROCESS_TERMINATE_TIMEOUT_SECONDS + PROCESS_KILL_TIMEOUT_SECONDS,
+                    )
                 scope_empty = True
             except BaseException:
                 diagnostics += "\nTask Supervisor local cleanup failed:\n" + traceback.format_exc()
@@ -490,32 +720,61 @@ def run_task_supervisor(
                 )
             else:
                 connection.send(TaskSupervisorFailed(diagnostics[-LOG_TAIL_CHARS:]))
-        if root is not None:
-            root.poll()
-        if log_file is not None:
-            log_file.close()
-        connection.close()
-        os._exit(1)
-    root.poll()
-    log_file.close()
+    if root is not None:
+        root.poll()
+    if log_file is not None:
+        log_file.close()
+    if task_connection is not None:
+        task_connection.close()
     connection.close()
-    os._exit(0)
+    os._exit(exit_code)
 
 
 def supervise_task(
     connection: Connection,
     root: subprocess.Popen[str],
     *,
+    protection: TaskProtection,
     task_deadline: float | None,
 ) -> TaskCompletion | TaskScopeDrained:
     """Drive timeout, natural drain, leak cleanup, and cancellation for one task."""
 
     natural_drain_deadline: float | None = None
+    item_deadline: float | None = None
+    item_expired = False
     while True:
         if connection.poll():
             command = connection.recv()
+            if isinstance(command, TaskRootUpdate):
+                protection.commit(command, connection)
+                continue
+            if isinstance(command, TaskExecutionWindow):
+                if command.root != protection.root:
+                    raise TaskScopeFailure("task execution window root identity does not match")
+                if (
+                    protection.event is TaskResourceEvent.ACTIVE
+                    and item_deadline is not None
+                    and command.changed_at >= item_deadline
+                ):
+                    item_expired = True
+                item_deadline = command.deadline
+                continue
+            if isinstance(command, TaskCancellation):
+                # The invocation finished and entered final retirement. Cleanup
+                # is timed by its original envelope rather than execution time.
+                protection.retire(command.deadline)
+                task_deadline = None
+                item_deadline = None
+                continue
             if not isinstance(command, TerminateTaskScope):
                 raise TaskScopeFailure(f"task supervisor received invalid command {command!r}")
+            if protection.event is not None:
+                retirement = protection.retire(command.cleanup_deadline)
+                if protection.event is TaskResourceEvent.ACTIVE:
+                    connection.send(retirement)
+                    wait_for_task_cleanup(connection, protection)
+                drain_retired_task_scope(root, protection)
+                return TaskScopeDrained()
             drain_task_scope(root, term_deadline=command.term_deadline, kill_deadline=command.kill_deadline)
             return TaskScopeDrained()
 
@@ -523,8 +782,24 @@ def supervise_task(
         scope_empty = reap_task_children(root)
         descendants = descendant_process_ids()
         now = time.monotonic()
+        if protection.event is not None and (item_expired or (item_deadline is not None and now >= item_deadline)):
+            connection.send(protection.retire())
+            if protection.event is TaskResourceEvent.ACTIVE:
+                wait_for_task_cleanup(connection, protection)
+            drain_retired_task_scope(root, protection)
+            return TaskCompletion(TaskCompletionKind.TIMED_OUT, None, "task item exceeded its execution timeout")
+        if root_returncode is not None and protection.event is TaskResourceEvent.ACTIVE:
+            connection.send(protection.retire())
+            wait_for_task_cleanup(connection, protection)
+            drain_retired_task_scope(root, protection)
+            return TaskCompletion(TaskCompletionKind.EXITED, root_returncode, None)
         if root_returncode is None:
             if task_deadline is not None and now >= task_deadline:
+                if protection.event is TaskResourceEvent.ACTIVE:
+                    connection.send(protection.retire())
+                    wait_for_task_cleanup(connection, protection)
+                    drain_retired_task_scope(root, protection)
+                    return TaskCompletion(TaskCompletionKind.TIMED_OUT, None, "task exceeded its execution timeout")
                 term_deadline = now + PROCESS_TERMINATE_TIMEOUT_SECONDS
                 drain_task_scope(
                     root, term_deadline=term_deadline, kill_deadline=term_deadline + PROCESS_KILL_TIMEOUT_SECONDS
@@ -541,27 +816,101 @@ def supervise_task(
         elif now >= natural_drain_deadline:
             diagnostics = f"descendants outlived the task root: {format_process_ids(descendants)}"
             term_deadline = now + PROCESS_TERMINATE_TIMEOUT_SECONDS
-            drain_task_scope(
-                root, term_deadline=term_deadline, kill_deadline=term_deadline + PROCESS_KILL_TIMEOUT_SECONDS
-            )
+            if protection.event is TaskResourceEvent.CLEANED:
+                drain_retired_task_scope(root, protection)
+            else:
+                drain_task_scope(
+                    root, term_deadline=term_deadline, kill_deadline=term_deadline + PROCESS_KILL_TIMEOUT_SECONDS
+                )
             return TaskCompletion(TaskCompletionKind.LEAKED, root_returncode, diagnostics)
+        time.sleep(PROCESS_POLL_INTERVAL_SECONDS)
+
+
+def wait_for_task_cleanup(connection: Connection, protection: TaskProtection) -> None:
+    """Retain supervision until exact-root proof permits generic drain."""
+
+    expiry_reported = False
+    last_error: str | None = None
+    channel_available = True
+    while protection.event is TaskResourceEvent.ACTIVE:
+        try:
+            if channel_available and connection.poll(PROCESS_POLL_INTERVAL_SECONDS):
+                command = connection.recv()
+                if isinstance(command, TaskRootUpdate):
+                    protection.commit(command, connection)
+                elif isinstance(command, TerminateTaskScope):
+                    connection.send(protection.retire(command.cleanup_deadline))
+                elif isinstance(command, TaskCancellation):
+                    protection.retire(command.deadline)
+                elif isinstance(command, TaskExecutionWindow):
+                    # Retirement already owns timing; item teardown may still
+                    # publish the end of its former execution interval.
+                    if command.root != protection.root:
+                        raise TaskScopeFailure("task execution window root identity does not match")
+                else:
+                    raise TaskScopeFailure(f"task supervisor received invalid retirement command {command!r}")
+        except Exception as error:
+            if isinstance(error, EOFError | OSError):
+                channel_available = False
+            diagnostic = str(error)
+            if diagnostic != last_error:
+                logger.error(
+                    "task resource proof unavailable; retaining supervisor root=%s detail=%s",
+                    protection.root,
+                    diagnostic,
+                )
+                last_error = diagnostic
+        if (
+            protection.cleanup_deadline is not None
+            and time.monotonic() >= protection.cleanup_deadline
+            and not expiry_reported
+        ):
+            logger.error(
+                "task cleanup expired; retaining supervisor root=%s; manual resolution required", protection.root
+            )
+            expiry_reported = True
+        if not channel_available:
+            time.sleep(PROCESS_POLL_INTERVAL_SECONDS)
+
+
+def drain_retired_task_scope(root: subprocess.Popen[str], protection: TaskProtection) -> None:
+    """Reap after resource proof within the unchanged task-retirement envelope."""
+
+    deadline = protection.retire().deadline
+    now = time.monotonic()
+    try:
+        drain_task_scope(
+            root,
+            term_deadline=min(now + PROCESS_TERMINATE_TIMEOUT_SECONDS, deadline),
+            kill_deadline=min(now + PROCESS_TERMINATE_TIMEOUT_SECONDS + PROCESS_KILL_TIMEOUT_SECONDS, deadline),
+        )
+    except Exception as error:
+        logger.error("task domain incomplete; retaining supervisor root=%s detail=%s", protection.root, error)
+        last_error = str(error)
+    else:
+        return
+    while True:
+        try:
+            if reap_task_children(root):
+                return
+        except Exception as observation_error:
+            diagnostic = str(observation_error)
+            if diagnostic != last_error:
+                logger.error(
+                    "task domain unconfirmed; retaining supervisor root=%s detail=%s", protection.root, diagnostic
+                )
+                last_error = diagnostic
         time.sleep(PROCESS_POLL_INTERVAL_SECONDS)
 
 
 def drain_task_scope(root: subprocess.Popen[str], *, term_deadline: float, kill_deadline: float) -> None:
     """Repeatedly enumerate, signal, and reap one complete descendant domain."""
 
-    try:
-        root_identity = ProcUniqId(root.pid)
-    except (psutil.Error, ValueError):
-        root_identity = None
     term_signaled: set[ProcUniqId] = set()
     while time.monotonic() < term_deadline:
         if reap_task_children(root):
             return
         targets = set(descendant_process_ids())
-        if root_identity is not None and root_identity.is_alive():
-            targets.add(root_identity)
         for process_id in targets - term_signaled:
             process_id.send_signal(signal.SIGTERM)
             term_signaled.add(process_id)
@@ -572,8 +921,6 @@ def drain_task_scope(root: subprocess.Popen[str], *, term_deadline: float, kill_
         if reap_task_children(root):
             return
         targets = set(descendant_process_ids())
-        if root_identity is not None and root_identity.is_alive():
-            targets.add(root_identity)
         for process_id in targets - kill_signaled:
             process_id.send_signal(signal.SIGKILL)
             kill_signaled.add(process_id)
@@ -724,34 +1071,59 @@ def drain_subreaper_descendants(
     excluded_roots: frozenset[ProcUniqId],
     *,
     context: str,
+    cleanup_deadline: float | None = None,
 ) -> None:
-    """Drain complete trees rooted at every unexcluded direct subreaper child."""
+    """Drain adopted trees, consuming a managed task's existing retirement clock.
+
+    Without a managed clock, existing bounded generic cleanup applies. With
+    one, expiry or observation failure retains this owner until domain proof;
+    it never grants another signalling phase.
+    """
 
     term_deadline = time.monotonic() + PROCESS_TERMINATE_TIMEOUT_SECONDS
     kill_deadline = term_deadline + PROCESS_KILL_TIMEOUT_SECONDS
-    term_signaled: set[ProcUniqId] = set()
-    while time.monotonic() < term_deadline:
-        roots = subreaper_direct_roots(excluded_roots)
-        if not roots:
-            return
-        for process_id in set(process_tree_ids(roots)) - term_signaled:
-            process_id.send_signal(signal.SIGTERM)
-            term_signaled.add(process_id)
-        time.sleep(min(PROCESS_POLL_INTERVAL_SECONDS, max(0.0, term_deadline - time.monotonic())))
+    if cleanup_deadline is not None:
+        term_deadline = min(term_deadline, cleanup_deadline)
+        kill_deadline = min(kill_deadline, cleanup_deadline)
+    last_error: str | None = None
+    for signum, phase_deadline in ((signal.SIGTERM, term_deadline), (signal.SIGKILL, kill_deadline)):
+        signaled: set[ProcUniqId] = set()
+        while time.monotonic() < phase_deadline:
+            try:
+                roots = subreaper_direct_roots(excluded_roots)
+                if not roots:
+                    return
+                for process_id in set(process_tree_ids(roots)) - signaled:
+                    process_id.send_signal(signum)
+                    signaled.add(process_id)
+            except Exception as error:
+                if cleanup_deadline is None:
+                    raise
+                diagnostic = str(error)
+                if diagnostic != last_error:
+                    logger.error("%s unconfirmed; retaining owner detail=%s", context, diagnostic)
+                    last_error = diagnostic
+            time.sleep(min(PROCESS_POLL_INTERVAL_SECONDS, max(0.0, phase_deadline - time.monotonic())))
 
-    kill_signaled: set[ProcUniqId] = set()
-    while time.monotonic() < kill_deadline:
-        roots = subreaper_direct_roots(excluded_roots)
-        if not roots:
-            return
-        for process_id in set(process_tree_ids(roots)) - kill_signaled:
-            process_id.send_signal(signal.SIGKILL)
-            kill_signaled.add(process_id)
-        time.sleep(min(PROCESS_POLL_INTERVAL_SECONDS, max(0.0, kill_deadline - time.monotonic())))
-
-    survivors = subreaper_direct_roots(excluded_roots)
-    if survivors:
-        raise TaskScopeFailure(f"{context} survived SIGKILL: {format_process_ids(survivors)}")
+    expiry_reported = False
+    while True:
+        try:
+            survivors = subreaper_direct_roots(excluded_roots)
+            if not survivors:
+                return
+            if cleanup_deadline is None:
+                raise TaskScopeFailure(f"{context} survived SIGKILL: {format_process_ids(survivors)}")
+        except Exception as error:
+            if cleanup_deadline is None:
+                raise
+            diagnostic = str(error)
+            if diagnostic != last_error:
+                logger.error("%s unconfirmed; retaining owner detail=%s", context, diagnostic)
+                last_error = diagnostic
+        if not expiry_reported:
+            logger.error("%s incomplete; retaining owner; manual resolution required", context)
+            expiry_reported = True
+        time.sleep(PROCESS_POLL_INTERVAL_SECONDS)
 
 
 def drain_new_subreaper_descendants(baseline_children: frozenset[ProcUniqId]) -> None:
@@ -761,28 +1133,38 @@ def drain_new_subreaper_descendants(baseline_children: frozenset[ProcUniqId]) ->
     drain_subreaper_descendants(excluded, context="task startup descendants")
 
 
-def drain_unprotected_subreaper_descendants() -> None:
+def drain_unprotected_subreaper_descendants(*, cleanup_deadline: float | None = None) -> None:
     """Clean descendants adopted after a Task Supervisor infrastructure failure."""
 
     drain_subreaper_descendants(
         protected_subreaper_process_ids or frozenset(),
         context="runner-adopted descendants",
+        cleanup_deadline=cleanup_deadline,
     )
 
 
-def reap_task_supervisors(scopes: Sequence[SupervisedTaskScope]) -> None:
+def reap_task_supervisors(scopes: Sequence[SupervisedTaskScope], *, cleanup_deadline: float | None = None) -> None:
     """Cancel and reap every known Supervisor before runner-level fallback."""
 
-    known = tuple(scope for scope in scopes if scope.supervisor.pid is not None)
+    known = tuple(
+        scope for scope in scopes if scope.state is not TaskScopeState.CLOSED and scope.supervisor.pid is not None
+    )
     for scope in known:
         if scope.state not in (TaskScopeState.COMPLETED, TaskScopeState.DRAINED, TaskScopeState.CLOSED):
             scope.state = TaskScopeState.FAILED
-            if scope.supervisor.is_alive():
-                with suppress(ProcessLookupError):
-                    scope.supervisor.kill()
+            try:
+                if scope.supervisor.is_alive() and (cleanup_deadline is None or time.monotonic() < cleanup_deadline):
+                    with suppress(ProcessLookupError):
+                        scope.supervisor.kill()
+            except Exception as error:
+                if cleanup_deadline is None:
+                    raise
+                logger.error("task supervisor unconfirmed; retaining owner name=%s detail=%s", scope.name, error)
 
-    deadline = time.monotonic() + TASK_SUPERVISOR_EXIT_TIMEOUT_SECONDS
-    wait_for_supervisors(known, deadline)
+    if cleanup_deadline is not None:
+        wait_for_supervisors(known, cleanup_deadline, retain_after_expiry=True)
+        return
+    wait_for_supervisors(known, time.monotonic() + TASK_SUPERVISOR_EXIT_TIMEOUT_SECONDS)
     survivors = tuple(scope for scope in known if scope.supervisor.is_alive())
     for scope in survivors:
         scope.state = TaskScopeState.FAILED
@@ -794,14 +1176,31 @@ def reap_task_supervisors(scopes: Sequence[SupervisedTaskScope]) -> None:
         raise TaskScopeFailure(f"Task Supervisors survived SIGKILL: {survivors}")
 
 
-def wait_for_supervisors(scopes: Sequence[SupervisedTaskScope], deadline: float) -> None:
+def wait_for_supervisors(
+    scopes: Sequence[SupervisedTaskScope], deadline: float, *, retain_after_expiry: bool = False
+) -> None:
     """Reap known Supervisor processes under one shared deadline."""
 
     pending = list(scopes)
-    while pending and time.monotonic() < deadline:
+    expiry_reported = False
+    last_error: str | None = None
+    while pending and (time.monotonic() < deadline or retain_after_expiry):
         for scope in tuple(pending):
-            scope.supervisor.join(0)
-            if not scope.supervisor.is_alive():
-                pending.remove(scope)
+            try:
+                scope.supervisor.join(0)
+                if not scope.supervisor.is_alive():
+                    pending.remove(scope)
+            except Exception as error:
+                if not retain_after_expiry:
+                    raise
+                diagnostic = str(error)
+                if diagnostic != last_error:
+                    logger.error(
+                        "task supervisor unconfirmed; retaining owner name=%s detail=%s", scope.name, diagnostic
+                    )
+                    last_error = diagnostic
         if pending:
-            time.sleep(min(PROCESS_POLL_INTERVAL_SECONDS, max(0.0, deadline - time.monotonic())))
+            if time.monotonic() >= deadline and not expiry_reported:
+                logger.error("task supervisors incomplete; retaining owner; manual resolution required")
+                expiry_reported = True
+            time.sleep(PROCESS_POLL_INTERVAL_SECONDS)

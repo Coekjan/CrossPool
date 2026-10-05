@@ -187,7 +187,7 @@ class ClientBenchCase(CaseSettings):
         metadata = ServingMetadata.model_validate_json(contents)
         if "schema_version" not in metadata.model_fields_set:
             raise ValueError("external serving metadata requires schema_version=1")
-        if set(metadata.target_gpu_uuids or {}) - {target.model_id for target in self.targets}:
+        if set(metadata.target_device_uuids or {}) - {target.model_id for target in self.targets}:
             raise ValueError("serving metadata references an unknown benchmark target")
         return metadata
 
@@ -195,7 +195,7 @@ class ClientBenchCase(CaseSettings):
 type BenchCase = Annotated[OwnedBenchCase | ClientBenchCase, Field(discriminator="mode")]
 
 
-class ServingGpu(BenchValue):
+class ServingDevice(BenchValue):
     uuid: str = Field(min_length=1)
     name: str | None = None
     total_memory_bytes: int | None = Field(default=None, gt=0)
@@ -204,7 +204,7 @@ class ServingGpu(BenchValue):
     numa_affinity: str | None = None
 
 
-class ServingGpuLink(BenchValue):
+class ServingDeviceLink(BenchValue):
     source_uuid: str = Field(min_length=1)
     destination_uuid: str = Field(min_length=1)
     link: str = Field(min_length=1)
@@ -214,32 +214,32 @@ class ServingMetadata(BenchValue):
     """Serving conditions; provenance is supplied by the tool, not the input.
 
     Missing fields remain unknown. Link tokens are topology observations, not
-    measured bandwidth. Client files may reference only their provided GPUs;
+    measured bandwidth. Client files may reference only their provided devices;
     preparation additionally checks their target references against the case.
     """
 
     schema_version: int = Field(default=1, ge=1, le=1, strict=True, exclude=True)
-    gpus: tuple[ServingGpu, ...] | None = None
-    links: tuple[ServingGpuLink, ...] | None = None
-    target_gpu_uuids: dict[ModelId, tuple[str, ...]] | None = None
-    role_gpu_uuids: dict[Literal["atn", "ffn"], tuple[str, ...]] | None = None
+    devices: tuple[ServingDevice, ...] | None = None
+    links: tuple[ServingDeviceLink, ...] | None = None
+    target_device_uuids: dict[ModelId, tuple[str, ...]] | None = None
+    role_device_uuids: dict[Literal["atn", "ffn"], tuple[str, ...]] | None = None
     packages: dict[str, str] | None = None
     driver_version: str | None = None
     cuda_build_version: str | None = None
     cuda_build_source: str | None = None
 
     @model_validator(mode="after")
-    def validate_gpu_references(self) -> Self:
-        uuids = {gpu.uuid for gpu in self.gpus or ()}
-        if len(uuids) != len(self.gpus or ()):
-            raise ValueError("serving metadata GPU UUIDs must be unique")
+    def validate_device_references(self) -> Self:
+        uuids = {device.uuid for device in self.devices or ()}
+        if len(uuids) != len(self.devices or ()):
+            raise ValueError("serving metadata device UUIDs must be unique")
         groups = (
-            *(self.target_gpu_uuids or {}).values(),
-            *(self.role_gpu_uuids or {}).values(),
+            *(self.target_device_uuids or {}).values(),
+            *(self.role_device_uuids or {}).values(),
             *((link.source_uuid, link.destination_uuid) for link in self.links or ()),
         )
         if any(set(group) - uuids for group in groups):
-            raise ValueError("serving metadata references an unknown GPU UUID")
+            raise ValueError("serving metadata references an unknown device UUID")
         return self
 
 

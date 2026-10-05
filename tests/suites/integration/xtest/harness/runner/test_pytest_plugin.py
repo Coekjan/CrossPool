@@ -44,7 +44,7 @@ import xtest
 from xkit import ResourceRequirements
 
 def resources(case):
-    return ResourceRequirements(case.required_gpu_count, True, True, case.models)
+    return ResourceRequirements(case.required_device_count, True, case.models)
 
 @xtest.parameterize("case")
 @xtest.requirements(resources)
@@ -55,10 +55,10 @@ def test_bound(case, tmp_path):
 def test_explicit(size, tmp_path):
     assert size in (16, 32) and tmp_path.is_dir()
 
-@pytest.mark.parametrize("cuda_count", (1, 2))
-@xtest.requirements(lambda cuda_count: ResourceRequirements(cuda_count, False, False, ()))
-def test_native(cuda_count, tmp_path):
-    assert cuda_count in (1, 2) and tmp_path.is_dir()
+@pytest.mark.parametrize("device_count", (1, 2))
+@xtest.requirements(lambda device_count: ResourceRequirements(device_count, False, ()))
+def test_native(device_count, tmp_path):
+    assert device_count in (1, 2) and tmp_path.is_dir()
 
 def test_plain(tmp_path):
     assert tmp_path.is_dir()
@@ -78,7 +78,7 @@ def test_plain(tmp_path):
     assert collected.ret == 0
     plan = xtest.harness.runner.plan.TestPlan.read(output)
     assert len(plan.cases) == 7
-    assert tuple(case.requirements.cuda_count for case in plan.cases) == (2, 3, 0, 0, 1, 2, 0)
+    assert tuple(case.requirements.device_count for case in plan.cases) == (2, 3, 0, 0, 1, 2, 0)
     assert plan.cases[0].nodeid.endswith("test_bound[serving-001]")
     assert plan.cases[1].nodeid.endswith("test_bound[serving-002]")
     assert plan.cases[0].requirements.model_ids == (ModelId("Qwen/Qwen3-0.6B"),)
@@ -87,7 +87,7 @@ def test_plain(tmp_path):
         "xtest.harness.runner.pytest_plugin",
         f"--xpool-test-catalog={bound_catalogue}",
         "-m",
-        "not requires_cuda",
+        "not requires_device",
         "-q",
         str(program),
     )
@@ -302,7 +302,7 @@ evaluated_rows = []
 
 def resources(row):
     evaluated_rows.append(row)
-    return ResourceRequirements(0, False, True, model_ids)
+    return ResourceRequirements(0, True, model_ids)
 
 @pytest.mark.parametrize("row", (0, 1))
 @xtest.requirements(resources)
@@ -397,7 +397,7 @@ import pytest
 import xtest
 from xpool.model import ModelId
 
-@xtest.requirements(cuda_count=2, requires_config=True, requires_mps=True, model_ids=(ModelId({str(TEST_MODEL_ID)!r}),))
+@xtest.requirements(device_count=2, requires_config=True, model_ids=(ModelId({str(TEST_MODEL_ID)!r}),))
 @pytest.mark.estimated_duration(seconds=3)
 @pytest.mark.timeout(12)
 def test_example():
@@ -424,8 +424,7 @@ def test_example():
     case = plan.cases[0]
     assert case.path == "tests/suites/integration/test_example.py"
     assert case.stage is xtest.harness.runner.plan.TestStage.INTEGRATION
-    assert case.requirements.cuda_count == 2
-    assert case.requirements.requires_mps
+    assert case.requirements.device_count == 2
     assert case.requirements.requires_config
     assert case.requirements.model_ids == (TEST_MODEL_ID,)
     assert case.estimated_duration_seconds == 3

@@ -57,17 +57,24 @@ snapshot establishes CONFIG provenance rather than preserving its original
 sources. [Tooling launch snapshots](tooling.md#shared-serving-lifecycle) preserve
 complete effective configuration while binding owned resources and child inputs.
 
-Every process receives the same effective configuration. The daemon compares
-declared process identity and topology against that configuration during
-registration; processes do not negotiate independent settings.
+Every process receives the same effective configuration. Participants compare
+configuration and their ordered Deployment Device View at the
+[startup check](#managed-mps-and-role-preparation). Registration validates
+declared process identity, topology and execution contracts against that
+configuration; processes do not negotiate independent settings.
 
 Role-owned placement is declared through the required `atn.devices` and
-`ffn.devices` lists. Each list is nonempty, nonnegative, unique, and ascending;
-its order determines the corresponding Agent ranks, and one CUDA device cannot
-belong to both roles. FFN also owns its optional device-memory calibration,
-explicit operator margin, checkpoint-loader policy, and placement-solver
-policy. Loader parallelism lives under `ffn.loader`; solver parallelism and its
-whole-solve deadline live directly under `ffn.placement`.
+`ffn.devices` lists. Both are nonempty consecutive blocks: attention starts at
+zero and FFN immediately follows attention. For attention width `A` and FFN
+width `F`, the lists are `0..A-1` and `A..A+F-1`. These indices select positions
+in the Deployment Device View, not host inventory indices. Each role's list
+order determines its logical Agent ranks. Runtime configuration and portable
+tool deployments share this validation contract.
+
+FFN also owns its optional device-memory calibration, explicit operator margin,
+checkpoint-loader policy, and placement-solver policy. Loader parallelism lives
+under `ffn.loader`; solver parallelism and its whole-solve deadline live directly
+under `ffn.placement`.
 
 Each configured Instance covers the complete Attention World, whose size is
 `len(atn.devices)`. A model's `atn_dp_size` defaults to one. An omitted
@@ -83,7 +90,7 @@ DP Attention. The integration validates engine geometry against configuration;
 daemon registration and readiness require the complete configured rank set.
 
 `atn.device_memory_utilization` defines the maximum share of each attention
-GPU that the post-capture Elastic KV Capacity Pool may retain. Available KV
+device that the post-capture Elastic KV Capacity Pool may retain. Available KV
 bytes are the AtnAgent's observed free bytes plus already mapped bootstrap
 backing. The daemon subtracts the larger of the configured unused-memory
 margin and the summed Attention Runtime Headroom declared by co-located
@@ -214,7 +221,7 @@ result-delivery requirements. Model and Instance plans are co-indexed by
 Elastic KV memory has a separate control seam. Instance registrations carry
 immutable, model-derived partition geometry. Live capacity is coordinated by
 the separate Elastic KV control seam.
-One Generation-scoped daemon policy freezes each attention GPU's physical pool
+One Generation-scoped daemon policy freezes each attention device's physical pool
 after Graph capture and coordinates persistent quantified demand, immutable
 group capacity operations, TP readiness votes, and terminal partition completions
 through a host-local native channel. SGLang retains logical allocation and
@@ -274,17 +281,19 @@ corpus. With no `ffn.device_memory_calibration` path configured, admission uses
 analytic estimation alone. An explicitly configured profile must be readable,
 valid, and compatible with the deployment; startup reports a profile error
 when those conditions fail. The compatibility checks compare recorded
-software, configuration, MPS, and per-FfnAgent GPU evidence. They constrain
-profile reuse, not the set of GPU models on which CrossPool may run.
+software, configuration and per-FfnAgent device evidence from direct FFN
+execution. They constrain profile reuse, not the set of device models on which
+CrossPool may run.
 
 The `xpool memory-profile` command produces calibration evidence. A profile
-records local GPU and software identity, fitted coefficients, observed and
+records local device and software identity, fitted coefficients, observed and
 predicted allocation values, and the Calibrated Overhead Envelope. The fitter
 adds one empirically derived Device Observation Quantum to each grouped
 residual target and absorbs that correction into the fitted coefficients. The
 quantum belongs to the fitting procedure; it is separate from Profile fields
 and the operator margin. A Profile records allocation behavior and remains
-model-neutral.
+model-neutral. The profiler owns its local attention MPS scope and participants;
+FFN allocation measurements use the same direct execution environment as serving.
 
 Checkpoint files may be read concurrently. Host buffers may use pinned memory,
 and independent tensor copies may use multiple CUDA streams. Device-side
@@ -295,36 +304,204 @@ construction-only buffers after installation.
 
 Startup is monotonic:
 
-1. every process resolves configuration and registers its role capabilities;
-2. the daemon admits and retains the Fabric Plan;
-3. during `PREPARING_JOIN`, AtnAgents publish Transport arenas while FfnAgents
+1. the daemon resolves physical placement and starts its attention MPS scope;
+2. Agents normalize deployment visibility, check configuration and obtain
+   startup admission before preparing MPS or direct execution. Serving owners
+   launch commands with normalized visibility and the attention MPS endpoint;
+   the plugin checks configuration before installing its hooks. Participants
+   initialize their devices and register their runtime capabilities;
+3. the daemon admits and retains the Fabric Plan;
+4. during `PREPARING_JOIN`, AtnAgents publish Transport arenas while FfnAgents
    perform memory admission and materialize selected weight shards;
-4. participants join the admitted Fabric generation collectively;
-5. during `PREPARING_EXECUTION`, FfnAgents capture and install execution;
-6. activation makes the Fabric generation executable;
-7. Instance ranks observe the executable barrier, attach their Transport
+5. participants join the admitted Fabric generation collectively;
+6. during `PREPARING_EXECUTION`, FfnAgents capture and install execution;
+7. activation makes the Fabric generation executable;
+8. Instance ranks observe the executable barrier, attach their Transport
    arenas, and publish initialization readiness; and
-8. the daemon reports ready only after all required owners are initialized.
+9. the daemon reports ready only after all required owners are initialized.
 
-An AtnAgent or FfnAgent may repeat registration only before retaining a Fabric
-Plan. Registration loss after Plan acquisition is terminal because participants
-cannot recover into a retained Generation. An Instance rank may retry temporary
-daemon transport failures within its existing bounded deadline, but a daemon
-response that its registration is missing is terminal; it does not re-register
-or reacquire its Transport lease.
+An AtnAgent or FfnAgent may automatically recover a missing registration only
+before retaining a Fabric Plan. Registration loss after Plan acquisition is
+terminal because participants cannot recover into a retained Generation.
+At the daemon boundary, an identical repeated registration from the same
+admitted live owner is idempotent, including while a Plan is retained, and
+preserves its Transport resources. Replacement admission waits for actual
+retirement of the old generation owners.
+
+An Instance rank may retry temporary daemon transport failures within its
+existing bounded deadline, but a daemon response that its registration is
+missing is terminal; it does not re-register or reacquire its Transport lease.
 
 Readiness never derives from process existence alone. It requires live
 registrations, MPS availability, a retained admitted plan, usable Transport
 leases, initialized Fabric participants, installed real FFN execution, and no
 canonical failure.
 
-Shutdown is coordinated while CUDA and NVSHMEM runtimes remain live. AtnAgent
-and FfnAgent participants drain asynchronous work, release rank-local
-resources, destroy Transport arenas, and finalize Fabric collectively before
-exiting. SGLang owns request draining and Instance process-tree cleanup. The
-daemon treats an exited Instance rank as Generation owner loss and drives the
-remaining participants through `QUIESCING -> DRAINING -> FINALIZING ->
-STOPPED`; it does not retain a Generation after an Instance leaves. Explicit
-Instance detach remains the startup-rollback and controlled-cleanup path, while
-process loss relies on CUDA process teardown and the existing daemon watchdog.
-Destructors are best-effort guards, not distributed recovery.
+### Managed MPS and role preparation
+
+[`xpool.utils.mps.MpsEndpoint`](../../src/xpool/utils/mps.py) is an immutable
+value for the ordered attention MPS UUID subset. It owns address derivation,
+pipe/log environment preparation checks, management queries and actual client
+inspection. Construction validates physical identities and creates no resources.
+The value remains independent of configuration and controller ownership.
+
+`MpsScope` composes that endpoint and owns one foreground
+`nvidia-cuda-mps-control -f` process, its exact identity, observed server identities,
+logs and private endpoint. The daemon retains that scope before starting it.
+Server creation may be lazy; startup requires the controller, not a server PID.
+The foreground mode is provided by the
+[NVIDIA control interface](https://docs.nvidia.com/deploy/mps/595/appendix-tools-and-interface-reference.html#nvidia-cuda-mps-control).
+
+The address is `/tmp/xpool-mps/<uid>/<key>/{pipe,log}`. The key is the first 32
+hexadecimal characters of SHA-256 over newline-joined, sorted full attention
+UUIDs. Sorting affects the address only; visibility preserves rank order.
+Exclusive directory creation establishes ownership. An existing scope is neither
+adopted nor deleted. Cleanup removes only the directory whose identity the owner
+retained, after its controller/server domain exits. This endpoint claim is not
+a physical-device lock; operators coordinate independent deployments. Runtime
+code changes neither compute mode nor privileged host policy.
+
+[`xpool.utils.device`](../../src/xpool/utils/device.py) queries physical
+index-to-UUID inventory directly through a bounded `nvidia-smi` command without
+initializing the CUDA Driver or creating a context. Numeric selectors name the
+returned `nvidia-smi` indices; explicit selection order is preserved. Unset
+visibility selects all physical devices in ascending inventory-index order;
+an explicitly empty value selects none. Full physical UUIDs are accepted;
+unknown selectors, duplicate physical selections and MIG selectors are rejected.
+The read-only visibility accessor caches successful resolutions by the raw
+environment value, assuming stable inventory during one process lifetime.
+Changing the selection chooses a different entry. Physical inventory and actual
+MPS availability or membership observations remain uncached.
+
+The daemon, both Agent entries and `xpool exec` normalize the complete ordered
+Deployment Device View into `CUDA_VISIBLE_DEVICES`. Full UUIDs avoid
+[MPS's server-visible numeric remapping](https://docs.nvidia.com/deploy/mps/595/appendix-tools-and-interface-reference.html#cuda-visible-devices).
+Daemon and Agent startup require the configured layout to fit that view. The
+daemon creates no device context; only its controller child receives
+attention-only visibility.
+`MpsEndpoint.environment()` prepares pipe/log addresses without changing
+visibility. Attention clients retain the complete UUID environment, while MPS
+exposes the zero-based attention prefix to the CUDA Driver. FFN retains the
+complete view with `CUDA_MPS_PIPE_DIRECTORY=""` for direct execution and selects
+its configured deployment device index. Its logical Fleet rank remains distinct
+from that execution index.
+
+`xpool exec -- PROGRAM ARG...` normalizes complete visibility and prepares the
+attention MPS endpoint before the target imports its runtime, then replaces its
+process image. Arguments, PID, inherited process group and standard streams are
+preserved. Configuration comes from normal TOML/environment resolution; the
+wrapper accepts target arguments rather than CrossPool CLI configuration flags.
+It performs no daemon RPC or participant configuration check and leaves plugin
+selection and engine-specific settings to their owners. Agent commands prepare
+their own execution environment without this wrapper.
+
+Manual SGLang launch selects `xpool` through `SGLANG_PLUGINS` and uses
+`xpool exec -- sglang serve ...`. Tool-owned launch selects the plugin in its
+child environment. During installation in the serving parent and workers, the
+plugin checks pipe/log addresses and effective configuration plus the complete
+ordered UUID view through `/config/check`. Agent startup performs the same check
+before admission and native initialization. Matching requests return `204`,
+disagreement returns `409`, and malformed requests return `422`. These startup
+owners perform the complete check once; registration owns identity, topology and
+execution contracts.
+
+The plugin sets `SGLANG_ENABLE_POST_CAPTURE_KV_SIZING` to true and
+`SGLANG_ONE_VISIBLE_DEVICE_PER_PROCESS` and
+`SGLANG_KILLPG_ON_SCHEDULER_EXCEPTION` to false through SGLang's environment API
+before installing hooks. Launch preparation must precede engine import because
+the pinned CLI can enumerate devices before plugin installation. After context
+initialization, the ModelRunner load hook requires actual current-process MPS
+membership before loading weights. An excluded plugin cannot verify its absence.
+
+Agent startup admission retains exact identities under the daemon's user and PID
+namespace and checks configured role/device placement. Instance registration
+retains identity, ABI, topology and runtime contracts. Ordered physical placement
+agreement belongs to the startup configuration check; address equality alone
+does not prove rank order because address derivation sorts UUIDs. Environment
+preparation, actual membership and process ownership remain separate facts.
+Serving owners retain their actual workers and helpers.
+
+### Ordered retirement
+
+The serving owner initiates SGLang exit and retires workers and helpers. Tool-owned
+execution first seals and joins startup, then closes every server process group
+and signals the exact daemon PID. Manual deployments finish or cancel startup and
+retire their clients before stopping the daemon, with new client launch sealed
+throughout retirement.
+
+The daemon closes participant admission and keeps control listeners and MPS
+available. Normal shutdown waits for known Instance identities from registrations
+and retained Fabric owners before requesting Agent/Fabric quiesce. Existing
+owner-loss and failure paths retain their generation-failure behavior. Heartbeat
+expiry or deregistration does not prove physical exit of retained generation
+owners. Controller stop follows confirmed participant exit and actual MPS client
+absence. Ordinary daemon SIGTERM/SIGINT does not signal serving processes.
+
+An empty MPS client snapshot proves current attachment absence, not a fence
+against future connections. Serving owners enforce launch/retirement ordering;
+they also retain CPU-only startup and helper processes through retirement.
+Controller/server domain retirement remains the scope's responsibility.
+
+An Instance rank's exit retires its Generation rather than leaving it reusable.
+The daemon drives the remaining participants through
+`QUIESCING -> DRAINING -> FINALIZING -> STOPPED`. While CUDA and NVSHMEM remain
+live, Agents drain asynchronous work, release rank-local resources and Transport
+arenas, and finalize Fabric collectively. Explicit Instance detach serves
+startup rollback and controlled cleanup; unexpected process loss enters the
+watchdog's owner-loss path and is not itself verified retirement. Destructors
+are best-effort guards, not distributed recovery.
+
+An already-admitted Agent may finish initialization and formal registration
+after admission closes. Without a joined generation, formal registration
+establishes its Agent.run signal-handler boundary and permits exact-PID SIGTERM.
+Startup admission alone does not. Joined Agents follow collective Fabric
+retirement; missing peers do not authorize an unconditional finalize in `finally`.
+
+SGLang retains its pinned factories and ready handshake. Startup signals record
+cancellation without interrupting an in-progress initialization transaction.
+At ready, pending cancellation uses the actual returned tokenizer transport and
+worker/cache handles before HTTP startup proceeds. Initialized shutdown prefers
+local release. IPC consumers retire before their cache exporters. Optional cache
+helper lifecycle uses these same boundaries; checkpoint-loader and cache-mode
+compatibility require their own serving evidence.
+
+At destructive engine boundaries, the integration selects its retained worker
+and cache-helper identities and stops further resource creation. The daemon's
+termination operation targets actual clients of its retained MPS scope under
+the same user and PID namespace. The scope checks exact target, controller and
+server identities, serializes with controller stop, waits for `terminate_client`
+and requires NVIDIA's `CUDA_SUCCESS` result for every affected client before
+forced host exit begins. The utility's exit code alone proves command transport.
+This follows
+[NVIDIA client termination](https://docs.nvidia.com/deploy/mps/595/when-to-use-mps.html#client-early-termination).
+Context termination does not kill a host process, finalize Fabric, retire direct
+FFN participants or establish complete-domain exit. These remain owner duties.
+Target and scope checks validate the operation; caller authentication and
+multi-tenant authorization are outside the supported local deployment boundary.
+
+Controller startup, management queries and initial membership inspection reuse
+one selected 30-second bound, capped by an existing owner deadline. Startup
+admission RPCs use this bound without changing ordinary HTTP timeouts. Retirement
+has a 300-second budget from its first trigger; repeated requests never renew it.
+An initialized serving owner reserves the final 30 seconds for controlled
+termination and reaping. The existing engine fallback may reach this boundary
+earlier. Startup cancellation consumes that same first-trigger budget even while
+waiting for ready. Agent/Fabric retirement has no blind forced-exit fallback.
+
+If retirement cannot be confirmed because of failed factory readiness, uncertain
+ownership, failed context termination or budget expiry, the actual living owner,
+controller and diagnostics remain available for manual resolution. Observation
+errors mean unknown, not process absence.
+The daemon and tooling seal new admission rather than replacing the controller
+or reclaiming resources from an unproved domain. Automatic recovery after owner
+loss or a partial-world/fatal failure is outside this contract.
+
+| Managed daemon exit | Meaning |
+| --- | --- |
+| `0` | Normal deployment exit with verified resource retirement. |
+| `20` | Deployment failed, but resource retirement was verified. |
+| Other status or signal death | Cleanup unconfirmed; outer ownership remains. |
+
+These statuses apply to the retained daemon after its MPS scope closes. The
+enclosing task still proves complete-domain exit and preserves its original
+test or benchmark verdict. `XpoolClient.close()` closes only its HTTP client.

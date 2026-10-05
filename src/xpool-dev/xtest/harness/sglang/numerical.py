@@ -48,7 +48,7 @@ FFN_NUMERICAL_HARNESS_RESERVE_SECONDS = 120.0
 def requirements_of(case: E2eFfnNumericalCase) -> ResourceRequirements:
     """Declare the peak production/reference lease and the case's local checkpoint."""
 
-    return ResourceRequirements(case.production_required_gpu_count, True, True, (case.model_id,))
+    return ResourceRequirements(case.production_required_device_count, True, (case.model_id,))
 
 
 def case_parameter(case: E2eFfnNumericalCase) -> ParameterSet:

@@ -10,16 +10,13 @@ from xpool.model import ModelId
 from xpool.native import ABI_VERSION
 from xpool.service.client import DAEMON_HEALTH_RETRY_ATTEMPTS, XpoolClient, XpoolDaemonError
 from xpool.service.errors import XpoolClientError
-from xpool.service.wire import AtnAgentRegistration, FfnAgentRegistration, InstanceRankRegistration, ProcessRef
+from xpool.service.wire import ProcessRef
 from xtest.harness.support.config import TEST_MODEL_ID, minimal_config, reset_global_config
-from xtest.harness.support.kv import kv_capacity_profile
-from xtest.harness.support.runtime.instance import ffn_profile, transport_attributes
 from xtest.harness.support.service.client import (
     initialize_client_config,
     install_scripted_http_client,
     response,
 )
-from xtest.harness.support.service.daemon import ffnagent_registration
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, initialize_client_config.__name__)
 
@@ -42,11 +39,11 @@ def test_client_constructor_retries_and_rejects_unhealthy_daemon(
     assert probe.close_count == 1
 
 
-@pytest.mark.parametrize("participant", ["atnagent", "ffnagent", "instance"])
-def test_client_rejects_registration_after_config_conflict(
+def test_client_reports_config_conflict(
     monkeypatch: pytest.MonkeyPatch,
-    participant: str,
 ) -> None:
+    visibility = ("GPU-00000000-0000-0000-0000-000000000001",)
+    monkeypatch.setattr(xpool.service.client, "visible_uuids", lambda: visibility)
     probe = install_scripted_http_client(
         monkeypatch,
         [
@@ -66,30 +63,18 @@ def test_client_rejects_registration_after_config_conflict(
     client = XpoolClient()
     try:
         with pytest.raises(XpoolDaemonError, match="client xpool config differs") as exc_info:
-            if participant == "atnagent":
-                client.register_atnagent(AtnAgentRegistration(pid=11, abi_version=ABI_VERSION, cuda_device=0))
-            elif participant == "ffnagent":
-                client.register_ffnagent(FfnAgentRegistration.model_validate(ffnagent_registration(pid=13)))
-            else:
-                client.register_instance(
-                    InstanceRankRegistration(
-                        pid=12,
-                        abi_version=ABI_VERSION,
-                        model_id=TEST_MODEL_ID,
-                        rank=0,
-                        transport=transport_attributes(),
-                        ffn_profile=ffn_profile(),
-                        kv_capacity=kv_capacity_profile(),
-                        atn_runtime_headroom_bytes=0,
-                    )
-                )
+            client.check_config()
     finally:
         client.close()
 
     assert exc_info.value.kind == "conflict"
     assert probe.calls == [
         ("GET", "/health", None),
-        ("POST", "/config/check", minimal_config().model_dump(mode="json")),
+        (
+            "POST",
+            "/config/check",
+            {"config": minimal_config().model_dump(mode="json"), "visible_devices": list(visibility)},
+        ),
     ]
 
 

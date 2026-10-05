@@ -44,7 +44,7 @@ public:
 
   /// Join one NVSHMEM world and allocate its symmetric arena.
   /// \pre projection passed intrinsic validation at construction.
-  void join(c10::DeviceIndex cuda_device, const ArenaProjection &projection, int pe);
+  void join(c10::DeviceIndex device, const ArenaProjection &projection, int pe);
 
   /// Launch and boundedly await the FfnAgent Resident startup publication.
   /// \pre This process joined as an FfnAgent and has not begun drain.
@@ -87,11 +87,11 @@ private:
   ~Runtime() = default;
 
   mutable std::mutex mutex_;
-  // Joined, Draining, and Drained own one CUDA device, Projection, PE identity,
+  // Joined, Draining, and Drained own one device, Projection, PE identity,
   // Fabric arena, module registration, and join-time drain stream. Closed owns
   // none of those resources.
   Phase phase_ = Phase::Empty;
-  std::optional<c10::DeviceIndex> cuda_device_;
+  std::optional<c10::DeviceIndex> device_;
   std::optional<ArenaProjection> projection_;
   std::optional<int> pe_;
   Arena arena_;

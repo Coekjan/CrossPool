@@ -146,7 +146,7 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
             raise ValueError(f"GLM Router workspace must contain exactly {expected_bytes} bytes")
         tensors = (router_weights.weight, correction_bias, workspace, routed_ids, routed_weights)
         if any(tensor.device != hidden_states.device for tensor in tensors):
-            raise ValueError("GLM Router tensors must share one CUDA device")
+            raise ValueError("GLM Router tensors must share one device")
         scratch = workspace.view(torch.float32)
         input_elements = row_capacity * hidden_size
         router_input = scratch[:input_elements].view(row_capacity, hidden_size)

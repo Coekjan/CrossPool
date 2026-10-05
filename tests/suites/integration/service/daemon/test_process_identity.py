@@ -20,6 +20,7 @@ from xtest.harness.support.service.daemon import (
     instance_transport_arena,
     instance_transport_arena_acquire_path,
     process_ref,
+    register,
     request,
     start_sleeping_proc,
     stop_proc,
@@ -34,7 +35,7 @@ def test_daemon_deregisters_instance_rank_owned_by_process() -> None:
     registration = instance_registration()
     model_id = str(registration["model_id"])
 
-    assert request(app, "POST", "/instance/register", json=registration).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/instance/register", registration).status_code == HTTPStatus.NO_CONTENT
     assert request(app, "GET", "/instances").json() == [registration]
 
     response = request(
@@ -68,7 +69,7 @@ def test_daemon_rejects_instance_deregister_from_another_process() -> None:
     registration = instance_registration()
     other_proc, other_proc_id = start_sleeping_proc()
     try:
-        assert request(app, "POST", "/instance/register", json=registration).status_code == HTTPStatus.NO_CONTENT
+        assert register(app, "/instance/register", registration).status_code == HTTPStatus.NO_CONTENT
 
         response = request(
             app,
@@ -86,8 +87,8 @@ def test_daemon_rejects_instance_deregister_from_another_process() -> None:
 def test_daemon_heartbeat_rejects_reused_pid_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     config = synthetic_config()
     app = create_app(config)
-    registration = atnagent_registration(cuda_device=0)
-    assert request(app, "POST", "/atnagent/register", json=registration).status_code == HTTPStatus.NO_CONTENT
+    registration = atnagent_registration(device=0)
+    assert register(app, "/atnagent/register", registration).status_code == HTTPStatus.NO_CONTENT
     proc_id = ProcUniqId.current()
 
     class ReusedPidProcess:
@@ -116,10 +117,10 @@ def test_daemon_heartbeat_rejects_reused_pid_identity(monkeypatch: pytest.Monkey
 def test_daemon_rejects_transport_arenas_from_non_owner_atnagent() -> None:
     config = synthetic_config()
     app = create_app(config)
-    atnagent = atnagent_registration(cuda_device=0)
+    atnagent = atnagent_registration(device=0)
     non_owner = {**atnagent, "pid": int(atnagent["pid"]) + 1}
-    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
 
     response = request(
         app,
@@ -137,11 +138,11 @@ def test_daemon_rejects_transport_arenas_from_non_owner_atnagent() -> None:
 def test_daemon_preserves_atnagent_transport_arenas_after_same_process_reregister() -> None:
     config = synthetic_config()
     app = create_app(config)
-    atnagent = atnagent_registration(cuda_device=0)
+    atnagent = atnagent_registration(device=0)
     ffnagent = ffnagent_registration()
-    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/ffnagent/register", json=ffnagent).status_code == HTTPStatus.NO_CONTENT
-    assert request(app, "POST", "/instance/register", json=instance_registration()).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
     plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
     assert (
@@ -154,7 +155,7 @@ def test_daemon_preserves_atnagent_transport_arenas_after_same_process_reregiste
         == HTTPStatus.NO_CONTENT
     )
 
-    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
     response = request(
         app,
         "POST",
@@ -172,12 +173,12 @@ def test_daemon_rejects_dead_registration_pid(participant: str) -> None:
     app = create_app(config)
     if participant == "atnagent":
         path = "/atnagent/register"
-        registration = atnagent_registration(cuda_device=0, pid=999_999_999)
+        registration = atnagent_registration(device=0, pid=999_999_999)
     else:
         path = "/instance/register"
         registration = instance_registration(pid=999_999_999)
 
-    response = request(app, "POST", path, json=registration)
+    response = register(app, path, registration)
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"] == {"kind": "conflict", "message": "registering pid 999999999 is not live"}
@@ -189,12 +190,12 @@ def test_daemon_rejects_registration_abi_mismatch(participant: str) -> None:
     app = create_app(config)
     if participant == "atnagent":
         path = "/atnagent/register"
-        registration = atnagent_registration(cuda_device=0, abi_version=ABI_VERSION + 1)
+        registration = atnagent_registration(device=0, abi_version=ABI_VERSION + 1)
     else:
         path = "/instance/register"
         registration = instance_registration(abi_version=ABI_VERSION + 1)
 
-    response = request(app, "POST", path, json=registration)
+    response = register(app, path, registration)
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()["detail"] == {

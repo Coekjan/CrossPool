@@ -23,6 +23,7 @@ from xpool.config import (
     ModelConfig,
     SchedulerConfig,
     XpoolConfig,
+    validate_device_layout,
 )
 from xpool.model import ModelId
 
@@ -79,8 +80,7 @@ def load_deployment(path: Path, *, model_ids: Sequence[ModelId]) -> DeploymentCo
                 raise ConfigError(f"deployment {name} requires fields: {sorted(missing)}")
     atn = AtnConfig.model_validate(payload["atn"])
     ffn = FfnConfig.model_validate(payload["ffn"])
-    if sorted(atn.devices + ffn.devices) != list(range(len(atn.devices) + len(ffn.devices))):
-        raise ConfigError("deployment devices must partition contiguous lease-local indices starting at zero")
+    validate_device_layout(atn, ffn)
     scheduler = payload["scheduler"]
     ffn_concurrency = TypeAdapter[int](
         SchedulerConfig.model_fields["ffn_concurrency"].rebuild_annotation()

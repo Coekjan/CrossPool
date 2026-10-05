@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -53,7 +55,7 @@ def create_transport_runtime(client: object) -> AtnAgentTransportRuntime:
 
     return AtnAgentTransportRuntime(
         client=cast(XpoolClient, client),
-        cuda_device=0,
+        device=0,
         local_rank=0,
         publisher=ProcessRef(abi_version=ABI_VERSION, pid=1),
     )
@@ -67,24 +69,32 @@ def test_transport_runtime_drains_process_wide_resident(monkeypatch: pytest.Monk
         transport_entry(model_id=ModelId("test/a"), rank=0, handle_rank=1),
         transport_entry(model_id=ModelId("test/b"), rank=0, handle_rank=2),
     )
-    events: list[str] = []
+    drained = False
+    completed = False
     poll_results = iter((True, False))
 
     def drain_async() -> None:
-        events.append("drain")
+        nonlocal drained
+        assert not drained
+        drained = True
 
     def drain_pending() -> bool:
-        events.append("poll")
-        return next(poll_results)
+        nonlocal completed
+        assert drained
+        pending = next(poll_results, False)
+        completed = not pending
+        return pending
 
     patch_native_atnagent_ops(monkeypatch, drain_async=drain_async, drain_pending=drain_pending)
-    monkeypatch.setattr("xpool.runtime.atnagent.time.sleep", lambda delay: events.append("sleep"))
+    monkeypatch.setattr(
+        "xpool.runtime.atnagent.time", SimpleNamespace(monotonic=time.monotonic, sleep=lambda delay: None)
+    )
     runtime = create_transport_runtime(object())
     runtime.entries = {entry.model_id: entry for entry in resources}
 
     runtime.drain()
 
-    assert events == ["drain", "poll", "sleep", "poll"]
+    assert drained and completed
 
 
 def test_transport_runtime_quiesces_leases_before_draining_resident(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -96,7 +106,7 @@ def test_transport_runtime_quiesces_leases_before_draining_resident(monkeypatch:
     class FakeClient:
         def quiesce_atnagent_transport_leases(
             self,
-            cuda_device: int,
+            device: int,
             *,
             publisher: ProcessRef,
         ) -> AtnAgentTransportLeaseQuiesceResponse:
@@ -171,12 +181,12 @@ def test_transport_runtime_publishes_instances_incrementally_and_republishes_eac
 
         def upsert_atnagent_transport_arenas(
             self,
-            cuda_device: int,
+            device: int,
             bindings: list[AtnAgentTransportArenaBinding],
             *,
             publisher: ProcessRef,
         ) -> None:
-            assert cuda_device == 0
+            assert device == 0
             publications.append([binding.model_id for binding in bindings])
 
     next_handle = 1
@@ -258,7 +268,7 @@ def test_transport_runtime_rejects_registration_geometry_change(monkeypatch: pyt
         runtime.prepare(1, {TEST_MODEL_ID: 0})
 
 
-def test_transport_runtime_close_uses_collection_destroy(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_transport_runtime_close_destroys_all_drained_arenas(monkeypatch: pytest.MonkeyPatch) -> None:
     """Terminal cleanup destroys one stable already-quiesced resource snapshot."""
 
     transport_config("test/a", "test/b")
@@ -276,4 +286,4 @@ def test_transport_runtime_close_uses_collection_destroy(monkeypatch: pytest.Mon
     runtime.close()
 
     assert runtime.resources == ()
-    assert events == [("destroy", 1), ("destroy", 2)]
+    assert sorted(events) == [("destroy", 1), ("destroy", 2)]

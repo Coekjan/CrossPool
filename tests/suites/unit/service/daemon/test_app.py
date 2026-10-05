@@ -12,23 +12,28 @@ import xpool.service.daemon.app
 from xpool.fabric import FabricGenerationId
 from xpool.model import ModelId
 from xpool.native import RuntimeRole
-from xpool.service.daemon.control import ServingHealthTargets
+from xpool.service.daemon.control import ControlPlane, ServingHealthTargets
 from xpool.service.wire import ServingListener
 from xtest.harness.support.config import install_test_config, reset_global_config, synthetic_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
 
-def test_daemon_failure_retains_first_exception() -> None:
+def test_daemon_failure_retains_first_exception_and_retirement_budget() -> None:
     first = RuntimeError("first")
     second = RuntimeError("second")
-    failure = xpool.service.daemon.app.DaemonFailure()
+    control = ControlPlane()
+    failure = xpool.service.daemon.app.DaemonFailure(control)
 
     failure.record(first)
+    deadline = control.cleanup_deadline
     failure.record(second)
 
     assert failure.failed
     assert failure.exception is first
+    assert control.admission_closed
+    assert deadline is not None
+    assert control.cleanup_deadline == deadline
 
 
 @pytest.mark.parametrize(
@@ -123,6 +128,7 @@ def test_daemon_lifespan_latches_concurrent_serving_health(
     monkeypatch.setattr(xpool.service.daemon.app.bootstrap, "init", lambda device, role: None)
     app = xpool.service.daemon.app.create_daemon()
     control = app.state.control_plane
+    monkeypatch.setattr(control, "start", lambda: None)
     targets = ServingHealthTargets(
         generation=FabricGenerationId(high=1, low=1),
         listeners=(
@@ -138,7 +144,7 @@ def test_daemon_lifespan_latches_concurrent_serving_health(
     monkeypatch.setattr(control, "capture_serving_health_targets", lambda: targets)
 
     def confirm(candidate: ServingHealthTargets) -> bool:
-        assert candidate is targets
+        assert candidate == targets
         confirmed.set()
         return True
 

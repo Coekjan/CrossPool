@@ -1,6 +1,6 @@
 # Elastic KV Cache Pooling
 
-CrossPool makes physical KV Cache backing on one attention GPU elastic across
+CrossPool makes physical KV Cache backing on one attention device elastic across
 co-located Instances. SGLang continues to own requests, logical token/page
 allocation, prefix-cache contents, and eviction order. CrossPool owns stable
 virtual storage, the allocator's admitted prefix, generation-scoped capacity
@@ -30,10 +30,10 @@ its own physical partition. Different DP ranks have independent request,
 prefix-cache, and capacity state.
 
 A **KV Capacity Pool** is the physical byte budget available across all
-Instance partitions on one attention GPU. It is frozen once after Graph capture
+Instance partitions on one attention device. It is frozen once after Graph capture
 from the configured device-memory utilization, observed device memory,
 already mapped bootstrap backing, and the summed runtime headroom declared by
-the GPU's Instance Ranks. The larger of the configured utilization margin and
+the device's Instance Ranks. The larger of the configured utilization margin and
 that runtime headroom remains outside the pool. `scheduler.atn_concurrency` is
 reserved for future attention compute admission and is not part of this memory
 model.
@@ -45,7 +45,7 @@ Headroom from device capacity and the complement of the resolved
 explicit or model-derived `max_running_requests`, the rank keeps the larger of
 that base headroom and SGLang's eager-activation reserve. SGLang retains
 ownership of model eligibility for post-capture sizing; CrossPool does not
-override it. The daemon sums the resulting immutable declarations per GPU.
+override it. The daemon sums the resulting immutable declarations per device.
 
 Each partition registers immutable geometry: bundle bytes and capacity, minimum
 backed bundles, token capacity, CUDA mapping granularity, row bytes, tokens per
@@ -79,7 +79,7 @@ The regions and writers are:
 
 | Region | Owner | Published state |
 | --- | --- | --- |
-| Pool entry | AtnAgent | One post-capture `(total_bytes, free_bytes)` observation for its attention GPU. |
+| Pool entry | AtnAgent | One post-capture `(total_bytes, free_bytes)` observation for its attention device. |
 | Group entry | Daemon | Immutable service ceiling and one fixed command stream. |
 | Group entry | TP leader Instance Rank | Latest persistent capacity demand. |
 | Partition entry | Instance Rank | Capture completion, bootstrap backing, and terminal operation completion. |
@@ -105,7 +105,7 @@ work to finish; admitted requests are never killed. A live suffix remains
 outside the command target.
 
 An all-ready vote makes every rank switch before its next batch planning.
-Reclaim then evicts the selected cache nodes and waits for prior GPU users
+Reclaim then evicts the selected cache nodes and waits for prior device users
 before physical unmap. Every partition publishes terminal completion; the
 daemon retires the operation only after all sequence-correlated completions.
 TP-one groups switch without a distributed vote. Startup uses the same switch
@@ -195,7 +195,7 @@ accounting prevents a borrower and donor from owning the same bytes while
 allowing unrelated completion and growth already fundable from unassigned bytes
 to proceed.
 
-Service-time unmap is asynchronous with GPU execution. Logical suffix
+Service-time unmap is asynchronous with device execution. Logical suffix
 withdrawal and SGLang cache eviction happen first. The Instance records one CUDA
 Event on the scheduler's actual execution stream and unmaps only after that
 event completes. No newer command is accepted while an operation or retirement

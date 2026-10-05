@@ -32,9 +32,11 @@ from xpool.service.daemon.registration import (
 )
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
+    AgentStartupAdmission,
     AtnAgentRegistration,
     AtnAgentTransportArenaUpsertRequest,
     AtnAgentTransportLeaseQuiesceResponse,
+    ConfigCheckRequest,
     FabricParticipantReport,
     FabricQuiesceRequest,
     FfnAgentRegistration,
@@ -42,6 +44,7 @@ from xpool.service.wire import (
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
     KvControlChannelRef,
+    MpsClientTermination,
     ProcessRef,
     ReadinessSnapshot,
     ServingListener,
@@ -55,8 +58,9 @@ KV_CAPACITY_POLICY_INTERVAL_S = 0.01
 
 @dataclass(slots=True)
 class DaemonFailure:
-    """Retain the first unrecoverable daemon-local background failure."""
+    """Retain the first background failure and trigger owner retirement."""
 
+    control: ControlPlane
     exception: BaseException | None = None
 
     @property
@@ -69,6 +73,7 @@ class DaemonFailure:
         """Retain ``exception`` unless an earlier failure already won."""
 
         if self.exception is None:
+            self.control.begin_close()
             self.exception = exception
 
 
@@ -101,13 +106,14 @@ def create_daemon() -> FastAPI:
 
     Side Effects:
         Initializes the process-wide native daemon role. The application
-        lifespan owns the daemon watchdog and one-time serving-health monitor
-        and records their unrecoverable failures.
+        lifespan owns the attention MPS controller, daemon watchdog and
+        serving-health monitor, and records
+        unrecoverable startup or background failures.
     """
 
     bootstrap.init(None, RuntimeRole.DAEMON)
     control_plane = ControlPlane()
-    daemon_failure = DaemonFailure()
+    daemon_failure = DaemonFailure(control_plane)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
@@ -182,18 +188,26 @@ def create_daemon() -> FastAPI:
 
         config = get_global_config()
         logger.info("process started host=%s port=%s pid=%s", config.daemon.host, config.daemon.port, os.getpid())
-        tasks = (
-            asyncio.create_task(run_watchdog(), name="xpool-daemon-watchdog"),
-            asyncio.create_task(monitor_serving_health(), name="xpool-serving-health"),
-            asyncio.create_task(run_kv_capacity_policy(), name="xpool-kv-capacity-policy"),
-        )
+        tasks: tuple[asyncio.Task[None], ...] = ()
         try:
+            control_plane.start()
+            tasks = (
+                asyncio.create_task(run_watchdog(), name="xpool-daemon-watchdog"),
+                asyncio.create_task(monitor_serving_health(), name="xpool-serving-health"),
+                asyncio.create_task(run_kv_capacity_policy(), name="xpool-kv-capacity-policy"),
+            )
             yield
+        except BaseException as error:
+            daemon_failure.record(error)
+            raise
         finally:
+            # Startup/bind failure can reach lifespan shutdown without the
+            # server's shutdown override. Keep coordination alive until the
+            # same resource owner proves retirement on that path too.
+            await asyncio.to_thread(control_plane.close)
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            await asyncio.to_thread(control_plane.close)
 
     app = FastAPI(title="xpool daemon", version=version("xpool"), lifespan=lifespan)
     app.state.control_plane = control_plane
@@ -288,17 +302,48 @@ def create_daemon() -> FastAPI:
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @app.post("/config/check")
-    async def check_config(request: XpoolConfig) -> Response:
-        """Require a participant's effective configuration to match the daemon.
+    async def check_config(request: ConfigCheckRequest) -> Response:
+        """Require agreement on effective configuration and ordered deployment UUIDs.
 
         Returns:
-            Empty 204 response when the configurations match.
+            Empty 204 response when configuration and visibility match.
 
         Raises:
-            409: The participant configuration differs from the daemon.
+            409: Participant configuration or visibility differs from the daemon.
+            422: The configuration-check request is malformed.
         """
 
         await asyncio.to_thread(control_plane.check_config, request)
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @app.post("/serving/mps/terminate-client")
+    async def terminate_serving_client(request: MpsClientTermination) -> Response:
+        """Confirm context termination without taking over serving process exit.
+
+        Returns:
+            Empty 204 response after owned MPS confirms CUDA_SUCCESS.
+
+        Raises:
+            409: The exact target identity or ABI does not match.
+            503: The owned controller or termination result is unconfirmed.
+        """
+
+        await asyncio.to_thread(control_plane.terminate_serving_client, request)
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @app.post("/startup/agent")
+    async def admit_agent_startup(request: AgentStartupAdmission) -> Response:
+        """Admit an Agent's configured placement and identity before device initialization.
+
+        Returns:
+            Empty 204 response after the exact startup identity is retained.
+
+        Raises:
+            409: ABI, process identity or configured role/device placement conflicts.
+            503: Owned controller, generation or startup admission is unavailable.
+        """
+
+        await asyncio.to_thread(control_plane.admit_agent_startup, request)
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @app.get("/atnagents")
@@ -321,7 +366,7 @@ def create_daemon() -> FastAPI:
 
     @app.post("/atnagent/register")
     async def register_atnagent(request: AtnAgentRegistration) -> Response:
-        """Register one live AtnAgent as the owner of a configured CUDA device.
+        """Register one live AtnAgent as the owner of a configured device.
 
         Returns:
             Empty 204 response after registration.
@@ -334,7 +379,7 @@ def create_daemon() -> FastAPI:
         await asyncio.to_thread(
             control_plane.register_atnagent,
             AtnAgentRegistrationState(
-                cuda_device=request.cuda_device,
+                device=request.device,
                 abi_version=request.abi_version,
                 pid=request.pid,
                 now=monotonic(),
@@ -342,20 +387,20 @@ def create_daemon() -> FastAPI:
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
-    @app.post("/atnagent/{cuda_device}/heartbeat")
-    async def heartbeat_atnagent(cuda_device: int, request: ProcessRef) -> HeartbeatResponse:
+    @app.post("/atnagent/{device}/heartbeat")
+    async def heartbeat_atnagent(device: int, request: ProcessRef) -> HeartbeatResponse:
         """Refresh one authenticated AtnAgent registration and return desired state.
 
         Raises:
-            404: No AtnAgent owns the requested CUDA device.
+            404: No AtnAgent owns the requested device.
             409: The process identity does not own that registration.
         """
 
-        return await asyncio.to_thread(control_plane.heartbeat_atnagent, cuda_device, request)
+        return await asyncio.to_thread(control_plane.heartbeat_atnagent, device, request)
 
     @app.post("/ffnagent/register")
     async def register_ffnagent(request: FfnAgentRegistration) -> Response:
-        """Register one live FfnAgent as the owner of a configured CUDA device.
+        """Register one live FfnAgent as the owner of a configured device.
 
         Returns:
             Empty 204 response after registration.
@@ -368,9 +413,9 @@ def create_daemon() -> FastAPI:
         await asyncio.to_thread(
             control_plane.register_ffnagent,
             FfnAgentRegistrationState(
-                cuda_device=request.cuda_device,
-                cuda_total_memory_bytes=request.cuda_total_memory_bytes,
-                cuda_free_memory_bytes=request.cuda_free_memory_bytes,
+                device=request.device,
+                device_total_memory_bytes=request.device_total_memory_bytes,
+                device_free_memory_bytes=request.device_free_memory_bytes,
                 abi_version=request.abi_version,
                 pid=request.pid,
                 now=monotonic(),
@@ -379,20 +424,20 @@ def create_daemon() -> FastAPI:
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
-    @app.post("/ffnagent/{cuda_device}/heartbeat")
-    async def heartbeat_ffnagent(cuda_device: int, request: ProcessRef) -> HeartbeatResponse:
+    @app.post("/ffnagent/{device}/heartbeat")
+    async def heartbeat_ffnagent(device: int, request: ProcessRef) -> HeartbeatResponse:
         """Refresh one authenticated FfnAgent registration and return desired state.
 
         Raises:
-            404: No FfnAgent owns the requested CUDA device.
+            404: No FfnAgent owns the requested device.
             409: The process identity does not own that registration.
         """
 
-        return await asyncio.to_thread(control_plane.heartbeat_ffnagent, cuda_device, request)
+        return await asyncio.to_thread(control_plane.heartbeat_ffnagent, device, request)
 
-    @app.post("/atnagent/{cuda_device}/transport-arenas")
+    @app.post("/atnagent/{device}/transport-arenas")
     async def upsert_atnagent_transport_arenas(
-        cuda_device: int,
+        device: int,
         request: AtnAgentTransportArenaUpsertRequest,
     ) -> Response:
         """Merge immutable Transport arena publications for one AtnAgent.
@@ -408,15 +453,15 @@ def create_daemon() -> FastAPI:
 
         await asyncio.to_thread(
             control_plane.upsert_atnagent_transport_arenas,
-            cuda_device,
+            device,
             request.bindings,
             request.publisher,
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
-    @app.post("/atnagent/{cuda_device}/transport-leases/quiesce")
+    @app.post("/atnagent/{device}/transport-leases/quiesce")
     async def quiesce_atnagent_transport_leases(
-        cuda_device: int,
+        device: int,
         request: ProcessRef,
     ) -> AtnAgentTransportLeaseQuiesceResponse:
         """Stop admission and return the current lease-drain state for one AtnAgent.
@@ -427,7 +472,7 @@ def create_daemon() -> FastAPI:
             503: Transport lease quiesce cannot currently progress.
         """
 
-        return await asyncio.to_thread(control_plane.quiesce_atnagent_transport_leases, cuda_device, request)
+        return await asyncio.to_thread(control_plane.quiesce_atnagent_transport_leases, device, request)
 
     @app.post("/instance/register")
     async def register_instance(request: InstanceRankRegistration) -> Response:

@@ -80,7 +80,7 @@ class E2eServingCase(BaseModel):
         return self.deployment_config.ffn_concurrency
 
     @property
-    def required_gpu_count(self) -> int:
+    def required_device_count(self) -> int:
         return self.atnagent_count + self.ffnagent_count
 
 
@@ -128,7 +128,7 @@ class E2eFfnNumericalCase(BaseModel):
         return load_deployment(self.deployment, model_ids=(self.model_id,))
 
     @property
-    def production_required_gpu_count(self) -> int:
+    def production_required_device_count(self) -> int:
         return len(self.deployment_config.atn.devices) + len(self.deployment_config.ffn.devices)
 
 
@@ -202,7 +202,7 @@ class E2eFfnTopologyCase(BaseModel):
         return self.deployment_config.ffn_concurrency
 
     @property
-    def required_gpu_count(self) -> int:
+    def required_device_count(self) -> int:
         return self.atnagent_count + self.ffnagent_count
 
 

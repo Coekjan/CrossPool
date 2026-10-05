@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 
@@ -78,17 +78,25 @@ def test_probe_does_not_retry_non_conflict_failure(tmp_path: Path, monkeypatch: 
     assert attempts == 1
 
 
-@pytest.mark.parametrize("inference_failure", [False, True])
+@pytest.mark.parametrize("failure", ["none", "startup", "inference"])
 def test_probe_adapter_uses_shared_system_and_always_closes(
-    inference_failure: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    failure: Literal["none", "startup", "inference"], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     attempt = probe_attempt(tmp_path)
     launch = probe_launch(tmp_path)
     events: list[str] = []
     owner = cast(OwnedProcessGroup, SimpleNamespace(name="sglang-test"))
     model = launch.models[0]
+    conflict = TcpEndpointConflict((("127.0.0.1", 20000),))
     server = SglangServerProcess(model, owner, SglangEndpointFamily("127.0.0.1", 20000, 21000, 22000, 1))
+
+    def close() -> None:
+        events.append("shared-close")
+        if failure == "startup":
+            raise conflict
+
     system = SimpleNamespace(
+        closed=False,
         launch=XpoolClusterLaunch(
             config=launch.config,
             config_path=tmp_path / "runtime.toml",
@@ -97,29 +105,39 @@ def test_probe_adapter_uses_shared_system_and_always_closes(
         ),
         servers=[server],
         cluster=SimpleNamespace(daemon_startup_seconds=0.5),
-        close=lambda: events.append("shared-close"),
+        close=close,
         diagnostics=lambda: "test diagnostics",
     )
 
     monkeypatch.setattr(xtest.harness.sglang.serving.attempt, "prepare", lambda *args, **kwargs: launch)
 
-    def start(cls: type[XpoolServingSystem], serving_launch: ServingLaunch, **kwargs: object) -> XpoolServingSystem:
+    def start(serving_launch: ServingLaunch, **kwargs: object) -> None:
         assert serving_launch is launch
         events.append("shared-start")
-        return cast(XpoolServingSystem, system)
+        if failure == "startup":
+            system.closed = True
+            raise conflict
 
-    monkeypatch.setattr(XpoolServingSystem, "start", classmethod(start))
+    system.start = start
+    monkeypatch.setattr(
+        xtest.harness.sglang.serving.attempt, "XpoolServingSystem", lambda: cast(XpoolServingSystem, system)
+    )
     monkeypatch.setattr(xtest.harness.sglang.serving.attempt, "read_graph_events", lambda path: [])
 
     def workload(servers: list[SglangProbeServer]) -> tuple[SglangServerResult, ...]:
         assert servers[0].process is server
         assert servers[0].inference_path == attempt.workdir / "models" / TEST_MODEL_ID.uri_encode() / "inference.json"
         events.append("test-request")
-        if inference_failure:
+        if failure == "inference":
             raise RuntimeError("inference failed")
         return (SglangServerResult(model.model_id, model.graph_mode.settings(), tuple(range(8)), None),)
 
-    if inference_failure:
+    if failure == "startup":
+        with pytest.raises(TcpEndpointConflict) as error:
+            attempt.run(workload)
+        assert error.value is conflict
+        assert events == ["shared-start"]
+    elif failure == "inference":
         with pytest.raises(AssertionError, match="inference failed"):
             attempt.run(workload)
     else:
@@ -127,7 +145,8 @@ def test_probe_adapter_uses_shared_system_and_always_closes(
         assert result.daemon_startup_seconds == 0.5
         assert result.model_ids == (TEST_MODEL_ID,)
         assert result.observer_outdir == (attempt.workdir / "observers").resolve()
-    assert events == ["shared-start", "test-request", "shared-close"]
+    if failure != "startup":
+        assert events == ["shared-start", "test-request", "shared-close"]
 
 
 def probe_attempt(tmp_path: Path) -> ProbeAttempt:

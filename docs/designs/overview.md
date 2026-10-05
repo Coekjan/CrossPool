@@ -1,9 +1,9 @@
 # System Overview
 
 CrossPool separates attention and KV Cache execution from FFN weight residency and
-computation. The current deployment runs both roles on one host under CUDA
-MPS. Multiple models may share every GPU assigned to a role; no model owns a
-device exclusively.
+computation. The current deployment runs both roles on one host, with
+daemon-owned attention MPS and direct FFN execution. Multiple models may share
+every device assigned to a role; no model owns a device exclusively.
 
 This document defines the supported deployment boundary, process roles, and
 cross-module interface ownership. See the [design map](README.md) for the
@@ -15,9 +15,10 @@ remaining current-state documents.
 
 The supported production boundary is:
 
-- one Linux host with NVIDIA GPUs capable of the selected execution;
+- one Linux host with NVIDIA devices capable of the selected execution;
 - CUDA Toolkit 13.2 and CCCL 3.2;
-- CUDA MPS running before GPU participants start;
+- a daemon-owned attention MPS controller, prepared before client initialization;
+- local managed processes under one user and PID namespace;
 - CUDA IPC mappings for rank-local Transport and NVSHMEM communication for
   Fabric, including directly accessible peer memory for FFN partial reduction;
 - one identical resolved CrossPool configuration in every process;
@@ -34,7 +35,7 @@ evidence for each new family.
 Qualification covers tested topologies. Other topologies require direct
 evidence after confirming that their kernels, CUDA Graph features, and memory
 access paths are available. Optional memory profiles follow their own
-environment-compatibility checks; they do not define a GPU model allowlist. See
+environment-compatibility checks; they do not define a device model allowlist. See
 [Control Plane](control-plane.md#memory-admission).
 
 The supported deployment uses one host, a fixed generation, static placement,
@@ -49,9 +50,13 @@ future attention admission as described in [Control Plane](control-plane.md).
 
 The daemon owns configuration-wide coordination. It registers processes,
 builds one immutable Fabric generation, assigns Transport publications,
-computes FFN placement, tracks readiness, observes heartbeats, and selects
-fail-stop shutdown. It loads the native extension as the daemon role but does
-not initialize CUDA or join NVSHMEM. Fabric UID creation is its only
+computes FFN placement, tracks readiness, observes heartbeats, and owns attention
+MPS. Serving owners initiate SGLang exit; the daemon coordinates Agent/Fabric
+retirement and stops its controller after known participants exit and actual MPS
+clients are absent. Serving owners coordinate their startup and full process exit.
+See [Control Plane](control-plane.md#startup-and-shutdown) for that order and
+unconfirmed-cleanup behavior. It loads the native extension as the daemon role
+but does not initialize CUDA or join NVSHMEM. Fabric UID creation is its only
 business-level native operation.
 
 Each serving Instance rank runs inside SGLang. It owns request scheduling,
@@ -62,12 +67,12 @@ across co-located Instances as described in
 [Elastic KV Cache Pooling](elastic-kv-cache.md). The Instance invokes the sole
 tensor API, `xpool.ops.ffn_shim`.
 
-Each AtnAgent owns one configured CUDA device, rank-local CUDA IPC Transport
+Each AtnAgent owns one configured device, rank-local CUDA IPC Transport
 arenas, and one Fabric PE. It stages Instance input into Fabric, submits layer
 work, receives the required FFN output form, and returns the result through the
 Transport mailbox.
 
-Each FfnAgent owns one configured CUDA device and one Fabric PE. It retains the
+Each FfnAgent owns one configured device and one Fabric PE. It retains the
 planned true-TP weight shards for all assigned model layers, materialized
 operator resources, and one independently instantiated Lane GraphExec per
 executor lane. The first FfnAgent PE also launches the Fabric Coordinator.

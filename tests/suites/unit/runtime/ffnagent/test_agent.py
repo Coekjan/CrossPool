@@ -25,7 +25,7 @@ def test_ffnagent_rejects_cuda_initialized_before_workspace_policy(monkeypatch: 
     monkeypatch.setattr(torch.cuda, "is_initialized", lambda: True)
 
     with pytest.raises(AgentError, match="CUDA initialized before"):
-        FfnAgent(cuda_device=1)
+        FfnAgent(device=1)
 
 
 def test_ffnagent_installs_zero_workspace_policy_before_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,6 +39,8 @@ def test_ffnagent_installs_zero_workspace_policy_before_bootstrap(monkeypatch: p
     def bootstrap_agent(self: Agent, **kwargs: object) -> None:
         assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":0:0"
         self.proc_id = ProcUniqId.current()
+        self.local_rank = 0
+        self.device = 1
 
     monkeypatch.setattr(xpool.runtime.ffnagent.agent.Agent, "__init__", bootstrap_agent)
     monkeypatch.setattr(xpool.runtime.ffnagent.agent, "ensure_supported_cuda_allocator", lambda: None)
@@ -46,18 +48,23 @@ def test_ffnagent_installs_zero_workspace_policy_before_bootstrap(monkeypatch: p
     monkeypatch.setattr(xpool.runtime.ffnagent.agent, "FfnAgentRegistration", lambda **kwargs: object())
     monkeypatch.setattr(xpool.runtime.ffnagent.agent, "AgentHeartbeat", lambda **kwargs: object())
 
-    FfnAgent(cuda_device=1)
+    FfnAgent(device=1)
 
     assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":0:0"
 
 
 def test_ffnagent_rejects_incompatible_calibration_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    def bootstrap_agent(self: Agent, **kwargs: object) -> None:
+        self.proc_id = ProcUniqId.current()
+        self.local_rank = 0
+        self.device = 1
+
     install_test_config(synthetic_config())
     monkeypatch.setattr(torch.cuda, "is_initialized", lambda: False)
     monkeypatch.setattr(
         xpool.runtime.ffnagent.agent.Agent,
         "__init__",
-        lambda self, **kwargs: setattr(self, "proc_id", SimpleNamespace(pid=1)),
+        bootstrap_agent,
     )
     monkeypatch.setattr(xpool.runtime.ffnagent.agent, "ensure_supported_cuda_allocator", lambda: None)
     monkeypatch.setattr(
@@ -65,7 +72,7 @@ def test_ffnagent_rejects_incompatible_calibration_gpu(monkeypatch: pytest.Monke
         "load_memory_calibration_profile",
         lambda: SimpleNamespace(
             environment=SimpleNamespace(
-                ffnagent_gpus=(
+                ffnagent_devices=(
                     SimpleNamespace(
                         name="expected",
                         compute_capability=(8, 0),
@@ -82,7 +89,7 @@ def test_ffnagent_rejects_incompatible_calibration_gpu(monkeypatch: pytest.Monke
     )
 
     with pytest.raises(AgentError, match="name: expected 'expected', found 'actual'"):
-        FfnAgent(cuda_device=1)
+        FfnAgent(device=1)
 
 
 def test_ffnagent_rejects_allocator_before_model_loading(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,7 +115,7 @@ def test_ffnagent_rejects_allocator_before_model_loading(monkeypatch: pytest.Mon
     )
 
     with pytest.raises(RuntimeError, match="unsupported allocator"):
-        FfnAgent(cuda_device=1)
+        FfnAgent(device=1)
 
 
 def test_ffnagent_prepares_weights_then_installs_execution(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -118,7 +125,8 @@ def test_ffnagent_prepares_weights_then_installs_execution(monkeypatch: pytest.M
     agent.fabric_plan = cast(FabricPlan, SimpleNamespace(pe_placements=(), instance_plans=()))
     agent.registration = SimpleNamespace(model_specs=("spec",))
     agent.runtime_role = RuntimeRole.FFNAGENT
-    agent.cuda_device = 1
+    agent.device = 1
+    agent.local_rank = 0
     agent.layer_weights = None
     agent.execution_registry = None
     layer_weights = (("weights",),)
@@ -161,7 +169,8 @@ def test_ffnagent_rejects_prejoin_memory_shortfall(monkeypatch: pytest.MonkeyPat
     agent.fabric_plan = cast(FabricPlan, SimpleNamespace(pe_placements=(), instance_plans=()))
     agent.registration = SimpleNamespace(model_specs=("spec",))
     agent.runtime_role = RuntimeRole.FFNAGENT
-    agent.cuda_device = 1
+    agent.device = 1
+    agent.local_rank = 0
     agent.layer_weights = None
     agent.execution_registry = None
     monkeypatch.setattr(agent, "fabric_pe", lambda: 0)

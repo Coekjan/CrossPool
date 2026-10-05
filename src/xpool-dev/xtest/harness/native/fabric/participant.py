@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from multiprocessing.connection import Connection
 
@@ -12,6 +13,8 @@ from xpool.native.ffn import LayerKind
 from xpool.runtime.agent import project_fabric_arena
 from xpool.runtime.ffnagent.registry import FfnExecutionRegistry
 from xpool.runtime.ffnagent.weights import FfnLayerWeights
+from xpool.utils.device import visible_uuids
+from xpool.utils.mps import MpsEndpoint
 from xtest.harness.native.fabric.protocol import (
     FabricArenasPublished,
     FabricParticipantCommand,
@@ -33,8 +36,11 @@ from xtest.harness.native.ffn.qualification import (
 def run_fabric_participant(connection: Connection, spec: FabricParticipantSpec) -> None:
     """Join one Fabric PE and serve typed lifecycle commands."""
 
+    os.environ.update(spec.environment)
     ensure_native_loaded()
     torch.cuda.set_device(spec.device)
+    if spec.role is RuntimeRole.ATNAGENT:
+        MpsEndpoint(visible_uuids()[: spec.atnagent_count]).require_client()
     xpool.native.initialize(
         spec.role,
         spec.device,

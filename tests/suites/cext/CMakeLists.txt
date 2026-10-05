@@ -91,8 +91,8 @@ foreach(XPOOL_CEXT_TEST_SOURCE IN LISTS XPOOL_CEXT_TEST_SOURCES)
 
   set(XPOOL_CEXT_TEST_PROPERTIES TIMEOUT 20)
   if(XPOOL_CEXT_TEST_SOURCE MATCHES "\\.cu$")
-    # Serialize CUDA tests through CTest's leased GPU resource groups.
-    list(APPEND XPOOL_CEXT_TEST_PROPERTIES RESOURCE_GROUPS "gpus:1")
+    # Serialize device tests through CTest's leased device resource groups.
+    list(APPEND XPOOL_CEXT_TEST_PROPERTIES RESOURCE_GROUPS "devices:1")
   endif()
   gtest_discover_tests("${XPOOL_CEXT_TEST_TARGET}"
     TEST_PREFIX "cext.${XPOOL_CEXT_TEST_NAME_SUFFIX}."

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from http import HTTPStatus
 
 import pytest
@@ -12,11 +11,12 @@ from xpool.fabric import (
     FabricGenerationPhase,
     FabricParticipantPhase,
     FabricPlan,
+    FabricRole,
     FifoSchedulerPolicy,
     RandomSchedulerPolicy,
 )
-from xpool.service.wire import ServingListener
-from xpool.utils.procs import ProcUniqId
+from xpool.native import ABI_VERSION
+from xpool.service.wire import AgentStartupAdmission, ServingListener
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
 from xtest.harness.support.kv import kv_capacity_profile
 from xtest.harness.support.service.daemon import (
@@ -30,6 +30,7 @@ from xtest.harness.support.service.daemon import (
     ffnagent_registration,
     instance_registration,
     process_ref,
+    register,
     register_fabric_world,
     report_fabric_phase,
     request,
@@ -140,9 +141,9 @@ def test_instance_initialized_listener_mismatch_is_atomic() -> None:
         }
     )
     app = create_app(config)
-    atnagent0 = atnagent_registration(cuda_device=0)
-    atnagent1 = atnagent_registration(cuda_device=1)
-    ffnagent = ffnagent_registration(cuda_device=2, model_ids=(str(TEST_MODEL_ID),))
+    atnagent0 = atnagent_registration(device=0)
+    atnagent1 = atnagent_registration(device=1)
+    ffnagent = ffnagent_registration(device=2, model_ids=(str(TEST_MODEL_ID),))
     rank0 = instance_registration(model_id=str(TEST_MODEL_ID), rank=0, atn_tp_size=2)
     rank1 = instance_registration(model_id=str(TEST_MODEL_ID), rank=1, atn_tp_size=2)
     for payload, path in (
@@ -152,7 +153,7 @@ def test_instance_initialized_listener_mismatch_is_atomic() -> None:
         (rank0, "/instance/register"),
         (rank1, "/instance/register"),
     ):
-        assert request(app, "POST", path, json=payload).status_code == HTTPStatus.NO_CONTENT
+        assert register(app, path, payload).status_code == HTTPStatus.NO_CONTENT
     plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagent0, 0), (atnagent1, 1), (ffnagent, 2))
     generation = plan.model_dump(mode="json")["generation"]
@@ -210,16 +211,14 @@ def test_plan_waits_for_every_model_while_transport_publication_is_incremental()
         }
     )
     app = create_app(config)
-    atnagent = atnagent_registration(cuda_device=0)
-    assert request(app, "POST", "/atnagent/register", json=atnagent).status_code == HTTPStatus.NO_CONTENT
+    atnagent = atnagent_registration(device=0)
+    assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
     assert (
-        request(
-            app, "POST", "/ffnagent/register", json=ffnagent_registration(model_ids=("test/a", "test/b"))
-        ).status_code
+        register(app, "/ffnagent/register", ffnagent_registration(model_ids=("test/a", "test/b"))).status_code
         == HTTPStatus.NO_CONTENT
     )
     assert (
-        request(app, "POST", "/instance/register", json=instance_registration(model_id="test/a")).status_code
+        register(app, "/instance/register", instance_registration(model_id="test/a")).status_code
         == HTTPStatus.NO_CONTENT
     )
     assert (
@@ -234,7 +233,7 @@ def test_plan_waits_for_every_model_while_transport_publication_is_incremental()
     assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
 
     assert (
-        request(app, "POST", "/instance/register", json=instance_registration(model_id="test/b")).status_code
+        register(app, "/instance/register", instance_registration(model_id="test/b")).status_code
         == HTTPStatus.NO_CONTENT
     )
     plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
@@ -285,8 +284,8 @@ def test_rank_independent_ffn_profile_mismatch_is_rejected_during_registration()
     second = instance_registration(model_id=str(TEST_MODEL_ID), rank=1, atn_tp_size=2)
     second["ffn_profile"] = ffn_profile(hidden_size=4096)
 
-    assert request(app, "POST", "/instance/register", json=first).status_code == HTTPStatus.NO_CONTENT
-    response = request(app, "POST", "/instance/register", json=second)
+    assert register(app, "/instance/register", first).status_code == HTTPStatus.NO_CONTENT
+    response = register(app, "/instance/register", second)
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert "ffn_profile disagrees" in response.json()["detail"]["message"]
@@ -305,8 +304,8 @@ def test_kv_capacity_geometry_mismatch_is_rejected_during_registration() -> None
     second = instance_registration(model_id=str(TEST_MODEL_ID), rank=1, atn_tp_size=2)
     second["kv_capacity"] = kv_capacity_profile().model_copy(update={"row_bytes": 2048}).model_dump(mode="json")
 
-    assert request(app, "POST", "/instance/register", json=first).status_code == HTTPStatus.NO_CONTENT
-    response = request(app, "POST", "/instance/register", json=second)
+    assert register(app, "/instance/register", first).status_code == HTTPStatus.NO_CONTENT
+    response = register(app, "/instance/register", second)
 
     assert response.status_code == HTTPStatus.CONFLICT
     assert "kv capacity geometry disagrees" in response.json()["detail"]["message"]
@@ -332,19 +331,18 @@ def test_kv_capacity_geometry_may_differ_between_dp_groups() -> None:
     )
     second["kv_capacity"] = kv_capacity_profile().model_copy(update={"row_bytes": 2048}).model_dump(mode="json")
 
-    assert request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=0)).status_code == 204
-    assert request(app, "POST", "/atnagent/register", json=atnagent_registration(cuda_device=1)).status_code == 204
+    assert register(app, "/atnagent/register", atnagent_registration(device=0)).status_code == 204
+    assert register(app, "/atnagent/register", atnagent_registration(device=1)).status_code == 204
     assert (
-        request(
+        register(
             app,
-            "POST",
             "/ffnagent/register",
-            json=ffnagent_registration(cuda_device=2, model_ids=(str(TEST_MODEL_ID),)),
+            ffnagent_registration(device=2, model_ids=(str(TEST_MODEL_ID),)),
         ).status_code
         == 204
     )
-    assert request(app, "POST", "/instance/register", json=first).status_code == 204
-    assert request(app, "POST", "/instance/register", json=second).status_code == 204
+    assert register(app, "/instance/register", first).status_code == 204
+    assert register(app, "/instance/register", second).status_code == 204
     assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.OK
 
 
@@ -435,8 +433,8 @@ def test_quiesce_requires_current_agent_owner_and_generation() -> None:
     try:
         atnagent, _, instance, plan = register_fabric_world(
             app,
-            atnagent=atnagent_registration(cuda_device=0, pid=atnagent_proc_id.pid),
-            ffnagent=ffnagent_registration(cuda_device=1, pid=ffnagent_proc_id.pid, model_ids=(str(TEST_MODEL_ID),)),
+            atnagent=atnagent_registration(device=0, pid=atnagent_proc_id.pid),
+            ffnagent=ffnagent_registration(device=1, pid=ffnagent_proc_id.pid, model_ids=(str(TEST_MODEL_ID),)),
         )
         generation = plan.model_dump(mode="json")["generation"]
 
@@ -502,8 +500,8 @@ def test_finalized_agent_exit_does_not_convert_cooperative_cleanup_to_abort() ->
     atnagent_process, atnagent_id = start_sleeping_proc()
     ffnagent_process, ffnagent_id = start_sleeping_proc()
     instance_process, instance_id = start_sleeping_proc()
-    atnagent = atnagent_registration(cuda_device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+    atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
+    ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
     instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
     try:
         _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
@@ -541,7 +539,7 @@ def test_finalized_agent_exit_does_not_convert_cooperative_cleanup_to_abort() ->
                 stop_proc(process)
 
 
-def test_termination_requested_instance_exit_during_quiesce_does_not_record_owner_failure() -> None:
+def test_leased_instance_retirement_during_quiesce_does_not_record_owner_failure() -> None:
     config = make_config(
         {
             "atn": {"devices": [0]},
@@ -553,8 +551,8 @@ def test_termination_requested_instance_exit_during_quiesce_does_not_record_owne
     atnagent_process, atnagent_id = start_sleeping_proc()
     ffnagent_process, ffnagent_id = start_sleeping_proc()
     instance_process, instance_id = start_sleeping_proc()
-    atnagent = atnagent_registration(cuda_device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+    atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
+    ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
     instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
     try:
         _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
@@ -596,6 +594,8 @@ def test_termination_requested_instance_exit_during_quiesce_does_not_record_owne
             == HTTPStatus.OK
         )
 
+        assert instance_process.poll() is None
+        stop_proc(instance_process)
         app.state.control_plane.watchdog()
         readiness = request(app, "GET", "/ready").json()
 
@@ -619,8 +619,8 @@ def test_unrequested_instance_exit_during_quiesce_records_owner_failure() -> Non
     atnagent_process, atnagent_id = start_sleeping_proc()
     ffnagent_process, ffnagent_id = start_sleeping_proc()
     instance_process, instance_id = start_sleeping_proc()
-    atnagent = atnagent_registration(cuda_device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+    atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
+    ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
     instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
     try:
         _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
@@ -666,8 +666,8 @@ def test_instance_exit_after_activation_completes_cooperative_shutdown() -> None
     atnagent_process, atnagent_id = start_sleeping_proc()
     ffnagent_process, ffnagent_id = start_sleeping_proc()
     instance_process, instance_id = start_sleeping_proc()
-    atnagent = atnagent_registration(cuda_device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+    atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
+    ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
     instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
     try:
         _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
@@ -724,11 +724,11 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
     new_atnagent_process, new_atnagent_id = start_sleeping_proc()
     new_ffnagent_process, new_ffnagent_id = start_sleeping_proc()
     new_instance_process, new_instance_id = start_sleeping_proc()
-    old_atnagent = atnagent_registration(cuda_device=0, pid=old_atnagent_id.pid)
-    old_ffnagent = ffnagent_registration(cuda_device=1, pid=old_ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+    old_atnagent = atnagent_registration(device=0, pid=old_atnagent_id.pid)
+    old_ffnagent = ffnagent_registration(device=1, pid=old_ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
     old_instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=old_instance_id.pid)
-    new_atnagent = atnagent_registration(cuda_device=0, pid=new_atnagent_id.pid)
-    new_ffnagent = ffnagent_registration(cuda_device=1, pid=new_ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+    new_atnagent = atnagent_registration(device=0, pid=new_atnagent_id.pid)
+    new_ffnagent = ffnagent_registration(device=1, pid=new_ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
     new_instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=new_instance_id.pid)
     processes = (
         old_atnagent_process,
@@ -745,33 +745,20 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
             ffnagent=old_ffnagent,
             instance=old_instance,
         )
-        assert request(app, "POST", "/atnagent/register", json=old_atnagent).status_code == HTTPStatus.NO_CONTENT
+        admission = AgentStartupAdmission(
+            pid=new_atnagent_id.pid,
+            create_time=new_atnagent_id.create_time,
+            abi_version=ABI_VERSION,
+            role=FabricRole.ATNAGENT,
+            device=0,
+        )
+        assert (
+            request(app, "POST", "/startup/agent", json=admission.model_dump(mode="json")).status_code
+            == HTTPStatus.SERVICE_UNAVAILABLE
+        )
 
-        replacement = request(app, "POST", "/atnagent/register", json=new_atnagent)
-        readiness = request(app, "GET", "/ready").json()
-        assert replacement.status_code == HTTPStatus.CONFLICT
-        assert readiness["fabric_phase"] == FabricGenerationPhase.ABORTING
-        assert readiness["fabric_owner_failure"] == {
-            "role": "atnagent",
-            "pe": 0,
-            "reason": "replaced",
-        }
-
-        old_owner_pids = {old_atnagent_id.pid, old_ffnagent_id.pid, old_instance_id.pid}
-        kill_barrier = threading.Barrier(len(old_owner_pids))
-        killed: list[int] = []
-
-        def retain_owner_for_retry(owner: ProcUniqId) -> bool:
-            if owner.pid in old_owner_pids:
-                killed.append(owner.pid)
-                kill_barrier.wait(timeout=2.0)
-            return False
-
-        monkeypatch.setattr(ProcUniqId, "kill_tree", retain_owner_for_retry)
-        app.state.control_plane.watchdog()
-
-        assert set(killed) == old_owner_pids
-        assert request(app, "GET", "/ready").json()["fabric_phase"] == FabricGenerationPhase.ABORTING
+        assert all(process.poll() is None for process in processes)
+        assert FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json()) == old_plan
 
         for process in (old_atnagent_process, old_ffnagent_process, old_instance_process):
             stop_proc(process)
@@ -779,10 +766,23 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
         assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
         assert app.state.control_plane.capture_serving_health_targets() is None
 
-        assert request(app, "POST", "/atnagent/register", json=new_atnagent).status_code == HTTPStatus.NO_CONTENT
-        assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
-        assert request(app, "POST", "/ffnagent/register", json=new_ffnagent).status_code == HTTPStatus.NO_CONTENT
-        assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
+        for role, identity, device, path, registration in (
+            (FabricRole.ATNAGENT, new_atnagent_id, 0, "/atnagent/register", new_atnagent),
+            (FabricRole.FFNAGENT, new_ffnagent_id, 1, "/ffnagent/register", new_ffnagent),
+        ):
+            admission = AgentStartupAdmission(
+                pid=identity.pid,
+                create_time=identity.create_time,
+                abi_version=ABI_VERSION,
+                role=role,
+                device=device,
+            )
+            assert (
+                request(app, "POST", "/startup/agent", json=admission.model_dump(mode="json")).status_code
+                == HTTPStatus.NO_CONTENT
+            )
+            assert request(app, "POST", path, json=registration).status_code == HTTPStatus.NO_CONTENT
+            assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
         assert request(app, "POST", "/instance/register", json=new_instance).status_code == HTTPStatus.NO_CONTENT
 
         new_plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
@@ -816,16 +816,9 @@ def test_fabric_pe_exit_records_owner_failure_and_selects_fail_stop(
     atnagent_process, atnagent_id = start_sleeping_proc()
     ffnagent_process, ffnagent_id = start_sleeping_proc()
     instance_process, instance_id = start_sleeping_proc()
-    atnagent = atnagent_registration(cuda_device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(cuda_device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+    atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
+    ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
     instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
-    killed: list[int] = []
-
-    def retain_owner_for_assertion(owner: ProcUniqId) -> bool:
-        killed.append(owner.pid)
-        return False
-
-    monkeypatch.setattr(ProcUniqId, "kill_tree", retain_owner_for_assertion)
     try:
         _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
         activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
@@ -842,7 +835,7 @@ def test_fabric_pe_exit_records_owner_failure_and_selects_fail_stop(
             "pe": target_pe,
             "reason": "exited",
         }
-        assert set(killed) == {surviving_agent_id.pid, instance_id.pid}
+        assert surviving_agent_id.is_alive() and instance_id.is_alive()
     finally:
         for process in (atnagent_process, ffnagent_process, instance_process):
             if process.poll() is None:

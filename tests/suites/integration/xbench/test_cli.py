@@ -62,8 +62,8 @@ def test_installed_cli_outside_checkout_replays_repetitions_and_reports_then_cle
         metadata = tmp_path / "serving.json"
         declared = {
             "schema_version": 1,
-            "gpus": [{"uuid": "GPU-remote", "name": "remote GPU", "total_memory_bytes": 85899345920}],
-            "target_gpu_uuids": {str(TEST_MODEL_ID): ["GPU-remote"]},
+            "devices": [{"uuid": "GPU-remote", "name": "remote device", "total_memory_bytes": 85899345920}],
+            "target_device_uuids": {str(TEST_MODEL_ID): ["GPU-remote"]},
             "packages": {"sglang": "externally-declared"},
         }
         metadata.write_text(json.dumps(declared), encoding="utf-8")
@@ -90,11 +90,11 @@ def test_installed_cli_outside_checkout_replays_repetitions_and_reports_then_cle
             assert series.summary.outcomes["success"] == 3
             assert series.summary.targets["aggregate"].input_tokens == 15
             measured_summaries.append(series.summary.model_dump(mode="json"))
-            assert series.environment["local_gpu_inventory"] is None
+            assert series.environment["local_device_inventory"] is None
             assert series.environment["serving_metadata_source"] == "declared"
             assert series.environment["environment_source"] == "local_client"
             serving = series.case_manifest.serving_metadata
-            assert serving is not None and serving.target_gpu_uuids == {TEST_MODEL_ID: ("GPU-remote",)}
+            assert serving is not None and serving.target_device_uuids == {TEST_MODEL_ID: ("GPU-remote",)}
             assert serving.packages == declared["packages"] and serving.cuda_build_version is None
             software = series.environment["tool_software"]
             assert isinstance(software, dict) and software["source"] == "local_distribution_metadata"
@@ -188,8 +188,7 @@ def test_source_collection_defers_body_and_worker_uses_external_roots_and_invoca
     case = client_case(tmp_path, "http://127.0.0.1:1")
     catalog = catalog_file(tmp_path, (case,))
     (tmp_path / "local_resources.py").write_text(
-        "from xkit import ResourceRequirements\n"
-        "def resources(case):\n    return ResourceRequirements(0, False, False, ())\n",
+        "from xkit import ResourceRequirements\ndef resources(case):\n    return ResourceRequirements(0, False, ())\n",
         encoding="utf-8",
     )
     (tmp_path / "suites/serving/multi_model.py").write_text(
@@ -201,7 +200,7 @@ def test_source_collection_defers_body_and_worker_uses_external_roots_and_invoca
         encoding="utf-8",
     )
     listed = command(outside, "list", "--catalog", str(catalog))
-    assert listed.returncode == 0 and "gpus=0" in listed.stdout, listed.stderr
+    assert listed.returncode == 0 and "devices=0" in listed.stdout, listed.stderr
     assert not tuple(tmp_path.rglob("invocation.json"))
     root = tmp_path / "runs"
     completed = command(outside, "run", "--catalog", str(catalog), "--result-root", str(root))

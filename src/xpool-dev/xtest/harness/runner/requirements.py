@@ -14,7 +14,6 @@ from pydantic import ValidationError
 from xkit.config import resolve_model_weights
 from xpool.config import XpoolConfig
 from xpool.model import ModelId
-from xpool.mps import probe_mps_controller
 
 R = TypeVar("R")
 
@@ -38,23 +37,16 @@ class ResolvedConfig:
 class RequirementResolver:
     """Resolve test resources without depending on pytest."""
 
-    def require_cuda(self, cuda_count: int) -> None:
-        """Validate the visible CUDA device count."""
+    def require_devices(self, device_count: int) -> None:
+        """Validate the visible device count through the supported driver."""
 
-        if cuda_count < 1:
-            raise RequirementMisconfigured("required CUDA device count must be at least 1")
+        if device_count < 1:
+            raise RequirementMisconfigured("required device count must be at least 1")
         if not torch.cuda.is_available():
-            raise RequirementUnavailable("CUDA is not available")
-        device_count = torch.cuda.device_count()
-        if device_count < cuda_count:
-            raise RequirementUnavailable(f"requires {cuda_count} visible CUDA devices, found {device_count}")
-
-    def require_mps(self) -> None:
-        """Require the CUDA MPS controller selected by the process environment."""
-
-        result = probe_mps_controller()
-        if not result.online:
-            raise RequirementUnavailable(result.diagnostic)
+            raise RequirementUnavailable("no supported devices are available")
+        visible_count = torch.cuda.device_count()
+        if visible_count < device_count:
+            raise RequirementUnavailable(f"requires {device_count} visible devices, found {visible_count}")
 
     def require_config(self) -> ResolvedConfig:
         """Reload XPOOL_CONFIG with registered process-environment inputs."""

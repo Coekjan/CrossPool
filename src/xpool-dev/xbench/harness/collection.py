@@ -40,7 +40,7 @@ def collect_programs(catalogue_path: Path, cases: tuple[BenchCase, ...]) -> tupl
     catalogue_path = catalogue_path.expanduser().resolve()
     roots = (catalogue_path.parent / "suites", catalogue_path.parent, catalogue_path.parent.parent)
     with TemporaryDirectory(prefix="xpool-benchmark-inventory-") as temporary:
-        child = PythonChildProcess.start(
+        child = PythonChildProcess(
             "benchmark-source-collection",
             collect_program_worker,
             (catalogue_path, cases),
@@ -48,6 +48,7 @@ def collect_programs(catalogue_path: Path, cases: tuple[BenchCase, ...]) -> tupl
             import_paths=roots,
         )
         try:
+            child.start()
             # The installed child producer sends this exact tuple through the typed Pipe.
             programs = cast(tuple[CollectedProgram, ...], child.receive(tuple, timeout_seconds=30))
             child.wait(timeout_seconds=30)

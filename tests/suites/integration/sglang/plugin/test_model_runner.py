@@ -7,6 +7,7 @@ from typing import cast
 
 import pytest
 import torch
+from sglang.srt.distributed.parallel_state_wrapper import ParallelState
 from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
@@ -45,8 +46,9 @@ pytestmark = pytest.mark.usefixtures(
 
 
 @pytest.fixture(autouse=True)
-def fake_cuda_device_properties(monkeypatch: pytest.MonkeyPatch, published_sglang_config: None) -> Iterator[None]:
+def fake_device_properties(monkeypatch: pytest.MonkeyPatch, published_sglang_config: None) -> Iterator[None]:
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: SimpleNamespace(total_memory=100_000))
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: None)
     with get_context().override_server_args(
         cuda_graph_config=get_exec().graph.cuda_graph_config, chunked_prefill_size=4096
     ):
@@ -71,31 +73,82 @@ def install_fake_elastic_kv(runner: FakeModelRunner) -> None:
     runner.req_to_token_pool = ReqToTokenPool.__new__(ReqToTokenPool)
 
 
+@pytest.mark.parametrize(("devices", "rank"), [((0,), 0), ((0, 1, 2, 3), 2)])
 def test_model_runner_hook_delegates_to_matching_adapters(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    devices: tuple[int, ...],
+    rank: int,
 ) -> None:
     events: list[str] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
-    configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
+    configure_xpool_model(
+        tmp_path, monkeypatch, runner.model_config.model_path, atn_devices=devices, ffn_devices=(len(devices),)
+    )
+    runner.ps = ParallelState.trivial(tp_rank=rank, tp_size=len(devices))
+    runner.gpu_id = rank
+    monkeypatch.setattr(
+        xpool.integrations.sglang.hooks.lifecycle.MpsEndpoint,
+        "require_client",
+        lambda self: events.append("mps-client"),
+    )
+    monkeypatch.setattr(
+        xpool.integrations.sglang.hooks.lifecycle.bootstrap,
+        "init",
+        lambda device, role: events.append(f"init:{device}"),
+    )
 
     def original(model_runner: ModelRunner) -> str:
         assert model_runner is runner.as_model_runner()
         events.append("original")
         return "loaded"
 
-    result = xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
-        (adapter,), original, runner.as_model_runner()
-    )
+    with get_context().override_server_args(tp_size=len(devices), cuda_graph_config=get_exec().graph.cuda_graph_config):
+        result = xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
+            (adapter,), original, runner.as_model_runner()
+        )
 
     assert result == "loaded"
-    assert events == ["validate_before_load", "bind_runtime", "original", "validate_after_load"]
+    assert events == [
+        "mps-client",
+        f"init:{rank}",
+        "validate_before_load",
+        "bind_runtime",
+        "original",
+        "validate_after_load",
+    ]
     assert runner.xpool_runtime is not None
     binding = runner.xpool_runtime.binding
     assert binding.model_id == TEST_MODEL_ID
-    assert binding.worker_world_size == 1
+    assert binding.device == devices[rank]
+    assert binding.worker_rank == rank
+    assert binding.worker_world_size == len(devices)
     assert binding.atn_dp_size == 1
+
+
+def test_model_runner_rejects_disconnected_mps_before_native_initialization_or_weights(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
+    configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
+
+    def disconnected(self: xpool.integrations.sglang.hooks.lifecycle.MpsEndpoint) -> None:
+        raise RuntimeError("not connected to attention MPS")
+
+    def unexpected_init(device: int, role: RuntimeRole) -> None:
+        raise AssertionError("native initialization preceded MPS verification")
+
+    def unexpected_load(model_runner: ModelRunner) -> None:
+        raise AssertionError("weights loaded without MPS")
+
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.MpsEndpoint, "require_client", disconnected)
+    monkeypatch.setattr(xpool.integrations.sglang.hooks.lifecycle.bootstrap, "init", unexpected_init)
+    with pytest.raises(RuntimeError, match="not connected to attention MPS"):
+        xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
+            (FakeAdapter(),), unexpected_load, runner.as_model_runner()
+        )
+    assert runner.xpool_runtime is None
 
 
 def test_model_runner_hook_resolves_only_the_matching_model(
@@ -200,6 +253,7 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     activation_limited: bool,
 ) -> None:
     events: list[str] = []
+    packages: list[str] = []
     installs: list[tuple[ModelId, int]] = []
     registrations: list[tuple[ModelId, int, int]] = []
     profiles: list[object] = []
@@ -210,20 +264,30 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     runner.max_running_requests = max_running_requests
     runner.mem_fraction_static = mem_fraction_static
     device_total_bytes = 40 << 30
-    monkeypatch.setattr(
-        torch.cuda, "get_device_properties", lambda device: SimpleNamespace(total_memory=device_total_bytes)
-    )
+
+    def device_properties(device: int) -> SimpleNamespace:
+        assert device == 0
+        return SimpleNamespace(total_memory=device_total_bytes)
+
+    monkeypatch.setattr(torch.cuda, "get_device_properties", device_properties)
     install_fake_elastic_kv(runner)
-    configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path, model_slo=(800, 40))
+    configure_xpool_model(
+        tmp_path,
+        monkeypatch,
+        runner.model_config.model_path,
+        atn_devices=(0,),
+        ffn_devices=(1,),
+        model_slo=(800, 40),
+    )
     monkeypatch.setattr(
         xpool.integrations.sglang.hooks.lifecycle.bootstrap,
         "init",
-        lambda cuda_device, role: events.append(f"init:{cuda_device}:{int(role)}"),
+        lambda device, role: events.append(f"init:{device}:{int(role)}"),
     )
     monkeypatch.setattr(
         xpool.integrations.sglang.hooks.lifecycle.devkit,
         "install",
-        lambda package=None: events.append("devkit"),
+        lambda package_name="xpool.devkit": packages.append(package_name),
     )
     generation = FabricGenerationId(high=1, low=2)
 
@@ -294,10 +358,9 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     result = xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
         (adapter,), original, runner.as_model_runner()
     )
+    assert set(packages) == {"xpool.devkit", "xpool.integrations.sglang.devkit"}
     assert events == [
         f"init:0:{int(RuntimeRole.INSTANCE)}",
-        "devkit",
-        "devkit",
         "validate_before_load",
         "bind_runtime",
         "original",
@@ -330,8 +393,6 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     assert initialize_result is init_info
     assert events == [
         f"init:0:{int(RuntimeRole.INSTANCE)}",
-        "devkit",
-        "devkit",
         "validate_before_load",
         "bind_runtime",
         "original",
@@ -352,54 +413,77 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     assert listeners == [ServingListener(host=runner.server_args.host, port=runner.server_args.port)]
 
 
-def test_scheduler_teardown_releases_xpool_resources_even_when_upstream_fails(
+@pytest.mark.parametrize("failure", [None, "release", "synchronize"])
+def test_scheduler_teardown_detaches_after_successful_release_and_synchronization(
     monkeypatch: pytest.MonkeyPatch,
+    failure: str | None,
 ) -> None:
     events: list[str] = []
     model_runner = SimpleNamespace(device=torch.device("cuda", 0), xpool_runtime=None)
     runtime = SglangInstanceRankRuntime(binding=binding())
     model_runner.xpool_runtime = runtime
     scheduler = SimpleNamespace(tp_worker=SimpleNamespace(model_runner=model_runner))
-    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: events.append("synchronize"))
-    monkeypatch.setattr(
-        SglangInstanceRankRuntime,
-        "detach",
-        lambda self, runner: events.append("detach"),
-    )
 
-    def fail_release(candidate: object) -> None:
+    def synchronize(device: int) -> None:
+        events.append("synchronize")
+        if failure == "synchronize":
+            raise RuntimeError("synchronize failed")
+
+    monkeypatch.setattr(torch.cuda, "synchronize", synchronize)
+
+    def release(candidate: Scheduler) -> str:
         events.append("release")
-        raise RuntimeError("release failed")
+        if failure == "release":
+            raise RuntimeError("release failed")
+        return "released"
 
-    with pytest.raises(RuntimeError, match="release failed"):
-        xpool.integrations.sglang.hooks.lifecycle.around_scheduler_release_host_resources(
-            fail_release,
-            cast(Scheduler, scheduler),
+    if failure is None:
+        result = xpool.integrations.sglang.hooks.lifecycle.around_scheduler_release_host_resources(
+            release, cast(Scheduler, scheduler)
         )
+        assert result == "released"
+        assert model_runner.xpool_runtime is None
+    else:
+        with pytest.raises(RuntimeError, match=f"{failure} failed"):
+            xpool.integrations.sglang.hooks.lifecycle.around_scheduler_release_host_resources(
+                release, cast(Scheduler, scheduler)
+            )
+        assert model_runner.xpool_runtime is runtime
 
-    assert events == ["release", "synchronize", "detach"]
+    assert events == (["release"] if failure == "release" else ["release", "synchronize"])
 
 
+@pytest.mark.parametrize("synchronization_fails", [False, True])
 def test_model_runner_hook_validates_before_daemon_registration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    synchronization_fails: bool,
 ) -> None:
     events: list[str] = []
     adapter = FailingAfterLoadAdapter(events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
     configure_xpool_model(tmp_path, monkeypatch, runner.model_config.model_path)
 
+    def synchronize(device: int) -> None:
+        assert device == runner.gpu_id
+        events.append("synchronize")
+        if synchronization_fails:
+            raise RuntimeError("synchronize failed")
+
+    monkeypatch.setattr(torch.cuda, "synchronize", synchronize)
+
     def original(model_runner: ModelRunner) -> str:
         events.append("original")
         return "loaded"
 
-    with pytest.raises(RuntimeError, match="validation failed"):
+    failure = "synchronize failed" if synchronization_fails else "validation failed"
+    with pytest.raises(RuntimeError, match=failure):
         xpool.integrations.sglang.hooks.lifecycle.around_model_runner_load_model(
             (adapter,), original, runner.as_model_runner()
         )
 
-    assert events == ["validate_before_load", "bind_runtime", "original", "validate_after_load"]
-    assert runner.xpool_runtime is None
+    assert events == ["validate_before_load", "bind_runtime", "original", "validate_after_load", "synchronize"]
+    assert (runner.xpool_runtime is not None) == synchronization_fails
 
 
 def test_model_runner_hook_clears_binding_when_instance_start_fails(

@@ -8,6 +8,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import torch
 from sglang.srt.distributed import get_tp_group
 from sglang.srt.distributed.parallel_state import GroupCoordinator
 from sglang.srt.layers.communicator import LayerScatterModes, ScatterMode
@@ -20,7 +21,6 @@ from xpool.config import get_global_config
 from xpool.integrations.sglang.hooks.registry import SglangHook
 from xpool.integrations.sglang.kv.capacity import CapacityReconciler
 from xpool.integrations.sglang.kv.pool import ElasticMHATokenToKVPool, ElasticMLATokenToKVPool
-from xpool.integrations.sglang.placement import SglangCudaPlacement
 from xpool.integrations.sglang.shim import FfnShimModule, iter_ffn_shims
 from xpool.integrations.sglang.topology import SglangAttentionTopology, SglangModelMetadata
 from xpool.model import ModelId
@@ -50,11 +50,9 @@ class SglangInstanceRankBinding:
         model_id: Model ID from CrossPool config.
         model_path: Resolved absolute model path matched against SGLang.
         instance_index: Config-order identity published during transport setup.
-        worker_rank: SGLang model-worker rank for this model runner.
-        cuda_device: Physical CUDA device used by this SGLang rank.
+        worker_rank: Model-worker rank and ordinal in the ordered attention view.
+        device: Deployment-visible device index, retained for identity and logs.
         worker_world_size: Expected SGLang model-worker world size.
-        sglang_base_gpu_id: Required SGLang base_gpu_id.
-        sglang_gpu_id_step: Required SGLang gpu_id_step.
         atn_tp_rank: Attention tensor-parallel rank for this SGLang rank.
         atn_tp_size: Attention tensor-parallel size for this SGLang rank.
         atn_dp_rank: Attention data-parallel rank for this SGLang rank.
@@ -65,10 +63,8 @@ class SglangInstanceRankBinding:
     model_path: Path
     instance_index: int
     worker_rank: int
-    cuda_device: int
+    device: int
     worker_world_size: int
-    sglang_base_gpu_id: int
-    sglang_gpu_id_step: int
     atn_tp_rank: int
     atn_tp_size: int
     atn_dp_rank: int
@@ -116,9 +112,7 @@ class SglangInstanceRankBinding:
             atnagent_count=config.atn_world_size,
             supports_dp_attention=supports_dp_attention,
         )
-        placement = SglangCudaPlacement.derive(config.atn.devices)
         worker_rank = model_runner.ps.tp_rank
-        cuda_device = model_runner.gpu_id
         if (
             not isinstance(worker_rank, int)
             or isinstance(worker_rank, bool)
@@ -127,6 +121,15 @@ class SglangInstanceRankBinding:
             raise RuntimeError(
                 f"xpool SGLang plugin requires ModelRunner.ps.tp_rank in [0, {policy.worker_world_size}), "
                 f"got {worker_rank!r}"
+            )
+        if (
+            not isinstance(model_runner.gpu_id, int)
+            or isinstance(model_runner.gpu_id, bool)
+            or model_runner.gpu_id != worker_rank
+        ):
+            raise RuntimeError(
+                f"xpool requires SGLang rank {worker_rank} to use attention-local device {worker_rank}, "
+                f"got {model_runner.gpu_id!r}"
             )
         attn_cp_size = model_runner.ps.attn_cp_size
         if not isinstance(attn_cp_size, int) or isinstance(attn_cp_size, bool) or attn_cp_size <= 0:
@@ -149,10 +152,8 @@ class SglangInstanceRankBinding:
             model_path=model_path,
             instance_index=instance.instance_index,
             worker_rank=worker_rank,
-            cuda_device=cuda_device,
+            device=config.atn.devices[worker_rank],
             worker_world_size=policy.worker_world_size,
-            sglang_base_gpu_id=placement.base_gpu_id,
-            sglang_gpu_id_step=placement.gpu_id_step,
             atn_tp_rank=atn_tp_rank,
             atn_tp_size=atn_tp_size,
             atn_dp_rank=atn_dp_rank,
@@ -217,18 +218,12 @@ class SglangInstanceRankBinding:
         for label, actual, expected in (
             ("tp_size", get_parallel().tp_size, self.worker_world_size),
             ("dp_size", get_parallel().dp_size, self.atn_dp_size),
-            ("base_gpu_id", get_device().base_gpu_id, self.sglang_base_gpu_id),
-            ("gpu_id_step", get_device().gpu_id_step, self.sglang_gpu_id_step),
+            ("base_gpu_id", get_device().base_gpu_id, 0),
+            ("gpu_id_step", get_device().gpu_id_step, 1),
             ("enable_dp_attention", get_parallel().enable_dp_attention, self.atn_dp_size > 1),
         ):
             if actual != expected:
                 raise RuntimeError(f"xpool config expects SGLang {label}={expected} for {self.model_id}, got {actual}")
-        expected_cuda_device = self.sglang_base_gpu_id + self.worker_rank * self.sglang_gpu_id_step
-        if self.cuda_device != expected_cuda_device:
-            raise RuntimeError(
-                f"xpool config expects SGLang rank {self.worker_rank} to run on CUDA device "
-                f"{expected_cuda_device}, got {self.cuda_device}"
-            )
 
 
 @dataclass(slots=True)
@@ -265,8 +260,12 @@ class SglangInstanceRankRuntime:
         return runtime
 
     def detach(self, model_runner: ModelRunner) -> None:
-        """Release live resources and clear this exact runner attachment."""
+        """Drain local device work before releasing this runner's resources.
 
+        Failed synchronization retains the attachment and its live resources.
+        """
+
+        torch.cuda.synchronize(self.binding.worker_rank)
         if self.kv_capacity is not None:
             self.kv_capacity.close()
             self.kv_capacity = None

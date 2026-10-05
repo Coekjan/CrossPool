@@ -21,8 +21,8 @@ namespace xpool::hooks {
 struct FabricJoinPostEvent final : HostObservePoint {
   /// Joined Fabric metadata exposed to Host observers.
   struct Context {
-    /// CUDA device that owns the Fabric participant.
-    c10::DeviceIndex cuda_device;
+    /// device that owns the Fabric participant.
+    c10::DeviceIndex device;
     /// NVSHMEM PE assigned to the participant.
     int pe;
     /// Materialized symmetric-arena layout.
@@ -39,8 +39,8 @@ struct FabricJoinPostEvent final : HostObservePoint {
 struct FabricFinalizePreEvent final : HostObservePoint {
   /// Finalizing participant metadata exposed to Host observers.
   struct Context {
-    /// CUDA device that owns the Fabric participant.
-    c10::DeviceIndex cuda_device;
+    /// device that owns the Fabric participant.
+    c10::DeviceIndex device;
   };
 
   /// Dispatch all registered Host observers.

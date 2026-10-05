@@ -11,7 +11,7 @@ from xpool.runtime.ffnagent.models.qwen3_moe import Qwen3MoeAdapter
 
 
 @pytest.mark.parametrize("payload_dtype", (torch.bfloat16, torch.float16), ids=("bfloat16", "float16"))
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_qwen3_moe_router_matches_softmax_formula(payload_dtype: torch.dtype) -> None:
     hidden_states = torch.tensor(
         ((3.0, 1.0, -1.0, -3.0), (-2.0, 0.0, 2.0, 4.0)),

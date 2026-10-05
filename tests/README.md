@@ -2,9 +2,10 @@
 
 `xtest run` is the canonical composition root. It collects pytest cases,
 derives their resource requirements, runs CTest and Python stages in order, and
-keeps one GPU pool locked until every supervised process scope is reaped.
+retains each tool-local device allocation until resource cleanup is verified and
+every supervised process scope is reaped.
 Direct pytest and CTest commands are focused debugging interfaces only.
-The process tree, scheduler, GPU lease, endpoint, and artifact internals are
+The process tree, scheduler, device allocation, endpoint, and artifact internals are
 documented in [Test and Benchmark Tooling](../docs/designs/tooling.md).
 
 Tests prove behavior visible at public boundaries. Avoid tests that mirror
@@ -24,7 +25,7 @@ public behavior is broken, replace it with a behavior test.
   type alone does not require Integration placement.
 - `tests/suites/integration/` owns cross-module, serving-engine, native binding,
   component CUDA, daemon, CLI, and real process-management contracts.
-- `tests/suites/e2e/` owns routine installed `xpool` and `sglang serve`
+- `tests/suites/e2e/` owns routine installed `xpool`, including `xpool exec -- sglang serve`,
   workflows, small-model weights, HTTP inference, observed graph structure,
   observer traces, multi-model concurrency, and shutdown.
 - `tests/suites/cext/` owns C++/CUDA value, layout, protocol, scheduler,
@@ -32,7 +33,7 @@ public behavior is broken, replace it with a behavior test.
 - `tests/suites/models/<model-id>/` owns optional real-checkpoint numerical and
   cross-graph qualification, including token or logit comparison. Engine-specific
   files use names such as `test_sglang_model_qualification.py`.
-- `src/xpool-dev/xkit/` owns shared process, GPU, endpoint, run-store and serving
+- `src/xpool-dev/xkit/` owns shared process, device, endpoint, run-store and serving
   lifecycle mechanisms. `src/xpool-dev/xtest/harness/` owns test collection,
   scheduling, verdicts, fixtures, native support and qualification;
   `src/xpool-dev/xbench/harness/` owns
@@ -67,7 +68,11 @@ Both tools have real CPU list/run/report/clean cycles through the editable
 `xpool-dev` development installation, including reports and cleanup from another
 working directory. The owned benchmark regression lives under
 `tests/suites/e2e/xbench/sglang/` and uses
-the existing two-Qwen, two-GPU deployment with a short deterministic workload.
+the existing two-Qwen, two-device deployment with a short deterministic workload.
+It proves the prepared workload, successful output from both models, actual
+worker inventory within its assigned UUID lease, attention/FFN placement,
+complete evidence and verified cleanup. Focused Integration tests own metadata
+field projections and offline report rendering and export.
 Its performance measurements are report-only. Source-owned benchmark programs
 and prompt/trace inputs belong under `benches/suites/<family>/`; these are
 measurement scenarios, distinct from pytest self-tests.
@@ -90,7 +95,7 @@ Repository-owned Python tests declare external resources on each function with
 import xtest
 
 
-@xtest.requirements(cuda_count=2, requires_mps=True)
+@xtest.requirements(device_count=2)
 def test_component() -> None:
     ...
 ```
@@ -116,9 +121,8 @@ The pytest adapter evaluates each concrete item's declaration once before marker
 deselection and retains its typed resource value for preflight and test-plan
 construction. It generates marker metadata for native `-m` selectors:
 
-- `requires_cuda(min_devices=N)` selects tests requesting `N` GPUs.
+- `requires_device(min_devices=N)` selects tests requesting `N` devices.
 - `requires_config` selects tests requiring `XPOOL_CONFIG`.
-- `requires_mps` selects tests requiring the externally managed CUDA MPS controller.
 - `requires_model_weights(model_id)` selects tests requiring a local checkpoint.
 
 Tests using `e2e_base_config` must declare `requires_config=True`. The fixture and
@@ -135,8 +139,9 @@ Unavailable resources skip by default and fail with
 pytest session preflights `xpool.native` and the sole `xpool.ops.ffn_shim`
 dispatcher registration and loads the complete portable test catalogue once
 before collection, including Unit-only sessions. Collection does not resolve
-machine configuration, read checkpoints or probe GPUs. CTest CUDA cases declare
-one CTest GPU resource and perform their own MPS preflight.
+machine configuration, read checkpoints or probe devices. CTest device cases
+declare a `devices` resource and execute directly. Role-aware deployment and
+topology owners prepare MPS when their actual execution needs it.
 
 A missing or ABI-incompatible native extension fails the session, including
 Unit-only sessions. Resource preflight handles unavailable external resources.
@@ -160,19 +165,20 @@ The package runner performs these steps:
 1. Collect selected Python suites in an isolated worker and compile a typed
    test plan from pytest metadata.
 2. Acquire one pool from startup `CUDA_VISIBLE_DEVICES` only when selected
-   cases require GPUs, then prove every visible device works through MPS.
+   cases require devices. Normalize physical visibility without creating contexts.
 3. Run CTest, Unit, Integration, E2E, and any explicitly selected Models in
-   canonical order. GPU work is sorted
-   by resource count and estimated duration and backfilled across idle GPUs.
-4. Run each Python GPU task in a `SupervisedTaskScope`; release its lease only
-   after the complete descendant process domain is reaped.
+   canonical order. Device work is sorted
+   by resource count and estimated duration and backfilled across idle devices.
+4. Run each Python device task in a `SupervisedTaskScope`; managed owners protect
+   their clients from generic descendant signals. Return the allocation only
+   after resource cleanup proof and complete descendant-domain reaping.
 5. Parse JUnit and E2E artifacts, evaluate declared serving-graph groups, and
    retain logs under `.xpool-cache/test-runs/`.
 
 Task `RUNNING` and terminal `PASSED` or `FAILED` lines identify leased physical
-GPU indices and UUIDs. Terminal lines report task elapsed time and available
+device indices and UUIDs. Terminal lines report task elapsed time and available
 per-case JUnit durations on subsequent lines. CTest records each native case's
-GPU assignment and duration separately.
+device assignment and duration separately.
 
 `xtest clean` explicitly removes inactive test results. It keeps the
 newest 20 inactive entries by default; use `--keep N`, `--all`, and

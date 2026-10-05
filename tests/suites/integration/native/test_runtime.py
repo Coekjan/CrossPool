@@ -18,22 +18,22 @@ def isolated_uninitialized_runtime_role() -> None:
 
 
 def isolated_runtime_identity() -> None:
-    cuda_device = torch.cuda.current_device()
-    xpool.native.initialize(RuntimeRole.INSTANCE, cuda_device, None)
+    device = torch.cuda.current_device()
+    xpool.native.initialize(RuntimeRole.INSTANCE, device, None)
     assert xpool.native.runtime_role() is RuntimeRole.INSTANCE
-    xpool.native.initialize(RuntimeRole.INSTANCE, cuda_device, None)
+    xpool.native.initialize(RuntimeRole.INSTANCE, device, None)
     with pytest.raises(RuntimeError, match="current process was initialized as instance"):
-        xpool.native.initialize(RuntimeRole.ATNAGENT, cuda_device, None)
+        xpool.native.initialize(RuntimeRole.ATNAGENT, device, None)
 
 
 def isolated_invalid_runtime_values() -> None:
-    cuda_device = torch.cuda.current_device()
+    device = torch.cuda.current_device()
     with pytest.raises(TypeError):
-        xpool.native.initialize(99, cuda_device, None)  # ty: ignore[invalid-argument-type]
+        xpool.native.initialize(99, device, None)  # ty: ignore[invalid-argument-type]
 
 
-def isolated_negative_cuda_device() -> None:
-    with pytest.raises(RuntimeError, match="non-negative CUDA device"):
+def isolated_negative_device() -> None:
+    with pytest.raises(RuntimeError, match="non-negative device"):
         xpool.native.initialize(RuntimeRole.INSTANCE, -1, None)
 
 
@@ -46,7 +46,7 @@ def isolated_cuda_configuration_failure() -> None:
 
 
 def isolated_daemon_runtime() -> None:
-    with pytest.raises(RuntimeError, match="daemon init requires a null CUDA device"):
+    with pytest.raises(RuntimeError, match="daemon init requires a null device"):
         xpool.native.initialize(RuntimeRole.DAEMON, 0, None)
     options = DebugConfig().native_options()
     xpool.native.initialize(RuntimeRole.DAEMON, None, options)
@@ -92,27 +92,27 @@ def isolated_daemon_runtime() -> None:
         )
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_runtime_role_requires_initialization(tmp_path: Path) -> None:
     run_native_case(isolated_uninitialized_runtime_role, workdir=tmp_path / "case")
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_runtime_initialization_is_idempotent_and_role_immutable(tmp_path: Path) -> None:
     run_native_case(isolated_runtime_identity, workdir=tmp_path / "case")
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_runtime_rejects_invalid_role(tmp_path: Path) -> None:
     run_native_case(isolated_invalid_runtime_values, workdir=tmp_path / "case")
 
 
-@xtest.requirements(cuda_count=1)
-def test_runtime_rejects_negative_cuda_device(tmp_path: Path) -> None:
-    run_native_case(isolated_negative_cuda_device, workdir=tmp_path / "case")
+@xtest.requirements(device_count=1)
+def test_runtime_rejects_negative_device(tmp_path: Path) -> None:
+    run_native_case(isolated_negative_device, workdir=tmp_path / "case")
 
 
-@xtest.requirements(cuda_count=1)
+@xtest.requirements(device_count=1)
 def test_runtime_locks_role_after_cuda_configuration_failure(tmp_path: Path) -> None:
     run_native_case(isolated_cuda_configuration_failure, workdir=tmp_path / "case")
 

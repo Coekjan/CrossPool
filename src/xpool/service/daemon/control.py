@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
+import signal
+import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 from time import monotonic, sleep
+
+import psutil
 
 import xpool.native
 from xpool import ffn
-from xpool.config import FfnSchedulingPolicy, XpoolConfig, get_global_config
+from xpool.config import FfnSchedulingPolicy, get_global_config
 from xpool.fabric import (
     FabricGenerationId,
     FabricGenerationPhase,
@@ -25,7 +30,6 @@ from xpool.fabric import (
     RandomSchedulerPolicy,
 )
 from xpool.model import ModelId
-from xpool.mps import MpsProbeResult, probe_mps_controller
 from xpool.native import ABI_VERSION
 from xpool.service.daemon.fabric import FabricController, FabricGenerationState, FabricMembership
 from xpool.service.daemon.ffn_placement import place_ffn_models
@@ -34,7 +38,6 @@ from xpool.service.daemon.readiness import ControlPlaneProjection
 from xpool.service.daemon.registration import (
     HEARTBEAT_WARNING_WATERMARK_S,
     AtnAgentRegistrationState,
-    CommonRegistration,
     FfnAgentRegistrationState,
     InstanceRankId,
     InstanceRankRegistrationState,
@@ -47,9 +50,11 @@ from xpool.service.daemon.transport import (
 )
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
+    AgentStartupAdmission,
     AtnAgentRegistration,
     AtnAgentTransportArenaBinding,
     AtnAgentTransportLeaseQuiesceResponse,
+    ConfigCheckRequest,
     ControlPlaneWarning,
     FabricInstanceRankOwnerFailure,
     FabricOwnerFailureReason,
@@ -62,17 +67,19 @@ from xpool.service.wire import (
     InstanceRankRef,
     InstanceRankRegistration,
     KvControlChannelRef,
+    MpsClientTermination,
     ProcessRef,
     ReadinessSnapshot,
     ReadinessStatus,
     ServingListener,
 )
 from xpool.transport import TransportArenaHandle
+from xpool.utils.device import normalize_environment, visible_uuids
+from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S, MpsEndpoint, MpsProbeResult, MpsScope
 from xpool.utils.procs import ProcUniqId
+from xpool.utils.sighandler import defer_signal_exceptions
 
 TRANSPORT_ARENA_LEASE_HEARTBEAT_TIMEOUT_S = 2.0 * HEARTBEAT_WARNING_WATERMARK_S
-TRANSPORT_DRAIN_TERM_GRACE_S = HEARTBEAT_WARNING_WATERMARK_S
-ATNAGENT_REPLACEMENT_TIMEOUT_S = 60.0
 FABRIC_PHASE_TIMEOUT_S = {
     FabricGenerationPhase.JOINING: 60.0,
     FabricGenerationPhase.QUIESCING: 60.0,
@@ -137,19 +144,150 @@ class ControlPlane:
         self.warning_cache: tuple[ControlPlaneWarning, ...] = ()
         self.mps_cache_at = float("-inf")
         self.mps_cache_result: MpsProbeResult | None = None
+        self.mps_scope: MpsScope | None = None
+        self.device_uuids: tuple[str, ...] | None = None
+        self.admission_closed = False
+        self.cleanup_lock = threading.Lock()
+        self.cleanup_deadline: float | None = None
+        self.closed = False
 
-    def mps_readiness_status(self) -> ReadinessStatus:
-        """Project the latest watchdog-owned MPS probe result.
+    def start(self) -> None:
+        """Resolve placement and start the retained attention-only controller.
 
-        Returns:
-            Online when the configured controller responds, otherwise offline.
+        The application retains this control plane before startup.
+        Partial startup leaves all resources on
+        this owner for ``close``. Startup and close serialize on the same lock,
+        while a signal can immediately close admission and record its deadline.
 
-        This query performs no controller I/O and does not mutate state.
+        Raises:
+            ValueError: Configured placement exceeds original visibility.
+            RuntimeError: Startup was already attempted or controller startup fails.
+            OSError: Device observation or controller creation fails.
+            TimeoutError: A bounded startup operation expires.
+
+        Side Effects:
+            Observes physical device visibility and
+            launches the foreground MPS controller over attention devices only.
+        """
+
+        with self.cleanup_lock:
+            if self.closed or self.device_uuids is not None:
+                raise RuntimeError("daemon resource startup was already attempted")
+            if self.admission_closed:
+                return
+            config = get_global_config()
+            normalize_environment()
+            self.device_uuids = visible_uuids()
+            devices = config.devices
+            if any(device >= len(self.device_uuids) for device in devices):
+                raise ValueError("daemon placement exceeds original device visibility")
+            if self.admission_closed:
+                return
+            with defer_signal_exceptions():
+                self.mps_scope = MpsScope(
+                    MpsEndpoint(tuple(self.device_uuids[device] for device in config.atn.devices))
+                )
+            if self.admission_closed:
+                return
+            try:
+                self.mps_scope.start()
+            except InterruptedError:
+                # The daemon signal handler records retirement instead of
+                # throwing. The scope stops creating resources at that boundary.
+                if not self.admission_closed:
+                    raise
+
+    def admit_agent_startup(self, request: AgentStartupAdmission) -> None:
+        """Retain a configured Agent before any device initialization.
+
+        Configured role/device and exact process identity are validated at
+        admission; formal registration must retain this same identity. Partial
+        construction remains owned until the admitted process exits.
+
+        Raises:
+            XpoolDaemonError: ABI, configured placement or process identity
+                conflicts, or startup/controller admission is unavailable.
+            OSError: Ownership-critical process observation fails.
         """
 
         with self.lock:
-            result = self.mps_cache_result
-        return ReadinessStatus.ONLINE if result is not None and result.online else ReadinessStatus.OFFLINE
+            scope = self.mps_scope
+            visibility = self.device_uuids
+            if self.admission_closed or scope is None or visibility is None:
+                raise XpoolDaemonError("not_ready", "Agent startup admission is unavailable")
+            config = get_global_config()
+            devices = config.atn.devices if request.role is FabricRole.ATNAGENT else config.ffn.devices
+            if request.abi_version != ABI_VERSION:
+                raise XpoolDaemonError("conflict", "Agent startup ABI version does not match daemon ABI")
+            if request.device not in devices:
+                raise XpoolDaemonError("conflict", "Agent startup role placement does not match daemon")
+            fabric = self.fabric_controller.generation
+            if fabric is not None and not any(
+                placement.role is request.role
+                and placement.device == request.device
+                and fabric.agent_owners[pe].pid == request.pid
+                and fabric.agent_owners[pe].create_time == request.create_time
+                for pe, placement in enumerate(fabric.plan.pe_placements)
+            ):
+                raise XpoolDaemonError("not_ready", "retained Fabric generation forbids new Agent startup")
+        try:
+            identity = ProcUniqId(request.pid)
+        except psutil.NoSuchProcess as error:
+            raise XpoolDaemonError("conflict", "Agent startup process is absent") from error
+        if identity.create_time != request.create_time or not identity.is_alive():
+            raise XpoolDaemonError("conflict", "Agent startup process identity does not match")
+        if psutil.Process(identity.pid).uids().real != os.getuid():
+            raise XpoolDaemonError("conflict", "Agent startup belongs to another user")
+        namespace = Path(f"/proc/{identity.pid}/ns/pid").stat()
+        own_namespace = Path("/proc/self/ns/pid").stat()
+        if (namespace.st_dev, namespace.st_ino) != (own_namespace.st_dev, own_namespace.st_ino):
+            raise XpoolDaemonError("conflict", "Agent startup requires the daemon's PID namespace")
+        if scope.probe().online is not True:
+            raise XpoolDaemonError("not_ready", "owned MPS controller is unavailable for Agent startup")
+        with self.lock:
+            if self.admission_closed or self.mps_scope is not scope or self.fabric_controller.generation is not fabric:
+                raise XpoolDaemonError("not_ready", "Agent startup admission changed during validation")
+            key = (request.role, request.device)
+            existing = self.registrations.agent_startups.get(key)
+            if existing is not None and existing != identity and existing.is_alive():
+                raise XpoolDaemonError("conflict", "Agent startup device is owned by another live process")
+            self.registrations.agent_startups[key] = identity
+
+    def terminate_serving_client(self, request: MpsClientTermination) -> None:
+        """Terminate contexts of an exact client of the retained MPS scope.
+
+        This retirement operation remains available after startup admission
+        closes. It does not signal clients, stop MPS or finalize
+        Fabric. The serving owner retains responsibility for subsequent exit.
+
+        Args:
+            request: Target identity, matching ABI and monotonic cleanup bound.
+
+        Raises:
+            XpoolDaemonError: Target/ABI conflicts or owned MPS termination
+                cannot be confirmed before the applicable cleanup deadline.
+            OSError: Process-domain observation cannot establish ownership.
+        """
+
+        with self.lock:
+            scope = self.mps_scope
+            if scope is None or self.closed:
+                raise XpoolDaemonError("not_ready", "owned MPS client termination is unavailable")
+            if request.abi_version != ABI_VERSION:
+                raise XpoolDaemonError("conflict", "MPS termination ABI version does not match daemon ABI")
+            try:
+                identity = ProcUniqId(request.pid)
+                if identity.create_time != request.create_time or not identity.is_alive():
+                    raise XpoolDaemonError("conflict", "MPS termination target identity does not match")
+            except (psutil.NoSuchProcess, ProcessLookupError) as error:
+                raise XpoolDaemonError("conflict", "MPS termination target is absent") from error
+            deadline = request.deadline
+            if self.cleanup_deadline is not None:
+                deadline = min(deadline, self.cleanup_deadline)
+        try:
+            scope.terminate_client(identity, deadline=deadline)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired, psutil.Error) as error:
+            raise XpoolDaemonError("not_ready", f"owned MPS client termination is unconfirmed: {error}") from error
 
     def refresh_mps_status(self, now: float) -> None:
         """Refresh MPS readiness outside the domain lock when its cache is stale."""
@@ -158,21 +296,30 @@ class ControlPlane:
             if self.mps_cache_result is not None and now - self.mps_cache_at < MPS_READINESS_CACHE_S:
                 return
             previous = self.mps_cache_result
-        result = probe_mps_controller()
+            scope = self.mps_scope
+        try:
+            result = (
+                MpsProbeResult(False, None, "owned MPS controller has not started") if scope is None else scope.probe()
+            )
+        except subprocess.TimeoutExpired as error:
+            result = MpsProbeResult(False, None, f"MPS management command exceeded {error.timeout}s")
+        except TimeoutError:
+            if scope is None or scope.cleanup_deadline is None or monotonic() < scope.cleanup_deadline:
+                raise
+            result = MpsProbeResult(None, None, "MPS observation unavailable after cleanup deadline")
         with self.lock:
             self.mps_cache_at = now
             self.mps_cache_result = result
         if previous is None or previous.online != result.online:
-            log = logger.info if result.online else logger.warning
-            log(
-                "mps readiness changed status=%s detail=%s", "online" if result.online else "offline", result.diagnostic
-            )
+            log = logger.warning if result.online is False else logger.info
+            status = "unavailable" if result.online is None else "online" if result.online else "offline"
+            log("mps readiness changed status=%s detail=%s", status, result.diagnostic)
 
-    def check_config(self, client_config: XpoolConfig) -> None:
-        """Require a runtime participant's effective config to match the daemon.
+    def check_config(self, request: ConfigCheckRequest) -> None:
+        """Require agreement on effective configuration and ordered deployment UUIDs.
 
         Args:
-            client_config: Validated effective config submitted by a runtime
+            request: Validated effective config and visibility submitted by a runtime
                 participant before registration.
 
         Raises:
@@ -206,10 +353,11 @@ class ControlPlane:
             differences.append(f"- {path}: client={display(client_value)}, daemon={display(daemon_value)}")
 
         compare(
-            client_config.model_dump(mode="json"),
+            request.config.model_dump(mode="json"),
             get_global_config().model_dump(mode="json"),
             "",
         )
+        compare(request.visible_devices, list(visible_uuids()), "visible_devices")
         if differences:
             raise XpoolDaemonError(
                 "conflict",
@@ -249,7 +397,7 @@ class ControlPlane:
             projection = ControlPlaneProjection.capture(
                 config=get_global_config(),
                 now=now,
-                mps_online=self.mps_cache_result is not None and self.mps_cache_result.online,
+                mps_online=None if self.mps_cache_result is None else self.mps_cache_result.online,
                 registrations=self.registrations,
                 transport=self.transport_broker,
                 fabric=self.fabric_controller,
@@ -258,12 +406,12 @@ class ControlPlane:
             self.warning_cache_at = now
             self.warning_cache = projection.warnings
             warnings = projection.warnings
-        previous_by_key = {(warning.kind, warning.cuda_device) for warning in previous_warnings}
-        current_by_key = {(warning.kind, warning.cuda_device) for warning in warnings}
-        for kind, cuda_device in sorted(current_by_key - previous_by_key):
-            logger.warning("global warning entered kind=%s device=%s", kind, cuda_device)
-        for kind, cuda_device in sorted(previous_by_key - current_by_key):
-            logger.info("global warning cleared kind=%s device=%s", kind, cuda_device)
+        previous_by_key = {(warning.kind, warning.device) for warning in previous_warnings}
+        current_by_key = {(warning.kind, warning.device) for warning in warnings}
+        for kind, device in sorted(current_by_key - previous_by_key):
+            logger.warning("global warning entered kind=%s device=%s", kind, device)
+        for kind, device in sorted(previous_by_key - current_by_key):
+            logger.info("global warning cleared kind=%s device=%s", kind, device)
         return list(warnings)
 
     def retire_terminal_generation(self) -> None:
@@ -285,34 +433,34 @@ class ControlPlane:
                 self.serving_startup = ServingStartupState()
 
     def register_atnagent(self, registration: AtnAgentRegistrationState) -> None:
-        """Install a atnagent registration after draining a dead generation.
+        """Install an AtnAgent registration after its prior arena users retire.
 
         Args:
             registration: Candidate atnagent process registration.
 
         Raises:
             XpoolDaemonError: If the device or ABI is invalid, a conflicting
-                generation remains live, or old arena users outlive the bounded
-                replacement cleanup.
+                generation remains live, or prior arena users remain live.
 
-        Side Effects:
-            Concurrently terminates live instance processes leasing arenas from
-            a dead prior generation and removes their registrations after death.
         """
 
         self.retire_terminal_generation()
-        if registration.cuda_device not in get_global_config().atnagent_by_cuda_device:
+        if registration.device not in get_global_config().atnagent_by_device:
             raise XpoolDaemonError("not_found", "unknown AtnAgent")
         if registration.abi_version != ABI_VERSION:
             raise XpoolDaemonError("conflict", "atnagent ABI version does not match daemon ABI")
         with self.lock:
-            existing = self.registrations.atnagents.query(registration.cuda_device)
+            if self.registrations.agent_startups.get((FabricRole.ATNAGENT, registration.device)) != registration.proc:
+                if self.admission_closed:
+                    raise XpoolDaemonError("not_ready", "participant admission is closed")
+                raise XpoolDaemonError("conflict", "AtnAgent registration requires its admitted startup identity")
+            existing = self.registrations.atnagents.query(registration.device)
             fabric = self.fabric_controller.generation
             if fabric is not None:
                 pe = next(
                     pe
                     for pe, item in enumerate(fabric.plan.pe_placements)
-                    if item.role is FabricRole.ATNAGENT and item.cuda_device == registration.cuda_device
+                    if item.role is FabricRole.ATNAGENT and item.device == registration.device
                 )
                 if fabric.agent_owners[pe] != registration.proc:
                     fabric.record_owner_failure(
@@ -327,54 +475,34 @@ class ControlPlane:
         existing_alive = False if existing is None else existing.proc.is_alive()
         if existing is not None and existing.proc != registration.proc and not existing_alive:
             with self.lock:
-                leased_instances = self.transport_broker.leased_instances(registration.cuda_device, existing.proc)
+                leased_instances = self.transport_broker.leased_instances(registration.device, existing.proc)
                 owners = [
                     owner
                     for instance in leased_instances
                     if (owner := self.registrations.instances.query(instance)) is not None
                 ]
-            live_owners = [owner for owner in owners if owner.proc.is_alive()]
-            if live_owners:
-                deadline = monotonic() + ATNAGENT_REPLACEMENT_TIMEOUT_S
-                with ThreadPoolExecutor(max_workers=len(live_owners)) as executor:
-                    futures = [
-                        executor.submit(owner.proc.terminate_tree, term_grace_s=TRANSPORT_DRAIN_TERM_GRACE_S)
-                        for owner in live_owners
-                    ]
-                    for future in futures:
-                        future.result()
-                while any(owner.proc.is_alive() for owner in live_owners) and monotonic() < deadline:
-                    sleep(0.05)
-                if any(owner.proc.is_alive() for owner in live_owners):
-                    raise XpoolDaemonError("not_ready", "previous atnagent generation still has live arena users")
+            if any(owner.proc.is_alive() for owner in owners):
+                raise XpoolDaemonError("not_ready", "previous AtnAgent still has live arena users")
             with self.lock:
-                for owner in live_owners:
-                    if self.registrations.instances.query(owner.instance) is owner:
-                        self.registrations.instances.remove_snapshot(owner.instance, owner)
-                        self.transport_broker.remove_instance(owner.instance)
-                        logger.info(
-                            "registration removed role=instance instance=%s rank=%s pid=%s",
-                            owner.instance.model_id,
-                            owner.instance.rank,
-                            owner.proc.pid,
-                        )
-                if self.registrations.atnagents.query(registration.cuda_device) is not existing:
+                if self.registrations.atnagents.query(registration.device) is not existing:
                     raise XpoolDaemonError("not_ready", "atnagent registration changed during generation cleanup")
         with self.lock:
+            if self.registrations.agent_startups.get((FabricRole.ATNAGENT, registration.device)) != registration.proc:
+                raise XpoolDaemonError("conflict", "AtnAgent startup ownership changed during registration")
             changed = self.registrations.atnagents.install_snapshot(
                 registration,
                 existing,
                 existing_alive=existing_alive,
             )
-            installed = self.registrations.atnagents.query(registration.cuda_device)
+            installed = self.registrations.atnagents.query(registration.device)
             if installed is None:
                 raise RuntimeError("AtnAgent registration disappeared during installation")
-            self.transport_broker.install_atnagent(registration.cuda_device, installed.proc)
+            self.transport_broker.install_atnagent(registration.device, installed.proc)
             if changed:
                 self.membership_revision += 1
                 logger.info(
                     "registration accepted role=atnagent device=%s pid=%s",
-                    registration.cuda_device,
+                    registration.device,
                     registration.proc.pid,
                 )
         self.ensure_fabric_plan()
@@ -396,18 +524,22 @@ class ControlPlane:
         """
 
         self.retire_terminal_generation()
-        if registration.cuda_device not in get_global_config().ffnagent_by_cuda_device:
+        if registration.device not in get_global_config().ffnagent_by_device:
             raise XpoolDaemonError("not_found", "unknown FfnAgent")
         if registration.abi_version != ABI_VERSION:
             raise XpoolDaemonError("conflict", "ffnagent ABI version does not match daemon ABI")
         with self.lock:
-            existing = self.registrations.ffnagents.query(registration.cuda_device)
+            if self.registrations.agent_startups.get((FabricRole.FFNAGENT, registration.device)) != registration.proc:
+                if self.admission_closed:
+                    raise XpoolDaemonError("not_ready", "participant admission is closed")
+                raise XpoolDaemonError("conflict", "FfnAgent registration requires its admitted startup identity")
+            existing = self.registrations.ffnagents.query(registration.device)
             fabric = self.fabric_controller.generation
             if fabric is not None:
                 pe = next(
                     pe
                     for pe, item in enumerate(fabric.plan.pe_placements)
-                    if item.role is FabricRole.FFNAGENT and item.cuda_device == registration.cuda_device
+                    if item.role is FabricRole.FFNAGENT and item.device == registration.device
                 )
                 if fabric.agent_owners[pe] != registration.proc:
                     fabric.record_owner_failure(
@@ -421,6 +553,8 @@ class ControlPlane:
                     raise XpoolDaemonError("conflict", "retained Fabric generation forbids FfnAgent replacement")
         existing_alive = False if existing is None else existing.proc.is_alive()
         with self.lock:
+            if self.registrations.agent_startups.get((FabricRole.FFNAGENT, registration.device)) != registration.proc:
+                raise XpoolDaemonError("conflict", "FfnAgent startup ownership changed during registration")
             canonical_specs = self.registrations.ffn_model_specs
             if canonical_specs is not None and model_specs != canonical_specs:
                 raise XpoolDaemonError("conflict", "FfnAgent Model Specs disagree with the canonical declaration")
@@ -435,13 +569,17 @@ class ControlPlane:
                 self.membership_revision += 1
                 logger.info(
                     "registration accepted role=ffnagent device=%s pid=%s",
-                    registration.cuda_device,
+                    registration.device,
                     registration.proc.pid,
                 )
         self.ensure_fabric_plan()
 
     def register_instance(self, registration: InstanceRankRegistrationState) -> None:
-        """Install an instance registration unless a different live one exists."""
+        """Install a live Instance worker with matching physical placement.
+
+        Ordered attention UUIDs must match the retained endpoint. Registration
+        commit shares the domain lock with closing participant admission.
+        """
 
         self.retire_terminal_generation()
         model_id = registration.instance.model_id
@@ -463,6 +601,8 @@ class ControlPlane:
         if transport.atn_dp_rank * transport.atn_tp_size + transport.atn_tp_rank != rank:
             raise XpoolDaemonError("conflict", "instance transport coordinates do not use TP-fastest rank order")
         with self.lock:
+            if self.admission_closed:
+                raise XpoolDaemonError("not_ready", "participant admission is closed")
             existing = self.registrations.instances.query(registration.instance)
             fabric = self.fabric_controller.generation
             if fabric is not None:
@@ -479,8 +619,12 @@ class ControlPlane:
                     raise XpoolDaemonError("conflict", "retained Fabric generation forbids Instance-rank replacement")
         existing_alive = False if existing is None else existing.proc.is_alive()
         with self.lock:
+            if self.admission_closed:
+                raise XpoolDaemonError("not_ready", "participant admission is closed")
             if self.registrations.instances.query(registration.instance) is not existing:
                 raise XpoolDaemonError("not_ready", "instance registration changed during validation")
+            if self.mps_scope is None:
+                raise XpoolDaemonError("not_ready", "owned attention MPS scope is unavailable")
             for peer in self.registrations.instances.values():
                 if peer.instance.model_id != model_id or peer.instance == registration.instance:
                     continue
@@ -540,7 +684,7 @@ class ControlPlane:
                     rank=rank,
                     reason=FabricOwnerFailureReason.EXITED,
                 ),
-                termination_requested=lease is not None and lease.termination_requested,
+                leases_quiescing=lease is not None and self.transport_broker.is_quiescing(lease.device),
                 now=monotonic(),
             )
         logger.info(
@@ -564,6 +708,8 @@ class ControlPlane:
             with self.lock:
                 if self.fabric_controller.generation is not None:
                     return self.fabric_controller.generation.plan
+                if self.admission_closed:
+                    return None
                 membership = FabricMembership.capture(config, self.registrations, self.membership_revision)
 
             # Validate: reject incomplete or dead membership without holding the
@@ -604,7 +750,7 @@ class ControlPlane:
                 if self.fabric_controller.generation is not None:
                     policy.close()
                     return self.fabric_controller.generation.plan
-                if self.membership_revision != membership.revision:
+                if self.admission_closed or self.membership_revision != membership.revision:
                     policy.close()
                     return None
                 installed_plan = self.fabric_controller.install(
@@ -663,13 +809,123 @@ class ControlPlane:
                 self.fabric_controller.abort(now=monotonic())
                 raise
 
-    def close(self) -> None:
-        """Release daemon-owned Generation resources during lifespan shutdown."""
+    def begin_close(self, *, deadline: float | None = None) -> float:
+        """Seal admission and retain the first retirement trigger's deadline.
+
+        This synchronous transition is shared by signals, background failures
+        and direct close. It leaves control reports available while the blocking
+        cleanup operation runs. Subsequent triggers preserve the same budget.
+
+        Args:
+            deadline: Absolute monotonic deadline, or ``None`` to start the
+                production cleanup budget at this trigger.
+
+        Returns:
+            The daemon-owned absolute monotonic cleanup deadline.
+        """
 
         with self.lock:
-            if self.kv_capacity_policy is not None:
-                self.kv_capacity_policy.close()
-                self.kv_capacity_policy = None
+            self.admission_closed = True
+            if self.cleanup_deadline is None:
+                self.cleanup_deadline = monotonic() + MPS_CLEANUP_TIMEOUT_S if deadline is None else deadline
+            if self.mps_scope is not None and self.mps_scope.cleanup_deadline is None:
+                self.mps_scope.cleanup_deadline = self.cleanup_deadline
+            return self.cleanup_deadline
+
+    def close(self, *, deadline: float | None = None) -> None:
+        """Retire known participants and actual clients before releasing the controller.
+
+        Concurrent callers join the same cleanup operation. The first caller
+        retains its absolute monotonic deadline, including any preceding wait
+        after a signal. Expiry or failed observation keeps this owner alive;
+        automatic management stops, while confirmed later retirement can still
+        complete cleanup. Control routes and background coordination must remain
+        usable until this operation returns.
+
+        Args:
+            deadline: First trigger's absolute monotonic deadline. Direct close
+                starts the production cleanup budget when none is supplied.
+
+        Side Effects:
+            Closes admission, waits for known Instance owners, requests
+            Agent/Fabric quiesce, stops only the retained MPS scope, closes KV
+            state after verified process exit.
+            Neither ordinary waiting nor expiry signals serving processes.
+        """
+
+        deadline = self.begin_close(deadline=deadline)
+        with self.cleanup_lock:
+            if self.closed:
+                return
+            with self.lock:
+                scope = self.mps_scope
+            logger.info("shutdown started pid=%s", os.getpid())
+            last_diagnostic: tuple[type[Exception], str] | None = None
+            expiry_reported = False
+            notified_agents: set[ProcUniqId] = set()
+            while True:
+                now = monotonic()
+                if now >= deadline and not expiry_reported:
+                    logger.error(
+                        "shutdown deadline expired; retaining ownership; manual resolution required mps_directory=%s",
+                        None if scope is None else scope.endpoint.directory,
+                    )
+                    expiry_reported = True
+                try:
+                    with self.lock:
+                        fabric = self.fabric_controller.generation
+                        owners = tuple(
+                            {
+                                *(registration.proc for registration in self.registrations.all_values()),
+                                *self.registrations.agent_startups.values(),
+                                *(() if fabric is None else fabric.agent_owners.values()),
+                                *(() if fabric is None else fabric.instance_owners.values()),
+                            }
+                        )
+                        scope = self.mps_scope
+                        instance_owners = {
+                            *(registration.proc for registration in self.registrations.instances.values()),
+                            *(() if fabric is None else fabric.instance_owners.values()),
+                        }
+                        pre_join_agents = (
+                            (*self.registrations.atnagents.values(), *self.registrations.ffnagents.values())
+                            if fabric is None
+                            else ()
+                        )
+                    # Agent.run installs its handlers before formal registration.
+                    # Already-admitted startup may publish that safe pre-join
+                    # boundary during close; new startup remains sealed.
+                    if now < deadline:
+                        for registration in pre_join_agents:
+                            if registration.proc not in notified_agents:
+                                registration.proc.send_signal(signal.SIGTERM)
+                                notified_agents.add(registration.proc)
+                    if not any(owner.is_alive() for owner in instance_owners):
+                        with self.lock:
+                            if fabric is not None and self.fabric_controller.generation is fabric and now < deadline:
+                                self.fabric_controller.quiesce(now=now)
+                        if not any(owner.is_alive() for owner in owners):
+                            # After expiry, only a controller already exited can
+                            # complete housekeeping; no new command gets a budget.
+                            if scope is not None:
+                                if now >= deadline and scope.controller is not None and scope.controller.poll() is None:
+                                    sleep(0.1)
+                                    continue
+                                scope.stop(deadline=deadline)
+                            with self.lock:
+                                if self.kv_capacity_policy is not None:
+                                    self.kv_capacity_policy.close()
+                                    self.kv_capacity_policy = None
+                                self.closed = True
+                            logger.info("shutdown completed pid=%s", os.getpid())
+                            return
+                    last_diagnostic = None
+                except Exception as error:
+                    diagnostic = (type(error), str(error))
+                    if diagnostic != last_diagnostic:
+                        logger.error("shutdown incomplete; retaining ownership detail=%s", error)
+                        last_diagnostic = diagnostic
+                sleep(0.1)
 
     def request_fabric_quiesce(self, request: FabricQuiesceRequest) -> None:
         """Authenticate an Agent owner and stop generation admission."""
@@ -681,9 +937,9 @@ class ControlPlane:
             owner_matches = 0
             for pe, placement in enumerate(fabric.plan.pe_placements):
                 registration = (
-                    self.registrations.atnagents.query(placement.cuda_device)
+                    self.registrations.atnagents.query(placement.device)
                     if placement.role is FabricRole.ATNAGENT
-                    else self.registrations.ffnagents.query(placement.cuda_device)
+                    else self.registrations.ffnagents.query(placement.device)
                 )
                 if (
                     registration is not None
@@ -711,9 +967,9 @@ class ControlPlane:
                 self.fabric_controller.reject_report("participant reported an unknown Fabric PE", now=now)
             placement = fabric.plan.pe_placements[report.pe]
             registration = (
-                self.registrations.atnagents.query(placement.cuda_device)
+                self.registrations.atnagents.query(placement.device)
                 if placement.role is FabricRole.ATNAGENT
-                else self.registrations.ffnagents.query(placement.cuda_device)
+                else self.registrations.ffnagents.query(placement.device)
             )
             try:
                 if registration is None or registration.proc != fabric.agent_owners[report.pe]:
@@ -767,30 +1023,30 @@ class ControlPlane:
             fabric_phase=fabric_phase,
         )
 
-    def heartbeat_atnagent(self, cuda_device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
+    def heartbeat_atnagent(self, device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
         """Refresh a atnagent heartbeat and return global daemon warnings."""
 
         now = monotonic()
         with self.lock:
-            registration = self.registrations.atnagents.query(cuda_device)
+            registration = self.registrations.atnagents.query(device)
         if registration is None:
             raise XpoolDaemonError("not_ready", "registration is not registered")
         registration.validate_process_ref(heartbeat, context="heartbeat")
         with self.lock:
-            self.registrations.atnagents.commit_heartbeat(cuda_device, registration, now=now)
+            self.registrations.atnagents.commit_heartbeat(device, registration, now=now)
         return self.heartbeat_response(now)
 
-    def heartbeat_ffnagent(self, cuda_device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
+    def heartbeat_ffnagent(self, device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
         """Refresh an FfnAgent heartbeat and return global daemon warnings."""
 
         now = monotonic()
         with self.lock:
-            registration = self.registrations.ffnagents.query(cuda_device)
+            registration = self.registrations.ffnagents.query(device)
         if registration is None:
             raise XpoolDaemonError("not_ready", "registration is not registered")
         registration.validate_process_ref(heartbeat, context="heartbeat")
         with self.lock:
-            self.registrations.ffnagents.commit_heartbeat(cuda_device, registration, now=now)
+            self.registrations.ffnagents.commit_heartbeat(device, registration, now=now)
         return self.heartbeat_response(now)
 
     def heartbeat_instance(self, model_id: ModelId, rank: int, heartbeat: ProcessRef) -> HeartbeatResponse:
@@ -816,13 +1072,7 @@ class ControlPlane:
         # Snapshot identities under the lock, but perform process-liveness I/O
         # outside it so a slow kernel/process query cannot block daemon control.
         with self.lock:
-            registrations: tuple[CommonRegistration, ...] = tuple(
-                [
-                    *self.registrations.atnagents.values(),
-                    *self.registrations.ffnagents.values(),
-                    *self.registrations.instances.values(),
-                ]
-            )
+            registrations = tuple(self.registrations.all_values())
             fabric_snapshot = self.fabric_controller.generation
             generation_owners = (
                 ()
@@ -830,7 +1080,9 @@ class ControlPlane:
                 else tuple({*fabric_snapshot.agent_owners.values(), *fabric_snapshot.instance_owners.values()})
             )
         liveness = {registration.proc: registration.proc.is_alive() for registration in registrations}
-        owner_liveness = {owner: liveness.get(owner, owner.is_alive()) for owner in generation_owners}
+        owner_liveness = {
+            owner: liveness[owner] if owner in liveness else owner.is_alive() for owner in generation_owners
+        }
         with self.lock:
             for registration in registrations:
                 registration.alive = liveness[registration.proc]
@@ -848,9 +1100,9 @@ class ControlPlane:
                     continue
                 owner = fabric.agent_owners[pe]
                 registration = (
-                    self.registrations.atnagents.query(placement.cuda_device)
+                    self.registrations.atnagents.query(placement.device)
                     if placement.role is FabricRole.ATNAGENT
-                    else self.registrations.ffnagents.query(placement.cuda_device)
+                    else self.registrations.ffnagents.query(placement.device)
                 )
                 reason = None
                 if registration is None or not owner_liveness[owner]:
@@ -886,9 +1138,11 @@ class ControlPlane:
                     elif registration.readiness_status(now) is not ReadinessStatus.ONLINE:
                         reason = FabricOwnerFailureReason.STALE
                     if reason is not None:
+                        lease = self.transport_broker.leases.get(instance)
                         if (
                             fabric.phase is FabricGenerationPhase.QUIESCING
-                            and self.transport_broker.termination_requested(instance)
+                            and lease is not None
+                            and self.transport_broker.is_quiescing(lease.device)
                         ):
                             continue
                         fabric.record_owner_failure(
@@ -919,14 +1173,8 @@ class ControlPlane:
             if fabric.phase is FabricGenerationPhase.ABORTING:
                 abort_owners = tuple({*fabric.agent_owners.values(), *fabric.instance_owners.values()})
 
-        # Fail-stop process trees outside the daemon lock; state advances to
-        # Stopped only after every generation owner is proven dead.
-        live_abort_owners = tuple(owner for owner in abort_owners if owner.is_alive())
-        if live_abort_owners:
-            with ThreadPoolExecutor(max_workers=len(live_abort_owners)) as executor:
-                futures = [executor.submit(owner.kill_tree) for owner in live_abort_owners]
-                for future in futures:
-                    future.result()
+        # Resource owners perform retirement. The daemon observes complete
+        # owner exit; a phase timeout never authorizes device-blind signals.
         if abort_owners:
             any_alive = any(owner.is_alive() for owner in abort_owners)
             with self.lock:
@@ -937,79 +1185,55 @@ class ControlPlane:
 
     def upsert_atnagent_transport_arenas(
         self,
-        cuda_device: int,
+        device: int,
         bindings: list[AtnAgentTransportArenaBinding],
         publisher: ProcessRef,
     ) -> None:
         """Upsert transport arenas if the owning atnagent registration is live."""
 
         now = monotonic()
-        if cuda_device not in get_global_config().atnagent_by_cuda_device:
+        if device not in get_global_config().atnagent_by_device:
             raise XpoolDaemonError("not_found", "unknown AtnAgent")
         with self.lock:
-            registration = self.registrations.atnagents.query(cuda_device)
+            registration = self.registrations.atnagents.query(device)
         if registration is None:
             raise XpoolDaemonError("not_ready", "atnagent must register before upserting transport arenas")
         registration.validate_process_ref(publisher, context="transport arena publisher")
         registration.require_online(now, context="local attention atnagent")
         with self.lock:
-            if self.registrations.atnagents.query(cuda_device) is not registration:
+            if self.registrations.atnagents.query(device) is not registration:
                 raise XpoolDaemonError("not_ready", "atnagent registration changed during arena publication")
-            publications = self.validate_atnagent_transport_arenas(cuda_device, bindings)
-            self.transport_broker.publish(cuda_device, registration.proc, publications)
+            publications = self.validate_atnagent_transport_arenas(device, bindings)
+            self.transport_broker.publish(device, registration.proc, publications)
 
     def quiesce_atnagent_transport_leases(
         self,
-        cuda_device: int,
+        device: int,
         publisher: ProcessRef,
     ) -> AtnAgentTransportLeaseQuiesceResponse:
-        """Close lease admission and terminate every live lease owner."""
+        """Close lease admission and report clients that still own arenas."""
 
         now = monotonic()
-        if cuda_device not in get_global_config().atnagent_by_cuda_device:
+        if device not in get_global_config().atnagent_by_device:
             raise XpoolDaemonError("not_found", "unknown AtnAgent")
         with self.lock:
-            registration = self.registrations.atnagents.query(cuda_device)
+            registration = self.registrations.atnagents.query(device)
         if registration is None:
             raise XpoolDaemonError("not_ready", "atnagent must register before quiescing transport leases")
         registration.validate_process_ref(publisher, context="transport lease quiesce")
         if registration.readiness_status(now) is ReadinessStatus.OFFLINE:
             raise XpoolDaemonError("not_ready", "local attention atnagent process is not live")
         with self.lock:
-            if self.registrations.atnagents.query(cuda_device) is not registration:
+            if self.registrations.atnagents.query(device) is not registration:
                 raise XpoolDaemonError("not_ready", "atnagent registration changed during lease quiesce")
-            self.transport_broker.quiesce(cuda_device, registration.proc)
-            leased_instances = self.transport_broker.leased_instances(cuda_device)
+            self.transport_broker.quiesce(device, registration.proc)
+            leased_instances = self.transport_broker.leased_instances(device)
             candidates = [
                 owner
                 for instance in leased_instances
                 if (owner := self.registrations.instances.query(instance)) is not None
             ]
-        live_candidates = [owner for owner in candidates if owner.proc.is_alive()]
-        with self.lock:
-            active_instances = [
-                owner.instance
-                for owner in live_candidates
-                if self.registrations.instances.query(owner.instance) is owner
-                and owner.instance in self.transport_broker.leased_instances(cuda_device)
-            ]
-            requested_instances = self.transport_broker.mark_termination_requested(active_instances)
-            procs_to_terminate = [owner.proc for owner in live_candidates if owner.instance in requested_instances]
-        if procs_to_terminate:
-            with ThreadPoolExecutor(max_workers=len(procs_to_terminate)) as executor:
-                futures = [
-                    executor.submit(proc.terminate_tree, term_grace_s=TRANSPORT_DRAIN_TERM_GRACE_S)
-                    for proc in procs_to_terminate
-                ]
-                for future in futures:
-                    future.result()
-        with self.lock:
-            remaining = [
-                owner
-                for instance in self.transport_broker.leased_instances(cuda_device)
-                if (owner := self.registrations.instances.query(instance)) is not None
-            ]
-        live_remaining = [owner for owner in remaining if owner.proc.is_alive()]
+        live_remaining = [owner for owner in candidates if owner.proc.is_alive()]
         return AtnAgentTransportLeaseQuiesceResponse(
             in_use=[
                 InstanceRankRef(
@@ -1024,12 +1248,12 @@ class ControlPlane:
 
     def validate_atnagent_transport_arenas(
         self,
-        cuda_device: int,
+        device: int,
         bindings: list[AtnAgentTransportArenaBinding],
     ) -> list[TransportArenaPublication]:
         """Validate and normalize transport arenas published by one atnagent."""
 
-        atn_cuda_devices = get_global_config().atn.devices
+        atn_devices = get_global_config().atn.devices
         seen: set[InstanceRankId] = set()
         seen_handles: set[str] = set()
         publications: list[TransportArenaPublication] = []
@@ -1041,14 +1265,14 @@ class ControlPlane:
             if binding.model_id not in get_global_config().instance_by_model_id:
                 raise XpoolDaemonError("conflict", "atnagent transport arena handle references unknown instance")
             self.validate_instance_rank(binding.model_id, binding.rank)
-            expected_cuda_device = atn_cuda_devices[binding.rank]
-            if expected_cuda_device != cuda_device:
+            expected_device = atn_devices[binding.rank]
+            if expected_device != device:
                 raise XpoolDaemonError(
                     "conflict",
                     (
-                        f"atnagent transport arena handle rank {binding.rank} belongs to CUDA device "
-                        f"{expected_cuda_device}, "
-                        f"not {cuda_device}"
+                        f"atnagent transport arena handle rank {binding.rank} belongs to device "
+                        f"{expected_device}, "
+                        f"not {device}"
                     ),
                 )
             instance = InstanceRankId(model_id=binding.model_id, rank=binding.rank)
@@ -1078,7 +1302,7 @@ class ControlPlane:
             return ControlPlaneProjection.capture(
                 config=get_global_config(),
                 now=now,
-                mps_online=self.mps_cache_result is not None and self.mps_cache_result.online,
+                mps_online=None if self.mps_cache_result is None else self.mps_cache_result.online,
                 registrations=self.registrations,
                 transport=self.transport_broker,
                 fabric=self.fabric_controller,
@@ -1099,7 +1323,7 @@ class ControlPlane:
                 or not ControlPlaneProjection.capture(
                     config=config,
                     now=now,
-                    mps_online=self.mps_cache_result is not None and self.mps_cache_result.online,
+                    mps_online=None if self.mps_cache_result is None else self.mps_cache_result.online,
                     registrations=self.registrations,
                     transport=self.transport_broker,
                     fabric=self.fabric_controller,
@@ -1148,10 +1372,10 @@ class ControlPlane:
         """Acquire a daemon-brokered transport arena handle for one registered instance rank."""
 
         config = get_global_config()
-        atn_cuda_devices = config.atn.devices
+        atn_devices = config.atn.devices
         self.validate_instance_rank(model_id, rank)
         instance_uid = InstanceRankId(model_id=model_id, rank=rank)
-        cuda_device = atn_cuda_devices[rank]
+        device = atn_devices[rank]
         now = monotonic()
         with self.lock:
             registration = self.registrations.instances.query(instance_uid)
@@ -1159,13 +1383,13 @@ class ControlPlane:
             raise XpoolDaemonError("not_ready", "instance rank is not registered")
         registration.validate_process_ref(owner, context="transport arena handle acquirer")
         with self.lock:
-            atnagent_registration = self.registrations.atnagents.query(cuda_device)
+            atnagent_registration = self.registrations.atnagents.query(device)
         if atnagent_registration is None:
             raise XpoolDaemonError("not_ready", "local attention atnagent is not registered")
         with self.lock:
             if self.registrations.instances.query(instance_uid) is not registration:
                 raise XpoolDaemonError("not_ready", "instance registration changed during arena acquisition")
-            if self.registrations.atnagents.query(cuda_device) is not atnagent_registration:
+            if self.registrations.atnagents.query(device) is not atnagent_registration:
                 raise XpoolDaemonError("not_ready", "atnagent registration changed during arena acquisition")
             registration.require_online(now, context="instance rank")
             atnagent_registration.require_online(now, context="local attention atnagent")
@@ -1187,13 +1411,13 @@ class ControlPlane:
                     raise XpoolDaemonError(
                         "conflict", "Fabric generation owner does not match Instance-rank registration"
                     )
-            publication = self.transport_broker.publication(cuda_device, instance_uid, atnagent_registration.proc)
+            publication = self.transport_broker.publication(device, instance_uid, atnagent_registration.proc)
             if publication.transport != registration.transport:
                 raise XpoolDaemonError("not_ready", "published transport arena geometry is stale")
             self.transport_broker.acquire(
                 instance_uid,
                 TransportArenaLease(
-                    cuda_device=cuda_device,
+                    device=device,
                     handle=publication.handle,
                     publisher=atnagent_registration.proc,
                 ),

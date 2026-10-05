@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[6]
 
 
 def test_suite_runner_cancellation_reaps_each_supervisor_through_its_scope(tmp_path: Path) -> None:
-    requirements = ResourceRequirements(0, False, False, ())
+    requirements = ResourceRequirements(0, False, ())
     cases = tuple(
         xtest.harness.runner.plan.CollectedTestCase(
             path="tests/suites/integration/xtest/harness/runner/test_suite.py",
@@ -57,7 +57,7 @@ def test_suite_runner_cancellation_reaps_each_supervisor_through_its_scope(tmp_p
             timeout_seconds=60,
         )
         runner.active[task.key] = xtest.harness.runner.suite.RunningTask(
-            task, directory, scope, None, gpu_assignments="none", started_at=time.monotonic()
+            task, directory, scope, None, device_assignments="none", started_at=time.monotonic()
         )
 
     runner.cancel_active_tasks()

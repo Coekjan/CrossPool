@@ -83,7 +83,7 @@ protected:
     auto device_count = int{0};
     const auto error = cudaGetDeviceCount(&device_count);
     if (error != cudaSuccess || device_count == 0) {
-      GTEST_SKIP() << "CUDA device is not available: " << cudaGetErrorString(error);
+      GTEST_SKIP() << "device is not available: " << cudaGetErrorString(error);
     }
     ASSERT_TRUE(cuda_succeeded(cudaSetDevice(0)));
   }

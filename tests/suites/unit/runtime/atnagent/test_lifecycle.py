@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -56,8 +58,8 @@ def fabric_plan(profile: InstanceFfnProfile) -> FabricPlan:
         generation=FabricGenerationId(high=1, low=2),
         uid=FabricUid(value="ab" * 128),
         pe_placements=(
-            FabricPePlacement(role=FabricRole.ATNAGENT, cuda_device=0),
-            FabricPePlacement(role=FabricRole.FFNAGENT, cuda_device=1),
+            FabricPePlacement(role=FabricRole.ATNAGENT, device=0),
+            FabricPePlacement(role=FabricRole.FFNAGENT, device=1),
         ),
         executor_lane_count=1,
         scheduler=FifoSchedulerPolicy(),
@@ -82,7 +84,7 @@ def fabric_plan(profile: InstanceFfnProfile) -> FabricPlan:
 
 
 @pytest.mark.parametrize(
-    ("agent_type", "cuda_device", "role"),
+    ("agent_type", "device", "role"),
     [
         (AtnAgent, 0, RuntimeRole.ATNAGENT),
         (FfnAgent, 1, RuntimeRole.FFNAGENT),
@@ -91,7 +93,7 @@ def fabric_plan(profile: InstanceFfnProfile) -> FabricPlan:
 def test_agent_construction_initializes_role_and_devkit(
     monkeypatch: pytest.MonkeyPatch,
     agent_type: type[AtnAgent] | type[FfnAgent],
-    cuda_device: int,
+    device: int,
     role: RuntimeRole,
 ) -> None:
     config = XpoolConfig.from_mapping(
@@ -104,10 +106,16 @@ def test_agent_construction_initializes_role_and_devkit(
     )
     install_test_config(config=config)
     events: list[tuple[object, ...]] = []
+    monkeypatch.setattr(xpool.runtime.agent.XpoolClient, "check_config", lambda self: events.append(("check_config",)))
+    monkeypatch.setattr(
+        xpool.runtime.agent.XpoolClient,
+        "admit_agent_startup",
+        lambda self, request: events.append(("admission", request.device)),
+    )
     monkeypatch.setattr(
         xpool.runtime.agent.bootstrap,
         "init",
-        lambda cuda_device, role: events.append(("init", cuda_device, role)),
+        lambda device, role: events.append(("init", device, role)),
     )
     monkeypatch.setattr(xpool.runtime.agent.devkit, "install", lambda: events.append(("devkit",)))
     monkeypatch.setattr(
@@ -121,9 +129,13 @@ def test_agent_construction_initializes_role_and_devkit(
         monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
         monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (1, 2))
 
-    agent_type(cuda_device=cuda_device)
+    agent = agent_type(device=device)
 
-    assert events == [("init", cuda_device, role), ("devkit",)]
+    assert events == [("check_config",), ("admission", device), ("init", device, role), ("devkit",)]
+    assert agent.local_rank == 0
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == ",".join(xpool.runtime.agent.visible_uuids())
+    if role is RuntimeRole.FFNAGENT:
+        assert os.environ["CUDA_MPS_PIPE_DIRECTORY"] == ""
 
 
 @pytest.mark.parametrize(
@@ -144,7 +156,7 @@ def test_agent_startup_registration_failure_is_debug(
 
     agent = object.__new__(agent_type)
     agent.client = cast(XpoolClient, UnavailableClient())
-    agent.cuda_device = 0
+    agent.device = 0
     agent.registration = object()
     agent.registered = True
     if isinstance(agent, AtnAgent):
@@ -157,11 +169,11 @@ def test_agent_startup_registration_failure_is_debug(
     assert [record.levelno for record in caplog.records] == [logging.DEBUG]
 
 
-def test_cuda_device_selection_rejects_unknown_device() -> None:
+def test_device_selection_rejects_unknown_device() -> None:
     config = synthetic_config()
 
-    with pytest.raises(AgentError, match="CUDA device 9 has no local instance-rank arenas"):
-        create_atnagent(config, cuda_device=9)
+    with pytest.raises(AgentError, match="device 9 is not configured for atnagent"):
+        create_atnagent(config, device=9)
 
 
 def test_participant_report_commits_only_after_daemon_acknowledgement(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -173,7 +185,7 @@ def test_participant_report_commits_only_after_daemon_acknowledgement(monkeypatc
             "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
-    agent = create_atnagent(config, cuda_device=0)
+    agent = create_atnagent(config, device=0)
     profile = InstanceFfnProfile(
         payload_dtype=torch.bfloat16,
         hidden_size=4,
@@ -187,22 +199,18 @@ def test_participant_report_commits_only_after_daemon_acknowledgement(monkeypatc
 
     class RetryingClient:
         def report_fabric_participant(self, report: FabricParticipantReport) -> None:
+            assert agent.participant_report is None
             reports.append(report)
-            if len(reports) < xpool.runtime.agent.FABRIC_REPORT_RETRY_ATTEMPTS:
+            if len(reports) == 1:
                 raise XpoolClientError("transport", "test daemon unavailable")
 
-    sleeps: list[float] = []
     agent.client = cast(XpoolClient, RetryingClient())
-    monkeypatch.setattr(xpool.runtime.agent.time, "sleep", sleeps.append)
+    monkeypatch.setattr(xpool.runtime.agent, "time", SimpleNamespace(sleep=lambda seconds: None))
 
     agent.report_fabric_phase(FabricParticipantPhase.JOIN_READY)
 
-    assert len(reports) == xpool.runtime.agent.FABRIC_REPORT_RETRY_ATTEMPTS
+    assert len(reports) == 2
     assert all(report == reports[0] for report in reports)
-    assert sleeps == [
-        xpool.runtime.agent.FABRIC_REPORT_RETRY_DELAY_S,
-        xpool.runtime.agent.FABRIC_REPORT_RETRY_DELAY_S,
-    ]
     assert agent.participant_report == reports[-1]
 
 
@@ -217,7 +225,7 @@ def test_post_join_value_error_is_reported_as_control_failure(monkeypatch: pytes
             "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         }
     )
-    agent = create_atnagent(config, cuda_device=0)
+    agent = create_atnagent(config, device=0)
     profile = InstanceFfnProfile(
         payload_dtype=torch.bfloat16,
         hidden_size=4,
@@ -260,7 +268,7 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
             "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
         },
     )
-    agent = create_atnagent(config, cuda_device=0)
+    agent = create_atnagent(config, device=0)
     profile = InstanceFfnProfile(
         payload_dtype=torch.bfloat16,
         hidden_size=4,
@@ -323,10 +331,11 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
 
 def test_atnagent_publishes_device_memory_once_after_capture(monkeypatch: pytest.MonkeyPatch) -> None:
     publications: list[tuple[int, int]] = []
+    capture_complete = False
 
     class ControlChannel:
         def captures_complete(self) -> bool:
-            return True
+            return capture_complete
 
         def publish_device_memory(self, total_bytes: int, free_bytes: int) -> None:
             publications.append((total_bytes, free_bytes))
@@ -336,10 +345,19 @@ def test_atnagent_publishes_device_memory_once_after_capture(monkeypatch: pytest
     agent.capacity_memory_published = False
     agent.participant_report = None
     agent.fabric_phase = None
-    agent.cuda_device = 3
+    agent.device = 0
+    agent.local_rank = 0
     monkeypatch.setattr(xpool.runtime.agent.Agent, "poll_fabric_health", lambda self: None)
-    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (40, 100))
 
+    def mem_get_info(device: int) -> tuple[int, int]:
+        assert device == 0
+        return 40, 100
+
+    monkeypatch.setattr(torch.cuda, "mem_get_info", mem_get_info)
+
+    agent.poll_fabric_health()
+    assert publications == []
+    capture_complete = True
     agent.poll_fabric_health()
     agent.poll_fabric_health()
 

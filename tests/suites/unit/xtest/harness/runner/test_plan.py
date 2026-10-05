@@ -38,17 +38,17 @@ def test_collected_case_rejects_stage_and_resource_drift() -> None:
             path="tests/suites/unit/test_example.py",
             nodeid="tests/suites/unit/test_example.py::test_example",
             stage=xtest.harness.runner.plan.TestStage.INTEGRATION,
-            requirements=ResourceRequirements(0, False, False, ()),
+            requirements=ResourceRequirements(0, False, ()),
             estimated_duration_seconds=None,
             timeout_seconds=10,
             artifact_group=None,
         )
-    with pytest.raises(ValueError, match="unit tests cannot require CUDA"):
+    with pytest.raises(ValueError, match="unit tests cannot require devices"):
         xtest.harness.runner.plan.CollectedTestCase(
             path="tests/suites/unit/test_example.py",
             nodeid="tests/suites/unit/test_example.py::test_example",
             stage=xtest.harness.runner.plan.TestStage.UNIT,
-            requirements=ResourceRequirements(1, False, False, ()),
+            requirements=ResourceRequirements(1, False, ()),
             estimated_duration_seconds=None,
             timeout_seconds=10,
             artifact_group=None,
@@ -84,7 +84,7 @@ def unit_case() -> xtest.harness.runner.plan.CollectedTestCase:
         path="tests/suites/unit/test_example.py",
         nodeid="tests/suites/unit/test_example.py::test_example",
         stage=xtest.harness.runner.plan.TestStage.UNIT,
-        requirements=ResourceRequirements(0, False, False, ()),
+        requirements=ResourceRequirements(0, False, ()),
         estimated_duration_seconds=None,
         timeout_seconds=10,
         artifact_group=None,
@@ -97,7 +97,7 @@ def e2e_case(mode: str) -> xtest.harness.runner.plan.CollectedTestCase:
         path=path,
         nodeid=f"{path}::test_e2e_example[{mode}]",
         stage=xtest.harness.runner.plan.TestStage.E2E,
-        requirements=ResourceRequirements(2, True, True, (TEST_MODEL_ID,)),
+        requirements=ResourceRequirements(2, True, (TEST_MODEL_ID,)),
         estimated_duration_seconds=60,
         timeout_seconds=120,
         artifact_group=xtest.harness.runner.artifact.ArtifactGroupRef("serving_graph", "example", 2),

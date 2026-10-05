@@ -5,8 +5,10 @@ from __future__ import annotations
 import contextlib
 import importlib
 import importlib.metadata
+import logging
 import multiprocessing
 import os
+import signal
 import tempfile
 import threading
 import time
@@ -14,6 +16,7 @@ from collections.abc import Iterator
 from multiprocessing.connection import Connection, wait
 from multiprocessing.process import BaseProcess
 from pathlib import Path
+from types import FrameType
 from typing import Any
 
 import httpx
@@ -26,12 +29,11 @@ from xpool.config import XpoolConfig, get_global_config, init_global_config
 from xpool.fabric import FabricPlan, FabricRole
 from xpool.memory import (
     FfnMemoryCalibration,
+    MemoryCalibrationDevice,
     MemoryCalibrationEnvironment,
-    MemoryCalibrationGpu,
     XpoolMemoryCalibrationProfile,
     cuda_versions,
 )
-from xpool.mps import probe_mps_controller
 from xpool.native import ABI_VERSION, RuntimeRole
 from xpool.runtime.agent import project_fabric_arena
 from xpool.runtime.ffnagent.device_memory import (
@@ -55,21 +57,25 @@ from xpool.runtime.ffnagent.memory_profile.fitting import (
     fit_worlds,
 )
 from xpool.runtime.ffnagent.registry import FfnExecutionRegistry
+from xpool.utils.device import visible_uuids
+from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S, MpsEndpoint, MpsScope
+from xpool.utils.sighandler import defer_signal_exceptions, sighandle
 
 CUDA_RUNTIME = importlib.import_module("cuda.bindings.runtime")
 SAMPLE_PERIOD_SECONDS = 0.001
 CHILD_TIMEOUT_SECONDS = 3600.0
 FABRIC_DRAIN_TIMEOUT_SECONDS = 60.0
 REPETITION_COUNT = 3
+logger = logging.getLogger(__name__)
 
 
 class PhaseRecorder:
     """High-frequency sampler for the four permanent startup phases."""
 
-    def __init__(self, *, cuda_device: int, baseline_free_bytes: int) -> None:
+    def __init__(self, *, device: int, baseline_free_bytes: int) -> None:
         """Start one current-device sampling thread after a clean baseline."""
 
-        self.cuda_device = cuda_device
+        self.device = device
         self.baseline_free_bytes = baseline_free_bytes
         self.current_phase: str | None = None
         self.samples: dict[str, list[int]] = {}
@@ -85,7 +91,7 @@ class PhaseRecorder:
         """Sample global device memory while one named phase is active."""
 
         try:
-            checked_cuda(CUDA_RUNTIME.cudaSetDevice(self.cuda_device), "sampler cudaSetDevice")
+            checked_cuda(CUDA_RUNTIME.cudaSetDevice(self.device), "sampler cudaSetDevice")
             self.ready.set()
             deadline_ns = time.monotonic_ns()
             period_ns = int(SAMPLE_PERIOD_SECONDS * 1_000_000_000)
@@ -130,7 +136,7 @@ class PhaseRecorder:
 
         if self.current_phase != name:
             raise RuntimeError(f"cannot finish inactive memory phase {name!r}")
-        torch.cuda.synchronize(self.cuda_device)
+        torch.cuda.synchronize(self.device)
         self.samples[name].append(self.read_sample())
         self.current_phase = None
         self.raise_if_failed()
@@ -209,9 +215,9 @@ def record_registry_phases(recorder: PhaseRecorder) -> Iterator[None]:
         yield
         if invocation_count != 1:
             raise RuntimeError("Registry did not invoke native execution installation exactly once")
-        torch.cuda.synchronize(recorder.cuda_device)
+        torch.cuda.synchronize(recorder.device)
         torch.cuda.empty_cache()
-        torch.cuda.synchronize(recorder.cuda_device)
+        torch.cuda.synchronize(recorder.device)
         recorder.finish("execution_installation")
     finally:
         setattr(xpool.native.ffnagent, "install_execution", saved_install)
@@ -257,17 +263,13 @@ def write_world_config(path: Path, source: XpoolConfig, coordinate: str) -> None
 
 
 def software_environment() -> MemoryProfileSoftwareEnvironment:
-    """Collect exact software and MPS compatibility facts in one participant."""
+    """Collect exact software compatibility facts in one participant."""
 
     driver_version, runtime_version = cuda_versions()
-    mps = probe_mps_controller()
-    if not mps.online or mps.active_thread_percentage is None:
-        raise RuntimeError(f"memory profiling requires a reachable MPS controller: {mps.diagnostic}")
     return MemoryProfileSoftwareEnvironment(
         native_abi_version=int(xpool.native.ABI_VERSION),
         cuda_driver_version=driver_version,
         cuda_runtime_version=runtime_version,
-        mps_active_thread_percentage=mps.active_thread_percentage,
         torch_version=importlib.metadata.version("torch"),
         triton_version=importlib.metadata.version("triton"),
         sglang_version=importlib.metadata.version("sglang"),
@@ -276,16 +278,16 @@ def software_environment() -> MemoryProfileSoftwareEnvironment:
     )
 
 
-def gpu_record(cuda_device: int, total_memory_bytes: int) -> MemoryCalibrationGpu:
+def device_record(device: int, total_memory_bytes: int) -> MemoryCalibrationDevice:
     """Read one selected device's Profile identity and provenance UUID."""
 
-    properties = torch.cuda.get_device_properties(cuda_device)
+    properties = torch.cuda.get_device_properties(device)
     uuid = str(properties.uuid).strip()
     if not uuid:
-        raise RuntimeError("PyTorch returned an empty GPU UUID")
+        raise RuntimeError("PyTorch returned an empty device UUID")
     if properties.total_memory != total_memory_bytes:
         raise RuntimeError("PyTorch and cudaMemGetInfo disagree on total device memory")
-    return MemoryCalibrationGpu(
+    return MemoryCalibrationDevice(
         name=properties.name,
         compute_capability=(properties.major, properties.minor),
         total_memory_bytes=properties.total_memory,
@@ -335,19 +337,29 @@ def participant_child(
     config_path: Path,
     fabric_plan: FabricPlan,
     pe: int,
+    environment: dict[str, str],
 ) -> None:
     """Run one fresh native participant through execution installation."""
 
     try:
+        os.environ.update(environment)
         config = init_global_config(config_path=config_path)
         placement = fabric_plan.pe_placements[pe]
         role = RuntimeRole.ATNAGENT if placement.role is FabricRole.ATNAGENT else RuntimeRole.FFNAGENT
+        device = placement.device
         if role is RuntimeRole.FFNAGENT:
             os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":0:0"
-        bootstrap.init(placement.cuda_device, role)
+        bootstrap.init(device, role)
         if role is RuntimeRole.ATNAGENT:
+            visibility = visible_uuids()
+            MpsEndpoint(tuple(visibility[index] for index in config.atn.devices)).require_client()
             connection.send(("prepared", pe))
-            require_command(connection, "join")
+            command = connection.recv()
+            if command == "stop":
+                connection.send(("stopped", pe))
+                return
+            if command != "join":
+                raise RuntimeError(f"memory-profile participant expected join, received {command!r}")
             xpool.native.fabric.join(project_fabric_arena(fabric_plan), pe)
             connection.send(("joined", pe))
             require_command(connection, "finalize")
@@ -358,12 +370,12 @@ def participant_child(
         ensure_supported_cuda_allocator()
         model_specs = tuple(calibration_corpus_spec(model.id.name) for model in config.models)
         warmup = torch.empty(1, dtype=torch.uint8, device="cuda")
-        torch.cuda.synchronize(placement.cuda_device)
+        torch.cuda.synchronize(device)
         del warmup
         torch.cuda.empty_cache()
-        torch.cuda.synchronize(placement.cuda_device)
+        torch.cuda.synchronize(device)
         baseline_free_bytes, baseline_total_bytes = memory_info()
-        recorder = PhaseRecorder(cuda_device=placement.cuda_device, baseline_free_bytes=baseline_free_bytes)
+        recorder = PhaseRecorder(device=device, baseline_free_bytes=baseline_free_bytes)
         estimator = DeviceMemoryEstimator(
             model_specs=model_specs,
             instance_profiles=tuple(instance.ffn_profile for instance in fabric_plan.instance_plans),
@@ -379,11 +391,22 @@ def participant_child(
                     ffnagent_index=ffnagent_index,
                 )
             connection.send(("prepared", pe))
-            require_command(connection, "join")
+            command = connection.recv()
+            if command == "stop":
+                connection.send(("stopped", pe))
+                return
+            if command != "join":
+                raise RuntimeError(f"memory-profile participant expected join, received {command!r}")
             with recorder.phase("fabric_join"):
                 xpool.native.fabric.join(project_fabric_arena(fabric_plan), pe)
             connection.send(("joined", pe))
-            require_command(connection, "execute")
+            command = connection.recv()
+            if command == "finalize":
+                drain_and_finalize()
+                connection.send(("stopped", pe))
+                return
+            if command != "execute":
+                raise RuntimeError(f"memory-profile participant expected execute, received {command!r}")
             with record_registry_phases(recorder):
                 execution_registry = FfnExecutionRegistry.materialize(
                     fabric_plan=fabric_plan,
@@ -401,7 +424,7 @@ def participant_child(
                     "execution",
                     MemoryProfileParticipantEvidence(
                         ffnagent_index=ffnagent_index,
-                        gpu=gpu_record(placement.cuda_device, baseline_total_bytes),
+                        device=device_record(device, baseline_total_bytes),
                         environment=software_environment(),
                         observations=observations,
                     ),
@@ -425,75 +448,65 @@ def participant_child(
         connection.close()
 
 
-def receive_child(
-    connection: Connection,
-    process: BaseProcess,
-    expected: str,
-) -> object:
-    """Receive one typed child message or surface early process exit."""
-
-    ready = wait((connection, process.sentinel), timeout=CHILD_TIMEOUT_SECONDS)
-    if connection not in ready:
-        if process.sentinel in ready:
-            raise RuntimeError(f"memory-profile child {process.name} exited with code {process.exitcode}")
-        raise RuntimeError(f"memory-profile child {process.name} timed out waiting for {expected}")
-    try:
-        message = connection.recv()
-    except EOFError as error:
-        raise RuntimeError(f"memory-profile child {process.name} closed before {expected}") from error
-    if not isinstance(message, tuple) or len(message) != 2:
-        raise RuntimeError(f"memory-profile child {process.name} returned an invalid message")
-    tag, payload = message
-    if tag == "failure":
-        raise RuntimeError(f"memory-profile child {process.name} failed: {payload}")
-    if tag != expected:
-        raise RuntimeError(f"memory-profile child {process.name} returned {tag!r}, expected {expected!r}")
-    return payload
-
-
-def terminate_children(
-    processes: tuple[BaseProcess, ...],
-    connections: tuple[Connection, ...],
-) -> None:
-    """Best-effort terminate and close every unfinished profiling child."""
-
-    for process in processes:
-        if process.is_alive():
-            process.terminate()
-    for process in processes:
-        process.join(timeout=5.0)
-        if process.is_alive():
-            process.kill()
-            process.join()
-    for connection in connections:
-        connection.close()
-
-
-def start_fabric_uid(config_path: Path) -> tuple[str, BaseProcess, Connection]:
-    """Start one daemon-role child that owns a Fabric UID bootstrap socket."""
-
-    context = multiprocessing.get_context("spawn")
-    parent, child = context.Pipe()
-    process = context.Process(target=uid_child, args=(child, config_path), name="memory-profile-uid")
-    process.start()
-    child.close()
-    try:
-        uid = receive_child(parent, process, "uid")
-        if not isinstance(uid, str):
-            raise RuntimeError("memory-profile UID child returned a non-string UID")
-        return uid, process, parent
-    except Exception:
-        terminate_children((process,), (parent,))
-        raise
-
-
 def run_world(coordinate: str, source: XpoolConfig) -> MemoryProfileWorld:
-    """Run one complete fresh configured-fleet calibration world."""
+    """Own a calibration world with complete deployment visibility and ordered retirement.
+
+    Signals record the first cancellation budget. The current preparation,
+    collective join or execution transaction reaches its existing boundary;
+    cancellation prevents the next transaction. Unknown peers retain this live
+    owner rather than authorizing device-blind process termination.
+    """
 
     context = multiprocessing.get_context("spawn")
-    with tempfile.TemporaryDirectory(prefix="xpool-memory-profile-") as temporary:
-        # Phase: Materialize - Every process receives the same isolated world
-        # config and one UID owner that never initializes CUDA.
+    visibility = visible_uuids()
+    if max(source.devices) >= len(visibility):
+        raise ValueError("memory-profile placement exceeds original device visibility")
+    scope = MpsScope(MpsEndpoint(tuple(visibility[device] for device in source.atn.devices)))
+    attention_environment = scope.endpoint.environment()
+    attention_environment["CUDA_VISIBLE_DEVICES"] = ",".join(visibility)
+    ffn_environment = {
+        "CUDA_VISIBLE_DEVICES": ",".join(visibility),
+        "CUDA_MPS_PIPE_DIRECTORY": "",
+    }
+    cancelled: int | None = None
+    cleanup_deadline: float | None = None
+
+    def record_cancellation(signum: int, frame: FrameType | None) -> None:
+        nonlocal cancelled, cleanup_deadline
+        if cancelled is None:
+            cancelled = signum
+        if cleanup_deadline is None:
+            cleanup_deadline = time.monotonic() + MPS_CLEANUP_TIMEOUT_S
+
+    def receive(connection: Connection, process: BaseProcess, expected: str) -> object:
+        execution_deadline = time.monotonic() + CHILD_TIMEOUT_SECONDS
+        while True:
+            deadline = execution_deadline if cleanup_deadline is None else min(execution_deadline, cleanup_deadline)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"memory-profile child {process.name} timed out waiting for {expected}")
+            ready = wait((connection, process.sentinel), timeout=min(0.1, remaining))
+            if connection in ready:
+                break
+            if process.sentinel in ready:
+                raise RuntimeError(f"memory-profile child {process.name} exited with code {process.exitcode}")
+        try:
+            message = connection.recv()
+        except EOFError as error:
+            raise RuntimeError(f"memory-profile child {process.name} closed before {expected}") from error
+        if not isinstance(message, tuple) or len(message) != 2:
+            raise RuntimeError(f"memory-profile child {process.name} returned an invalid message")
+        tag, payload = message
+        if tag == "failure":
+            raise RuntimeError(f"memory-profile child {process.name} failed: {payload}")
+        if tag != expected:
+            raise RuntimeError(f"memory-profile child {process.name} returned {tag!r}, expected {expected!r}")
+        return payload
+
+    with contextlib.ExitStack() as handlers, tempfile.TemporaryDirectory(prefix="xpool-memory-profile-") as temporary:
+        if threading.current_thread() is threading.main_thread():
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                handlers.enter_context(sighandle(signum, record_cancellation))
         config_path = Path(temporary) / "world.toml"
         write_world_config(config_path, source, coordinate)
         world_config = XpoolConfig.from_file(config_path)
@@ -503,71 +516,84 @@ def run_world(coordinate: str, source: XpoolConfig) -> MemoryProfileWorld:
             ffnagent_count=len(world_config.ffn.devices),
         )
         model_specs = tuple(calibration_corpus_spec(member[0]) for member in members)
-        uid, uid_process, uid_connection = start_fabric_uid(config_path)
-        processes = []
-        connections = []
+        uid_connection, uid_child_connection = context.Pipe()
+        uid_process = context.Process(
+            target=uid_child, args=(uid_child_connection, config_path), name="memory-profile-uid"
+        )
+        processes: list[BaseProcess] = []
+        connections: list[Connection] = []
+        stopped = False
+        uid_ready = False
         try:
+            with defer_signal_exceptions():
+                uid_process.start()
+                uid_child_connection.close()
+            uid = receive(uid_connection, uid_process, "uid")
+            if not isinstance(uid, str):
+                raise RuntimeError("memory-profile UID child returned a non-string UID")
+            uid_ready = True
             fabric_plan = build_fabric_plan(
-                uid=uid,
-                coordinate=coordinate,
-                config=world_config,
-                model_specs=model_specs,
+                uid=uid, coordinate=coordinate, config=world_config, model_specs=model_specs
             )
-            for pe in range(len(fabric_plan.pe_placements)):
-                parent, child = context.Pipe()
-                process = context.Process(
-                    target=participant_child,
-                    kwargs={"connection": child, "config_path": config_path, "fabric_plan": fabric_plan, "pe": pe},
-                    name=f"memory-profile-{coordinate}-pe{pe}",
-                )
-                process.start()
-                child.close()
-                processes.append(process)
-                connections.append(parent)
-            process_tuple = tuple(processes)
-            connection_tuple = tuple(connections)
+            scope.start()
+            for pe, placement in enumerate(fabric_plan.pe_placements):
+                with defer_signal_exceptions():
+                    parent, child = context.Pipe()
+                    process = context.Process(
+                        target=participant_child,
+                        kwargs={
+                            "connection": child,
+                            "config_path": config_path,
+                            "fabric_plan": fabric_plan,
+                            "pe": pe,
+                            "environment": attention_environment
+                            if placement.role is FabricRole.ATNAGENT
+                            else ffn_environment,
+                        },
+                        name=f"memory-profile-{coordinate}-pe{pe}",
+                    )
+                    processes.append(process)
+                    connections.append(parent)
+                    process.start()
+                    child.close()
 
-            # Phase: Prepare - All participants establish clean baselines before
-            # any one of them joins Fabric and changes shared device memory.
-            for connection, process in zip(connection_tuple, process_tuple, strict=True):
-                receive_child(connection, process, "prepared")
-            for connection in connection_tuple:
-                connection.send("join")
-            for connection, process in zip(connection_tuple, process_tuple, strict=True):
-                receive_child(connection, process, "joined")
-
-            # Phase: Measure - Only FfnAgents materialize execution; AtnAgents
-            # remain joined so the measured Fabric topology is production-shaped.
-            atnagent_count = len(world_config.atn.devices)
-            for connection in connection_tuple[atnagent_count:]:
-                connection.send("execute")
+            # Each broadcast completes one existing transaction. Signals record
+            # intent instead of leaving only part of the collective world joined.
+            for connection, process in zip(connections, processes, strict=True):
+                receive(connection, process, "prepared")
+            joined = cancelled is None
             rows = []
-            for connection, process in zip(
-                connection_tuple[atnagent_count:],
-                process_tuple[atnagent_count:],
-                strict=True,
-            ):
-                row = receive_child(connection, process, "execution")
-                if not isinstance(row, MemoryProfileParticipantEvidence):
-                    raise RuntimeError("memory-profile participant returned invalid evidence")
-                rows.append(row)
-
-            # Phase: Finalize - Drain every participant before stopping the UID
-            # owner, then accept evidence only from one complete homogeneous world.
-            for connection in connection_tuple:
-                connection.send("finalize")
-            for connection, process in zip(connection_tuple, process_tuple, strict=True):
-                receive_child(connection, process, "stopped")
-            for process in process_tuple:
-                process.join(timeout=CHILD_TIMEOUT_SECONDS)
+            if joined:
+                for connection in connections:
+                    connection.send("join")
+                for connection, process in zip(connections, processes, strict=True):
+                    receive(connection, process, "joined")
+                if cancelled is None:
+                    atnagent_count = len(world_config.atn.devices)
+                    for connection in connections[atnagent_count:]:
+                        connection.send("execute")
+                    for connection, process in zip(
+                        connections[atnagent_count:], processes[atnagent_count:], strict=True
+                    ):
+                        row = receive(connection, process, "execution")
+                        if not isinstance(row, MemoryProfileParticipantEvidence):
+                            raise RuntimeError("memory-profile participant returned invalid evidence")
+                        rows.append(row)
+            if cleanup_deadline is None:
+                cleanup_deadline = time.monotonic() + MPS_CLEANUP_TIMEOUT_S
+            for connection in connections:
+                connection.send("finalize" if joined else "stop")
+            for connection, process in zip(connections, processes, strict=True):
+                receive(connection, process, "stopped")
+            for process in processes:
+                process.join(max(0.0, cleanup_deadline - time.monotonic()))
+                if process.is_alive():
+                    raise TimeoutError(f"memory-profile child {process.name} retirement is unconfirmed")
                 if process.exitcode != 0:
                     raise RuntimeError(f"memory-profile child {process.name} exited with code {process.exitcode}")
-            uid_connection.send("stop")
-            receive_child(uid_connection, uid_process, "stopped")
-            uid_process.join(timeout=CHILD_TIMEOUT_SECONDS)
-            if uid_process.exitcode != 0:
-                raise RuntimeError(f"memory-profile UID child exited with code {uid_process.exitcode}")
-
+            stopped = True
+            if cancelled is not None:
+                raise KeyboardInterrupt(f"memory profiling cancelled by signal {cancelled}")
             ordered = tuple(sorted(rows, key=lambda row: row.ffnagent_index))
             if tuple(row.ffnagent_index for row in ordered) != tuple(range(len(world_config.ffn.devices))):
                 raise RuntimeError("memory-profile evidence does not cover every configured FfnAgent")
@@ -575,12 +601,36 @@ def run_world(coordinate: str, source: XpoolConfig) -> MemoryProfileWorld:
             if any(row.environment != environment for row in ordered[1:]):
                 raise RuntimeError("memory-profile participants disagree on the software environment")
             return MemoryProfileWorld(
-                gpus=tuple(row.gpu for row in ordered),
+                devices=tuple(row.device for row in ordered),
                 environment=environment,
                 observations=tuple(observation for row in ordered for observation in row.observations),
             )
         finally:
-            terminate_children((uid_process, *processes), (uid_connection, *connections))
+            if cleanup_deadline is None:
+                cleanup_deadline = time.monotonic() + MPS_CLEANUP_TIMEOUT_S
+            try:
+                if not stopped and any(process.is_alive() for process in processes):
+                    raise RuntimeError("memory-profile participant retirement is unconfirmed")
+                # The host-only UID owner remains until all device participants
+                # have retired. It owns no device context or collective teardown.
+                if uid_process.pid is not None and uid_process.is_alive():
+                    if uid_ready:
+                        uid_connection.send("stop")
+                        receive(uid_connection, uid_process, "stopped")
+                    else:
+                        uid_process.terminate()
+                    uid_process.join(max(0.0, cleanup_deadline - time.monotonic()))
+                if uid_process.is_alive():
+                    raise TimeoutError("memory-profile UID owner retirement is unconfirmed")
+                for connection in (uid_connection, uid_child_connection, *connections):
+                    connection.close()
+                for process in (uid_process, *processes):
+                    process.close()
+                scope.stop(deadline=cleanup_deadline)
+            except BaseException as error:
+                logger.error("memory-profile cleanup unconfirmed; retaining owner and MPS: %s", error)
+                while True:
+                    time.sleep(1.0)
 
 
 def refuse_live_daemon(config: XpoolConfig) -> None:
@@ -601,9 +651,6 @@ def profile_ffn_memory() -> XpoolMemoryCalibrationProfile:
     if config.ffn.device_memory_calibration is None:
         raise RuntimeError("ffn.device_memory_calibration is required for xpool memory-profile")
     refuse_live_daemon(config)
-    mps = probe_mps_controller()
-    if not mps.online:
-        raise RuntimeError(f"xpool memory-profile requires a reachable MPS controller: {mps.diagnostic}")
 
     # Repeated fit worlds determine coefficients; the disjoint held-out world
     # determines the minimum headroom required for an unseen placement shape.
@@ -613,9 +660,9 @@ def profile_ffn_memory() -> XpoolMemoryCalibrationProfile:
     )
     held_out_worlds = tuple(run_world(HELD_OUT_COORDINATE, config) for _ in range(REPETITION_COUNT))
     all_worlds = (*fit_worlds_evidence, *held_out_worlds)
-    gpus = all_worlds[0].gpus
+    devices = all_worlds[0].devices
     environment = all_worlds[0].environment
-    if any(world.gpus != gpus or world.environment != environment for world in all_worlds[1:]):
+    if any(world.devices != devices or world.environment != environment for world in all_worlds[1:]):
         raise RuntimeError("xpool memory-profile worlds disagree on hardware or software environment")
     coefficients, minimum_headroom = fit_worlds(fit_worlds_evidence, held_out_worlds)
     if environment.native_abi_version != ABI_VERSION:
@@ -623,10 +670,9 @@ def profile_ffn_memory() -> XpoolMemoryCalibrationProfile:
     return XpoolMemoryCalibrationProfile(
         environment=MemoryCalibrationEnvironment(
             native_abi_version=ABI_VERSION,
-            ffnagent_gpus=gpus,
+            ffnagent_devices=devices,
             cuda_driver_version=environment.cuda_driver_version,
             cuda_runtime_version=environment.cuda_runtime_version,
-            mps_active_thread_percentage=environment.mps_active_thread_percentage,
             torch_version=environment.torch_version,
             triton_version=environment.triton_version,
             sglang_version=environment.sglang_version,

@@ -16,7 +16,7 @@ import xtest.harness.runner.suite
 import xtest.harness.runner.task
 import xtest.harness.sglang.serving.alignment
 from xkit import ResourceRequirements
-from xkit.gpu import GpuPool
+from xkit.device import DevicePool
 from xkit.serving.sglang.graph import SglangGraphMode
 from xkit.supervisor import (
     TaskCompletion,
@@ -26,7 +26,6 @@ from xkit.supervisor import (
     TaskStartFailure,
 )
 from xpool.model import ModelId
-from xpool.mps import MpsProbeResult
 from xtest.harness.sglang.serving.alignment import (
     SERVING_GRAPH_ARTIFACT_FILENAME,
     ServingGraphArtifact,
@@ -47,8 +46,8 @@ def test_task_formatter_colors_only_status_on_tty() -> None:
 
 def test_compiler_builds_stage_tasks_with_exact_gpu_batching() -> None:
     cpu_requirements = requirements()
-    gpu_one = requirements(cuda_count=1, requires_mps=True)
-    gpu_two = requirements(cuda_count=2, requires_mps=True)
+    gpu_one = requirements(device_count=1)
+    gpu_two = requirements(device_count=2)
     plan = xtest.harness.runner.plan.TestPlan(
         (
             case("tests/suites/unit/test_alpha.py", "test_alpha", requirements=cpu_requirements),
@@ -119,14 +118,14 @@ def test_compiler_uses_timeout_when_estimate_is_absent_and_merges_cpu_requiremen
 
 
 def test_execution_task_rejects_requirement_drift() -> None:
-    collected = case("tests/suites/integration/test_gpu.py", "test_gpu", requirements=requirements(cuda_count=1))
+    collected = case("tests/suites/integration/test_gpu.py", "test_gpu", requirements=requirements(device_count=1))
 
     with pytest.raises(ValueError, match="requirements"):
         xtest.harness.runner.task.ExecutionTask(
             key="invalid",
             stage=xtest.harness.runner.plan.TestStage.INTEGRATION,
             cases=(collected,),
-            requirements=requirements(cuda_count=2),
+            requirements=requirements(device_count=2),
             estimated_duration_seconds=10,
             timeout_seconds=10,
         )
@@ -356,14 +355,25 @@ def test_suite_runner_preserves_e2e_failure_during_completion_or_stop(
     assert "STAGE e2e: code=1" in capsys.readouterr().out
 
 
-def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
+def test_suite_runner_backfills_device_pool_and_builds_exact_pytest_commands(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     starts: list[tuple[str, list[str], dict[str, str]]] = []
     poll_counts = {"test-wide-a": 2, "test-wide-b": 0, "test-small": 0}
-    gpu_pool = GpuPool(("GPU-a", "GPU-b", "GPU-c"), {"GPU-a": 0, "GPU-b": 1, "GPU-c": 2})
+    device_pool = DevicePool(
+        (
+            "GPU-00000000-0000-0000-0000-000000000001",
+            "GPU-00000000-0000-0000-0000-000000000002",
+            "GPU-00000000-0000-0000-0000-000000000003",
+        ),
+        {
+            "GPU-00000000-0000-0000-0000-000000000001": 0,
+            "GPU-00000000-0000-0000-0000-000000000002": 1,
+            "GPU-00000000-0000-0000-0000-000000000003": 2,
+        },
+    )
 
     class ScopeFactory:
         @staticmethod
@@ -385,29 +395,24 @@ def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
             )
 
     monkeypatch.setattr(xtest.harness.runner.suite, "SupervisedTaskScope", ScopeFactory)
-    monkeypatch.setattr(
-        xtest.harness.runner.suite,
-        "probe_mps_controller",
-        lambda: MpsProbeResult(True, 100, "online"),
-    )
     plan = xtest.harness.runner.plan.TestPlan(
         (
             case(
                 "tests/suites/integration/test_wide_a.py",
                 "test-wide-a",
-                requirements=requirements(cuda_count=2, requires_mps=True),
+                requirements=requirements(device_count=2),
                 estimate=100,
             ),
             case(
                 "tests/suites/integration/test_wide_b.py",
                 "test-wide-b",
-                requirements=requirements(cuda_count=2, requires_mps=True),
+                requirements=requirements(device_count=2),
                 estimate=90,
             ),
             case(
                 "tests/suites/integration/test_small.py",
                 "test-small",
-                requirements=requirements(cuda_count=1, requires_mps=True),
+                requirements=requirements(device_count=1),
                 estimate=80,
             ),
         )
@@ -418,14 +423,14 @@ def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
         catalogue_path=tmp_path / "tests/tests.toml",
         run_directory=tmp_path / "run",
         strict_requirements=True,
-        gpu_pool=gpu_pool,
+        device_pool=device_pool,
     )
 
     with caplog.at_level("INFO", logger="xtest.runner"):
         assert runner.run() == 0
     output = caplog.text
-    assert "gpus=0:GPU-a,1:GPU-b" in output
-    assert "gpus=2:GPU-c" in output
+    assert "devices=0:GPU-00000000-0000-0000-0000-000000000001,1:GPU-00000000-0000-0000-0000-000000000002" in output
+    assert "devices=2:GPU-00000000-0000-0000-0000-000000000003" in output
     assert "PASSED" in tuple(getattr(record, "status", None) for record in caplog.records)
     assert "tests/suites/integration/test_small.py::test-small elapsed=0.250s" in output
     task_starts = starts
@@ -435,9 +440,9 @@ def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
         "test-wide-b",
     )
     assert tuple(environment["CUDA_VISIBLE_DEVICES"] for _, _, environment in task_starts) == (
-        "GPU-a,GPU-b",
-        "GPU-c",
-        "GPU-a,GPU-b",
+        "GPU-00000000-0000-0000-0000-000000000001,GPU-00000000-0000-0000-0000-000000000002",
+        "GPU-00000000-0000-0000-0000-000000000003",
+        "GPU-00000000-0000-0000-0000-000000000001,GPU-00000000-0000-0000-0000-000000000002",
     )
     assert all("--strict-requirements" in command for _, command, _ in task_starts)
     assert all("-v" in command for _, command, _ in task_starts)
@@ -448,7 +453,7 @@ def test_suite_runner_backfills_gpu_pool_and_builds_exact_pytest_commands(
         any(argument.startswith("--xpool-task-artifact-dir=") for argument in command) for _, command, _ in task_starts
     )
     assert runner.resources_releasable
-    assert not gpu_pool.closed
+    assert not device_pool.closed
 
 
 @pytest.mark.parametrize(
@@ -464,7 +469,9 @@ def test_suite_runner_classifies_gpu_lease_after_start_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    gpu_pool = GpuPool(("GPU-a",), {"GPU-a": 0})
+    device_pool = DevicePool(
+        ("GPU-00000000-0000-0000-0000-000000000001",), {"GPU-00000000-0000-0000-0000-000000000001": 0}
+    )
 
     class ScopeFactory:
         @staticmethod
@@ -473,17 +480,12 @@ def test_suite_runner_classifies_gpu_lease_after_start_failure(
             raise failure
 
     monkeypatch.setattr(xtest.harness.runner.suite, "SupervisedTaskScope", ScopeFactory)
-    monkeypatch.setattr(
-        xtest.harness.runner.suite,
-        "probe_mps_controller",
-        lambda: MpsProbeResult(True, 100, "online"),
-    )
     plan = xtest.harness.runner.plan.TestPlan(
         (
             case(
                 "tests/suites/integration/test_gpu.py",
                 "test_gpu",
-                requirements=requirements(cuda_count=1, requires_mps=True),
+                requirements=requirements(device_count=1),
             ),
         )
     )
@@ -493,26 +495,26 @@ def test_suite_runner_classifies_gpu_lease_after_start_failure(
         catalogue_path=tmp_path / "tests/tests.toml",
         run_directory=tmp_path / "run",
         strict_requirements=False,
-        gpu_pool=gpu_pool,
+        device_pool=device_pool,
     )
 
     with pytest.raises(type(failure), match=str(failure)):
         runner.start_task(runner.tasks[0])
 
     assert bool(runner.retained_leases) is lease_retained
-    assert bool(gpu_pool.active_leases) is lease_retained
+    assert bool(device_pool.active_leases) is lease_retained
     assert runner.resources_releasable is not lease_retained
+    for lease in tuple(device_pool.active_leases):
+        device_pool.release(lease)
+    device_pool.close()
 
 
 def test_suite_runner_prepares_directory_before_gpu_lease(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    gpu_pool = GpuPool(("GPU-a",), {"GPU-a": 0})
-    monkeypatch.setattr(
-        xtest.harness.runner.suite,
-        "probe_mps_controller",
-        lambda: MpsProbeResult(True, 100, "online"),
+    device_pool = DevicePool(
+        ("GPU-00000000-0000-0000-0000-000000000001",), {"GPU-00000000-0000-0000-0000-000000000001": 0}
     )
     blocked_run_directory = tmp_path / "blocked"
     blocked_run_directory.write_text("not a directory", encoding="utf-8")
@@ -521,7 +523,7 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
             case(
                 "tests/suites/integration/test_gpu.py",
                 "test_gpu",
-                requirements=requirements(cuda_count=1, requires_mps=True),
+                requirements=requirements(device_count=1),
             ),
         )
     )
@@ -531,13 +533,13 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
         catalogue_path=tmp_path / "tests/tests.toml",
         run_directory=blocked_run_directory,
         strict_requirements=False,
-        gpu_pool=gpu_pool,
+        device_pool=device_pool,
     )
 
     with pytest.raises(NotADirectoryError):
         runner.start_task(runner.tasks[0])
 
-    assert not gpu_pool.active_leases
+    assert not device_pool.active_leases
     assert runner.resources_releasable
 
 
@@ -696,14 +698,12 @@ def case(
 
 def requirements(
     *,
-    cuda_count: int = 0,
-    requires_mps: bool = False,
+    device_count: int = 0,
     requires_config: bool = False,
     model_ids: tuple[ModelId, ...] = (),
 ) -> ResourceRequirements:
     return ResourceRequirements(
-        cuda_count=cuda_count,
-        requires_mps=requires_mps,
+        device_count=device_count,
         requires_config=requires_config,
         model_ids=model_ids,
     )

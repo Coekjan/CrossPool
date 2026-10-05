@@ -56,18 +56,18 @@ def test_owned_hardware_capture_is_lease_scoped_and_failure_keeps_known_placemen
     placements: dict[ModelId, tuple[str, ...]] = {ModelId("test/one"): ("GPU-c",), ModelId("test/two"): ("GPU-c",)}
     roles: dict[Literal["atn", "ffn"], tuple[str, ...]] = {"atn": ("GPU-c",), "ffn": ("GPU-b",)}
     metadata = capture_owned_metadata(
-        ("GPU-c", "GPU-b"), target_gpu_uuids=placements, role_gpu_uuids=roles, errors=errors
+        ("GPU-c", "GPU-b"), target_device_uuids=placements, role_device_uuids=roles, errors=errors
     )
-    assert errors == [] and metadata.gpus is not None and metadata.links is not None
-    assert [gpu.uuid for gpu in metadata.gpus] == ["GPU-c", "GPU-b"]
-    assert metadata.gpus[0].name == "H100" and metadata.gpus[0].total_memory_bytes == 81920 * 1024 * 1024
-    assert metadata.gpus[0].pci_bus_id == "0000:03:00.0"
-    assert (metadata.gpus[0].cpu_affinity, metadata.gpus[0].numa_affinity) == ("4-7", "1")
+    assert errors == [] and metadata.devices is not None and metadata.links is not None
+    assert [device.uuid for device in metadata.devices] == ["GPU-c", "GPU-b"]
+    assert metadata.devices[0].name == "H100" and metadata.devices[0].total_memory_bytes == 81920 * 1024 * 1024
+    assert metadata.devices[0].pci_bus_id == "0000:03:00.0"
+    assert (metadata.devices[0].cpu_affinity, metadata.devices[0].numa_affinity) == ("4-7", "1")
     assert {(link.source_uuid, link.destination_uuid, link.link) for link in metadata.links} == {
         ("GPU-b", "GPU-c", "NV12"),
         ("GPU-c", "GPU-b", "NV12"),
     }
-    assert metadata.target_gpu_uuids == placements and metadata.role_gpu_uuids == roles
+    assert metadata.target_device_uuids == placements and metadata.role_device_uuids == roles
     assert metadata.driver_version == "580.65" and metadata.cuda_build_version is None
 
     def unavailable(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -75,9 +75,9 @@ def test_owned_hardware_capture_is_lease_scoped_and_failure_keeps_known_placemen
 
     monkeypatch.setattr(subprocess, "run", unavailable)
     unknown = capture_owned_metadata(
-        ("GPU-c", "GPU-b"), target_gpu_uuids=placements, role_gpu_uuids=roles, errors=errors
+        ("GPU-c", "GPU-b"), target_device_uuids=placements, role_device_uuids=roles, errors=errors
     )
-    assert errors and unknown.gpus is not None
-    assert unknown.gpus[0].uuid == "GPU-c" and unknown.gpus[0].name is None
+    assert errors and unknown.devices is not None
+    assert unknown.devices[0].uuid == "GPU-c" and unknown.devices[0].name is None
     assert unknown.links is None and unknown.driver_version is None
-    assert unknown.target_gpu_uuids == placements
+    assert unknown.target_device_uuids == placements

@@ -1,7 +1,7 @@
 #pragma once
 
 /// \file xpool/abort.hpp
-/// \brief Immediate host and CUDA device termination primitives.
+/// \brief Immediate host and device termination primitives.
 
 #include <cstdlib>
 

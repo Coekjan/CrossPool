@@ -36,7 +36,7 @@ def test_bootstrap_initializes_native_runtime(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         xpool.bootstrap.xpool.native,
         "initialize",
-        lambda role, cuda_device, debug_options: events.append(("init", role, cuda_device, debug_options)),
+        lambda role, device, debug_options: events.append(("init", role, device, debug_options)),
     )
     monkeypatch.setattr(xpool.bootstrap.xpool.native, "runtime_role", lambda: RuntimeRole.INSTANCE)
 
@@ -57,7 +57,7 @@ def test_bootstrap_initializes_native_runtime(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.parametrize(
-    ("cuda_device", "role", "title"),
+    ("device", "role", "title"),
     [
         (None, RuntimeRole.DAEMON, "xpool::daemon"),
         (0, RuntimeRole.ATNAGENT, "xpool::atnagent"),
@@ -65,7 +65,7 @@ def test_bootstrap_initializes_native_runtime(monkeypatch: pytest.MonkeyPatch) -
     ],
 )
 def test_bootstrap_sets_resident_process_title_after_native_initialization(
-    cuda_device: int | None,
+    device: int | None,
     role: RuntimeRole,
     title: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -86,15 +86,15 @@ def test_bootstrap_sets_resident_process_title_after_native_initialization(
     monkeypatch.setattr(xpool.bootstrap, "set_process_title", lambda value: events.append(("title", value)))
     monkeypatch.setattr(xpool.bootstrap.xpool.native, "runtime_role", lambda: role)
 
-    xpool.bootstrap.init(cuda_device, role)
+    xpool.bootstrap.init(device, role)
 
     assert events[0] == ("load",)
-    assert events[1][0:3] == ("init", role, cuda_device)
+    assert events[1][0:3] == ("init", role, device)
     assert isinstance(events[1][3], xpool.bootstrap.xpool.native.debug.Options)
-    if cuda_device is None:
+    if device is None:
         assert events[2] == ("title", title)
     else:
-        assert events[2:] == [("device", cuda_device), ("title", title)]
+        assert events[2:] == [("device", device), ("title", title)]
     assert xpool.bootstrap.get_runtime_role() is role
 
 
@@ -105,13 +105,11 @@ def test_bootstrap_stops_after_failed_native_initialization(monkeypatch: pytest.
     monkeypatch.setattr(xpool.bootstrap, "get_global_config", lambda: SimpleNamespace(debug=DebugConfig()))
     process_titles: list[str] = []
     monkeypatch.setattr(xpool.bootstrap, "set_process_title", process_titles.append)
-    monkeypatch.setattr(
-        torch.cuda, "set_device", lambda device: pytest.fail("CUDA device selected after native failure")
-    )
+    monkeypatch.setattr(torch.cuda, "set_device", lambda device: pytest.fail("device selected after native failure"))
 
     def fail_init(
         role: RuntimeRole,
-        cuda_device: int,
+        device: int,
         debug_options: xpool.bootstrap.xpool.native.debug.Options,
     ) -> None:
         raise RuntimeError("native init failed")
@@ -123,7 +121,7 @@ def test_bootstrap_stops_after_failed_native_initialization(monkeypatch: pytest.
     assert process_titles == []
 
 
-def test_daemon_bootstrap_propagates_native_cuda_device_rejection(
+def test_daemon_bootstrap_propagates_native_device_rejection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The host-only daemon delegates CUDA-device rejection to native."""
@@ -134,22 +132,22 @@ def test_daemon_bootstrap_propagates_native_cuda_device_rejection(
 
     def reject_daemon_device(
         role: RuntimeRole,
-        cuda_device: int | None,
+        device: int | None,
         debug_options: xpool.bootstrap.xpool.native.debug.Options,
     ) -> None:
-        assert (role, cuda_device) == (RuntimeRole.DAEMON, 0)
-        raise RuntimeError("must not own a CUDA device")
+        assert (role, device) == (RuntimeRole.DAEMON, 0)
+        raise RuntimeError("must not own a device")
 
     monkeypatch.setattr(xpool.bootstrap.xpool.native, "initialize", reject_daemon_device)
 
-    with pytest.raises(RuntimeError, match="must not own a CUDA device"):
+    with pytest.raises(RuntimeError, match="must not own a device"):
         xpool.bootstrap.init(0, RuntimeRole.DAEMON)
 
     assert native_loads == [None]
 
 
 @pytest.mark.parametrize("role", [RuntimeRole.INSTANCE, RuntimeRole.ATNAGENT, RuntimeRole.FFNAGENT])
-def test_gpu_runtime_bootstrap_requires_cuda_device(
+def test_runtime_bootstrap_requires_device(
     monkeypatch: pytest.MonkeyPatch,
     role: RuntimeRole,
 ) -> None:
@@ -158,15 +156,15 @@ def test_gpu_runtime_bootstrap_requires_cuda_device(
 
     def reject_missing_device(
         native_role: RuntimeRole,
-        cuda_device: int | None,
+        device: int | None,
         debug_options: xpool.bootstrap.xpool.native.debug.Options,
     ) -> None:
-        assert (native_role, cuda_device) == (role, None)
-        raise RuntimeError("requires a CUDA device")
+        assert (native_role, device) == (role, None)
+        raise RuntimeError("requires a device")
 
     monkeypatch.setattr(xpool.bootstrap.xpool.native, "initialize", reject_missing_device)
 
-    with pytest.raises(RuntimeError, match="requires a CUDA device"):
+    with pytest.raises(RuntimeError, match="requires a device"):
         xpool.bootstrap.init(None, role)
 
 

@@ -62,9 +62,9 @@ def estimator_and_plan() -> tuple[device_memory.DeviceMemoryEstimator, FabricPla
         generation=FabricGenerationId(high=1, low=1),
         uid=FabricUid("a" * 256),
         pe_placements=(
-            FabricPePlacement(role=FabricRole.ATNAGENT, cuda_device=0),
-            FabricPePlacement(role=FabricRole.FFNAGENT, cuda_device=1),
-            FabricPePlacement(role=FabricRole.FFNAGENT, cuda_device=2),
+            FabricPePlacement(role=FabricRole.ATNAGENT, device=0),
+            FabricPePlacement(role=FabricRole.FFNAGENT, device=1),
+            FabricPePlacement(role=FabricRole.FFNAGENT, device=2),
         ),
         executor_lane_count=1,
         scheduler=FifoSchedulerPolicy(),

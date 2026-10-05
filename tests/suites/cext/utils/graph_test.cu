@@ -36,7 +36,7 @@ TEST(GraphTest, ConstructsAndVisitsRetainedNodeKinds) {
   auto device_count = 0;
   const auto availability = cudaGetDeviceCount(&device_count);
   if (availability != cudaSuccess || device_count == 0) {
-    GTEST_SKIP() << "CUDA device is not available: " << cudaGetErrorString(availability);
+    GTEST_SKIP() << "device is not available: " << cudaGetErrorString(availability);
   }
   ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
 
@@ -81,7 +81,7 @@ TEST(GraphTest, ReturnsDeviceUpdatableKernelNode) {
   auto device_count = 0;
   const auto availability = cudaGetDeviceCount(&device_count);
   if (availability != cudaSuccess || device_count == 0) {
-    GTEST_SKIP() << "CUDA device is not available: " << cudaGetErrorString(availability);
+    GTEST_SKIP() << "device is not available: " << cudaGetErrorString(availability);
   }
   ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
 
@@ -103,7 +103,7 @@ TEST(GraphTest, NormalizesPackedKernelParametersForDeviceUpdates) {
   auto device_count = 0;
   const auto availability = cudaGetDeviceCount(&device_count);
   if (availability != cudaSuccess || device_count == 0) {
-    GTEST_SKIP() << "CUDA device is not available: " << cudaGetErrorString(availability);
+    GTEST_SKIP() << "device is not available: " << cudaGetErrorString(availability);
   }
   ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
 
@@ -241,7 +241,7 @@ TEST(GraphTest, UpdatesKernelParametersAndSplicesDependencies) {
   auto device_count = 0;
   const auto availability = cudaGetDeviceCount(&device_count);
   if (availability != cudaSuccess || device_count == 0) {
-    GTEST_SKIP() << "CUDA device is not available: " << cudaGetErrorString(availability);
+    GTEST_SKIP() << "device is not available: " << cudaGetErrorString(availability);
   }
   ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
 

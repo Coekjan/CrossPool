@@ -140,4 +140,6 @@ def test_complete_scene_replaces_workspace_geometry_on_a_smaller_fleet(tmp_path:
         runtime_config=base,
         env={},
     )
+    assert config.atn.devices == [0]
+    assert config.ffn.devices == [1]
     assert config.models[0].ffn_tp_size == 1
