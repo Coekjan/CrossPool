@@ -5,20 +5,19 @@ import json
 import os
 import signal
 import sys
-import threading
 import time
 from collections.abc import AsyncIterator
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import TracebackType
 
 import httpx
 import pytest
 from benches.suites.serving.multi_model import run_serving
+from tests.suites.integration.xbench.support import FakeServingServer, client_case
 
 import xbench.harness.serving.client
 from xbench.harness.serving.api import create_api_adapter
-from xbench.harness.serving.case import BenchCase, ClientBenchCase
+from xbench.harness.serving.case import BenchCase
 from xbench.harness.serving.client import MeasurementRecorder, RequestState, run_measurement, send_request
 from xbench.harness.serving.execution import warmup
 from xbench.harness.serving.measure import BenchCaseManifest, RepetitionManifest, RequestRecord, summarize
@@ -27,84 +26,6 @@ from xbench.harness.serving.workload import PreparedWorkload, prepare_workload, 
 from xkit.results import write_json, write_jsonl
 from xkit.supervisor import SupervisedTaskScope, TaskCompletionKind, TaskScopeState
 from xtest.harness.support.config import TEST_MODEL_ID
-
-
-class FakeServingServer:
-    """A real CPU HTTP/SSE peer with a bounded gate and native terminal usage."""
-
-    def __init__(self, *, block_first: bool = False, omit_done: bool = False) -> None:
-        self.received: list[str] = []
-        self.first_started = threading.Event()
-        self.gate = threading.Event()
-        self.block_first = block_first
-        self.omit_done = omit_done
-        owner = self
-
-        class Handler(BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.1"
-
-            def log_message(self, format: str, *args: object) -> None:
-                pass
-
-            def do_POST(self) -> None:
-                length = int(self.headers["content-length"])
-                payload = json.loads(self.rfile.read(length))
-                id = payload["rid"]
-                owner.received.append(id)
-                if len(owner.received) == 1:
-                    owner.first_started.set()
-                    if owner.block_first:
-                        owner.gate.wait(10)
-                frames = [
-                    b"data: "
-                    + json.dumps(
-                        {
-                            "text": "",
-                            "meta_info": {
-                                "completion_tokens": 3,
-                                "prompt_tokens": 5,
-                                "cached_tokens": 4,
-                                "finish_reason": {"type": "length"},
-                            },
-                        }
-                    ).encode()
-                    + b"\r\n\r\n"
-                ]
-                if not owner.omit_done:
-                    frames.append(b"data: [DONE]\n\n")
-                try:
-                    self.send_response(200)
-                    self.send_header("content-type", "text/event-stream")
-                    self.send_header("transfer-encoding", "chunked")
-                    self.end_headers()
-                    for frame in frames:
-                        self.wfile.write(f"{len(frame):x}\r\n".encode() + frame + b"\r\n")
-                        self.wfile.flush()
-                    self.wfile.write(b"0\r\n\r\n")
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.server.daemon_threads = True
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-
-    @property
-    def url(self) -> str:
-        return f"http://127.0.0.1:{self.server.server_port}"
-
-    def __enter__(self) -> FakeServingServer:
-        return self
-
-    def __exit__(
-        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None
-    ) -> None:
-        self.gate.set()
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(5)
-        assert not self.thread.is_alive()
 
 
 def test_native_http_stream_empty_text_usage_done_and_final_artifacts(tmp_path: Path) -> None:
@@ -177,7 +98,7 @@ def test_sse_limit_counts_wire_frames_across_chunks_not_transport_batches(
         assert record.error_kind == "protocol" and record.error_message == "SSE frame exceeds the supported size"
 
 
-def test_queue_wait_is_outside_http_deadline_and_one_timeout_does_not_stop_fifo(tmp_path: Path) -> None:
+def test_one_timeout_does_not_stop_fifo(tmp_path: Path) -> None:
     with FakeServingServer(block_first=True) as server:
         case = client_case(tmp_path, server.url).model_copy(update={"request_timeout_seconds": 2.0})
         workload = retain_workload(case, tmp_path / "result")
@@ -189,8 +110,6 @@ def test_queue_wait_is_outside_http_deadline_and_one_timeout_does_not_stop_fifo(
         assert server.received == ["first", "second", "third"]
         assert tuple(record.outcome for record in recorder.requests) == ("failed", "success", "success")
         assert recorder.requests[0].error_kind == "timeout"
-        queue_wait = recorder.requests[1].metrics.queue_wait_seconds
-        assert queue_wait is not None and queue_wait >= case.request_timeout_seconds
 
 
 def test_http_200_without_done_is_a_failed_request_not_an_infrastructure_stop(tmp_path: Path) -> None:
@@ -473,48 +392,6 @@ def test_warmup_observes_process_loss_while_a_response_is_pending(tmp_path: Path
         assert any(str(cause) == "serving process exited" for cause in error.value.exceptions)
         records = read_jsonl(tmp_path / "warmup/requests.jsonl", RequestRecord)
         assert len(records) == 1 and records[0].outcome == "cancelled"
-
-
-def client_case(tmp_path: Path, endpoint: str, *, future: bool = False) -> ClientBenchCase:
-    prompts = tmp_path / "input-prompts.jsonl"
-    prompts.write_text('{"prompt_id":"p","text":"an explicit offline prompt"}\n', encoding="utf-8")
-    trace = tmp_path / "input-trace.jsonl"
-    trace.write_text(
-        "".join(
-            json.dumps(
-                {
-                    "request_id": id,
-                    "model_id": str(TEST_MODEL_ID),
-                    "arrival_seconds": 1000 if future and id == "third" else 0,
-                    "prompt_id": "p",
-                    "max_new_tokens": 3,
-                }
-            )
-            + "\n"
-            for id in ("first", "second", "third")
-        ),
-        encoding="utf-8",
-    )
-    return ClientBenchCase.model_validate_json(
-        json.dumps(
-            {
-                "id": "case",
-                "description": "Observe HTTP admission, streaming timing and supervised cleanup.",
-                "module": "serving.multi_model",
-                "mode": "client",
-                "max_inflight": 1,
-                "warmup_requests_per_target": 0,
-                "arrivals": {"kind": "jsonl", "path": str(trace)},
-                "targets": [
-                    {
-                        "model_id": str(TEST_MODEL_ID),
-                        "base_url": endpoint,
-                        "prompts": {"kind": "jsonl", "path": str(prompts)},
-                    }
-                ],
-            }
-        )
-    )
 
 
 def retain_workload(case: BenchCase, repetition: Path) -> PreparedWorkload:

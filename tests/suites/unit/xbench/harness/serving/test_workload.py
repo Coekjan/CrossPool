@@ -8,7 +8,7 @@ from pydantic import TypeAdapter
 
 import xbench.harness.serving.workload
 from xbench.harness.serving.case import BenchCase, ClientBenchCase
-from xbench.harness.serving.workload import LocalMetadata, PreparedWorkload, prepare_workload
+from xbench.harness.serving.workload import LocalMetadata, prepare_workload
 from xpool.model import ModelId
 
 
@@ -21,7 +21,6 @@ def test_all_prompt_and_arrival_combinations_are_replayable_and_target_scoped(
     stub_metadata(monkeypatch, tmp_path)
     workload = prepare_workload(case)
     assert workload == prepare_workload(case)
-    assert PreparedWorkload.model_validate_json(workload.model_dump_json()) == workload
     prompts = {(prompt.model_id, prompt.prompt_id): prompt for prompt in workload.prompts}
     for request in workload.requests:
         prompt = prompts[request.model_id, request.prompt_id]

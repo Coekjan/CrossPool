@@ -74,7 +74,8 @@ process boundary. Ordinary command wiring calls `xtest.cli.main` or
 `xbench.cli.main` directly; collection and worker boundaries remain real.
 Client execution, report projection
 and RunStore lifecycle checks own their behavior without repeating a complete
-list/run/report/clean cycle for each verdict.
+list/run/report/clean cycle for each verdict. Private HTTP peers and case data
+shared by tool tests belong in a non-collected test-local support module.
 
 The owned benchmark regression lives under
 `tests/suites/e2e/xbench/sglang/` and uses
@@ -95,6 +96,11 @@ One layer should own each expensive behavioral verdict. Higher layers assert
 only their integration seam instead of replaying lower-level protocol details.
 Use a Cartesian matrix only when its dimensions interact; otherwise cover each
 independent dimension once at its lowest observable boundary.
+
+Report tests construct real Figures for layout and data checks and capture them
+at the save boundary. One real multi-format export verifies file signatures and
+embedded fonts. Rendering failure, active-lock protection and source-preserving
+publication retain separate checks without re-exporting every format.
 
 ## Requirements
 
