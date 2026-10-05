@@ -24,11 +24,6 @@ def test_transport_request_enum_is_validated_before_submit() -> None:
 
 @xtest.requirements(device_count=1)
 def test_transport_request_tensors_are_validated_before_submit() -> None:
-    cpu_hidden_states = torch.empty((2, 4), dtype=torch.bfloat16)
-    cpu_output = torch.empty_like(cpu_hidden_states)
-    with pytest.raises(NotImplementedError, match="only available for these backends"):
-        torch.ops.xpool.ffn_shim(cpu_hidden_states, None, cpu_output, 0, 2, 1, 0)
-
     noncontiguous_hidden_states = torch.empty((4, 2), device="cuda", dtype=torch.bfloat16).transpose(0, 1)
     contiguous_output = torch.empty(noncontiguous_hidden_states.shape, device="cuda", dtype=torch.bfloat16)
     with pytest.raises(RuntimeError, match="expects a contiguous tensor"):

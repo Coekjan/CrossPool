@@ -30,6 +30,8 @@ public behavior is broken, replace it with a behavior test.
   observer traces, multi-model concurrency, and shutdown.
 - `tests/suites/cext/` owns C++/CUDA value, layout, protocol, scheduler,
   resident-kernel, trace, and utility behavior through CTest/GTest.
+  Host-only C++ cases use `.cpp` translation units; device cases use `.cu`
+  and receive device resources through the existing CMake classification.
 - `tests/suites/models/<model-id>/` owns optional real-checkpoint numerical and
   cross-graph qualification, including token or logit comparison. Engine-specific
   files use names such as `test_sglang_model_qualification.py`.
@@ -64,9 +66,17 @@ finalization. Real sockets, subprocesses, locks and cross-module execution
 belong to Integration. Product tests retain their subsystem ownership even
 when they use a tool fixture.
 
-Both tools have real CPU list/run/report/clean cycles through the editable
-`xpool-dev` development installation, including reports and cleanup from another
-working directory. The owned benchmark regression lives under
+Each tool retains a minimal real CPU execution through the editable `xpool-dev`
+development entry from outside the checkout. Real SIGTERM cancellation and
+worker loss remain separate: cancellation has an observed outcome, while worker
+loss lacks complete execution evidence. Fresh-process collection retains its
+process boundary. Ordinary command wiring calls `xtest.cli.main` or
+`xbench.cli.main` directly; collection and worker boundaries remain real.
+Client execution, report projection
+and RunStore lifecycle checks own their behavior without repeating a complete
+list/run/report/clean cycle for each verdict.
+
+The owned benchmark regression lives under
 `tests/suites/e2e/xbench/sglang/` and uses
 the existing two-Qwen, two-device deployment with a short deterministic workload.
 It proves the prepared workload, successful output from both models, actual

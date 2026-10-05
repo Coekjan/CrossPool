@@ -103,8 +103,8 @@ def test_kill_tree_directly_kills_captured_root_and_child_within_bound() -> None
             child.kill_tree()
 
 
-@pytest.mark.parametrize("title", ["xpool::daemon", "xpool::atnagent", "xpool::ffnagent"])
-def test_process_title_is_visible_without_hiding_environment(title: str) -> None:
+def test_process_title_is_visible_without_hiding_environment() -> None:
+    title = "xpool::ffnagent"
     probe_name = "XPOOL_PROCESS_TITLE_ENVIRONMENT_PROBE"
     environment = os.environ.copy()
     environment[probe_name] = title

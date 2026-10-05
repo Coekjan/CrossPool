@@ -92,7 +92,6 @@ def isolated_daemon_runtime() -> None:
         )
 
 
-@xtest.requirements(device_count=1)
 def test_runtime_role_requires_initialization(tmp_path: Path) -> None:
     run_native_case(isolated_uninitialized_runtime_role, workdir=tmp_path / "case")
 

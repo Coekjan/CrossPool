@@ -91,6 +91,15 @@ Do not add production seams solely so tests can replace dependencies. Tests
 should patch the dependency at the module that owns the call. Production APIs
 must describe runtime concepts rather than test mechanics.
 
+Assert observable interface behavior and resource invariants. Require call order
+when it protects a lifecycle boundary; compare independently owned results by
+value rather than incidental object identity, container layout or call count.
+Test substitutes accept the real dependency's supported calling convention.
+
+When substituting a clock, replace the owning module's clock binding rather
+than mutating shared standard-library time functions. Background control threads
+and framework waits retain their real clock and deadlines.
+
 Do not retain migration-only tests whose sole purpose is to name and reject a
 removed, unsupported API, configuration field, CLI option, or environment
 variable. Test the current public contract and generic invalid-input behavior

@@ -10,12 +10,6 @@
 
 namespace {
 
-enum class TestEvent : std::uint32_t {
-  Begin,
-  End,
-  Count,
-};
-
 struct TestRecord {
   std::uint64_t sequence;
 };
@@ -60,35 +54,6 @@ protected:
 };
 
 } // namespace
-
-TEST(TraceTimelineTest, RecordsDependencyGraph) {
-  auto timeline = xpool::utils::trace::Timeline<TestEvent>{};
-
-  timeline.record<TestEvent::Begin>(10);
-  timeline.record<TestEvent::End, TestEvent::Begin>(20);
-
-  EXPECT_TRUE(timeline.recorded(TestEvent::Begin));
-  EXPECT_TRUE(timeline.recorded(TestEvent::End));
-  EXPECT_EQ(timeline.timestamp(TestEvent::Begin), 10U);
-  EXPECT_EQ(timeline.timestamp(TestEvent::End), 20U);
-}
-
-TEST(TraceTimelineTest, FailStopsOnMissingDependency) {
-  EXPECT_DEATH(([] {
-                 auto timeline = xpool::utils::trace::Timeline<TestEvent>{};
-                 timeline.record<TestEvent::End, TestEvent::Begin>(20);
-               }()),
-               "");
-}
-
-TEST(TraceTimelineTest, FailStopsOnDuplicateEvent) {
-  EXPECT_DEATH(([] {
-                 auto timeline = xpool::utils::trace::Timeline<TestEvent>{};
-                 timeline.record<TestEvent::Begin>(10);
-                 timeline.record<TestEvent::Begin>(20);
-               }()),
-               "");
-}
 
 TEST_F(TraceBufferTest, DropsNewRecordsAfterCapacity) {
   auto *arena = static_cast<TestArena *>(nullptr);

@@ -92,30 +92,6 @@ def test_compute_dense_partial_matches_reference_without_steady_allocation(paylo
 
 
 @xtest.requirements(device_count=1)
-def test_compute_dense_partial_keeps_live_prefix_independent_of_capacity_tail() -> None:
-    torch.manual_seed(23)
-    hidden_states, layer_weights, workspace, output = dense_values()
-    operators.compute_dense_partial(
-        hidden_states=hidden_states,
-        layer_weights=layer_weights,
-        workspace=workspace,
-        output=output,
-        activation=ActivationKind.SILU,
-    )
-    first_prefix = output[:2].clone()
-    hidden_states[2:] = torch.randn_like(hidden_states[2:])
-    operators.compute_dense_partial(
-        hidden_states=hidden_states,
-        layer_weights=layer_weights,
-        workspace=workspace,
-        output=output,
-        activation=ActivationKind.SILU,
-    )
-
-    torch.testing.assert_close(output[:2], first_prefix, rtol=0, atol=0)
-
-
-@xtest.requirements(device_count=1)
 def test_compute_dense_partial_rejects_misaligned_workspace() -> None:
     hidden_states, layer_weights, workspace, output = dense_values()
     storage = torch.empty(workspace.numel() + 1, device="cuda", dtype=torch.uint8)

@@ -1,14 +1,14 @@
 from pathlib import Path
-from typing import Never
 
 import pytest
 
 from xpool.model import ModelId
 from xtest.harness.runner.requirements import (
-    RequirementGuard,
     RequirementMisconfigured,
-    RequirementResolver,
     RequirementUnavailable,
+    require_config,
+    require_devices,
+    require_model_weights,
 )
 from xtest.harness.support.config import TEST_MODEL_ID
 
@@ -46,26 +46,24 @@ def test_device_requirement_rejects_unavailable_devices(monkeypatch: pytest.Monk
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
 
     with pytest.raises(RequirementUnavailable, match="no supported devices"):
-        RequirementResolver().require_devices(1)
+        require_devices(1)
 
 
 def test_device_requirement_checks_count(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("torch.cuda.is_available", lambda: True)
     monkeypatch.setattr("torch.cuda.device_count", lambda: 2)
-    resolver = RequirementResolver()
-
-    resolver.require_devices(2)
+    require_devices(2)
     with pytest.raises(RequirementUnavailable, match="requires 3"):
-        resolver.require_devices(3)
+        require_devices(3)
     with pytest.raises(RequirementMisconfigured, match="at least 1"):
-        resolver.require_devices(0)
+        require_devices(0)
 
 
 def test_config_requires_exact_environment_variable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("XPOOL_CONFIG", raising=False)
 
     with pytest.raises(RequirementUnavailable, match="set XPOOL_CONFIG"):
-        RequirementResolver().require_config()
+        require_config()
 
 
 def test_explicit_invalid_config_is_misconfigured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -74,7 +72,7 @@ def test_explicit_invalid_config_is_misconfigured(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
 
     with pytest.raises(RequirementMisconfigured, match="invalid XPOOL_CONFIG"):
-        RequirementResolver().require_config()
+        require_config()
 
 
 def test_config_reload_observes_same_path_rewrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,14 +80,13 @@ def test_config_reload_observes_same_path_rewrite(tmp_path: Path, monkeypatch: p
     second_model_root = tmp_path / "second-model-root"
     config_path = tmp_path / "xpool.toml"
     write_config(config_path, first_model_root)
-    resolver = RequirementResolver()
 
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
     monkeypatch.setenv("XPOOL_LOG_LEVEL", "debug")
-    first = resolver.require_config()
+    first = require_config()
     write_config(config_path, second_model_root)
     monkeypatch.setenv("XPOOL_LOG_LEVEL", "error")
-    second = resolver.require_config()
+    second = require_config()
 
     assert first.config.vendor.model_base_uri == first_model_root
     assert first.config.logging.level == "debug"
@@ -104,17 +101,16 @@ def test_model_weights_require_directory_and_config_json(tmp_path: Path, monkeyp
     config_path = tmp_path / "xpool.toml"
     write_config(config_path, model_root)
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
-    resolver = RequirementResolver()
-    config = resolver.require_config().config
+    config = require_config().config
 
     with pytest.raises(RequirementUnavailable, match="weight directory"):
-        resolver.require_model_weights(config, TEST_MODEL_ID)
+        require_model_weights(config, TEST_MODEL_ID)
     model_path.mkdir(parents=True)
     with pytest.raises(RequirementUnavailable, match=r"config\.json"):
-        resolver.require_model_weights(config, TEST_MODEL_ID)
+        require_model_weights(config, TEST_MODEL_ID)
     (model_path / "config.json").write_text("{}", encoding="utf-8")
 
-    assert resolver.require_model_weights(config, TEST_MODEL_ID) == model_path
+    assert require_model_weights(config, TEST_MODEL_ID) == model_path
 
 
 def test_model_weights_resolve_explicit_path_and_unregistered_vendor_fallback(
@@ -132,31 +128,6 @@ def test_model_weights_resolve_explicit_path_and_unregistered_vendor_fallback(
     config_path.write_text(config_path.read_text(encoding="utf-8") + f'\npath = "{custom_path}"\n', encoding="utf-8")
     monkeypatch.setenv("XPOOL_CONFIG", str(config_path))
 
-    resolver = RequirementResolver()
-    config = resolver.require_config().config
-    assert resolver.require_model_weights(config, ModelId("manifest/model")) == model_path
-    assert resolver.require_model_weights(config, ModelId("external/model-not-owned-by-tests")) == custom_path
-
-
-def test_requirement_guard_skips_unavailable_and_always_fails_misconfiguration() -> None:
-    outcomes: list[str] = []
-
-    def skip(reason: str) -> Never:
-        outcomes.append(f"skip:{reason}")
-        raise LookupError
-
-    def fail(reason: str) -> Never:
-        outcomes.append(f"fail:{reason}")
-        raise LookupError
-
-    default_guard = RequirementGuard(strict=False, skip=skip, fail=fail)
-    strict_guard = RequirementGuard(strict=True, skip=skip, fail=fail)
-
-    with pytest.raises(LookupError):
-        default_guard.run(lambda: (_ for _ in ()).throw(RequirementUnavailable("cuda")))
-    with pytest.raises(LookupError):
-        strict_guard.run(lambda: (_ for _ in ()).throw(RequirementUnavailable("cuda")))
-    with pytest.raises(LookupError):
-        default_guard.run(lambda: (_ for _ in ()).throw(RequirementMisconfigured("config")))
-
-    assert outcomes == ["skip:cuda", "fail:cuda", "fail:config"]
+    config = require_config().config
+    assert require_model_weights(config, ModelId("manifest/model")) == model_path
+    assert require_model_weights(config, ModelId("external/model-not-owned-by-tests")) == custom_path

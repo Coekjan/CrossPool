@@ -69,23 +69,25 @@ def command(cwd: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
 
 @pytest.mark.parametrize("success", [True, False])
 def test_cli_lists_then_executes_source_cases_and_reports_original_outcomes(
-    source_checkout: Path, success: bool
+    source_checkout: Path, success: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     selector = "tests/suites/unit/test_example.py"
-    listed = command(source_checkout, "list", "--suite", "unit", selector)
-    assert listed.returncode == 0, listed.stderr
-    assert tuple(line.split("\t")[1] for line in listed.stdout.splitlines()) == tuple(
-        f"{selector}::test_result[{outcome}]" for outcome in ("pass", "fail", "skip")
-    )
-    assert not (source_checkout / "fixture-ran").exists()
-    assert not (source_checkout / ".xpool-cache/test-runs").exists()
+    if success:
+        assert xtest.cli.main(["list", "--suite", "unit", selector]) == 0
+        assert tuple(line.split("\t")[1] for line in capsys.readouterr().out.splitlines()) == tuple(
+            f"{selector}::test_result[{outcome}]" for outcome in ("pass", "fail", "skip")
+        )
+        assert not (source_checkout / "fixture-ran").exists()
+        assert not (source_checkout / ".xpool-cache/test-runs").exists()
 
     selected = f"{selector}::test_result[pass]" if success else selector
     root = source_checkout / "selected-results"
-    completed = command(
-        source_checkout, "run", "--suite", "unit", "--strict-requirements", "--result-root", str(root), selected
-    )
-    assert completed.returncode == int(not success), completed.stderr
+    arguments = ["run", "--suite", "unit", "--strict-requirements", "--result-root", str(root), selected]
+    if success:
+        completed = command(source_checkout, *arguments)
+        assert completed.returncode == 0, completed.stderr
+    else:
+        assert xtest.cli.main(arguments) == 1
     assert (source_checkout / "fixture-ran").is_file()
     run = next(path for path in root.iterdir() if path.is_dir())
     summary = TestRunReport.load(run).summary()
@@ -94,23 +96,23 @@ def test_cli_lists_then_executes_source_cases_and_reports_original_outcomes(
     assert summary["failed"] == summary["skipped"] == int(not success)
     assert summary["cleanup_verified"] is True and summary["evidence_complete"] is True
     assert summary["strict_requirements"] is True
+    if not success:
+        return
     before = {path.relative_to(run): path.read_bytes() for path in run.rglob("*") if path.is_file()}
 
     outside = source_checkout / "outside"
     outside.mkdir()
+    monkeypatch.chdir(outside)
     output = outside / "report"
-    reported = command(outside, "report", str(run), "--output", str(output), "--label", "original")
-    assert reported.returncode == 0, reported.stderr
+    assert xtest.cli.main(["report", str(run), "--output", str(output), "--label", "original"]) == 0
     retained = json.loads((output / "summary.json").read_bytes())["runs"][0]
     assert retained["label"] == "original" and retained["summary"] == summary
     assert before == {path.relative_to(run): path.read_bytes() for path in run.rglob("*") if path.is_file()}
-    dry_run = command(outside, "clean", "--result-root", str(root), "--all", "--dry-run")
-    assert dry_run.returncode == 0 and run.is_dir(), dry_run.stderr
-    cleaned = command(outside, "clean", "--result-root", str(root), "--all")
-    assert cleaned.returncode == 0 and not run.exists(), cleaned.stderr
 
 
-def test_list_declares_unavailable_requirements_without_resolving_them(source_checkout: Path) -> None:
+def test_list_declares_unavailable_requirements_without_resolving_them(
+    source_checkout: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     suite = source_checkout / "tests/suites/integration"
     suite.mkdir()
     (suite / "test_resource.py").write_text(
@@ -121,34 +123,36 @@ def test_list_declares_unavailable_requirements_without_resolving_them(source_ch
         "def test_resource():\n    raise AssertionError('inventory executed a test')\n",
         encoding="utf-8",
     )
-    listed = command(source_checkout, "list", "--suite", "integration")
-    assert listed.returncode == 0, listed.stderr
-    assert "test_resource.py::test_resource\tdevices=2 config=True models=missing/model" in listed.stdout
+    assert xtest.cli.main(["list", "--suite", "integration"]) == 0
+    assert "test_resource.py::test_resource\tdevices=2 config=True models=missing/model" in capsys.readouterr().out
     assert not (source_checkout / ".xpool-cache/test-runs").exists()
 
 
-def test_list_reads_ctest_inventory_and_reports_missing_manifest_without_execution(source_checkout: Path) -> None:
-    missing = command(source_checkout, "list", "--suite", "cext")
-    assert missing.returncode == 2 and "no CTest manifest" in missing.stderr
+def test_list_reads_ctest_inventory_and_reports_missing_manifest_without_execution(
+    source_checkout: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert xtest.cli.main(["list", "--suite", "cext"]) == 2
+    assert "no CTest manifest" in capsys.readouterr().err
     build = current_build_directory(source_checkout)
     build.mkdir(parents=True)
     (build / "CTestTestfile.cmake").write_text(
         'add_test("cext.never-run" "cmake" "-E" "touch" "' + str(source_checkout / "native-ran") + '")\n',
         encoding="utf-8",
     )
-    listed = command(source_checkout, "list", "--suite", "cext")
-    assert listed.returncode == 0, listed.stderr
-    assert listed.stdout.splitlines() == ["cext\tcext.never-run"]
+    assert xtest.cli.main(["list", "--suite", "cext"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["cext\tcext.never-run"]
     assert not (source_checkout / "native-ran").exists()
     assert not (source_checkout / ".xpool-cache/test-runs").exists()
 
 
-def test_list_reports_collection_failure_without_creating_durable_run(source_checkout: Path) -> None:
+def test_list_reports_collection_failure_without_creating_durable_run(
+    source_checkout: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     (source_checkout / "tests/suites/unit/test_bad.py").write_text(
         "raise RuntimeError('collection unavailable')\n", encoding="utf-8"
     )
-    failed = command(source_checkout, "list", "--suite", "unit")
-    assert failed.returncode == 2 and "collection unavailable" in failed.stderr
+    assert xtest.cli.main(["list", "--suite", "unit"]) == 2
+    assert "collection unavailable" in capsys.readouterr().err
     assert not (source_checkout / ".xpool-cache/test-runs").exists()
     assert not (source_checkout / "fixture-ran").exists()
 
@@ -207,11 +211,12 @@ def test_interrupted_cli_retains_original_outcome_and_cleanup_proof(source_check
     assert summary["original_result_code"] == (2 if worker_loss else 143) and summary["cleanup_verified"] is True
     assert summary["strict_requirements"] is True and summary["passed"] == 0
     assert summary["evidence_complete"] is False
-    outside = source_checkout / "outside"
-    outside.mkdir()
-    reported = command(outside, "report", str(run), "--output", str(outside / "report"))
-    assert reported.returncode == 0, reported.stderr
-    assert json.loads((outside / "report/summary.json").read_bytes())["runs"][0]["summary"] == summary
+    if not worker_loss:
+        outside = source_checkout / "outside"
+        outside.mkdir()
+        reported = command(outside, "report", str(run), "--output", str(outside / "report"))
+        assert reported.returncode == 0, reported.stderr
+        assert json.loads((outside / "report/summary.json").read_bytes())["runs"][0]["summary"] == summary
 
 
 def test_result_checkpoint_failure_returns_infrastructure_error_after_cleanup(

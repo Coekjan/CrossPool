@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import torch
 from sglang.srt.layers.communicator import ScatterMode
 from sglang.srt.models.deepseek_v2 import DeepseekV2ForCausalLM
 from sglang.srt.plugins.hook_registry import HookType
@@ -12,7 +11,6 @@ import xpool.config
 from xpool.integrations.sglang.adapter import (
     SglangInstanceRankBinding,
     SglangInstanceRankRuntime,
-    filter_decoder_ffn_weights,
 )
 from xpool.integrations.sglang.models.deepseek_v2 import (
     DeepseekV2ShimAdapter,
@@ -44,23 +42,6 @@ def test_deepseek_adapter_matches_only_deepseek_v2_architecture() -> None:
     assert adapter.matches(runner_with_architecture("DeepseekV2ForCausalLM").as_model_runner())
     assert not adapter.matches(runner_with_architecture("DeepseekV3ForCausalLM").as_model_runner())
     assert not adapter.matches(runner_with_architecture("Qwen2ForCausalLM").as_model_runner())
-
-
-def test_deepseek_ffn_weight_filter_skips_mlp_subtree() -> None:
-    weights = [
-        ("model.layers.0.self_attn.q_proj.weight", torch.empty(1)),
-        ("model.layers.0.mlp.gate_proj.weight", torch.empty(1)),
-        ("model.layers.1.mlp.experts.0.down_proj.weight", torch.empty(1)),
-        ("model.layers.2.mlp.shared_experts.gate_up_proj.weight", torch.empty(1)),
-        ("model.norm.weight", torch.empty(1)),
-    ]
-
-    kept = [name for name, tensor in filter_decoder_ffn_weights(weights)]
-
-    assert kept == [
-        "model.layers.0.self_attn.q_proj.weight",
-        "model.norm.weight",
-    ]
 
 
 def test_deepseek_loaded_model_validation_requires_positive_layer_count() -> None:

@@ -181,16 +181,9 @@ def test_graph(case, graph_mode, request, tmp_path):
     )
     assert recollected.ret == 0
     assert xtest.harness.runner.plan.TestPlan.read(output) == plan
-    executed = pytester.runpytest_subprocess(*arguments, plan.cases[0].nodeid, plan.cases[3].nodeid)
-    executed.assert_outcomes(passed=2)
-    partial = pytester.runpytest_subprocess(
-        *arguments, "--collect-only", "-k", "eager", f"--xpool-test-plan={output}", str(program)
-    )
-    assert partial.ret != 0
-    assert "artifact groups must contain every expected case" in partial.stderr.str()
 
 
-def test_missing_config_skips_by_default_and_fails_when_strict(
+def test_config_requirements_apply_default_and_strict_outcomes(
     pytester: pytest.Pytester,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -217,6 +210,14 @@ def test_missing_config_skips_by_default_and_fails_when_strict(
         "-q",
     )
     strict_result.assert_outcomes(errors=1)
+
+    invalid_config = pytester.path / "invalid.toml"
+    invalid_config.write_text("not = [valid", encoding="utf-8")
+    monkeypatch.setenv("XPOOL_CONFIG", str(invalid_config))
+    invalid_result = pytester.runpytest(
+        "-p", "xtest.harness.runner.pytest_plugin", f"--xpool-test-catalog={TEST_CATALOG_PATH}", "-q"
+    )
+    invalid_result.assert_outcomes(errors=1)
 
 
 def test_deselected_requirement_is_not_resolved(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
-from functools import partial
 from pathlib import Path
 from typing import cast
 
@@ -21,13 +20,15 @@ from xtest.harness.runner.plan import (
     TestStage,
 )
 from xtest.harness.runner.requirements import (
-    RequirementGuard,
-    RequirementResolver,
+    RequirementMisconfigured,
+    RequirementUnavailable,
     ResolvedConfig,
+    require_config,
+    require_devices,
+    require_model_weights,
 )
 from xtest.harness.sglang.catalog import E2eFfnTopologyCase, E2eServingCase, TestCatalog
 
-requirement_resolver_key = pytest.StashKey[RequirementResolver]()
 catalogue_key = pytest.StashKey[tuple[Path, TestCatalog]]()
 resource_requirements_key = pytest.StashKey[ResourceRequirements]()
 resolved_config_key = pytest.StashKey[ResolvedConfig]()
@@ -68,7 +69,7 @@ def task_artifact_dir(request: pytest.FixtureRequest) -> Path | None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Create one resource resolver for the pytest session."""
+    """Register selection and scheduling metadata for pytest."""
 
     config.addinivalue_line("markers", "requires_config: selects tests declaring local configuration")
     config.addinivalue_line("markers", "requires_device(min_devices=1): selects tests declaring device resources")
@@ -78,7 +79,6 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "serving_graph_group(name, expected_case_count): complete cross-task serving graph group",
     )
-    config.stash[requirement_resolver_key] = RequirementResolver()
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
@@ -224,19 +224,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Resolve resource requirements for one selected test before fixtures."""
 
-    resolver = item.config.stash[requirement_resolver_key]
-    guard = RequirementGuard(
-        strict=item.config.getoption("--strict-requirements"),
-        skip=lambda reason: pytest.skip(reason),
-        fail=lambda reason: pytest.fail(reason, pytrace=False),
-    )
     resources = item.stash[resource_requirements_key]
-    if resources.device_count:
-        guard.run(partial(resolver.require_devices, resources.device_count))
-    if resources.requires_config:
-        item.stash[resolved_config_key] = guard.run(resolver.require_config)
-    for model_id in resources.model_ids:
-        guard.run(partial(resolver.require_model_weights, item.stash[resolved_config_key].config, model_id))
+    try:
+        if resources.device_count:
+            require_devices(resources.device_count)
+        if resources.requires_config:
+            item.stash[resolved_config_key] = require_config()
+        for model_id in resources.model_ids:
+            require_model_weights(item.stash[resolved_config_key].config, model_id)
+    except RequirementMisconfigured as error:
+        pytest.fail(str(error), pytrace=False)
+    except RequirementUnavailable as error:
+        if item.config.getoption("--strict-requirements"):
+            pytest.fail(str(error), pytrace=False)
+        pytest.skip(str(error))
 
 
 def estimated_duration(item: pytest.Item) -> float | None:

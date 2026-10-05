@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import pytest
-import torch
 from sglang.srt.layers.communicator import ScatterMode
 from sglang.srt.models.qwen3 import Qwen3ForCausalLM
 from sglang.srt.plugins.hook_registry import HookType
 from transformers import Qwen3Config
 
-from xpool.integrations.sglang.adapter import filter_decoder_ffn_weights
 from xpool.integrations.sglang.models.qwen2 import XpoolQwen2MLP
 from xpool.integrations.sglang.models.qwen3 import Qwen3ShimAdapter
 from xtest.harness.support.sglang.fakes import FakeDecoderLayer, loaded_model, runner_with_architecture
@@ -47,20 +45,6 @@ def test_qwen3_adapter_matches_only_dense_qwen3_architecture() -> None:
     assert adapter.matches(runner_with_architecture("Qwen3ForCausalLM").as_model_runner())
     assert not adapter.matches(runner_with_architecture("Qwen3MoeForCausalLM").as_model_runner())
     assert not adapter.matches(runner_with_architecture("DeepseekV2ForCausalLM").as_model_runner())
-
-
-def test_qwen3_weight_filter_removes_only_decoder_mlp_tensors() -> None:
-    weights = [
-        ("model.layers.0.self_attn.q_proj.weight", torch.empty(1)),
-        ("model.layers.0.mlp.gate_proj.weight", torch.empty(1)),
-        ("model.layers.1.mlp.down_proj.weight", torch.empty(1)),
-        ("model.norm.weight", torch.empty(1)),
-    ]
-
-    assert [name for name, tensor in filter_decoder_ffn_weights(weights)] == [
-        "model.layers.0.self_attn.q_proj.weight",
-        "model.norm.weight",
-    ]
 
 
 def test_qwen3_loaded_model_requires_full_non_reduce_scatter_boundary() -> None:
