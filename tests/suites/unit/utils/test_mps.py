@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,92 @@ def endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> mps.MpsEndpoint
     monkeypatch.setattr(mps, "MPS_PROBE_LOCK_DIRECTORY", tmp_path / "locks")
     monkeypatch.setattr(mps.fcntl, "flock", lambda file_descriptor, operation: None)
     return mps.MpsEndpoint(("GPU-00000000-0000-0000-0000-000000000001",))
+
+
+def test_endpoint_uses_a_private_per_user_root() -> None:
+    endpoint = mps.MpsEndpoint(("GPU-00000000-0000-0000-0000-000000000001",))
+    root = Path("/tmp") / f"xpool-mps-{os.getuid()}"
+
+    assert endpoint.directory.parent == root
+    assert endpoint.environment() == {
+        "CUDA_MPS_PIPE_DIRECTORY": str(root / endpoint.directory.name / "pipe"),
+        "CUDA_MPS_LOG_DIRECTORY": str(root / endpoint.directory.name / "log"),
+    }
+
+
+@pytest.fixture
+def scope(endpoint: mps.MpsEndpoint, monkeypatch: pytest.MonkeyPatch) -> mps.MpsScope:
+    monkeypatch.setattr(mps.shutil, "which", lambda command: "/usr/bin/nvidia-cuda-mps-control")
+
+    def launch(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("controller launch boundary")
+
+    monkeypatch.setattr(mps.subprocess, "Popen", launch)
+    return mps.MpsScope(endpoint)
+
+
+@pytest.mark.parametrize("existing_root", [False, True])
+def test_scope_creates_private_directories(scope: mps.MpsScope, existing_root: bool) -> None:
+    if existing_root:
+        mps.MPS_SCOPE_DIRECTORY.mkdir(mode=0o700)
+
+    try:
+        with pytest.raises(RuntimeError, match="controller launch boundary"):
+            scope.start()
+    finally:
+        if scope.controller_log is not None:
+            scope.controller_log.close()
+
+    assert scope.endpoint.directory.parent == mps.MPS_SCOPE_DIRECTORY
+    for directory in (
+        mps.MPS_SCOPE_DIRECTORY,
+        scope.endpoint.directory,
+        scope.endpoint.pipe_directory,
+        scope.endpoint.log_directory,
+    ):
+        facts = directory.lstat()
+        assert stat.S_IMODE(facts.st_mode) == 0o700
+        assert facts.st_uid == os.getuid()
+
+
+@pytest.mark.parametrize("invalid", ["writable", "foreign-owner", "symlink", "file"])
+def test_scope_rejects_incompatible_root_without_claiming_endpoint(
+    scope: mps.MpsScope, invalid: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = mps.MPS_SCOPE_DIRECTORY
+    if invalid == "symlink":
+        target = tmp_path / "target"
+        target.mkdir(mode=0o700)
+        root.symlink_to(target, target_is_directory=True)
+    elif invalid == "file":
+        root.write_text("retained", encoding="utf-8")
+    else:
+        root.mkdir(mode=0o700)
+        if invalid == "writable":
+            root.chmod(0o722)
+        else:
+            original_lstat = Path.lstat
+
+            def lstat(path: Path) -> os.stat_result:
+                facts = original_lstat(path)
+                if path == root:
+                    values = list(facts)
+                    values[4] = os.getuid() + 1
+                    return os.stat_result(values)
+                return facts
+
+            monkeypatch.setattr(Path, "lstat", lstat)
+    original = root.lstat()
+
+    error = FileExistsError if invalid == "file" else PermissionError
+    with pytest.raises(error) as raised:
+        scope.start()
+
+    assert str(root) in str(raised.value)
+    assert root.lstat() == original
+    assert not scope.endpoint.directory.exists()
+    assert scope.directory_identity is None
+    assert scope.controller is None
 
 
 def test_endpoint_preserves_rank_order_and_derives_one_address(endpoint: mps.MpsEndpoint) -> None:
