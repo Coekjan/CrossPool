@@ -181,7 +181,6 @@ def test_scope_does_not_terminate_an_unconnected_process(
 def test_scope_preserves_an_existing_endpoint(scoped_controller: mps.MpsScope) -> None:
     scope = scoped_controller
     mps.MPS_SCOPE_DIRECTORY.mkdir(mode=0o700)
-    scope.endpoint.directory.parent.mkdir(mode=0o700)
     scope.endpoint.directory.mkdir(mode=0o700)
     diagnostic = scope.endpoint.directory / "owner.log"
     diagnostic.write_text("retained owner", encoding="utf-8")

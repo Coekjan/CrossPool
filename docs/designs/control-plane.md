@@ -352,9 +352,11 @@ Server creation may be lazy; startup requires the controller, not a server PID.
 The foreground mode is provided by the
 [NVIDIA control interface](https://docs.nvidia.com/deploy/mps/595/appendix-tools-and-interface-reference.html#nvidia-cuda-mps-control).
 
-The address is `/tmp/xpool-mps/<uid>/<key>/{pipe,log}`. The key is the first 32
+The address is `/tmp/xpool-mps-<uid>/<key>/{pipe,log}`. The key is the first 32
 hexadecimal characters of SHA-256 over newline-joined, sorted full attention
 UUIDs. Sorting affects the address only; visibility preserves rank order.
+Each user has an independent root directly under `/tmp`. Root, endpoint, pipe
+and log directories are created with mode `0700`.
 Exclusive directory creation establishes ownership. An existing scope is neither
 adopted nor deleted. Cleanup removes only the directory whose identity the owner
 retained, after its controller/server domain exits. This endpoint claim is not

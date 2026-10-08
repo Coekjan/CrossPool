@@ -81,6 +81,7 @@ Follow the [two-device Qwen3-0.6B quick start](docs/tutorials/quick-start.md) to
 configure a local checkpoint, start the four serving roles, send an HTTP
 request through real FFN execution, and shut everything down in order.
 The daemon starts and stops attention-side MPS; FFN processes run directly.
+MPS endpoints use a private per-user root at `/tmp/xpool-mps-<uid>/`.
 
 ## Configuration
 

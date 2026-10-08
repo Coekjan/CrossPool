@@ -36,7 +36,7 @@ MPS_PROBE_LOCK_DIRECTORY = Path("/tmp") / f"xpool-mps-probe-locks-{os.getuid()}"
 MPS_STARTUP_TIMEOUT_S = 30.0
 MPS_CLEANUP_TIMEOUT_S = 300.0
 MPS_TERMINATION_TIMEOUT_S = 30.0
-MPS_SCOPE_DIRECTORY = Path("/tmp/xpool-mps")
+MPS_SCOPE_DIRECTORY = Path("/tmp") / f"xpool-mps-{os.getuid()}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +81,7 @@ class MpsEndpoint:
         """Return the per-user address derived from the unordered device set."""
 
         key = hashlib.sha256("\n".join(sorted(self.device_uuids)).encode("ascii")).hexdigest()[:32]
-        return MPS_SCOPE_DIRECTORY / str(os.getuid()) / key
+        return MPS_SCOPE_DIRECTORY / key
 
     @property
     def pipe_directory(self) -> Path:
@@ -346,11 +346,10 @@ class MpsScope:
         if self.cleanup_deadline is not None:
             raise InterruptedError("MPS scope is retiring")
 
-        for directory in (MPS_SCOPE_DIRECTORY, MPS_SCOPE_DIRECTORY / str(os.getuid())):
-            directory.mkdir(mode=0o700, exist_ok=True)
-            facts = directory.lstat()
-            if not stat.S_ISDIR(facts.st_mode) or facts.st_uid != os.getuid() or facts.st_mode & 0o022:
-                raise PermissionError(f"MPS directory has incompatible ownership: {directory}")
+        MPS_SCOPE_DIRECTORY.mkdir(mode=0o700, exist_ok=True)
+        facts = MPS_SCOPE_DIRECTORY.lstat()
+        if not stat.S_ISDIR(facts.st_mode) or facts.st_uid != os.getuid() or facts.st_mode & 0o022:
+            raise PermissionError(f"MPS directory has incompatible ownership: {MPS_SCOPE_DIRECTORY}")
         with defer_signal_exceptions():
             self.endpoint.directory.mkdir(mode=0o700, exist_ok=False)
             facts = self.endpoint.directory.lstat()
