@@ -18,6 +18,40 @@ from xtest.harness.support.devkit import observer_enabled_config
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
 
+@pytest.mark.parametrize(("device", "local_rank"), ((1, 0), (3, 1)))
+def test_graph_snapshot_uuid_matches_execution_device(
+    device: int,
+    local_rank: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = cast(
+        FfnAgent,
+        SimpleNamespace(
+            fabric_plan=SimpleNamespace(generation=FabricGenerationId(high=1, low=2)),
+            device=device,
+            local_rank=local_rank,
+            fabric_pe=lambda: 1,
+        ),
+    )
+    snapshot = cast(
+        xpool.native.devkit.graph_observer.Snapshot,
+        SimpleNamespace(
+            primary_graphs=(),
+            lane_graphs=(SimpleNamespace(node_counts={}, compute_branch_count=0, delivery_branch_count=0),),
+        ),
+    )
+
+    def get_device_properties(index: int) -> SimpleNamespace:
+        return SimpleNamespace(uuid=f"GPU-00000000-0000-0000-0000-{index:012d}")
+
+    monkeypatch.setattr(graph_observer.torch.cuda, "get_device_properties", get_device_properties)
+
+    payload = json.loads(graph_observer.graph_snapshot(agent, snapshot).model_dump_json())
+
+    assert payload["device"] == device
+    assert payload["device_uuid"] == f"GPU-00000000-0000-0000-0000-{device:012d}"
+
+
 def test_graph_snapshot_serializes_native_observations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -55,7 +89,7 @@ def test_graph_snapshot_serializes_native_observations(
     )
 
     def get_device_properties(device: int) -> SimpleNamespace:
-        assert device == agent.local_rank
+        assert device == agent.device
         return SimpleNamespace(uuid="GPU-test")
 
     monkeypatch.setattr(graph_observer.torch.cuda, "get_device_properties", get_device_properties)
@@ -64,6 +98,7 @@ def test_graph_snapshot_serializes_native_observations(
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     assert path.name == f"xpool.graph-observer.{generation.format()}.5.json"
+    assert payload["device"] == agent.device
     assert payload["device_uuid"] == "GPU-test"
     assert payload["primary_graphs"][0]["node_counts"] == {"cudaGraphNodeTypeKernel": 3}
     assert payload["primary_graphs"][0]["binding_site_count"] == 7
