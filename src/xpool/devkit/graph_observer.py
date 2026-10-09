@@ -64,7 +64,7 @@ def graph_snapshot(
     agent: FfnAgent,
     snapshot: xpool.native.devkit.graph_observer.Snapshot,
 ) -> FfnGraphObserverSnapshot:
-    """Attach process identity to one native Graph snapshot."""
+    """Attach the FfnAgent's execution-device identity to a native Graph snapshot."""
 
     plan = agent.fabric_plan
     if plan is None:
@@ -89,7 +89,7 @@ def graph_snapshot(
         generation=plan.generation,
         pe=agent.fabric_pe(),
         device=agent.device,
-        device_uuid=str(torch.cuda.get_device_properties(agent.local_rank).uuid),
+        device_uuid=str(torch.cuda.get_device_properties(agent.device).uuid),
         primary_graphs=primary_graphs,
         lane_graphs=lane_graphs,
     )
