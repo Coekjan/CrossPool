@@ -10,8 +10,9 @@ from types import MappingProxyType
 import tomli_w
 
 from xkit.serving.cluster import XpoolClusterLaunch
-from xpool.config import CONFIG_REGISTRY, ConfigSource, XpoolConfig, XpoolDaemonConfig, get_nested
+from xpool.config import CONFIG_REGISTRY, ConfigSource, XpoolConfig, XpoolDaemonConfig
 from xpool.model import ModelId
+from xpool.utils.config import get_nested
 
 __all__ = ["ServingEndpoint", "snapshot_cluster_launch"]
 

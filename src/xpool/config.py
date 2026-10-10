@@ -2,25 +2,29 @@
 
 from __future__ import annotations
 
-import argparse
 import ipaddress
-import logging
 import os
 import tomllib
 from collections.abc import Mapping
-from copy import deepcopy
-from dataclasses import dataclass
 from enum import StrEnum
 from functools import cached_property
 from pathlib import Path
 from threading import Lock
 from types import MappingProxyType
-from typing import Literal, TypedDict, cast
+from typing import ClassVar, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, JsonValue, PrivateAttr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, field_validator, model_validator
 
 import xpool.native
 from xpool.model import ModelId
+from xpool.utils.config import (
+    ConfigError,
+    ConfigModel,
+    ConfigSetting,
+    ConfigSource,
+    ConfigSourceRecord,
+    MissingRequiredConfig,
+)
 
 __all__ = [
     "CONFIG_REGISTRY",
@@ -55,45 +59,6 @@ __all__ = [
     "validate_device_layout",
 ]
 
-logger = logging.getLogger(__name__)
-
-
-class ConfigSource(StrEnum):
-    """Configuration value source used by the CrossPool setting registry.
-
-    Attributes:
-        CLI: Value came from an explicit CrossPool CLI override.
-        ENV: Value came from an allowlisted process environment variable.
-        CONFIG: Value came from the TOML config file.
-        DEFAULT: Value came from a registry default.
-        UNSET: Optional value has no direct CLI, environment, TOML, or default source.
-    """
-
-    CLI = "cli"
-    ENV = "env"
-    CONFIG = "config"
-    DEFAULT = "default"
-    UNSET = "unset"
-
-
-type ParserName = Literal["bool", "int", "raw", "str"]
-
-
-class ConfigSourceRecord(TypedDict):
-    """Resolved config value and source provenance."""
-
-    name: str
-    value: object
-    source: ConfigSource
-
-
-class ConfigError(ValueError):
-    """Base error for CrossPool config resolution failures."""
-
-
-class MissingRequiredConfig(ConfigError):
-    """Raised when a required setting has no value from any allowed source."""
-
 
 class TopologyError(ConfigError):
     """Raised when model or device topology cannot be derived safely."""
@@ -112,163 +77,6 @@ class FfnSchedulingPolicy(StrEnum):
     RANDOM = "random"
 
 
-@dataclass(frozen=True, slots=True)
-class ConfigSetting:
-    """Registry entry for one TOML, CLI, or defaulted setting.
-
-    Attributes:
-        name: Stable registry key used by CLI overrides and diagnostics.
-        path: Canonical ``XpoolConfig`` field path, or ``None`` for bootstrap-only settings.
-        parser: Parser name used to normalize raw source values.
-        allowed_sources: Sources allowed to provide this setting.
-        description: Human-readable setting purpose for generated registry output.
-        default: Default value used when ``DEFAULT`` is an allowed source.
-        required: Whether missing values are configuration errors.
-        cli: CLI flag name when the setting is overrideable from the command line.
-        env_var: Environment variable name when the setting is process-env backed.
-    """
-
-    name: str
-    path: tuple[str, ...] | None
-    parser: ParserName
-    allowed_sources: tuple[ConfigSource, ...]
-    description: str
-    default: object = None
-    required: bool = False
-    cli: str | None = None
-    env_var: str | None = None
-
-    def parse(self, value: object) -> object:
-        """Parse one raw value using this setting's declared parser.
-
-        Args:
-            value: Raw selected value.
-
-        Returns:
-            Parsed config value.
-
-        Raises:
-            ConfigError: If the parser rejects the value or is unknown.
-        """
-
-        match self.parser:
-            case "bool":
-                if isinstance(value, bool):
-                    return value
-                normalized = str(value).strip()
-                if normalized == "1":
-                    return True
-                if normalized == "0":
-                    return False
-                raise ConfigError(f"expected boolean flag value '0' or '1', got {value!r}")
-            case "int":
-                try:
-                    return int(str(value).strip())
-                except ValueError as exc:
-                    raise ConfigError(f"expected integer config value for {self.name}, got {value!r}") from exc
-            case "raw":
-                return value
-            case "str":
-                return str(value)
-            case _:
-                raise ConfigError(f"unknown parser for {self.name}: {self.parser}")
-
-    def resolve(
-        self,
-        payload: Mapping[str, object],
-        cli_overrides: Mapping[str, object],
-        env: Mapping[str, str],
-    ) -> tuple[object, ConfigSource | None]:
-        """Resolve this setting according to CrossPool source precedence.
-
-        Args:
-            payload: Config-file payload.
-            cli_overrides: Explicit CLI values keyed by setting name.
-            env: Allowlisted environment values.
-
-        Returns:
-            Resolved value and source, or ``(None, None)`` when optional and unset.
-
-        Raises:
-            MissingRequiredConfig: If this required setting has no value.
-            ConfigError: If the selected value cannot be parsed.
-        """
-
-        if ConfigSource.CLI in self.allowed_sources and self.name in cli_overrides:
-            return self.parse(cli_overrides[self.name]), ConfigSource.CLI
-        if ConfigSource.ENV in self.allowed_sources and self.env_var is not None and self.env_var in env:
-            return self.parse(env[self.env_var]), ConfigSource.ENV
-        if ConfigSource.CONFIG in self.allowed_sources:
-            found, config_value = get_nested(payload, self.path or ())
-            if found:
-                return self.parse(config_value), ConfigSource.CONFIG
-        if ConfigSource.DEFAULT in self.allowed_sources:
-            return self.parse(self.default), ConfigSource.DEFAULT
-        if self.required:
-            raise MissingRequiredConfig(f"missing required config setting: {self.name}")
-        return None, None
-
-    def source_records(self, payload: Mapping[str, object]) -> list[ConfigSourceRecord]:
-        """Expand this setting's wildcard path into concrete source records.
-
-        Args:
-            payload: Original config mapping before overrides are applied.
-
-        Returns:
-            Source records for every concrete wildcard path.
-
-        Raises:
-            ConfigError: If the payload shape does not match the wildcard path.
-        """
-
-        path = self.path or ()
-        records: list[ConfigSourceRecord] = []
-
-        def walk(value: object, remaining_path: tuple[str, ...], concrete_path: tuple[str | int, ...]) -> None:
-            if not remaining_path:
-                records.append(
-                    {
-                        "name": format_source_record_name(concrete_path),
-                        "value": value,
-                        "source": ConfigSource.CONFIG,
-                    }
-                )
-                return
-
-            segment = remaining_path[0]
-            rest = remaining_path[1:]
-            if segment == "*":
-                if not isinstance(value, list):
-                    raise ConfigError(
-                        f"expected list config value at {format_source_record_name(concrete_path)} "
-                        f"for wildcard setting {self.name}"
-                    )
-                for index, item in enumerate(value):
-                    walk(item, rest, (*concrete_path, index))
-                return
-
-            if not isinstance(value, Mapping):
-                raise ConfigError(f"expected mapping config value at {format_source_record_name(concrete_path)}")
-            mapping = cast(Mapping[str, object], value)
-            if segment not in mapping:
-                if "*" in rest:
-                    return
-                records.append(
-                    {
-                        "name": format_source_record_name((*concrete_path, segment, *rest)),
-                        "value": self.default if ConfigSource.DEFAULT in self.allowed_sources else None,
-                        "source": ConfigSource.DEFAULT
-                        if ConfigSource.DEFAULT in self.allowed_sources
-                        else ConfigSource.UNSET,
-                    }
-                )
-                return
-            walk(mapping[segment], rest, (*concrete_path, segment))
-
-        walk(payload, path, ())
-        return records
-
-
 TOP_LEVEL_SOURCES = (
     ConfigSource.CLI,
     ConfigSource.CONFIG,
@@ -277,6 +85,16 @@ TOP_LEVEL_SOURCES = (
 CONFIG_REQUIRED = (ConfigSource.CONFIG,)
 
 CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
+    ConfigSetting(
+        name="cache_root",
+        path=("cache_root",),
+        parser="path",
+        allowed_sources=(ConfigSource.CLI, ConfigSource.ENV, ConfigSource.CONFIG, ConfigSource.DEFAULT),
+        default=".xpool-cache",
+        cli="--cache-root",
+        env_var="XPOOL_CACHE_ROOT",
+        description="Shared project artifact and profiling workspace root.",
+    ),
     ConfigSetting(
         name="config_path",
         path=None,
@@ -1127,11 +945,13 @@ class VendorConfig(BaseModel):
         return self
 
 
-class XpoolConfig(BaseModel):
+class XpoolConfig(ConfigModel):
     """Validated CrossPool TOML config plus derived runtime views."""
 
-    model_config = ConfigDict(extra="forbid")
-    _sources: tuple[ConfigSourceRecord, ...] = PrivateAttr(default_factory=tuple)
+    registry: ClassVar[tuple[ConfigSetting, ...]] = CONFIG_REGISTRY
+    env_prefix: ClassVar[str] = "XPOOL_"
+
+    cache_root: Path = Field(description="Shared project artifact and profiling workspace root.")
 
     daemon: XpoolDaemonConfig = Field(description="Daemon control-plane config.")
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="Runtime logging policy.")
@@ -1142,166 +962,40 @@ class XpoolConfig(BaseModel):
     vendor: VendorConfig = Field(default_factory=VendorConfig, description="Vendor model-root settings.")
     models: list[ModelConfig] = Field(min_length=1, description="Configured model list.")
 
-    @staticmethod
-    def add_cli_args(parser: argparse.ArgumentParser) -> None:
-        """Add registry-declared config override flags to an argparse parser.
-
-        Args:
-            parser: Subcommand parser that should accept CrossPool config override
-                flags.
-
-        Side Effects:
-            Mutates ``parser`` by adding every setting whose registry entry
-            allows CLI input.
-        """
-
-        for setting in CONFIG_REGISTRY:
-            if setting.cli is None or ConfigSource.CLI not in setting.allowed_sources:
-                continue
-            parser.add_argument(
-                setting.cli,
-                dest=setting.name,
-                type=int if setting.parser == "int" else str,
-                help=setting.description,
-            )
-
     @classmethod
-    def from_file(
+    def resolve_cache_root(
         cls,
-        path: str | Path,
         *,
+        config_path: str | Path | None = None,
         cli: Mapping[str, object] | None = None,
         env: Mapping[str, str] | None = None,
-    ) -> XpoolConfig:
-        """Load and validate a CrossPool TOML file.
+    ) -> tuple[Path, ConfigSourceRecord]:
+        """Resolve cache storage without validating or installing a deployment.
 
-        Args:
-            path: Path to the TOML config file.
-            cli: Optional CLI-derived setting overrides that take
-                precedence over TOML values.
-            env: Optional allowlisted environment settings. Only registry
-                entries with ``ENV`` in ``allowed_sources`` may read it.
-
-        Returns:
-            Validated config object with defaults and CLI overrides resolved.
-
-        Raises:
-            OSError: If the file cannot be opened.
-            tomllib.TOMLDecodeError: If the file is not valid TOML.
-            ConfigError: If registry resolution fails.
-            pydantic.ValidationError: If schema validation fails.
+        Explicit runtime files precede XPOOL_CONFIG. Selected files must be
+        readable TOML even with a cache override; unrelated fields are ignored.
+        TOML cache paths use the file directory, other sources use cwd.
+        Environment defaults to this process; pass an empty mapping to omit it.
         """
 
-        config_path = Path(path)
-        with config_path.open("rb") as config_file:
-            payload = tomllib.load(config_file)
-        return cls.from_mapping(payload, cli=cli, env=env)
-
-    @classmethod
-    def from_mapping(
-        cls,
-        payload: Mapping[str, object],
-        *,
-        cli: Mapping[str, object] | None = None,
-        env: Mapping[str, str] | None = None,
-    ) -> XpoolConfig:
-        """Validate an in-memory config mapping.
-
-        Args:
-            payload: TOML-like mapping to validate. The mapping is deep-copied
-                before defaults or overrides are applied.
-            cli: Optional CLI-derived setting overrides that take
-                precedence over mapping values.
-            env: Optional allowlisted environment settings. Only registry
-                entries with ``ENV`` in ``allowed_sources`` may read it.
-
-        Returns:
-            Validated config object.
-
-        Raises:
-            ConfigError: If registry resolution fails.
-            pydantic.ValidationError: If schema validation fails.
-
-        Side Effects:
-            Does not mutate ``payload``.
-        """
-
-        source_payload = deepcopy(dict(payload))
-        resolved: dict[str, object] = deepcopy(dict(payload))
-        effective_cli = cli or {}
-        effective_env = env or {}
-        if env is not None:
-            allowed_env_vars = frozenset(setting.env_var for setting in CONFIG_REGISTRY if setting.env_var is not None)
-            unknown_env_vars = tuple(
-                sorted(name for name in effective_env if name.startswith("XPOOL_") and name not in allowed_env_vars)
-            )
-            if unknown_env_vars:
-                logger.warning("ignoring unknown xpool environment variables: %s", ", ".join(unknown_env_vars))
-
-        for setting in CONFIG_REGISTRY:
-            if setting.path is None or ConfigSource.CONFIG in setting.allowed_sources:
-                continue
-            if get_nested(source_payload, setting.path)[0]:
-                raise ConfigError(f"config setting {setting.name} does not allow TOML source: {'.'.join(setting.path)}")
-
-        sources: list[ConfigSourceRecord] = []
-        for setting in CONFIG_REGISTRY:
-            if setting.path is not None and "*" in setting.path:
-                sources.extend(setting.source_records(source_payload))
-                continue
-            value, source = setting.resolve(source_payload, effective_cli, effective_env)
-            if setting.path is not None and setting.name != "models":
-                sources.append(
-                    {
-                        "name": format_source_record_name(setting.path),
-                        "value": value,
-                        "source": ConfigSource.UNSET if source is None else source,
-                    }
-                )
-            if setting.path is not None and source is not None:
-                set_nested(resolved, setting.path, value)
-
-        config = cls.model_validate(resolved)
-        config._sources = tuple(sources)
-        return config
-
-    @property
-    def sources(self) -> tuple[ConfigSourceRecord, ...]:
-        """Return immutable source records for resolved leaf config values."""
-
-        return self._sources
-
-    def to_config_mapping(self) -> dict[str, JsonValue]:
-        """Snapshot CONFIG-allowed effective values for TOML materialization.
-
-        Registry source permissions, including model wildcard paths, own the
-        projection. Optional None values, bootstrap inputs and env-only debug
-        values are omitted. Callers retain debug environment and original source
-        provenance separately; reloading the snapshot establishes CONFIG sources.
-        """
-
-        paths = tuple(
-            setting.path
-            for setting in CONFIG_REGISTRY
-            if setting.path is not None and ConfigSource.CONFIG in setting.allowed_sources
-        )
-
-        def project(value: JsonValue, allowed: tuple[tuple[str, ...], ...]) -> JsonValue:
-            if () in allowed:
-                return value
-            if isinstance(value, dict):
-                return {
-                    name: project(child, tuple(path[1:] for path in allowed if path and path[0] == name))
-                    for name, child in value.items()
-                    if any(path and path[0] == name for path in allowed)
-                }
-            if isinstance(value, list):
-                nested = tuple(path[1:] for path in allowed if path and path[0] == "*")
-                return [project(child, nested) for child in value]
-            raise ConfigError("configuration registry path does not match its schema")
-
-        payload = cast(dict[str, JsonValue], self.model_dump(mode="json", exclude_none=True))
-        return cast(dict[str, JsonValue], project(payload, paths))
+        environment = os.environ if env is None else env
+        path_setting = next(setting for setting in cls.registry if setting.name == "config_path")
+        path_inputs = {} if config_path is None else {"config_path": str(config_path)}
+        path_value, path_source = path_setting.resolve({}, path_inputs, environment)
+        payload: dict[str, object] = {}
+        origin = None
+        if path_source is not None:
+            path = Path(cast(str, path_value)).expanduser().resolve()
+            with path.open("rb") as config_file:
+                payload = tomllib.load(config_file)
+            origin = path.parent
+        cache_setting = next(setting for setting in cls.registry if setting.name == "cache_root")
+        value, source = cache_setting.resolve(payload, cli or {}, environment, origin=origin)
+        return cast(Path, value), {
+            "name": "cache_root",
+            "value": value,
+            "source": ConfigSource.UNSET if source is None else source,
+        }
 
     @cached_property
     def devices(self) -> tuple[int, ...]:
@@ -1522,70 +1216,3 @@ def get_global_config() -> XpoolConfig:
     if config is None:
         raise MissingRequiredConfig("xpool global config has not been loaded")
     return config
-
-
-def format_source_record_name(path: tuple[str | int, ...]) -> str:
-    """Format a nested config path for source-report diagnostics.
-
-    Args:
-        path: Config path segments, including integer list indexes.
-
-    Returns:
-        Dot-and-bracket notation for the path.
-    """
-
-    return "".join(
-        f"[{segment}]" if isinstance(segment, int) else f"{'.' if index else ''}{segment}"
-        for index, segment in enumerate(path)
-    )
-
-
-def get_nested(payload: Mapping[str, object], path: tuple[str, ...]) -> tuple[bool, object]:
-    """Read a nested mapping path without conflating missing and null values.
-
-    Args:
-        payload: Mapping to traverse.
-        path: String path segments.
-
-    Returns:
-        Whether the path exists and its value when present.
-    """
-
-    cursor: object = payload
-    for key in path:
-        if not isinstance(cursor, Mapping):
-            return False, None
-        mapping = cast(Mapping[str, object], cursor)
-        if key not in mapping:
-            return False, None
-        cursor = mapping[key]
-    return True, cursor
-
-
-def set_nested(payload: dict[str, object], path: tuple[str, ...], value: object) -> None:
-    """Set a nested config path, creating missing mappings.
-
-    Args:
-        payload: Mutable config mapping.
-        path: Non-empty path to update.
-        value: Resolved value to install.
-
-    Raises:
-        ConfigError: If the path is empty or crosses a non-mapping value.
-
-    Side Effects:
-        Mutates ``payload`` in place.
-    """
-
-    if not path:
-        raise ConfigError("cannot set empty config path")
-    cursor = payload
-    for key in path[:-1]:
-        child = cursor.get(key)
-        if child is None:
-            child = {}
-            cursor[key] = child
-        if not isinstance(child, dict):
-            raise ConfigError(f"cannot override nested config path {'.'.join(path)}")
-        cursor = cast(dict[str, object], child)
-    cursor[path[-1]] = value

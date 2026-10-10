@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import argparse
 
-from xpool.cli.command import RunnableCliCommand
 from xpool.config import XpoolConfig
 from xpool.runtime.agent import AgentError
 from xpool.runtime.ffnagent import FfnAgent
+from xpool.utils.cli import RunnableCliCommand
 
 
-class FfnAgentCommand(RunnableCliCommand):
+class FfnAgentCommand(RunnableCliCommand[XpoolConfig]):
     """Run one configured FfnAgent process."""
 
     name = "ffnagent"

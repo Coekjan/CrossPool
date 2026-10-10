@@ -371,3 +371,49 @@ def test_int_source_rejects_invalid_integer() -> None:
                 "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
             },
         )
+
+
+def test_cache_paths_follow_declaring_source_and_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    invocation = tmp_path / "invocation"
+    invocation.mkdir()
+    monkeypatch.chdir(invocation)
+    origin = tmp_path / "configs"
+    payload = minimal_config().to_config_mapping()
+    payload["cache_root"] = "file-cache"
+
+    config = XpoolConfig.from_mapping(payload, origin=origin)
+    assert config.cache_root == origin / "file-cache"
+    source = next(record for record in config.sources if record["name"] == "cache_root")
+    assert source["source"] is ConfigSource.CONFIG
+    assert source["value"] == config.cache_root
+    assert XpoolConfig.from_mapping(payload, origin=origin, env={"XPOOL_CACHE_ROOT": "env-cache"}).cache_root == (
+        invocation / "env-cache"
+    )
+    assert (
+        XpoolConfig.from_mapping(
+            payload, origin=origin, env={"XPOOL_CACHE_ROOT": "env-cache"}, cli={"cache_root": "cli-cache"}
+        ).cache_root
+        == invocation / "cli-cache"
+    )
+    payload.pop("cache_root")
+    assert XpoolConfig.from_mapping(payload, origin=origin).cache_root == invocation / ".xpool-cache"
+
+
+def test_cache_only_lookup_needs_no_runtime_deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "runtime.toml"
+    path.write_text('cache_root = "cache"\n[atn]\ndevices = "unrelated-invalid-topology"\n', encoding="utf-8")
+    root, source = XpoolConfig.resolve_cache_root(config_path=path, env={})
+    assert root == tmp_path / "cache"
+    assert source["source"] is ConfigSource.CONFIG
+    assert xpool.config.global_config is None
+    monkeypatch.chdir(tmp_path)
+    assert XpoolConfig.resolve_cache_root(env={})[0] == tmp_path / ".xpool-cache"
+
+
+def test_cache_override_still_requires_selected_file_to_be_valid_toml(tmp_path: Path) -> None:
+    path = tmp_path / "broken.toml"
+    path.write_text("[broken", encoding="utf-8")
+    with pytest.raises(ValueError):
+        XpoolConfig.resolve_cache_root(config_path=path, cli={"cache_root": tmp_path / "override"}, env={})
+    with pytest.raises(FileNotFoundError):
+        XpoolConfig.resolve_cache_root(config_path=tmp_path / "missing.toml", cli={"cache_root": "override"}, env={})

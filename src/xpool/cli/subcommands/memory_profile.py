@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import argparse
 
-from xpool.cli.command import RunnableCliCommand
 from xpool.config import XpoolConfig
 from xpool.memory import write_memory_calibration_profile
 from xpool.runtime.agent import AgentError
 from xpool.runtime.ffnagent.memory_profile import profile_ffn_memory
+from xpool.utils.cli import RunnableCliCommand
 
 
-class MemoryProfileCommand(RunnableCliCommand):
+class MemoryProfileCommand(RunnableCliCommand[XpoolConfig]):
     """Run the fixed FFN Calibration Corpus and publish its Profile."""
 
     name = "memory-profile"

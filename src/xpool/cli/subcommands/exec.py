@@ -6,19 +6,19 @@ import argparse
 import os
 from typing import NoReturn
 
-from xpool.cli.command import RunnableCliCommand
 from xpool.config import ConfigError, XpoolConfig
+from xpool.utils.cli import RunnableCliCommand
 from xpool.utils.device import normalize_environment, visible_uuids
 from xpool.utils.mps import MpsEndpoint
 
 
-class ExecCommand(RunnableCliCommand):
+class ExecCommand(RunnableCliCommand[XpoolConfig]):
     """Normalize complete visibility and prepare attention MPS, then exec the target."""
 
     name = "exec"
     help = "execute a command with the attention MPS environment"
     order = 30
-    config_cli_options = False
+    config_settings = ()
 
     def configure_parser(self, parser: argparse.ArgumentParser) -> None:
         """Accept one executable and opaque arguments, including its options."""

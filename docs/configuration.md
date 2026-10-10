@@ -64,6 +64,7 @@ reference:
 
 | Setting | Purpose |
 | --- | --- |
+| `cache_root` | Shared artifact and profiling workspace root; default `.xpool-cache`. |
 | `daemon.host` / `daemon.port` | Selects the local control-plane address; SGLang serving uses its own listener. |
 | `vendor.model_base_uri` | Sets the absolute local model root. |
 | `models[].id` / `models[].path` | Identifies a model and optionally overrides its absolute local weight path. |

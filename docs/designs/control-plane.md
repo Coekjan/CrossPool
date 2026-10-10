@@ -12,6 +12,10 @@ process-global configuration and business logic reads that configuration rather
 than caching selected values elsewhere. CLI values override allowlisted
 environment variables, which override TOML, which overrides registry defaults.
 Each setting declares which of these sources it accepts.
+The registry, source records, path-origin handling and CLI override mechanics
+live in [`xpool.utils.config`](../../src/xpool/utils/config.py). Production
+`XpoolConfig` owns runtime fields and validation; the private development tools
+reuse this mechanism without becoming production dependencies.
 [`ModelId`](../../src/xpool/model.py) owns immutable, case-sensitive model
 identity in strict `namespace/name` form. Components admit ASCII letters,
 digits, underscore, hyphen and dot, excluding `.` and `..` components. Identity

@@ -9,10 +9,10 @@ from collections.abc import Sequence
 
 from pydantic import ValidationError
 
-from xpool.cli.registry import discover_cli_commands, register_cli_commands
-from xpool.config import CONFIG_REGISTRY, ConfigError, ConfigSource, init_global_config
+from xpool.config import CONFIG_REGISTRY, ConfigError, ConfigSource, XpoolConfig, init_global_config
 from xpool.runtime.agent import AgentError
 from xpool.service.client import XpoolClientError, XpoolDaemonError
+from xpool.utils.cli import discover_cli_commands, register_cli_commands
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -37,7 +37,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="xpool", description="CrossPool control tool")
     subparsers = parser.add_subparsers(dest="command")
 
-    register_cli_commands(subparsers, discover_cli_commands())
+    register_cli_commands(
+        subparsers,
+        discover_cli_commands("xpool.cli.subcommands", config_type=XpoolConfig),
+        config_type=XpoolConfig,
+    )
 
     args = parser.parse_args(argv)
     if args.command is None:

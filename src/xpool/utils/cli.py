@@ -1,34 +1,111 @@
-"""Automatic discovery and argparse registration for CrossPool CLI commands."""
+"""Shared command contracts for the CrossPool CLI."""
 
 from __future__ import annotations
 
 import argparse
+from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from typing import ClassVar, cast
 
-from xpool.cli.command import CliCommand, CliCommandGroup, RunnableCliCommand
-from xpool.config import XpoolConfig
+from xpool.utils.config import ConfigModel
 from xpool.utils.discovery import discover_concrete_subclasses
 
-CLI_PACKAGE = "xpool.cli.subcommands"
+__all__ = [
+    "CliCommand",
+    "CliCommandGroup",
+    "RunnableCliCommand",
+    "discover_cli_commands",
+    "register_cli_commands",
+]
 
 
-def discover_cli_commands(package_name: str = CLI_PACKAGE) -> tuple[CliCommand, ...]:
+class CliCommand[C: ConfigModel](ABC):
+    """Base class for argparse-backed CrossPool subcommands.
+
+    Attributes:
+        name: Command token used on the command line.
+        help: Short help text shown by the parent parser.
+        order: Stable sort key among siblings.
+        parent: Optional parent command name for nested commands.
+    """
+
+    name: ClassVar[str]
+    help: ClassVar[str]
+    order: ClassVar[int] = 100
+    parent: ClassVar[str | None] = None
+
+    def configure_parser(self, parser: argparse.ArgumentParser) -> None:
+        """Add command-specific arguments to ``parser``.
+
+        Args:
+            parser: Parser created for this command.
+
+        Side Effects:
+            Mutates ``parser`` by adding command arguments.
+        """
+
+
+class CliCommandGroup[C: ConfigModel](CliCommand[C]):
+    """CLI command that owns nested subcommands instead of a direct handler.
+
+    Attributes:
+        subparser_dest: Attribute name used by argparse for the child command.
+    """
+
+    subparser_dest: ClassVar[str]
+
+
+class RunnableCliCommand[C: ConfigModel](CliCommand[C], ABC):
+    """CLI command that executes a handler after config resolution.
+
+    Attributes:
+        config_settings: Registered override names exposed by this command.
+            None selects all; an empty tuple exposes no config flags.
+    """
+
+    config_settings: ClassVar[tuple[str, ...] | None] = None
+
+    @abstractmethod
+    def run(self, args: argparse.Namespace, config: C) -> int:
+        """Run the command.
+
+        Args:
+            args: Parsed command-line arguments.
+            config: Process-global CrossPool config resolved by the top-level CLI.
+
+        Returns:
+            Process-style exit code.
+
+        Side Effects:
+            Depends on the concrete command; may print diagnostics or run a
+            resident process.
+        """
+
+
+def discover_cli_commands[C: ConfigModel](
+    package_name: str,
+    *,
+    config_type: type[C],
+) -> tuple[CliCommand[C], ...]:
     """Discover and instantiate concrete CrossPool CLI commands from a subcommands package.
 
     Args:
         package_name: Importable subcommands package containing command modules.
+        config_type: Application-owned configuration type for this command family.
 
     Returns:
         Stable, name-validated command instances.
 
     Raises:
         ImportError: If the package itself cannot be imported.
-        RuntimeError: If a command module cannot be imported in strict mode,
+        RuntimeError: If a command module cannot be imported,
             a command class cannot be constructed, or command names are invalid.
     """
 
-    commands: list[CliCommand] = []
-    for command_class in discover_concrete_subclasses(package_name, CliCommand):
+    commands: list[CliCommand[C]] = []
+    # Package discovery establishes the application-owned generic command family.
+    command_classes = cast(tuple[type[CliCommand[C]], ...], discover_concrete_subclasses(package_name, CliCommand))
+    for command_class in command_classes:
         try:
             commands.append(command_class())
         except TypeError as error:
@@ -37,18 +114,24 @@ def discover_cli_commands(package_name: str = CLI_PACKAGE) -> tuple[CliCommand, 
     return sort_and_validate_commands(commands)
 
 
-def register_cli_commands(subparsers: argparse._SubParsersAction, commands: Sequence[CliCommand]) -> None:
+def register_cli_commands[C: ConfigModel](
+    subparsers: argparse._SubParsersAction,
+    commands: Sequence[CliCommand[C]],
+    *,
+    config_type: type[C],
+) -> None:
     """Register discovered CLI commands onto an argparse subparser collection.
 
     Args:
         subparsers: Top-level argparse subparser collection.
         commands: Commands returned by ``discover_cli_commands``.
+        config_type: Configuration model supplying each command's registered options.
 
     Side Effects:
         Mutates ``subparsers`` by adding command parsers and handlers.
     """
 
-    children_by_parent: dict[str | None, list[CliCommand]] = {}
+    children_by_parent: dict[str | None, list[CliCommand[C]]] = {}
     for command in commands:
         children_by_parent.setdefault(command.parent, []).append(command)
 
@@ -58,8 +141,8 @@ def register_cli_commands(subparsers: argparse._SubParsersAction, commands: Sequ
         parent_subparsers = group_subparsers[parent]
         for command in children_by_parent.get(parent, []):
             parser = parent_subparsers.add_parser(command.name, help=command.help)
-            if isinstance(command, RunnableCliCommand) and command.config_cli_options:
-                XpoolConfig.add_cli_args(parser)
+            if isinstance(command, RunnableCliCommand):
+                config_type.add_cli_args(parser, names=command.config_settings)
             command.configure_parser(parser)
             if isinstance(command, CliCommandGroup):
                 group_subparsers[command.name] = parser.add_subparsers(
@@ -75,7 +158,7 @@ def register_cli_commands(subparsers: argparse._SubParsersAction, commands: Sequ
     register_children(None)
 
 
-def sort_and_validate_commands(commands: Sequence[CliCommand]) -> tuple[CliCommand, ...]:
+def sort_and_validate_commands[C: ConfigModel](commands: Sequence[CliCommand[C]]) -> tuple[CliCommand[C], ...]:
     """Sort commands deterministically and reject invalid command trees.
 
     Args:
@@ -100,8 +183,8 @@ def sort_and_validate_commands(commands: Sequence[CliCommand]) -> tuple[CliComma
             ),
         )
     )
-    seen_by_parent: dict[tuple[str | None, str], CliCommand] = {}
-    groups_by_name: dict[str, CliCommandGroup] = {}
+    seen_by_parent: dict[tuple[str | None, str], CliCommand[C]] = {}
+    groups_by_name: dict[str, CliCommandGroup[C]] = {}
     for command in sorted_commands:
         if not command.name:
             raise RuntimeError(f"xpool CLI command {type(command).__module__}.{type(command).__name__} has no name")

@@ -12,12 +12,12 @@ from types import FrameType
 
 import uvicorn
 
-from xpool.cli.command import CliCommandGroup, RunnableCliCommand
 from xpool.config import XpoolConfig
 from xpool.service.client import XpoolClient, XpoolClientError, XpoolDaemonError
 from xpool.service.daemon import create_daemon
 from xpool.service.daemon.app import DaemonFailure
 from xpool.service.daemon.control import ControlPlane
+from xpool.utils.cli import CliCommandGroup, RunnableCliCommand
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class DaemonServer(uvicorn.Server):
         await super().shutdown(sockets=sockets)
 
 
-class DaemonCommand(CliCommandGroup):
+class DaemonCommand(CliCommandGroup[XpoolConfig]):
     """Command group for daemon process and readiness operations."""
 
     name = "daemon"
@@ -84,7 +84,7 @@ class DaemonCommand(CliCommandGroup):
     subparser_dest = "daemon_command"
 
 
-class DaemonServeCommand(RunnableCliCommand):
+class DaemonServeCommand(RunnableCliCommand[XpoolConfig]):
     """Serve the daemon control-plane process."""
 
     name = "serve"
@@ -110,7 +110,7 @@ class DaemonServeCommand(RunnableCliCommand):
         return 20 if app.state.daemon_failure.failed else 0
 
 
-class DaemonCheckCommand(RunnableCliCommand):
+class DaemonCheckCommand(RunnableCliCommand[XpoolConfig]):
     """Check daemon readiness through the daemon API."""
 
     name = "check"

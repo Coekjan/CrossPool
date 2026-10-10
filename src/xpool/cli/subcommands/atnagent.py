@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import argparse
 
-from xpool.cli.command import RunnableCliCommand
 from xpool.config import XpoolConfig
 from xpool.runtime.agent import AgentError
 from xpool.runtime.atnagent import AtnAgent
+from xpool.utils.cli import RunnableCliCommand
 
 
-class AtnAgentCommand(RunnableCliCommand):
+class AtnAgentCommand(RunnableCliCommand[XpoolConfig]):
     """Run one configured AtnAgent process."""
 
     name = "atnagent"

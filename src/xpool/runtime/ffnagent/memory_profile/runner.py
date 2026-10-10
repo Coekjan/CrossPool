@@ -503,7 +503,12 @@ def run_world(coordinate: str, source: XpoolConfig) -> MemoryProfileWorld:
             raise RuntimeError(f"memory-profile child {process.name} returned {tag!r}, expected {expected!r}")
         return payload
 
-    with contextlib.ExitStack() as handlers, tempfile.TemporaryDirectory(prefix="xpool-memory-profile-") as temporary:
+    workspace_root = source.cache_root / "memory-profile"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    with (
+        contextlib.ExitStack() as handlers,
+        tempfile.TemporaryDirectory(prefix="xpool-memory-profile-", dir=workspace_root) as temporary,
+    ):
         if threading.current_thread() is threading.main_thread():
             for signum in (signal.SIGINT, signal.SIGTERM):
                 handlers.enter_context(sighandle(signum, record_cancellation))

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import json
 
-from xpool.cli.command import CliCommandGroup, RunnableCliCommand
-from xpool.config import XpoolConfig
+from pydantic import TypeAdapter
+
+from xpool.config import ConfigSourceRecord, XpoolConfig
+from xpool.utils.cli import CliCommandGroup, RunnableCliCommand
 
 
-class ConfigCommand(CliCommandGroup):
+class ConfigCommand(CliCommandGroup[XpoolConfig]):
     """Command group for resolved configuration inspection."""
 
     name = "config"
@@ -18,7 +19,7 @@ class ConfigCommand(CliCommandGroup):
     subparser_dest = "config_command"
 
 
-class ConfigDumpCommand(RunnableCliCommand):
+class ConfigDumpCommand(RunnableCliCommand[XpoolConfig]):
     """Dump resolved config and value provenance."""
 
     name = "dump"
@@ -29,13 +30,5 @@ class ConfigDumpCommand(RunnableCliCommand):
     def run(self, args: argparse.Namespace, config: XpoolConfig) -> int:
         """Dump resolved config and value provenance."""
 
-        payload = [
-            {
-                "name": record["name"],
-                "value": record["value"],
-                "source": record["source"].value,
-            }
-            for record in config.sources
-        ]
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(TypeAdapter(tuple[ConfigSourceRecord, ...]).dump_json(config.sources, indent=2).decode())
         return 0
