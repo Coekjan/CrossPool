@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from array import array
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,16 +10,28 @@ import pytest
 import torch
 import torch.distributed
 import torch.multiprocessing
-from sglang.srt.managers.schedule_batch import Req
+from sglang.srt.managers.schedule_batch import Req, ScheduleBatch, retract_all
+from sglang.srt.managers.schedule_policy import AddReqResult, PrefillAdder
 from sglang.srt.managers.scheduler import Scheduler
-from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
+from sglang.srt.mem_cache.allocation import alloc_token_slots
+from sglang.srt.mem_cache.cache_init_params import CacheInitParams
+from sglang.srt.mem_cache.common import release_kv_cache
+from sglang.srt.mem_cache.memory_pool import KVCache, ReqToTokenPool
+from sglang.srt.mem_cache.unified_cache.components import ComponentType
+from sglang.srt.mem_cache.unified_radix_cache import UnifiedRadixCache
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.runtime_context import get_context, get_parallel
+from sglang.srt.sampling.sampling_params import SamplingParams
 
 import xpool.integrations.sglang.kv.capacity
 import xpool.native
 from xpool.config import LatencySloConfig
-from xpool.integrations.sglang.kv.allocator import ElasticTokenToKVPoolAllocator
+from xpool.integrations.sglang.hooks.kv import (
+    ElasticPrefillAdder,
+    around_prefill_add_one_req,
+    capacity_reconciler_scope,
+)
+from xpool.integrations.sglang.kv.allocator import ElasticPagedTokenToKVPoolAllocator, ElasticTokenToKVPoolAllocator
 from xpool.integrations.sglang.kv.capacity import CapacityReconciler
 from xpool.integrations.sglang.kv.vmm import KvVmmBacking
 from xpool.runtime.instance import InstanceRankRuntime
@@ -103,6 +116,188 @@ def make_reconciler(
         applied_sequence=applied_sequence,
         completed_sequence=completed_sequence,
     )
+
+
+def create_prefill_cache(
+    page_size: int = 1,
+) -> tuple[UnifiedRadixCache, ElasticTokenToKVPoolAllocator | ElasticPagedTokenToKVPoolAllocator, ReqToTokenPool]:
+    request_pool = ReqToTokenPool(4, 64, "cpu", False)
+    # CPU allocation never dereferences the KV tensor storage.
+    storage = cast(KVCache, object())
+    allocator = (
+        ElasticTokenToKVPoolAllocator(40, torch.float16, "cpu", storage, False)
+        if page_size == 1
+        else ElasticPagedTokenToKVPoolAllocator(40, page_size, torch.float16, "cpu", storage, False)
+    )
+    cache = UnifiedRadixCache(
+        CacheInitParams(
+            disable=False,
+            req_to_token_pool=request_pool,
+            token_to_kv_pool_allocator=allocator,
+            page_size=page_size,
+            tree_components=(ComponentType.FULL,),
+        )
+    )
+    return cache, allocator, request_pool
+
+
+@pytest.mark.parametrize(("page_size", "prefix_length", "occupied"), [(1, 0, 32), (4, 0, 32), (4, 2, 40)])
+def test_chunk_continuation_bounds_negative_forecast_by_allocatable_slots(
+    page_size: int, prefix_length: int, occupied: int
+) -> None:
+    cache, allocator, request_pool = create_prefill_cache(page_size)
+    slots = allocator.alloc(occupied)
+    assert slots is not None
+    request = Req("chunk", "", array("q", range(30)), SamplingParams(max_new_tokens=1))
+    request.init_next_round_input(cache)
+    request.prefix_indices = slots[:prefix_length]
+    request.time_stats.scheduler_recv_time = 10.0
+    reconciler = make_reconciler(
+        FakeControlChannel(), FakeBacking(10), allocator, request_pool, active_bundles=10, applied_sequence=1
+    )
+    adder = ElasticPrefillAdder(page_size, cache, allocator, ScheduleBatch(reqs=[]), 1.0, 16, 16)
+    adder.rem_total_token_offset = 100
+    assert adder.rem_total_tokens < 0
+    free_before = allocator.available_size()
+
+    with get_parallel().override(attn_tp_rank=0), capacity_reconciler_scope(reconciler):
+        retained = adder.add_chunked_req(request)
+
+    assert retained is request
+    assert adder.can_run_list == [request]
+    assert request.extend_range is not None
+    assert request.extend_range.length == (8 if prefix_length == 0 else 2)
+    new_pages = (request.extend_range.end + page_size - 1) // page_size - (prefix_length + page_size - 1) // page_size
+    assert new_pages * page_size <= free_before
+    if page_size == 1:
+        allocated = alloc_token_slots(cache, request.extend_range.length)
+        assert len(allocated) == request.extend_range.length
+        assert allocator.available_size() == 0
+
+
+def test_legally_admitted_chunk_parks_then_retraction_allows_progress_and_reclaim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache, allocator, request_pool = create_prefill_cache()
+    channel = FakeControlChannel(ceiling=20)
+    backing = FakeBacking(10)
+    reconciler = make_reconciler(
+        channel, backing, allocator, request_pool, active_bundles=10, applied_sequence=1, completed_sequence=1
+    )
+    chunk = Req("chunk", "", array("q", range(37)), SamplingParams(max_new_tokens=1))
+    peer = Req("peer", "", array("q", range(100, 107)), SamplingParams(max_new_tokens=20))
+    for request in (chunk, peer):
+        request.init_next_round_input(cache)
+        request.time_stats.scheduler_recv_time = 10.0
+    scheduler = SimpleNamespace(
+        chunked_req=None,
+        waiting_queue=[],
+        running_batch=ScheduleBatch(reqs=[]),
+        tree_cache=cache,
+        enable_overlap=False,
+        schedule_stream="execution",
+    )
+
+    def prepare_selected(requests: list[Req]) -> None:
+        assert request_pool.alloc(requests) is not None
+        for request in requests:
+            extent = request.extend_range
+            assert extent is not None
+            slots = alloc_token_slots(cache, extent.length)
+            request_pool.write((request.kv.req_pool_idx, slice(extent.start, extent.end)), slots)
+            request.kv.kv_allocated_len = request.kv.kv_committed_len = extent.end
+            cache.cache_unfinished_req(request, chunked=extent.end < len(request.full_untruncated_fill_ids))
+
+    class Event:
+        ready = False
+
+        def record(self, stream: object) -> None:
+            assert stream == "execution"
+
+        def query(self) -> bool:
+            return self.ready
+
+    event = Event()
+    monkeypatch.setattr(torch.cuda, "Event", lambda: event)
+    with get_parallel().override(attn_tp_rank=0, attn_tp_size=1), capacity_reconciler_scope(reconciler):
+        adder = ElasticPrefillAdder(1, cache, allocator, scheduler.running_batch, 1.0, 15, 15)
+        # Alignment leaves room for a complete peer Prefill beside the first chunk.
+        assert adder.add_one_req(chunk, False, 8) is AddReqResult.CONTINUE
+        adder.add_one_req(peer, True, 8)
+        assert adder.can_run_list == [chunk, peer]
+        assert adder.new_chunked_req is chunk
+        prepare_selected(adder.can_run_list)
+        peer.output_ids.append(1000)
+        scheduler.running_batch = ScheduleBatch(reqs=[peer])
+        scheduler.chunked_req = chunk
+        reconciler.accept_command(xpool.native.kv.KvCapacityCommand(sequence=2, target_bundles=4))
+
+        while allocator.available_size() > 0:
+            reconciler.begin_scheduling(cast(Scheduler, scheduler))
+            assert allocator.token_capacity == 40
+            chunk.init_next_round_input()
+            adder = ElasticPrefillAdder(1, cache, allocator, scheduler.running_batch, 1.0, 15, 15)
+            scheduler.chunked_req = adder.add_chunked_req(chunk)
+            assert scheduler.chunked_req is chunk
+            assert chunk.extend_range is not None
+            assert 0 < chunk.extend_range.length <= allocator.available_size()
+            prepare_selected(adder.can_run_list)
+
+        chunk.init_next_round_input()
+        original_extent = chunk.extend_range
+        adder = ElasticPrefillAdder(1, cache, allocator, scheduler.running_batch, 1.0, 15, 15)
+        assert adder.add_chunked_req(chunk) is chunk
+        assert adder.can_run_list == []
+        assert chunk.extend_range == original_extent
+        assert adder.add_one_req(peer, True, 8) is AddReqResult.OTHER
+        reconciler.finish_scheduling(cast(Scheduler, scheduler))
+        demand = channel.demands[-1]
+        assert (demand.evaluated_sequence, demand.requested_bundles, demand.deadline_monotonic_ns) == (
+            1,
+            17,
+            11_000_000_000,
+        )
+        assert reconciler.applied_sequence == reconciler.completed_sequence == 1
+        assert backing.backed_bundles == 10
+
+        retract_all(
+            reqs=[peer],
+            req_to_token_pool=request_pool,
+            token_to_kv_pool_allocator=allocator,
+            tree_cache=cache,
+            hisparse_coordinator=None,
+            offload_kv=False,
+        )
+        assert not peer.kv.holds_kv
+        scheduler.running_batch = ScheduleBatch(reqs=[])
+        scheduler.waiting_queue = [peer]
+        chunk.init_next_round_input()
+        adder = ElasticPrefillAdder(1, cache, allocator, scheduler.running_batch, 1.0, 15, 15)
+        scheduler.chunked_req = adder.add_chunked_req(chunk)
+        assert scheduler.chunked_req is None
+        prepare_selected(adder.can_run_list)
+        assert len(chunk.prefix_indices) == len(chunk.origin_input_ids)
+        reconciler.finish_scheduling(cast(Scheduler, scheduler))
+        assert channel.demands[-1].requested_bundles is None
+
+        reconciler.begin_scheduling(cast(Scheduler, scheduler))
+        assert reconciler.active_bundles == 10
+        assert allocator.token_capacity == 40
+        release_kv_cache(chunk, cache, is_insert=False)
+        reconciler.begin_scheduling(cast(Scheduler, scheduler))
+        assert allocator.token_capacity == 16
+        assert allocator.suffix_is_free(16)
+        assert not reconciler.draining
+        assert reconciler.applied_sequence == 2
+        assert reconciler.completed_sequence == 1
+        assert backing.backed_bundles == 10
+        assert channel.completions == []
+        event.ready = True
+        reconciler.begin_scheduling(cast(Scheduler, scheduler))
+
+    assert backing.backed_bundles == 4
+    assert reconciler.completed_sequence == 2
+    assert [(item.sequence, item.backed_bundles) for item in channel.completions] == [(2, 4)]
 
 
 def run_tp2_readiness_vote(rank: int, rendezvous_uri: str) -> None:
@@ -236,76 +431,89 @@ def test_growth_maps_before_exposing_capacity_and_completes_at_the_boundary() ->
     assert reconciler.applied_sequence == reconciler.completed_sequence == 2
 
 
-def test_accepted_reclaim_defers_unmap_and_completion_until_cuda_retires(
+def test_common_reclaim_admits_on_both_ranks_while_local_events_retire_independently(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     command = xpool.native.kv.KvCapacityCommand(sequence=2, target_bundles=1)
-    channel = FakeControlChannel(command)
-    backing = FakeBacking(8)
-    capacities: list[int] = []
-    allocator = SimpleNamespace(
-        set_token_capacity=capacities.append,
-        suffix_is_free=lambda token_capacity: True,
-    )
-    evictions: list[tuple[int, ...]] = []
-    monkeypatch.setattr(
-        xpool.integrations.sglang.kv.capacity,
-        "select_suffix_reclaim_nodes",
-        lambda tree_cache, selected_allocator, token_capacity: (3, 2),
-    )
-    monkeypatch.setattr(
-        xpool.integrations.sglang.kv.capacity,
-        "evict_suffix_reclaim_nodes",
-        lambda tree_cache, nodes: evictions.append(nodes),
-    )
 
     class Event:
         ready = False
+        stream: object = None
 
         def record(self, stream: object) -> None:
-            assert stream == "execution"
+            self.stream = stream
 
         def query(self) -> bool:
             return self.ready
 
-    event = Event()
-    monkeypatch.setattr(torch.cuda, "Event", lambda: event)
-    running_batch = SimpleNamespace(batch_is_full=True)
-    reconciler = make_reconciler(
-        channel,
-        backing,
-        allocator,
-        SimpleNamespace(reset_aux_cache_allocator=lambda: None),
-        command=command,
-        active_bundles=8,
-        applied_sequence=1,
-        completed_sequence=1,
-    )
-    scheduler = cast(
-        Scheduler,
-        SimpleNamespace(
-            chunked_req=None,
-            tree_cache=object(),
-            running_batch=running_batch,
-            enable_overlap=False,
-            schedule_stream="execution",
-            forward_stream="overlap",
-        ),
-    )
-
-    with get_parallel().override(attn_tp_rank=0, attn_tp_size=1):
-        reconciler.begin_scheduling(scheduler)
+    events = [Event(), Event()]
+    event_factory = iter(events)
+    monkeypatch.setattr(torch.cuda, "Event", lambda: next(event_factory))
+    ranks: list[tuple[CapacityReconciler, Scheduler, FakeControlChannel, FakeBacking]] = []
+    for rank in range(2):
+        channel = FakeControlChannel(command)
+        backing = FakeBacking(8)
+        cache, allocator, request_pool = create_prefill_cache()
+        allocator.set_token_capacity(32)
+        reconciler = make_reconciler(
+            channel,
+            backing,
+            allocator,
+            request_pool,
+            command=command,
+            active_bundles=8,
+            applied_sequence=1,
+            completed_sequence=1,
+        )
+        scheduler = cast(
+            Scheduler,
+            SimpleNamespace(
+                chunked_req=None,
+                tree_cache=cache,
+                running_batch=ScheduleBatch(reqs=[], batch_is_full=True),
+                enable_overlap=rank == 1,
+                schedule_stream="schedule",
+                forward_stream="forward",
+            ),
+        )
+        # The real TP vote has separate coverage; start at its common all-ready commit.
+        reconciler.apply_command(scheduler, ())
+        ranks.append((reconciler, scheduler, channel, backing))
+        assert allocator.token_capacity == 4
+        assert not reconciler.draining
+        assert not scheduler.running_batch.batch_is_full
+        assert reconciler.applied_sequence == 2
+        assert reconciler.completed_sequence == 1
+        assert backing.backed_bundles == 8
         assert channel.completions == []
-        assert backing.resize_calls == []
-        event.ready = True
-        reconciler.begin_scheduling(scheduler)
 
-    assert capacities == [4]
-    assert evictions == [(3, 2)]
-    assert backing.resize_calls == [1]
+    assert [event.stream for event in events] == ["schedule", "forward"]
+    events[0].ready = True
+    for rank, (reconciler, scheduler, channel, backing) in enumerate(ranks):
+        reconciler.begin_scheduling(scheduler)
+        assert backing.backed_bundles == (1 if rank == 0 else 8)
+        assert reconciler.completed_sequence == (2 if rank == 0 else 1)
+        request = Req("new-prefill", "", array("q", [1]), SamplingParams(max_new_tokens=1))
+        request.init_next_round_input(scheduler.tree_cache)
+        request.time_stats.scheduler_recv_time = 10.0
+        adder = ElasticPrefillAdder(1, scheduler.tree_cache, reconciler.allocator, scheduler.running_batch, 1.0, 15, 15)
+        with get_parallel().override(attn_tp_rank=rank), capacity_reconciler_scope(reconciler):
+            result = around_prefill_add_one_req(PrefillAdder.add_one_req, adder, request, False, None)
+        assert result is AddReqResult.CONTINUE
+        assert adder.can_run_list == [request]
+        assert request.extend_range is not None
+        slots = alloc_token_slots(scheduler.tree_cache, request.extend_range.length)
+        assert len(slots) == 1
+        assert all(1 <= slot <= 4 for slot in slots.tolist())
+        assert reconciler.allocator.available_size() == 3
+        if rank == 1:
+            assert channel.completions == []
+
+    events[1].ready = True
+    reconciler, scheduler, channel, backing = ranks[1]
+    reconciler.begin_scheduling(scheduler)
+    assert backing.backed_bundles == 1
     assert [(item.sequence, item.backed_bundles) for item in channel.completions] == [(2, 1)]
-    assert reconciler.applied_sequence == reconciler.completed_sequence == 2
-    assert not running_batch.batch_is_full
 
 
 class TimedRequest(SimpleNamespace):
@@ -339,12 +547,13 @@ def test_prefill_demand_uses_scheduler_receipt_deadline_until_the_request_leaves
 
     with get_parallel().override(attn_tp_rank=0, attn_tp_size=1):
         reconciler.record_prefill_requirement(request, 13)
-        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request])))
-        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request])))
+        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request], chunked_req=None)))
+        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[], chunked_req=request)))
         reconciler.applied_sequence = 2
         reconciler.record_prefill_requirement(request, 9)
-        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request])))
-        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[])))
+        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[], chunked_req=request)))
+        reconciler.record_prefill_requirement(request, None)
+        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[], chunked_req=request)))
 
     assert [
         (demand.evaluated_sequence, demand.requested_bundles, demand.deadline_monotonic_ns)
@@ -392,7 +601,7 @@ def test_decode_batch_keeps_its_target_with_earliest_request_deadline() -> None:
 
     with get_parallel().override(attn_tp_rank=0, attn_tp_size=1):
         reconciler.record_decode_requirement(requests, 17)
-        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=list(requests))))
+        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=list(requests), chunked_req=None)))
 
     demand = channel.demands[-1]
     assert (demand.evaluated_sequence, demand.requested_bundles, demand.deadline_monotonic_ns) == (

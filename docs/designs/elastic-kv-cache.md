@@ -68,6 +68,16 @@ SGLang's Unified Radix Cache remains the source of prefix-cache ownership and
 eviction order. CrossPool only queries reclaimable IDs inside the active prefix
 and asks SGLang to evict through its existing cache operation.
 
+Chunked Prefill continuation is bounded by allocatable slots in the active
+prefix, including reclaimable active cache and unused slots in its existing
+partial page. Forecast output is not free physical capacity. When no slot fits,
+the scheduler retains the same chunk owner and parks new Prefill for that
+iteration; ordinary Decode and retraction can still progress. Later iterations
+reevaluate the retained chunk against the current allocator.
+For page size `P`, allocated prefix length `K`, and nonnegative available slots
+`F` after current-batch charges, the continuation fits at most
+`(-K) % P + floor(F / P) * P` tokens.
+
 ## KV Control Channel
 
 One daemon-owned POSIX shared-memory channel belongs to one Fabric Generation.
@@ -99,10 +109,12 @@ prefix becomes visible only after every TP rank is ready. For reclaim, each
 partition selects currently reclaimable SGLang cache suffix nodes at its
 pre-planning boundary. If any partition is not ready, all keep the old logical
 capacity and continue ordinary scheduling; the next iteration may retry with
-a fresh selection. New Prefill waits during reclaim, while already admitted
+a fresh selection. New Prefill waits until logical reclaim commit, while admitted
 chunked Prefill and running Decode can progress. Reclaim waits for admitted
-work to finish; admitted requests are never killed. A live suffix remains
-outside the command target.
+chunks to finish allocating their remaining input and for the exact suffix to
+become reclaimable; admitted requests are never killed. A live suffix remains
+outside the command target. Clearing the chunk owner proves completed input
+allocation, not completed device execution or HTTP response.
 
 An all-ready vote makes every rank switch before its next batch planning.
 Reclaim then evicts the selected cache nodes and waits for prior device users
@@ -120,9 +132,15 @@ Prefill deadlines start at SGLang scheduler receipt plus the effective model
 `ttft_ms`; Decode deadlines start at the last token completion, or Prefill
 completion before the first Decode token, plus `tbt_ms`. These scheduler-local
 timestamps do not include API handling, tokenization, or request IPC. A group
-publishes its earliest-deadline unresolved witness with the completed capacity
-operation under which it was evaluated. No requested value means demand
-resolved. Re-reading leaves demand unchanged, and applying capacity leaves the
+publishes its earliest-deadline unresolved witness with the logically applied
+capacity operation under which it was evaluated. A Prefill witness covers the
+full remaining uncached input, clipped remaining output, and page and
+shared-state costs, rather than only the next chunk. Waiting requests and a
+parked chunk remain eligible; reevaluation clears stale demand without renewing
+its original deadline. A witness expresses demand rather than a hard reservation.
+The daemon accepts it only against the matching completed operation and excludes
+groups with an outstanding adjustment. No requested value means demand resolved.
+Re-reading leaves demand unchanged, and applying capacity leaves the
 demand record intact until scheduling evaluates the new capacity and publishes
 feedback for that operation.
 
@@ -162,9 +180,10 @@ unready vote retains the old logical capacity while ordinary scheduling
 continues.
 Authoritative Prefill or Decode admission failures update the leader's demand.
 During reclaim, new Prefill waits while already admitted work can finish; when
-drain completes, waiting requests are made eligible for ordinary scheduling
-again. A demand remains eligible only while its exact blocked request set and
-evaluated operation sequence remain current.
+all TP ranks commit the smaller logical prefix, waiting requests become eligible
+for ordinary scheduling within it. This common admission boundary is independent
+of each rank's physical retirement Event. A demand remains eligible only while
+its exact blocked request set and evaluated operation sequence remain current.
 
 One daemon task owns policy state. It tries overdue borrowers first, rotating
 by oldest completed service-time growth grant and breaking ties by deadline
@@ -199,8 +218,9 @@ Service-time unmap is asynchronous with device execution. Logical suffix
 withdrawal and SGLang cache eviction happen first. The Instance records one CUDA
 Event on the scheduler's actual execution stream and unmaps only after that
 event completes. No newer command is accepted while an operation or retirement
-event is unfinished. All allocator, prefix-cache, reconciler, and VMM mutations
-occur on the SGLang scheduler thread.
+event is unfinished. Applied sequence advances at the common logical switch;
+completed sequence advances after local physical work. All allocator,
+prefix-cache, reconciler, and VMM mutations occur on the SGLang scheduler thread.
 
 Shutdown first stops KV users and synchronizes the device. The Instance closes
 its channel attachment, drops pool views, unmaps its backed prefix, and releases

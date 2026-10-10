@@ -351,7 +351,7 @@ def test_authoritative_admission_failures_publish_quantified_demand(monkeypatch:
             False,
             None,
         )
-        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request])))
+        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request], chunked_req=None)))
         assert [
             (demand.evaluated_sequence, demand.requested_bundles, demand.deadline_monotonic_ns) for demand in published
         ] == [(1, 4, 11_000_000_000)]
@@ -364,10 +364,10 @@ def test_authoritative_admission_failures_publish_quantified_demand(monkeypatch:
             ),
         )
         after_check_decode_mem(False, batch, selected_indices=[0])
-        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request])))
+        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request], chunked_req=None)))
         assert len(published) == 1
         after_check_decode_mem(False, batch)
-        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request])))
+        reconciler.finish_scheduling(cast(Scheduler, SimpleNamespace(waiting_queue=[request], chunked_req=None)))
 
     assert result is AddReqResult.NO_TOKEN
     assert [

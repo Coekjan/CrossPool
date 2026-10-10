@@ -166,8 +166,8 @@ A distinct group capacity adjustment with a fixed target. The daemon authorizes
 the target; the group coordinates safe application and reports its outcome.
 
 **KV Capacity Demand**:
-The Capacity Group leader's persistent latest-state report of the completed
-capacity operation evaluated by scheduling and the absolute bundle capacity
+The Capacity Group leader's persistent latest-state report of the logical
+capacity evaluated by scheduling and the absolute bundle capacity
 required by one unresolved authoritative admission-failure witness, paired with
 that witness's scheduler-local SLO deadline. It is state, not a consumed pressure
 event.

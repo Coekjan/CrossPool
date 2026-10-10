@@ -94,10 +94,10 @@ class CapacityReconciler:
 
     @property
     def draining(self) -> bool:
-        """Return whether an immutable shrink is waiting to finish."""
+        """Return whether an immutable shrink is waiting for logical commit."""
 
         command = self.command
-        return self.pending_retirement_event is not None or (
+        return (
             command is not None
             and command.sequence > self.applied_sequence
             and command.target_bundles < self.active_bundles
@@ -152,11 +152,7 @@ class CapacityReconciler:
         target_tokens = self.backing.usable_tokens(command.target_bundles)
         self.allocator.set_token_capacity(target_tokens)
         self.request_pool.reset_aux_cache_allocator()
-        if (
-            scheduler is not None
-            and scheduler.running_batch is not None
-            and command.target_bundles > self.active_bundles
-        ):
+        if scheduler is not None and scheduler.running_batch is not None:
             scheduler.running_batch.batch_is_full = False
         self.active_bundles = command.target_bundles
         self.applied_sequence = command.sequence
@@ -199,10 +195,7 @@ class CapacityReconciler:
     def begin_scheduling(self, scheduler: Scheduler | None) -> None:
         """Reconcile at most one fixed operation before ordinary batch planning."""
 
-        was_draining = self.draining
         self.finish_retirement()
-        if was_draining and not self.draining and scheduler is not None and scheduler.running_batch is not None:
-            scheduler.running_batch.batch_is_full = False
         if self.pending_retirement_event is not None:
             return
         command = self.command
@@ -216,11 +209,13 @@ class CapacityReconciler:
         else:
             if scheduler is None:
                 raise RuntimeError("kv capacity startup cannot reclaim backing")
-            selected = select_suffix_reclaim_nodes(
-                scheduler.tree_cache,
-                self.allocator,
-                self.backing.usable_tokens(command.target_bundles),
-            )
+            selected = None
+            if scheduler.chunked_req is None:
+                selected = select_suffix_reclaim_nodes(
+                    scheduler.tree_cache,
+                    self.allocator,
+                    self.backing.usable_tokens(command.target_bundles),
+                )
             ready = selected is not None
             nodes = selected or ()
         if self.vote_ready(ready):
@@ -233,11 +228,14 @@ class CapacityReconciler:
             raise RuntimeError("kv capacity demand has no valid scheduler timing origin")
         return int((origin + target_ms / 1000) * 1_000_000_000)
 
-    def record_prefill_requirement(self, request: Req, required_token_capacity: int) -> None:
-        """Retain one blocked Prefill request and its TTFT deadline."""
+    def record_prefill_requirement(self, request: Req, required_token_capacity: int | None) -> None:
+        """Retain one blocked Prefill witness, or clear it before reevaluation."""
 
         if get_parallel().attn_tp_rank == 0:
             requests = (request,)
+            if required_token_capacity is None:
+                self.unresolved_demands.pop(requests, None)
+                return
             self.unresolved_demands[requests] = DemandWitness(
                 evaluated_sequence=self.applied_sequence,
                 requested_bundles=self.backing.required_bundles(required_token_capacity),
@@ -269,6 +267,8 @@ class CapacityReconciler:
         if get_parallel().attn_tp_rank != 0 or self.applied_sequence == 0:
             return
         waiting = set(scheduler.waiting_queue)
+        if scheduler.chunked_req is not None:
+            waiting.add(scheduler.chunked_req)
         self.unresolved_demands = {
             requests: witness
             for requests, witness in self.unresolved_demands.items()

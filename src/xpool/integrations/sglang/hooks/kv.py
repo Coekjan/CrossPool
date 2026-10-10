@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from inspect import signature
+from typing import cast
 
 import torch
 from sglang.srt.beam_search.batch_tail import beam_retraction_order
@@ -123,6 +124,44 @@ class ElasticPrefillAdder(PrefillAdder):
             - self.cur_rem_token_offset
         )
 
+    def add_chunked_req(self, req: Req) -> Req | None:
+        """Continue within allocatable backing, retaining ownership when no slot fits.
+
+        SGLang calls this with a concrete chunk budget for an existing chunk.
+        """
+
+        reconciler = current_capacity_reconciler()
+        reconciler.record_prefill_requirement(req, None)
+        free_tokens = max(self.cur_rem_tokens, 0)
+        allocatable = (-len(req.prefix_indices)) % self.page_size + free_tokens // self.page_size * self.page_size
+        self.rem_chunk_tokens = min(cast(int, self.rem_chunk_tokens), allocatable)
+        if self.rem_chunk_tokens <= 0:
+            self.prefill_max_requests = 0
+            self.record_rejection(req, self.rem_total_tokens)
+            return req
+        return super().add_chunked_req(req)
+
+    def record_rejection(self, req: Req, remaining_tokens: float) -> None:
+        """Record absolute Prefill demand with its original scheduler-receipt deadline."""
+
+        # SGLang normalizes sampling limits before scheduler admission.
+        max_new_tokens = min(
+            max(cast(int, req.sampling_params.max_new_tokens) - len(req.output_ids), 0), CLIP_MAX_NEW_TOKENS
+        )
+        required_tokens = (
+            len(req.full_untruncated_fill_ids)
+            - len(req.prefix_indices)
+            + max_new_tokens
+            + self.page_size
+            + self._mamba_gap_budget_for_req(req)
+        )
+        shortfall = math.floor(required_tokens - remaining_tokens) + 1
+        if shortfall > 0:
+            current_capacity_reconciler().record_prefill_requirement(
+                req,
+                self.token_to_kv_pool_allocator.token_capacity + shortfall,
+            )
+
 
 def compute_kv_reservation_budget(
     configurator: KVCacheConfigurator,
@@ -228,23 +267,7 @@ def around_prefill_add_one_req(
         adder.track_remaining_tokens = False
     remaining = adder.minimum_remaining_tokens
     if result is AddReqResult.NO_TOKEN and req not in adder.can_run_list and remaining is not None:
-        max_new_tokens = min(
-            max(req.sampling_params.max_new_tokens - len(req.output_ids), 0),
-            CLIP_MAX_NEW_TOKENS,
-        )
-        required_tokens = (
-            len(req.full_untruncated_fill_ids)
-            - len(req.prefix_indices)
-            + max_new_tokens
-            + adder.page_size
-            + adder._mamba_gap_budget_for_req(req)
-        )
-        shortfall = math.floor(required_tokens - remaining) + 1
-        if shortfall > 0:
-            reconciler.record_prefill_requirement(
-                req,
-                adder.token_to_kv_pool_allocator.token_capacity + shortfall,
-            )
+        adder.record_rejection(req, remaining)
     return result
 
 
@@ -345,6 +368,7 @@ def validate_kv_seams() -> None:
         (SchedulerRequestReceiver._broadcast_reqs_across_ranks, ("self", "recv_reqs", "local_reqs")),
         (Scheduler.get_next_batch_to_run, ("self", "running_batch", "last_batch")),
         (PrefillAdder.add_one_req, ("self", "req", "has_chunked_req", "truncation_align_size")),
+        (PrefillAdder.add_chunked_req, ("self", "req")),
         (ScheduleBatch.check_decode_mem, ("self", "selected_indices")),
         (ScheduleBatch.retract_decode, ("self",)),
         (ScheduleBatch._get_decode_retraction_order, ("reqs",)),
