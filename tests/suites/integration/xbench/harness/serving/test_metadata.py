@@ -8,7 +8,8 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
 from xbench.harness.serving.execution import capture_owned_metadata
-from xbench.harness.serving.workload import PromptValue, load_local_metadata, validate_prompt
+from xbench.harness.serving.workload import PromptValue, validate_prompt
+from xpool.integrations.sglang.devkit.requests import LocalModelMetadata, SglangRequestLimits
 from xpool.model import ModelId
 
 
@@ -17,18 +18,36 @@ def test_offline_metadata_validates_actual_vocabulary_special_ids_and_text_limit
     tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
     PreTrainedTokenizerFast(tokenizer_object=tokenizer, unk_token="[UNK]", pad_token="[PAD]").save_pretrained(tmp_path)
     (tmp_path / "config.json").write_text(
-        json.dumps({"model_type": "gpt2", "vocab_size": 4, "n_positions": 4}), encoding="utf-8"
+        json.dumps({"model_type": "gpt2", "vocab_size": 4, "n_positions": 16}), encoding="utf-8"
     )
-    metadata, ids = load_local_metadata(tmp_path, prompts=(PromptValue(prompt_id="p", text="a b"),))
-    assert ids == (2, 3)
-    assert metadata.vocab_size == metadata.max_input_tokens == 4
+    metadata = LocalModelMetadata.from_checkpoint(tmp_path, text_prompts={"p": "a b"})
+    assert metadata.admissible_ids == (2, 3)
+    assert metadata.vocab_size == 4 and metadata.limits.context_length == 16
+    assert metadata.text_lengths == {"p": 2}
     validate_prompt(PromptValue(prompt_id="p", input_ids=(1, 2)), metadata)
     with pytest.raises(ValueError, match="vocabulary"):
         validate_prompt(PromptValue(prompt_id="p", input_ids=(4,)), metadata)
     with pytest.raises(ValueError, match="input limit"):
-        load_local_metadata(tmp_path, prompts=(PromptValue(prompt_id="p", text="a a a a a"),))
+        LocalModelMetadata.from_checkpoint(tmp_path, text_prompts={"p": " ".join(["a"] * 17)})
     with pytest.raises(ValueError, match="vocabulary"):
-        load_local_metadata(tmp_path, prompts=(PromptValue(prompt_id="p", text="outside"),))
+        LocalModelMetadata.from_checkpoint(tmp_path, text_prompts={"p": "outside"})
+
+
+def test_static_service_limits_enforce_input_reserves_and_paged_group_ceiling() -> None:
+    limits = SglangRequestLimits.from_server_info(
+        json.dumps({"max_req_input_len": 18, "max_total_num_tokens": 24, "page_size": 4, "dcp_size": 1}).encode(),
+        context_length=32,
+    )
+    limits.validate_request(9, 7)
+    # The next output token reaches the group ceiling after page rounding.
+    with pytest.raises(ValueError, match="static service limits"):
+        limits.validate_request(9, 8)
+    with pytest.raises(ValueError, match="static service limits"):
+        limits.validate_request(18, 1)
+    model_limits = SglangRequestLimits.from_context(32)
+    model_limits.validate_request(25, 5)
+    with pytest.raises(ValueError, match="static service limits"):
+        model_limits.validate_request(25, 6)
 
 
 def test_owned_hardware_capture_is_lease_scoped_and_failure_keeps_known_placement(

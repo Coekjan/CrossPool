@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import random
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Self, cast
+from statistics import NormalDist
+from typing import Annotated, Self, cast
 
 from pydantic import Field, FiniteFloat, TypeAdapter, model_validator
-from transformers import AutoConfig, AutoTokenizer
 
 from xbench.harness.serving.case import (
     BenchCase,
@@ -18,12 +19,17 @@ from xbench.harness.serving.case import (
     BenchValue,
     ClientTarget,
     JsonlPrompts,
+    LogNormalOutputTokens,
+    OutputTokenCount,
     OwnedBenchCase,
     PoissonArrivals,
     RandomPrompts,
     TokenCount,
+    TokenRange,
 )
+from xkit.case import CaseId
 from xpool.config import XpoolConfig
+from xpool.integrations.sglang.devkit.requests import LocalModelMetadata
 from xpool.model import ModelId
 
 
@@ -43,6 +49,12 @@ class PromptValue(BenchValue):
 
 class ResolvedPrompt(PromptValue):
     model_id: ModelId
+    text_tokens: int | None = Field(default=None, ge=0, description="Local serving-tokenizer length for text input.")
+
+    @property
+    def input_tokens(self) -> int | None:
+        """Exact prepared input length; unknown for un-tokenized client text."""
+        return len(self.input_ids) if self.input_ids is not None else self.text_tokens
 
 
 class ScheduledRequest(BenchValue):
@@ -55,11 +67,6 @@ class ScheduledRequest(BenchValue):
     max_new_tokens: int = Field(gt=0)
 
 
-class LocalMetadata(BenchValue):
-    vocab_size: int = Field(gt=0)
-    max_input_tokens: int | None = Field(gt=0)
-
-
 class PreparedWorkload(BenchValue):
     """Finite replay authority reused unchanged across case repetitions.
 
@@ -68,8 +75,9 @@ class PreparedWorkload(BenchValue):
     Configuration and local metadata belong to preparation, not replay content.
     """
 
-    case_id: str
+    case_id: CaseId
     model_ids: tuple[ModelId, ...]
+    model_contexts: dict[ModelId, Annotated[int, Field(gt=0, strict=True)]]
     prompts: tuple[ResolvedPrompt, ...]
     requests: tuple[ScheduledRequest, ...]
     warmup: tuple[ScheduledRequest, ...]
@@ -104,6 +112,8 @@ class PreparedWorkload(BenchValue):
 
     @model_validator(mode="after")
     def validate_replay(self) -> Self:
+        if set(self.model_contexts) - set(self.model_ids):
+            raise ValueError("prepared model context references an unknown target")
         prompt_keys = {(prompt.model_id, prompt.prompt_id) for prompt in self.prompts}
         ids = tuple(request.request_id for request in self.requests)
         if len(ids) != len(set(ids)) or len(prompt_keys) != len(self.prompts):
@@ -145,8 +155,39 @@ def read_jsonl[V: BenchValue](path: Path, value_type: type[V]) -> tuple[V, ...]:
     return tuple(values)
 
 
-def sample_tokens(count: TokenCount, rng: random.Random) -> int:
-    return count if isinstance(count, int) else rng.randint(count.min, count.max)
+def sample_tokens(
+    count: TokenCount,
+    rng: random.Random,
+    *,
+    minimum: int = 1,
+    maximum: int | None,
+) -> int:
+    """Condition generated counts on a legal interval; never rewrite fixed values."""
+    if isinstance(count, int):
+        if count < minimum or (maximum is not None and count > maximum):
+            raise ValueError(f"token count {count} is outside the legal request interval [{minimum}, {maximum}]")
+        return count
+    if isinstance(count, TokenRange):
+        lower = max(count.min, minimum)
+        upper = count.max if maximum is None else min(count.max, maximum)
+        if upper < lower:
+            raise ValueError(f"token range [{count.min}, {count.max}] has no legal request interval")
+        return lower if lower == upper else rng.randint(lower, upper)
+    if maximum is None:
+        raise ValueError("lognormal token sampling requires a finite legal upper bound")
+    if maximum < minimum:
+        raise ValueError("lognormal token policy has no legal request interval")
+    if maximum == minimum:
+        return minimum
+    median = minimum + (maximum - minimum) * count.median_fraction
+    normal = NormalDist(mu=math.log(median), sigma=count.sigma)
+    lower = normal.cdf(math.log(minimum - 0.5))
+    upper = normal.cdf(math.log(maximum + 0.5))
+    if upper <= lower:
+        raise ValueError("lognormal token policy has no representable probability in its legal interval")
+    # Keep inverse-CDF probabilities open despite floating-point rounding.
+    probability = max(math.nextafter(0.0, 1.0), min(math.nextafter(upper, lower), rng.uniform(lower, upper)))
+    return math.floor(math.exp(normal.inv_cdf(probability)) + 0.5)
 
 
 def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> PreparedWorkload:
@@ -168,50 +209,7 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
         seeds[key] = seed
         return random.Random(seed)
 
-    if isinstance(case.arrivals, PoissonArrivals):
-        arrivals = case.arrivals
-        requests: list[ScheduledRequest] = []
-        for target in case.targets:
-            rate = arrivals.rates[target.model_id]
-            arrival_rng = rng(target.model_id, "arrivals")
-            output_rng = rng(target.model_id, "output")
-            if rate == 0:
-                continue
-            arrival = arrival_rng.expovariate(rate)
-            sequence = 0
-            while arrival < arrivals.duration_seconds:
-                request_id = f"{target.model_id}-{sequence:08d}"
-                requests.append(
-                    ScheduledRequest(
-                        request_id=request_id,
-                        model_id=target.model_id,
-                        arrival_seconds=arrival,
-                        prompt_id=request_id,
-                        # Case validation requires a policy for every Poisson target.
-                        max_new_tokens=sample_tokens(cast(TokenCount, target.output_tokens), output_rng),
-                    )
-                )
-                sequence += 1
-                arrival += arrival_rng.expovariate(rate)
-        # Python's stable sort preserves target declaration/local sequence for ties.
-        requests.sort(key=lambda request: request.arrival_seconds)
-        horizon = arrivals.duration_seconds
-    else:
-        requests = list(read_jsonl(case.arrivals.path, ScheduledRequest))
-        ids = [request.request_id for request in requests]
-        if len(ids) != len(set(ids)):
-            raise ValueError("trace request IDs must be unique")
-        targets = {target.model_id for target in case.targets}
-        if any(request.model_id not in targets for request in requests):
-            raise ValueError("trace contains an unknown target ID")
-        requests.sort(key=lambda request: request.arrival_seconds)
-        last = requests[-1].arrival_seconds if requests else 0.0
-        horizon = last if case.arrivals.duration_seconds is None else case.arrivals.duration_seconds
-        if horizon < last:
-            raise ValueError("trace arrival horizon must cover every request")
-
-    metadata: dict[ModelId, LocalMetadata] = {}
-    admissible: dict[ModelId, tuple[int, ...]] = {}
+    metadata: dict[ModelId, LocalModelMetadata] = {}
     sources: dict[ModelId, tuple[PromptValue, ...]] = {}
     prompt_index: dict[ModelId, dict[str, PromptValue]] = {}
     for target in case.targets:
@@ -232,25 +230,45 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
             else None
         )
         if metadata_path is not None:
-            metadata[target.model_id], admissible[target.model_id] = load_local_metadata(
-                metadata_path, prompts=sources.get(target.model_id, ())
+            metadata[target.model_id] = LocalModelMetadata.from_checkpoint(
+                metadata_path,
+                text_prompts={
+                    prompt.prompt_id: prompt.text
+                    for prompt in sources.get(target.model_id, ())
+                    if prompt.text is not None
+                },
             )
-        if isinstance(target.prompts, RandomPrompts) and not admissible.get(target.model_id):
+        if isinstance(target.prompts, RandomPrompts) and not metadata[target.model_id].admissible_ids:
             raise ValueError(f"{target.model_id}: random prompts require nonempty admissible local tokenizer IDs")
         for value in sources.get(target.model_id, ()):
             validate_prompt(value, metadata.get(target.model_id))
 
     resolved: dict[tuple[ModelId, str], ResolvedPrompt] = {}
 
-    def prompt(target: BenchTarget, id: str, *, warmup: bool = False) -> ResolvedPrompt:
+    def prompt(
+        target: BenchTarget,
+        id: str,
+        *,
+        output_tokens: int,
+        minimum_input: int = 1,
+        warmup: bool = False,
+    ) -> ResolvedPrompt:
         key = (target.model_id, id)
         if key in resolved:
             return resolved[key]
+        local = metadata.get(target.model_id)
         if isinstance(target.prompts, RandomPrompts):
+            # Random targets have local metadata by declaration and acquisition.
+            local = metadata[target.model_id]
             content_rng = rng(target.model_id, f"{'warmup' if warmup else 'content'}:{id}")
-            length = sample_tokens(target.prompts.input_tokens, content_rng)
+            length = sample_tokens(
+                target.prompts.input_tokens,
+                content_rng,
+                minimum=minimum_input,
+                maximum=local.limits.input_budget(output_tokens),
+            )
             value = PromptValue(
-                prompt_id=id, input_ids=tuple(content_rng.choice(admissible[target.model_id]) for _ in range(length))
+                prompt_id=id, input_ids=tuple(content_rng.choice(local.admissible_ids) for _ in range(length))
             )
             validate_prompt(value, metadata.get(target.model_id))
         else:
@@ -258,25 +276,117 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
             if id not in by_id:
                 raise ValueError(f"{target.model_id}: unresolved prompt reference {id!r}")
             value = by_id[id]
-        result = ResolvedPrompt(model_id=target.model_id, **value.model_dump())
+        result = ResolvedPrompt(
+            model_id=target.model_id,
+            text_tokens=local.text_lengths[id] if local is not None and value.text is not None else None,
+            **value.model_dump(),
+        )
         resolved[key] = result
         return result
 
     by_target = {target.model_id: target for target in case.targets}
     selection_rngs = {target.model_id: rng(target.model_id, "selection") for target in case.targets}
-    for index, request in enumerate(requests):
-        target = by_target[request.model_id]
-        if isinstance(case.arrivals, PoissonArrivals) and isinstance(target.prompts, JsonlPrompts):
-            id = selection_rngs[target.model_id].choice(sources[target.model_id]).prompt_id
-            request = request.model_copy(update={"prompt_id": id})
-            requests[index] = request
-        prompt(target, request.prompt_id)
+    output_rngs = {target.model_id: rng(target.model_id, "output") for target in case.targets}
+
+    def request_budget(
+        target: BenchTarget,
+        prompt_id: str,
+        policy: OutputTokenCount,
+        output_rng: random.Random,
+        *,
+        warmup: bool = False,
+        shared_output_bound: int = 0,
+    ) -> int:
+        local = metadata.get(target.model_id)
+        limits = local.limits if local is not None else None
+        ratio = policy.max_output_input_ratio if isinstance(policy, LogNormalOutputTokens) else None
+        if isinstance(target.prompts, RandomPrompts):
+            minimum_output = policy if isinstance(policy, int) else policy.min if isinstance(policy, TokenRange) else 1
+            value = prompt(
+                target,
+                prompt_id,
+                output_tokens=max(minimum_output, shared_output_bound),
+                minimum_input=max(1, math.ceil(minimum_output / ratio)) if ratio is not None else 1,
+                warmup=warmup,
+            )
+        else:
+            value = prompt(target, prompt_id, output_tokens=0, warmup=warmup)
+        maximum = None
+        if limits is not None and value.input_tokens is not None:
+            maximum = limits.output_budget(value.input_tokens)
+            if ratio is not None:
+                maximum = math.floor(min(maximum, ratio * value.input_tokens))
+        output = sample_tokens(policy, output_rng, maximum=maximum)
+        if limits is not None and value.input_tokens is not None:
+            limits.validate_request(value.input_tokens, output)
+        return output
+
+    requests: list[ScheduledRequest] = []
+    if isinstance(case.arrivals, PoissonArrivals):
+        arrivals: list[tuple[float, ModelId, str]] = []
+        for target in case.targets:
+            rate = case.arrivals.rates[target.model_id]
+            arrival_rng = rng(target.model_id, "arrivals")
+            if rate == 0:
+                continue
+            arrival = arrival_rng.expovariate(rate)
+            sequence = 0
+            while arrival < case.arrivals.duration_seconds:
+                arrivals.append((arrival, target.model_id, f"{target.model_id}-{sequence:08d}"))
+                sequence += 1
+                arrival += arrival_rng.expovariate(rate)
+        # Stable sort preserves target declaration/local sequence for arrival ties.
+        arrivals.sort(key=lambda value: value[0])
+        for arrival, model_id, request_id in arrivals:
+            target = by_target[model_id]
+            prompt_id = (
+                selection_rngs[model_id].choice(sources[model_id]).prompt_id
+                if isinstance(target.prompts, JsonlPrompts)
+                else request_id
+            )
+            requests.append(
+                ScheduledRequest(
+                    request_id=request_id,
+                    model_id=model_id,
+                    arrival_seconds=arrival,
+                    prompt_id=prompt_id,
+                    # Case validation requires a policy for every Poisson target.
+                    max_new_tokens=request_budget(
+                        target, prompt_id, cast(OutputTokenCount, target.output_tokens), output_rngs[model_id]
+                    ),
+                )
+            )
+        horizon = case.arrivals.duration_seconds
+    else:
+        requests = list(read_jsonl(case.arrivals.path, ScheduledRequest))
+        ids = [request.request_id for request in requests]
+        if len(ids) != len(set(ids)):
+            raise ValueError("trace request IDs must be unique")
+        if any(request.model_id not in by_target for request in requests):
+            raise ValueError("trace contains an unknown target ID")
+        requests.sort(key=lambda request: request.arrival_seconds)
+        last = requests[-1].arrival_seconds if requests else 0.0
+        horizon = last if case.arrivals.duration_seconds is None else case.arrivals.duration_seconds
+        if horizon < last:
+            raise ValueError("trace arrival horizon must cover every request")
+        shared_output_bounds: dict[tuple[ModelId, str], int] = {}
+        for request in requests:
+            key = (request.model_id, request.prompt_id)
+            shared_output_bounds[key] = max(shared_output_bounds.get(key, 0), request.max_new_tokens)
+        for request in requests:
+            request_budget(
+                by_target[request.model_id],
+                request.prompt_id,
+                request.max_new_tokens,
+                output_rngs[request.model_id],
+                shared_output_bound=shared_output_bounds[request.model_id, request.prompt_id],
+            )
 
     warmup_requests: list[ScheduledRequest] = []
     for target in case.targets:
         warmup_rng = rng(target.model_id, "warmup")
         cap = (
-            cast(TokenCount, target.output_tokens)
+            cast(OutputTokenCount, target.output_tokens)
             if isinstance(case.arrivals, PoissonArrivals)
             else next((request.max_new_tokens for request in requests if request.model_id == target.model_id), 1)
         )
@@ -287,20 +397,20 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
                 if isinstance(target.prompts, JsonlPrompts)
                 else id
             )
-            prompt(target, prompt_id, warmup=True)
             warmup_requests.append(
                 ScheduledRequest(
                     request_id=id,
                     model_id=target.model_id,
                     arrival_seconds=0.0,
                     prompt_id=prompt_id,
-                    max_new_tokens=sample_tokens(cap, warmup_rng),
+                    max_new_tokens=request_budget(target, prompt_id, cap, warmup_rng, warmup=True),
                 )
             )
     prompts = tuple(resolved.values())
     return PreparedWorkload(
         case_id=case.id,
         model_ids=tuple(by_target),
+        model_contexts={model_id: local.limits.context_length for model_id, local in metadata.items()},
         prompts=prompts,
         requests=tuple(requests),
         warmup=tuple(warmup_requests),
@@ -313,41 +423,10 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
     )
 
 
-def load_local_metadata(path: Path, *, prompts: Sequence[PromptValue] = ()) -> tuple[LocalMetadata, tuple[int, ...]]:
-    # Metadata acquisition is offline and deliberately excludes SGLang model discovery.
-    config = AutoConfig.from_pretrained(str(path), local_files_only=True, trust_remote_code=True)
-    tokenizer = AutoTokenizer.from_pretrained(str(path), local_files_only=True, trust_remote_code=True)
-    if tokenizer is None:
-        raise ValueError(f"local metadata did not produce a tokenizer: {path}")
-    text_config = config.get_text_config()
-    vocab_size = getattr(text_config, "vocab_size", None)
-    if not isinstance(vocab_size, int) or isinstance(vocab_size, bool) or vocab_size <= 0:
-        raise ValueError(f"local model metadata has no positive vocab_size: {path}")
-    special = set(tokenizer.all_special_ids)
-    ids = tuple(sorted({id for id in tokenizer.get_vocab().values() if 0 <= id < vocab_size and id not in special}))
-    max_input = getattr(text_config, "max_position_embeddings", None)
-    if not isinstance(max_input, int) or isinstance(max_input, bool) or max_input <= 0:
-        max_input = None
-    for prompt in prompts:
-        if prompt.text is not None and max_input is not None:
-            tokens = tokenizer.encode(prompt.text)
-            if len(tokens) > max_input:
-                raise ValueError(f"prompt {prompt.prompt_id!r} exceeds the known model input limit")
-            if any(token < 0 or token >= vocab_size for token in tokens):
-                raise ValueError(f"prompt {prompt.prompt_id!r} contains IDs outside the local model vocabulary")
-    return (
-        LocalMetadata(
-            vocab_size=vocab_size,
-            max_input_tokens=max_input,
-        ),
-        ids,
-    )
-
-
-def validate_prompt(prompt: PromptValue, metadata: LocalMetadata | None) -> None:
+def validate_prompt(prompt: PromptValue, metadata: LocalModelMetadata | None) -> None:
     if metadata is None or prompt.input_ids is None:
         return
     if any(id >= metadata.vocab_size for id in prompt.input_ids):
         raise ValueError(f"prompt {prompt.prompt_id!r} contains IDs outside the local model vocabulary")
-    if metadata.max_input_tokens is not None and len(prompt.input_ids) > metadata.max_input_tokens:
+    if len(prompt.input_ids) >= metadata.limits.context_length:
         raise ValueError(f"prompt {prompt.prompt_id!r} exceeds the known model input limit")

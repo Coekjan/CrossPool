@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
+import re
 from bisect import bisect_right
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, cast
 
 from pydantic import Field, FiniteFloat, JsonValue
@@ -17,22 +19,35 @@ from xbench.harness.serving.case import (
     ResolvedDeployment,
     ServingMetadata,
 )
-from xbench.harness.serving.workload import PreparedWorkload, ScheduledRequest
+from xbench.harness.serving.workload import PreparedWorkload, ScheduledRequest, file_digest, read_jsonl
+from xkit.case import CaseId
+from xkit.config import ToolConfigRecord
+
+REPETITION_DIRECTORY_PATTERN = re.compile(r"repetition-([0-9]{4,})(?:\.attempt-([0-9]{4,}))?")
+
+
+def retained_file(directory: Path, reference: str) -> Path:
+    """Resolve a retained file within its owning directory, rejecting escapes."""
+    path = (directory / reference).resolve()
+    if not path.is_relative_to(directory.resolve()) or not path.is_file():
+        raise ValueError(f"benchmark artifact is missing or escapes its owner: {reference}")
+    return path
 
 
 class BenchRunManifest(BenchValue):
     """Invocation selection and runner-finalized outcome, independent of reports."""
 
     run_id: str
-    selected_cases: tuple[str, ...]
+    tool_config: ToolConfigRecord
+    selected_cases: tuple[CaseId, ...]
     case_directories: tuple[str, ...] = ()
     finished: bool = Field(default=False, description="All admitted case execution and finalization has ended.")
-    result_code: int | None = Field(default=None, description="Original invocation outcome; None until finalization.")
+    result_code: int | None = Field(default=None, description="Current invocation outcome; None until finalization.")
     infrastructure_error: str | None = None
 
 
 class BenchCaseManifest(BenchValue):
-    """Case-owned declaration, replay identities and deployment conditions."""
+    """Case declaration, replay identities, deployment and effective attempt references."""
 
     case: BenchCase
     prompt_sha256: str
@@ -42,9 +57,45 @@ class BenchCaseManifest(BenchValue):
     serving_metadata: ServingMetadata | None = None
     repetitions: tuple[str, ...]
 
+    def effective_attempts(self, directory: Path) -> dict[int, Path]:
+        """Resolve one physical attempt per logical repetition inside its case."""
+        attempts = {}
+        for reference in self.repetitions:
+            match = REPETITION_DIRECTORY_PATTERN.fullmatch(reference)
+            path = (directory / reference).resolve()
+            if (
+                match is None
+                or int(match[1]) < 1
+                or (match[2] is not None and int(match[2]) < 1)
+                or path.parent != directory.resolve()
+                or path.name != reference
+            ):
+                raise ValueError("benchmark repetition reference escapes its case or is not a physical attempt")
+            number = int(match[1])
+            if number in attempts:
+                raise ValueError("benchmark case declares multiple effective attempts for one repetition")
+            attempts[number] = path
+        return attempts
+
+    def load_workload(self, directory: Path) -> PreparedWorkload:
+        """Read the original replay and check its case-owned identities and timing."""
+        workload = PreparedWorkload.load(directory, case=self.case)
+        if (
+            workload.prompt_sha256 != self.prompt_sha256
+            or workload.trace_sha256 != self.trace_sha256
+            or workload.warmup_sha256 != self.warmup_sha256
+        ):
+            raise ValueError("retained replay content identities disagree")
+        if workload.bucket_seconds != self.case.bucket_seconds or (
+            self.case.arrivals.duration_seconds is not None
+            and workload.arrival_horizon_seconds != self.case.arrivals.duration_seconds
+        ):
+            raise ValueError("retained workload declarations disagree with the case")
+        return workload
+
 
 class RepetitionManifest(BenchValue):
-    """Worker timing facts, sealed by the runner only after domain drain."""
+    """One attempt's timing and outcome, sealed by the runner after domain drain."""
 
     repetition: int = Field(gt=0)
     window_end_seconds: FiniteFloat | None = Field(
@@ -64,12 +115,86 @@ class RepetitionManifest(BenchValue):
     artifact_sha256: dict[str, str] = Field(default_factory=dict)
     infrastructure_error: str | None = None
 
+    @property
+    def sealed(self) -> bool:
+        """Whether this attempt has its own final outcome and cleanup observation."""
+        return self.finished and self.result_code is not None and self.cleanup_verified is not None
+
+    @classmethod
+    def from_directory(cls, directory: Path) -> RepetitionManifest:
+        """Read an attempt checkpoint whose logical number matches its path."""
+        match = REPETITION_DIRECTORY_PATTERN.fullmatch(directory.name)
+        if match is None or (match[2] is not None and int(match[2]) < 1):
+            raise ValueError(f"invalid benchmark attempt directory: {directory.name}")
+        manifest = cls.model_validate_json(retained_file(directory, "repetition.json").read_bytes())
+        if manifest.repetition != int(match[1]):
+            raise ValueError("benchmark attempt number disagrees with its directory")
+        return manifest
+
 
 class MeasurementOrigin(BenchValue):
     """Common native-client T0; wall time identifies the run rather than latency."""
 
     monotonic_origin_seconds: FiniteFloat = Field(ge=0)
     wall_clock_origin_seconds: FiniteFloat = Field(ge=0)
+
+
+def load_measurement(directory: Path, workload: PreparedWorkload) -> tuple[RepetitionManifest, BenchSummary]:
+    """Validate saved attempt measurements independently of the parent run's seal.
+
+    Continuation can reuse a successful sealed attempt in an interrupted parent.
+    Reporting applies the parent publication boundary separately.
+    """
+    manifest = RepetitionManifest.from_directory(directory)
+    required = {"events.jsonl", "requests.jsonl"}
+    if (
+        manifest.window_end_seconds is not None
+        or "measurement.json" in manifest.artifact_sha256
+        or (directory / "measurement.json").is_file()
+    ):
+        required.add("measurement.json")
+    if not required <= manifest.artifact_sha256.keys():
+        raise ValueError("benchmark repetition lacks required evidence digests")
+    for reference in required:
+        artifact = retained_file(directory, reference)
+        if file_digest(artifact) != manifest.artifact_sha256[reference]:
+            raise ValueError(f"retained benchmark artifact digest mismatch: {reference}")
+    if "measurement.json" in required:
+        MeasurementOrigin.model_validate_json(retained_file(directory, "measurement.json").read_bytes())
+    requests = read_jsonl(directory / "requests.jsonl", RequestRecord)
+    events = read_jsonl(directory / "events.jsonl", StreamEvent)
+    if manifest.window_end_seconds is None and events:
+        raise ValueError("benchmark events require an available measurement window")
+    if (manifest.window_end_seconds is None) != (manifest.window_kind is None):
+        raise ValueError("measurement window end and kind must be available together")
+    summary = (
+        summarize(
+            workload,
+            requests,
+            events,
+            window_end_seconds=manifest.window_end_seconds,
+            window_kind=manifest.window_kind,
+        )
+        if manifest.window_end_seconds is not None and manifest.window_kind is not None
+        else unavailable_summary(workload, requests)
+    ).model_copy(
+        update={"cleanup_verified": manifest.cleanup_verified, "infrastructure_error": manifest.infrastructure_error}
+    )
+    if manifest.result_code == 0 and (
+        not summary.execution_complete
+        or not summary.measurement_available
+        or not summary.evidence_complete
+        or not summary.cleanup_verified
+        or manifest.raw_evidence_complete is False
+        or summary.infrastructure_error is not None
+        or any(summary.outcomes[kind] for kind in ("failed", "cancelled", "not_sent"))
+    ):
+        raise ValueError("successful benchmark checkpoint contradicts its completeness or outcomes")
+    if not manifest.sealed or manifest.raw_evidence_complete is not True:
+        summary = summary.model_copy(update={"evidence_complete": False})
+    if manifest.raw_evidence_complete is False:
+        summary = summary.model_copy(update={"execution_complete": False})
+    return manifest, summary
 
 
 class StreamEvent(BenchValue):
@@ -372,7 +497,7 @@ class BenchSummary(BenchValue):
     """Recomputed measurement populations with separate execution and evidence facts."""
 
     latency_units: Literal["seconds"] = "seconds"
-    case_id: str
+    case_id: CaseId
     execution_complete: bool
     measurement_available: bool
     cleanup_verified: bool | None = None

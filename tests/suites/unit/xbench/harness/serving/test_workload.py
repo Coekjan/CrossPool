@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import math
+import random
 from pathlib import Path
 
 import pytest
 from pydantic import TypeAdapter
 
-import xbench.harness.serving.workload
-from xbench.harness.serving.case import BenchCase, ClientBenchCase
-from xbench.harness.serving.workload import LocalMetadata, prepare_workload
+from xbench.harness.serving.case import BenchCase, ClientBenchCase, LogNormalTokens, TokenRange
+from xbench.harness.serving.workload import prepare_workload, sample_tokens
+from xpool.integrations.sglang.devkit.requests import LocalModelMetadata, SglangRequestLimits
 from xpool.model import ModelId
+from xtest.harness.support.config import TEST_CASE_ID
 
 
 @pytest.mark.parametrize("random_prompts", [False, True])
@@ -52,6 +55,54 @@ def test_prompt_changes_and_warmup_do_not_perturb_arrivals(tmp_path: Path, monke
     assert baseline.trace_sha256 == altered.trace_sha256
     assert baseline.prompt_sha256 != altered.prompt_sha256
     assert len(altered.warmup) == 8
+
+
+@pytest.mark.parametrize(("random_prompts", "ratio"), [(False, 2.0), (True, 2.0), (True, 0.25)])
+def test_interval_relative_lengths_obey_joint_bounds_and_keep_isolated_model_streams(
+    random_prompts: bool, ratio: float, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub_metadata(monkeypatch, tmp_path)
+    raw = workload_case(tmp_path, random_prompts=random_prompts, poisson_arrivals=True).model_dump(mode="json")
+    for target in raw["targets"]:
+        if random_prompts:
+            target["prompts"]["input_tokens"] = {"kind": "lognormal", "median_fraction": 0.125, "sigma": 1.0}
+        target["output_tokens"] = {
+            "kind": "lognormal",
+            "median_fraction": 0.03125,
+            "sigma": 1.0,
+            "max_output_input_ratio": ratio,
+        }
+    case = TypeAdapter(BenchCase).validate_json(json.dumps(raw))
+    workload = prepare_workload(case)
+    assert workload == prepare_workload(case)
+    assert workload.model_contexts == {target.model_id: 128 for target in case.targets}
+    prompts = {(prompt.model_id, prompt.prompt_id): prompt for prompt in workload.prompts}
+    for request in (*workload.requests, *workload.warmup):
+        length = prompts[request.model_id, request.prompt_id].input_tokens
+        assert length is not None and math.ceil(1 / ratio) <= length <= 121
+        assert 1 <= request.max_new_tokens <= min(math.floor(ratio * length), 126 - length)
+        if not random_prompts:
+            assert length == 3
+    remaining = case.targets[0].model_id
+    raw["targets"] = raw["targets"][:1]
+    raw["arrivals"]["rates"] = {str(remaining): raw["arrivals"]["rates"][str(remaining)]}
+    isolated = prepare_workload(TypeAdapter(BenchCase).validate_json(json.dumps(raw)))
+    assert isolated.requests == tuple(request for request in workload.requests if request.model_id == remaining)
+    assert isolated.prompts == tuple(prompt for prompt in workload.prompts if prompt.model_id == remaining)
+
+
+def test_token_sampling_conditions_intervals_without_rewriting_fixed_counts() -> None:
+    for policy in (TokenRange(min=2, max=20), LogNormalTokens(kind="lognormal", median_fraction=0.125, sigma=1.0)):
+        first, second = random.Random(0), random.Random(0)
+        values = [sample_tokens(policy, first, minimum=7, maximum=9) for _ in range(16)]
+        assert values == [sample_tokens(policy, second, minimum=7, maximum=9) for _ in range(16)]
+        assert all(7 <= value <= 9 for value in values)
+        assert sample_tokens(policy, first, minimum=9, maximum=9) == 9
+        with pytest.raises(ValueError, match="no legal request interval"):
+            sample_tokens(policy, first, minimum=10, maximum=9)
+    assert sample_tokens(9, random.Random(0), minimum=7, maximum=9) == 9
+    with pytest.raises(ValueError, match="outside the legal request interval"):
+        sample_tokens(6, random.Random(0), minimum=7, maximum=9)
 
 
 def test_declared_serving_metadata_validates_external_conditions(tmp_path: Path) -> None:
@@ -156,7 +207,7 @@ def test_prompt_metadata_rejects_unselected_file_values_and_generated_input_over
     else:
         with (tmp_path / "prompts.jsonl").open("a", encoding="utf-8") as output:
             output.write('{"prompt_id":"unselected","input_ids":[20]}\n')
-    with pytest.raises(ValueError, match=r"known model input limit|local model vocabulary"):
+    with pytest.raises(ValueError, match=r"legal request interval|local model vocabulary"):
         prepare_workload(TypeAdapter(BenchCase).validate_json(json.dumps(raw)))
 
 
@@ -197,7 +248,7 @@ def workload_case(tmp_path: Path, *, random_prompts: bool, poisson_arrivals: boo
     return TypeAdapter(BenchCase).validate_json(
         json.dumps(
             {
-                "id": "case",
+                "id": str(TEST_CASE_ID),
                 "description": "Replay deterministic per-model traffic from declared input sources.",
                 "module": "serving.multi_model",
                 "mode": "client",
@@ -221,7 +272,7 @@ def workload_case(tmp_path: Path, *, random_prompts: bool, poisson_arrivals: boo
 
 
 def stub_metadata(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
-    metadata = LocalMetadata(vocab_size=20, max_input_tokens=128)
-    monkeypatch.setattr(
-        xbench.harness.serving.workload, "load_local_metadata", lambda path, *, prompts=(): (metadata, (1, 3, 5))
+    metadata = LocalModelMetadata(
+        vocab_size=20, limits=SglangRequestLimits.from_context(128), admissible_ids=(1, 3, 5), text_lengths={}
     )
+    monkeypatch.setattr(LocalModelMetadata, "from_checkpoint", lambda path, *, text_prompts: metadata)

@@ -13,7 +13,7 @@ from xbench.harness.serving.measure import (
     unavailable_summary,
 )
 from xbench.harness.serving.workload import PreparedWorkload, ResolvedPrompt, ScheduledRequest, content_digest
-from xtest.harness.support.config import TEST_MODEL_ID
+from xtest.harness.support.config import TEST_CASE_ID, TEST_MODEL_ID
 
 
 def test_first_coalesced_chunk_has_no_invented_intervals_and_two_ttft_origins() -> None:
@@ -242,8 +242,9 @@ def prepared(ids: tuple[str, ...], *, horizon: float) -> PreparedWorkload:
         for id in ids
     )
     return PreparedWorkload(
-        case_id="case",
+        case_id=TEST_CASE_ID,
         model_ids=(TEST_MODEL_ID,),
+        model_contexts={},
         prompts=prompts,
         requests=requests,
         warmup=(),

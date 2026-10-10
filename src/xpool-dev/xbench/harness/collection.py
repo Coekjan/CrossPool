@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
@@ -11,11 +12,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
 
-from xbench.harness.serving.case import BenchCase
+from xbench.harness.serving.case import BenchCase, ResolvedDeployment
 from xkit import ResourceRequirements
 from xkit.child import PythonChildProcess
+from xkit.config import ToolConfigRecord, XpoolDevConfig, get_global_config, init_global_config
 from xkit.declaration import Parameterization
 from xkit.source import resolve_source_path
+from xpool.config import XpoolConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +32,12 @@ class CollectedProgram:
     requirements: ResourceRequirements
 
 
-def collect_programs(catalogue_path: Path, cases: tuple[BenchCase, ...]) -> tuple[CollectedProgram, ...]:
+def collect_programs(
+    catalogue_path: Path,
+    cases: tuple[BenchCase, ...],
+    *,
+    deployments: tuple[ResolvedDeployment | None, ...] | None = None,
+) -> tuple[CollectedProgram, ...]:
     """Import selected source declarations in a fresh child, retaining case order.
 
     Collection executes resource callbacks but neither benchmark bodies nor input
@@ -43,7 +51,7 @@ def collect_programs(catalogue_path: Path, cases: tuple[BenchCase, ...]) -> tupl
         child = PythonChildProcess(
             "benchmark-source-collection",
             collect_program_worker,
-            (catalogue_path, cases),
+            (catalogue_path, cases, get_global_config().record(), deployments),
             log_path=Path(temporary) / "collection.log",
             import_paths=roots,
         )
@@ -58,13 +66,17 @@ def collect_programs(catalogue_path: Path, cases: tuple[BenchCase, ...]) -> tupl
             child.close()
 
 
-def collect_program_worker(connection: Connection, inputs: tuple[Path, tuple[BenchCase, ...]]) -> None:
+def collect_program_worker(
+    connection: Connection,
+    inputs: tuple[Path, tuple[BenchCase, ...], ToolConfigRecord, tuple[ResolvedDeployment | None, ...] | None],
+) -> None:
     """Discover only module-defined catalogue entries and their declared resources."""
 
-    catalogue_path, cases = inputs
+    catalogue_path, cases, tool_config, deployments = inputs
+    init_global_config(resolved=XpoolDevConfig.from_record(tool_config))
     roots = (catalogue_path.parent / "suites", catalogue_path.parent, catalogue_path.parent.parent)
     programs = []
-    for case in cases:
+    for index, case in enumerate(cases):
         source_path = resolve_source_path(catalogue_path, case.module)
         module = importlib.import_module(case.module)
         if module.__file__ is None or Path(module.__file__).resolve() != source_path:
@@ -92,6 +104,13 @@ def collect_program_worker(connection: Connection, inputs: tuple[Path, tuple[Ben
         )
         if resources is None:
             raise ValueError(f"{source_path}: benchmark entry requires a resource declaration")
-        requirements = resources if isinstance(resources, ResourceRequirements) else resources(case=case)
+        deployment = None if deployments is None else deployments[index]
+        if deployment is not None:
+            config = XpoolConfig.model_validate_json(json.dumps(deployment.effective))
+            requirements = ResourceRequirements(
+                len(config.atn.devices) + len(config.ffn.devices), True, tuple(model.id for model in config.models)
+            )
+        else:
+            requirements = resources if isinstance(resources, ResourceRequirements) else resources(case=case)
         programs.append(CollectedProgram(case.module, source_path, name, roots, requirements))
     connection.send(tuple(programs))

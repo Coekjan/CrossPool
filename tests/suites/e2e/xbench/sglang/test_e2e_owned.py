@@ -16,6 +16,7 @@ from xbench.harness.serving.case import BenchCatalog, JsonlPrompts, NativeSampli
 from xbench.harness.serving.measure import BenchRunManifest
 from xbench.harness.serving.report import load_series
 from xbench.harness.serving.workload import ScheduledRequest
+from xkit.case import CaseId
 from xkit.deployment import resolve_deployment_path
 from xkit.task import get_task_root
 from xpool.utils.device import visible_uuids
@@ -24,7 +25,9 @@ from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.support.config import e2e_base_config
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
-CASE = BenchCatalog.load(REPOSITORY_ROOT / "benches/benches.toml").select(("serving-001",))[0]
+CASE = BenchCatalog.from_file(REPOSITORY_ROOT / "benches/benches.toml").select(
+    ("58fcaacc-d3bc-4a7f-af68-a3eb1dbd79c1",)
+)[0]
 assert isinstance(CASE, OwnedBenchCase)
 
 
@@ -56,6 +59,7 @@ def test_e2e_owned_benchmark_measures_both_targets_with_assigned_devices(
     trace.write_text("".join(request.model_dump_json() + "\n" for request in requests), encoding="utf-8")
     case = CASE.model_copy(
         update={
+            "id": CaseId.generate(),
             "arrivals": TraceArrivals(kind="jsonl", path=trace, duration_seconds=0.1),
             "targets": tuple(
                 target.model_copy(
@@ -82,11 +86,11 @@ def test_e2e_owned_benchmark_measures_both_targets_with_assigned_devices(
     declaration = case.model_dump(mode="json", exclude_none=True, exclude={"id"})
     declaration["deployment"] = case.deployment.stem
     catalog.write_text(
-        tomli_w.dumps({"serving_cases": {case.id: declaration}}),
+        tomli_w.dumps({"serving_cases": {str(case.id): declaration}}),
         encoding="utf-8",
     )
     assigned = visible_uuids()
-    result_root = workdir / "runs"
+    result_root = workdir / "cache/bench-runs"
     root = get_task_root()
     scope = None
     process: subprocess.Popen[str] | None = None
@@ -104,12 +108,14 @@ def test_e2e_owned_benchmark_measures_both_targets_with_assigned_devices(
                         "uv",
                         "run",
                         "--no-sync",
+                        "--no-env-file",
                         "xbench",
                         "run",
+                        "--all",
                         "--catalog",
                         str(catalog),
-                        "--result-root",
-                        str(result_root),
+                        "--cache-root",
+                        str(result_root.parent),
                     ],
                     cwd=REPOSITORY_ROOT,
                     env=dict(os.environ, SGLANG_PLUGINS="xpool", HF_HUB_OFFLINE="0", TRANSFORMERS_OFFLINE="0"),
@@ -135,7 +141,7 @@ def test_e2e_owned_benchmark_measures_both_targets_with_assigned_devices(
     run = Path(output_text.strip())
     manifest = BenchRunManifest.model_validate_json((run / "run.json").read_bytes())
     assert manifest.finished and manifest.result_code == 0
-    repetition = run / "cases" / case.id / "repetition-0001"
+    repetition = run / "cases" / str(case.id) / "repetition-0001"
     series = load_series(repetition, "owned")
     assert series.workload.requests == requests
     assert series.summary.cleanup_verified

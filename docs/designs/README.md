@@ -19,7 +19,9 @@ current architecture while workflow history remains in version control.
   reclamation.
 - [Devkit](devkit.md) defines Hook Points and observer evidence.
 - [Test and Benchmark Tooling](tooling.md) defines installed harness ownership,
-  shared resource lifecycle, workload measurements and offline reports.
+  configuration, catalogues, shared resource lifecycle and test evidence.
+- [Serving Benchmarks](benchmark.md) defines workloads, measurements,
+  continuation and offline reports.
 - [Qualification](qualification.md) defines readiness and acceptance evidence.
 
 The root [CONTEXT.md](../../CONTEXT.md) owns domain terminology. An active plan

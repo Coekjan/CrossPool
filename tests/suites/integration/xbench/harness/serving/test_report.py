@@ -3,7 +3,9 @@ from __future__ import annotations
 import csv
 import json
 import shutil
+import struct
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
@@ -25,6 +27,7 @@ from xbench.harness.serving.measure import (
     RequestRecord,
 )
 from xbench.harness.serving.report import (
+    list_bench_artifacts,
     load_series,
     render_report,
     report_bench_runs,
@@ -37,15 +40,24 @@ from xbench.harness.serving.workload import (
     file_digest,
     read_jsonl,
 )
+from xkit.config import XpoolDevConfig, get_global_config
 from xkit.results import RunEntry, RunStore, write_json, write_jsonl
-from xtest.harness.support.config import TEST_MODEL_ID
+from xtest.harness.support.config import (
+    TEST_CASE_ID,
+    TEST_MODEL_ID,
+    development_config,
+    reset_development_config,
+    tool_config_record,
+)
+
+pytestmark = pytest.mark.usefixtures(reset_development_config.__name__, development_config.__name__)
 
 
 @pytest.fixture
 def captured_figures(monkeypatch: pytest.MonkeyPatch) -> dict[str, Figure]:
     figures: dict[str, Figure] = {}
 
-    def save(figure: Figure, filename: Path, *, bbox_inches: str) -> None:
+    def save(figure: Figure, filename: Path, *, dpi: int) -> None:
         figures[filename.stem] = figure
 
     monkeypatch.setattr(Figure, "savefig", save)
@@ -55,7 +67,7 @@ def captured_figures(monkeypatch: pytest.MonkeyPatch) -> dict[str, Figure]:
 def test_report_exports_all_formats_with_embedded_fonts(tmp_path: Path) -> None:
     run, repetition = retained_run(tmp_path)
     run.complete()
-    output = render_report(load_series(repetition, "the retained run"))
+    output = render_report(load_series(repetition, "the retained run"), config=get_global_config().xbench.report)
     for name in ("ttft-cdf", "itl-cdf", "throughput"):
         assert (output / f"{name}.pdf").read_bytes().startswith(b"%PDF-")
         assert b"/FontFile2" in (output / f"{name}.pdf").read_bytes()
@@ -63,40 +75,96 @@ def test_report_exports_all_formats_with_embedded_fonts(tmp_path: Path) -> None:
         assert (output / f"{name}.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
-@pytest.mark.parametrize("layout", ["single", "double"])
+def test_report_regeneration_applies_presentation_without_changing_evidence(tmp_path: Path) -> None:
+    run, repetition = retained_run(tmp_path)
+    run.complete()
+    series = load_series(repetition, "the retained run")
+    output = render_report(series, config=get_global_config().xbench.report)
+    (output / "notes.txt").write_text("retain these notes", encoding="utf-8")
+    evidence = {path: path.read_bytes() for path in repetition.iterdir() if path.is_file()}
+    config = XpoolDevConfig.from_mapping(
+        {
+            "xbench": {
+                "report": {
+                    "layout": "half",
+                    "formats": ["png"],
+                    "ppi": 100,
+                    "legend": {"visible": False},
+                    "ttft": {"width_inches": 4, "height_inches": 3, "columns": 2, "caption": "Latency comparison."},
+                    "itl": {"columns": 2},
+                }
+            }
+        }
+    ).xbench.report
+    render_report(series, config=config)
+    assert struct.unpack(">II", (output / "ttft-cdf.png").read_bytes()[16:24]) == (400, 300)
+    assert struct.unpack(">II", (output / "itl-cdf.png").read_bytes()[16:24]) == (165, 480)
+    assert {path.name for path in output.glob("*.png")} == {"ttft-cdf.png", "itl-cdf.png", "throughput.png"}
+    assert not tuple(output.glob("*.pdf")) and not tuple(output.glob("*.svg"))
+    assert "Latency comparison." in (output / "report.md").read_text()
+    assert (output / "notes.txt").read_text() == "retain these notes"
+    assert evidence == {path: path.read_bytes() for path in evidence}
+
+
+@pytest.mark.parametrize("layout", ["single", "double", "half"])
 def test_report_renders_labeled_units_weights_and_layout(
-    layout: Literal["single", "double"], tmp_path: Path, captured_figures: dict[str, Figure]
+    layout: Literal["single", "double", "half"], tmp_path: Path, captured_figures: dict[str, Figure]
 ) -> None:
     run, repetition = retained_run(tmp_path)
     run.complete()
     series = load_series(repetition, "the retained run")
+    series = replace(
+        series,
+        summary=series.summary.model_copy(
+            update={
+                "cdf": tuple(
+                    point.model_copy(update={"value_seconds": point.value_seconds * 1_000_000})
+                    if point.metric == "itl_combined"
+                    else point
+                    for point in series.summary.cdf
+                )
+            }
+        ),
+    )
     original_font = matplotlib.rcParams["font.family"]
     output = repetition / "report"
-    assert render_report(series, layout=layout) == output
+    assert (
+        render_report(series, config=get_global_config().xbench.report.model_copy(update={"layout": layout})) == output
+    )
     if layout == "single":
         (output / "notes.txt").write_text("keep these notes", encoding="utf-8")
         (output / "cdf.csv").write_text("old generated CSV", encoding="utf-8")
-        render_report(series, layout=layout)
+        render_report(series, config=get_global_config().xbench.report.model_copy(update={"layout": layout}))
         assert (output / "notes.txt").read_text() == "keep these notes"
         assert "old generated CSV" not in (output / "cdf.csv").read_text()
     assert matplotlib.rcParams["font.family"] == original_font
     metadata = json.loads((output / "render.json").read_text())
     assert metadata["font"] == "DejaVu Serif"
     assert metadata["rc_params"]["savefig.dpi"] == 300
-    assert metadata["width_inches"] == (3.3 if layout == "single" else 6.8)
-    assert metadata["legend_location"] == "below figure"
+    assert metadata["figures"]["ttft-cdf"]["width_inches"] == {"single": 3.3, "double": 6.8, "half": 1.65}[layout]
+    assert metadata["settings"]["legend"]["location"] == "upper center"
     ttft_figure = captured_figures["ttft-cdf"]
     itl_figure = captured_figures["itl-cdf"]
     throughput_figure = captured_figures["throughput"]
     assert ttft_figure.legends and all(axis.get_legend() is None for axis in ttft_figure.axes)
     assert len({value["linestyle"] for value in metadata["series_styles"]}) == 2
     assert all(axis.get_xlabel().endswith("(ms)") for axis in ttft_figure.axes)
-    observed_itl = next(axis for axis in itl_figure.axes if axis.get_xlabel() == "Observed ITL (ms)")
+    observed_itl = next(axis for axis in itl_figure.axes if " ".join(axis.get_xlabel().split()) == "Observed ITL (ms)")
     assert any("Unavailable" in note.get_text() for note in observed_itl.texts)
-    http_ttft = next(axis for axis in ttft_figure.axes if axis.get_xlabel() == "HTTP TTFT (ms)")
-    cdf_line = next(line for line in http_ttft.lines if line.get_label() == str(TEST_MODEL_ID))
+    http_ttft = next(axis for axis in ttft_figure.axes if " ".join(axis.get_xlabel().split()) == "HTTP TTFT (ms)")
+    cdf_line = next(line for line in http_ttft.lines if str(line.get_label()).replace("\n", "") == str(TEST_MODEL_ID))
     assert numpy.asarray(cdf_line.get_xydata()).tolist() == [[100, 0], [100, 1]]
     assert any("queue drain" in note.get_text() for axis in throughput_figure.axes for note in axis.texts)
+    for figure in captured_figures.values():
+        figure.canvas.draw()
+        for axis in figure.axes:
+            for text in (axis.title, axis.xaxis.label):
+                bounds = text.get_window_extent()
+                assert figure.bbox.contains(bounds.x0, bounds.y0)
+                assert figure.bbox.contains(bounds.x1, bounds.y1)
+            offset = axis.xaxis.get_offset_text()
+            if offset.get_text():
+                assert not axis.xaxis.label.get_window_extent().overlaps(offset.get_window_extent())
     assert "mean represented-interval coverage: 0.6" in (output / "report.md").read_text()
 
 
@@ -106,8 +174,9 @@ def test_report_expands_repetitions_and_preserves_failed_source(
     run, repetition = retained_run(tmp_path, failed=True)
     output = repetition / "report"
     with pytest.raises(BlockingIOError):
-        report_bench_runs((run.directory,), labels=(), layout="single")
+        report_bench_runs((run.directory,))
     run.complete()
+    assert list_bench_artifacts(run.directory.parent) == (run.directory.name,)
     (repetition / "environment.json").unlink()
     (repetition / "warmup.json").unlink()
     second = repetition.with_name("repetition-0002")
@@ -116,17 +185,29 @@ def test_report_expands_repetitions_and_preserves_failed_source(
     write_json(second / "repetition.json", checkpoint.model_copy(update={"repetition": 2}).model_dump(mode="json"))
     case_path = repetition.parent / "case.json"
     manifest = BenchCaseManifest.model_validate_json(case_path.read_bytes())
+    run_path = run.directory / "run.json"
+    run_manifest = BenchRunManifest.model_validate_json(run_path.read_bytes())
+    settings = XpoolDevConfig.from_mapping({}, cli={"xbench_repetitions": 2}, env={})
+    write_json(
+        run_path,
+        run_manifest.model_copy(
+            update={
+                "tool_config": run_manifest.tool_config.model_copy(
+                    update={"settings": settings, "sources": settings.sources}
+                )
+            }
+        ).model_dump(mode="json"),
+    )
     write_json(
         case_path,
         manifest.model_copy(
             update={
-                "case": manifest.case.model_copy(update={"repetitions": 2}),
                 "repetitions": (repetition.name, second.name),
             }
         ).model_dump(mode="json"),
     )
     before = {path.relative_to(run.directory): path.read_bytes() for path in run.directory.rglob("*") if path.is_file()}
-    assert xbench.cli.main(["report", str(run.directory), "--label", "failed source"]) == 0
+    assert xbench.cli.main(["report", run.directory.name]) == 0
     outputs = (output, second / "report")
     assert capsys.readouterr().out.splitlines() == [str(path) for path in outputs]
     after = {
@@ -140,8 +221,22 @@ def test_report_expands_repetitions_and_preserves_failed_source(
         assert report["summary"]["outcomes"]["failed"] == 1
         assert not report["summary"]["measurement_available"]
         assert report["environment"]["unavailable"] is True
-    with pytest.raises(ValueError, match="one label"):
-        report_bench_runs((run.directory,), labels=("a", "b"), layout="single")
+    assert report_bench_runs((run.directory, repetition)) == outputs
+
+    for unavailable in (
+        checkpoint.model_copy(update={"repetition": 2, "finished": False, "result_code": None}).model_dump(mode="json"),
+        {"repetition": "malformed"},
+    ):
+        write_json(second / "repetition.json", unavailable)
+        assert list_bench_artifacts(run.directory.parent) == (
+            f"{run.directory.name}/{repetition.relative_to(run.directory).as_posix()}",
+        )
+        with pytest.raises(ValueError, match="complete reportable repetition set"):
+            report_bench_runs((run.directory,))
+    export = tmp_path / "export"
+    assert report_bench_runs((repetition,), output=export) == (
+        export / "xbench" / run.directory.name / repetition.relative_to(run.directory) / "report",
+    )
 
 
 @pytest.mark.parametrize("failure", ["csv", "render"])
@@ -160,7 +255,7 @@ def test_report_output_failure_preserves_original_verdict_and_measurement(
             patch.setattr(csv.DictWriter, "writerows", write_rows)
         else:
 
-            def save(figure: Figure, filename: Path, *, bbox_inches: str) -> None:
+            def save(figure: Figure, filename: Path, *, dpi: int) -> None:
                 assert RunStore(run.directory.parent).cleanup(keep_runs=0, dry_run=True).active == (run.directory,)
                 with pytest.raises(BlockingIOError):
                     with RunStore(run.directory.parent).read(run.directory.name, exclusive=True):
@@ -169,9 +264,9 @@ def test_report_output_failure_preserves_original_verdict_and_measurement(
 
             patch.setattr(Figure, "savefig", save)
         with pytest.raises(OSError, match="report output unavailable"):
-            report_bench_runs((run.directory,), labels=(), layout="single")
+            report_bench_runs((run.directory,))
     output = repetition / "report"
-    assert report_bench_runs((repetition,), labels=(), layout="single") == (output,)
+    assert report_bench_runs((repetition,)) == (output,)
     assert before == {
         path.relative_to(run.directory): path.read_bytes()
         for path in run.directory.rglob("*")
@@ -301,7 +396,7 @@ def test_owner_loss_reports_only_retained_observation_prefix(
     assert series.summary.window_end_seconds == 0.18
     assert not series.summary.execution_complete
     assert series.summary.targets["aggregate"].distributions["http_ttft_seconds"].sample_count == 1
-    output = render_report(series, layout="single")
+    output = render_report(series, config=get_global_config().xbench.report)
     assert all(axis.get_xlim()[1] == 0.18 for axis in captured_figures["throughput"].axes)
     assert "actual stop time is unknown" in (output / "report.md").read_text()
 
@@ -393,7 +488,7 @@ def test_owner_loss_after_origin_remains_reportable_without_a_measurement_window
     assert "measurement.json" in series.repetition_manifest.artifact_sha256
     if not cleanup_verified:
         return
-    assert report_bench_runs((run.directory,), labels=(), layout="single") == (repetition / "report",)
+    assert report_bench_runs((run.directory,)) == (repetition / "report",)
     assert origin.read_bytes() == original_origin
     origin.write_text("{}", encoding="utf-8")
     with pytest.raises(ValueError, match=r"digest mismatch: measurement\.json"):
@@ -408,9 +503,9 @@ def test_owner_loss_after_origin_remains_reportable_without_a_measurement_window
 
 
 def retained_run(tmp_path: Path, *, failed: bool = False, horizon: float = 0.1) -> tuple[RunEntry, Path]:
-    store = RunStore(tmp_path / "bench-runs")
+    store = RunStore(tmp_path / ".xpool-cache/bench-runs")
     run = store.start("20260927-180000-123-456")
-    case_directory = run.directory / "cases" / "case"
+    case_directory = run.directory / "cases" / str(TEST_CASE_ID)
     repetition = case_directory / "repetition-0001"
     repetition.mkdir(parents=True)
     prompts = (ResolvedPrompt(prompt_id="p", model_id=TEST_MODEL_ID, text="offline replay data"),)
@@ -418,8 +513,9 @@ def retained_run(tmp_path: Path, *, failed: bool = False, horizon: float = 0.1) 
         request_id="r", model_id=TEST_MODEL_ID, prompt_id="p", arrival_seconds=0.0, max_new_tokens=6
     )
     workload = PreparedWorkload(
-        case_id="case",
+        case_id=TEST_CASE_ID,
         model_ids=(TEST_MODEL_ID,),
+        model_contexts={},
         prompts=prompts,
         requests=(scheduled,),
         warmup=(scheduled,),
@@ -461,7 +557,7 @@ def retained_run(tmp_path: Path, *, failed: bool = False, horizon: float = 0.1) 
     case = TypeAdapter(BenchCase).validate_json(
         json.dumps(
             {
-                "id": "case",
+                "id": str(TEST_CASE_ID),
                 "description": "Render retained serving measurements without executing the workload.",
                 "module": "serving.multi_model",
                 "mode": "client",
@@ -500,8 +596,9 @@ def retained_run(tmp_path: Path, *, failed: bool = False, horizon: float = 0.1) 
     write_json(repetition / "repetition.json", manifest.model_dump(mode="json"))
     run_manifest = BenchRunManifest(
         run_id=run.directory.name,
-        selected_cases=("case",),
-        case_directories=("cases/case",),
+        tool_config=tool_config_record(tmp_path / ".xpool-cache"),
+        selected_cases=(TEST_CASE_ID,),
+        case_directories=(f"cases/{TEST_CASE_ID}",),
         finished=True,
         result_code=1 if failed else 0,
     )

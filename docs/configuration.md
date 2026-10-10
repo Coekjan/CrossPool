@@ -77,7 +77,15 @@ Inspect both the effective development settings and their sources with:
 
 ```bash
 uv run xtest config dump
+uv run xbench config dump
 ```
+
+Report settings include layout, unique output formats, raster PPI, legend
+visibility/location/columns and per-figure dimensions, subplot columns and
+Markdown captions. `--layout` selects a preset width; explicit widths override
+it. Common `--width`/`--height` override all three figures. Complex text and
+per-figure settings stay in TOML. See the
+[tooling tutorial](tutorials/tooling.md) for the complete command workflow.
 
 ## Native build settings
 

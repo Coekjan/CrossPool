@@ -5,16 +5,17 @@ from typing import Literal
 
 import pytest
 
+from xbench.harness.serving.case import BenchCatalog
 from xkit.case import CaseFamily, CaseId
 from xtest.harness.sglang.catalog import TestCatalog
 
 
 @pytest.mark.parametrize(
     ("tool", "family"),
-    [("xtest", CaseFamily.SERVING), ("xtest", CaseFamily.TOPOLOGY)],
+    [("xtest", CaseFamily.SERVING), ("xtest", CaseFamily.TOPOLOGY), ("xbench", CaseFamily.SERVING)],
 )
 def test_catalogue_clone_preserves_source_text_paths_and_published_line_range(
-    tmp_path: Path, tool: Literal["xtest"], family: CaseFamily, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, tool: Literal["xtest", "xbench"], family: CaseFamily, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = Path.cwd()
     shutil.copytree(root / "configs/deployments", tmp_path / "configs/deployments")
@@ -24,7 +25,7 @@ def test_catalogue_clone_preserves_source_text_paths_and_published_line_range(
     original = ("# Author-owned comment.\n" + (root / relative).read_text(encoding="utf-8")).replace("\n", "\r\n")
     path.write_bytes(original.encode("utf-8"))
     source = next(iter(tomllib.loads(original)[family.table_name]))
-    catalog = TestCatalog.from_file(path)
+    catalog = TestCatalog.from_file(path) if tool == "xtest" else BenchCatalog.from_file(path)
     location = catalog.clone(source[:8], family=family)
     published = path.read_bytes().decode("utf-8")
     assert published.startswith(original)

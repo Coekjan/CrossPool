@@ -1,23 +1,23 @@
-[serving_cases.serving-001]
-description = "Concurrent two-model serving with fixed-length random prompts and independent Poisson arrivals."
+[serving_cases.58fcaacc-d3bc-4a7f-af68-a3eb1dbd79c1]
+description = "Small-pair mixed serving with interval-relative log-normal lengths at 4 RPS per model."
 module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
 
-[serving_cases.serving-001.arrivals]
+[serving_cases.58fcaacc-d3bc-4a7f-af68-a3eb1dbd79c1.arrivals]
 kind = "poisson"
-duration_seconds = 60
-rates = { "Qwen/Qwen2.5-0.5B" = 4, "Qwen/Qwen3-0.6B" = 4 }
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 4.0, "Qwen/Qwen3-0.6B" = 4.0 }
 
-[[serving_cases.serving-001.targets]]
+[[serving_cases.58fcaacc-d3bc-4a7f-af68-a3eb1dbd79c1.targets]]
 model_id = "Qwen/Qwen2.5-0.5B"
-output_tokens = 128
 graph_mode = "decode-full-prefill-breakable"
-prompts = { kind = "random", input_tokens = 512 }
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
 
-[[serving_cases.serving-001.targets]]
+[[serving_cases.58fcaacc-d3bc-4a7f-af68-a3eb1dbd79c1.targets]]
 model_id = "Qwen/Qwen3-0.6B"
-output_tokens = 128
 graph_mode = "decode-full-prefill-breakable"
-prompts = { kind = "random", input_tokens = 512 }
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }

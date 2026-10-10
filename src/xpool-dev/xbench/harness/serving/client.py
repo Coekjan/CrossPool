@@ -219,7 +219,7 @@ async def send_request(
     state: RequestState,
     *,
     origin: float,
-    timeout_seconds: float,
+    timeout_seconds: float | None,
 ) -> RequestRecord:
     """Record termination before closing transport outside the latency clock.
 
@@ -317,8 +317,8 @@ async def run_measurement(
     """Dispatch all finite arrivals through one unbounded FIFO and global active limit.
 
     Warmup is performed separately by the runner before this common origin.
-    Request deadlines exclude queue waiting. Individual failures do not interrupt
-    drain; process/recording failures cancel all workers and account for every
+    Optional request deadlines exclude queue waiting. Individual failures do not
+    interrupt drain; process/recording failures cancel all workers and account for every
     planned request. The return value is the arrival/drain window, excluding
     HTTP-resource and serving cleanup.
     """

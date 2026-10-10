@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import os
 import tomllib
-from dataclasses import dataclass
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, JsonValue, model_validator
 
+from xkit.case import CaseId, Catalog
 from xkit.config import assemble_config
 from xkit.deployment import resolve_deployment_path
 from xkit.serving.sglang.graph import SglangGraphMode
@@ -25,7 +26,7 @@ class BenchValue(BaseModel):
 
 
 class TokenRange(BenchValue):
-    """Inclusive token-count bounds used for independent random sampling."""
+    """Inclusive uniform token-count bounds conditioned on legal request limits."""
 
     min: int = Field(gt=0)
     max: int = Field(gt=0)
@@ -37,7 +38,22 @@ class TokenRange(BenchValue):
         return self
 
 
-type TokenCount = Annotated[int, Field(gt=0, strict=True)] | TokenRange
+class LogNormalTokens(BenchValue):
+    """Legal-interval-relative median and natural-log standard deviation."""
+
+    kind: Literal["lognormal"]
+    median_fraction: FiniteFloat = Field(gt=0, le=1)
+    sigma: FiniteFloat = Field(gt=0)
+
+
+class LogNormalOutputTokens(LogNormalTokens):
+    """Generated output policy with an optional ceiling relative to input length."""
+
+    max_output_input_ratio: FiniteFloat | None = Field(default=None, gt=0)
+
+
+type TokenCount = Annotated[int, Field(gt=0, strict=True)] | TokenRange | LogNormalTokens
+type OutputTokenCount = Annotated[int, Field(gt=0, strict=True)] | TokenRange | LogNormalOutputTokens
 
 
 class RandomPrompts(BenchValue):
@@ -90,7 +106,7 @@ class BenchTarget(BenchValue):
     model_id: ModelId
     api: Literal["sglang", "openai"] = "sglang"
     prompts: PromptSource
-    output_tokens: TokenCount | None = Field(
+    output_tokens: OutputTokenCount | None = Field(
         default=None, description="Poisson request output limit; file traces supply max_new_tokens per request."
     )
     sampling: NativeSampling = Field(default_factory=NativeSampling)
@@ -121,7 +137,7 @@ class ClientTarget(BenchTarget):
 
 
 class CaseSettings(BenchValue):
-    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    id: CaseId
     description: str = Field(min_length=1)
     module: str = Field(min_length=1, description="Source module relative to the catalogue's sibling suites directory.")
     arrivals: ArrivalSource
@@ -132,13 +148,12 @@ class CaseSettings(BenchValue):
     startup_timeout_seconds: FiniteFloat = Field(
         default=1800.0, gt=0, description="Complete owned startup budget, including daemon, Agents and serving health."
     )
-    request_timeout_seconds: FiniteFloat = Field(
-        default=600.0,
+    request_timeout_seconds: FiniteFloat | None = Field(
+        default=None,
         gt=0,
-        description="Absolute timeout from HTTP dispatch, excluding time spent in the admission queue.",
+        description="Absolute HTTP timeout excluding client queue wait; None waits until completion.",
     )
     warmup_requests_per_target: int = Field(default=1, ge=0)
-    repetitions: int = Field(default=1, gt=0)
     bucket_seconds: FiniteFloat = Field(default=1.0, gt=0)
 
     def validate_targets(self, targets: tuple[BenchTarget, ...]) -> None:
@@ -175,8 +190,10 @@ class ClientBenchCase(CaseSettings):
     def validate_case(self) -> Self:
         self.validate_targets(self.targets)
         for target in self.targets:
-            if isinstance(target.prompts, RandomPrompts) and target.model_metadata_path is None:
-                raise ValueError(f"{target.model_id}: random prompts require explicit local model_metadata_path")
+            if (
+                isinstance(target.prompts, RandomPrompts) or isinstance(target.output_tokens, LogNormalTokens)
+            ) and target.model_metadata_path is None:
+                raise ValueError(f"{target.model_id}: generated token traffic requires local model_metadata_path")
         return self
 
     def load_serving_metadata(self) -> ServingMetadata | None:
@@ -244,7 +261,7 @@ class ServingMetadata(BenchValue):
 
 
 class CatalogDeclaration(BenchValue):
-    serving_cases: dict[str, BenchCase] = Field(min_length=1)
+    serving_cases: dict[CaseId, BenchCase] = Field(min_length=1)
 
 
 class ResolvedDeployment(BenchValue):
@@ -273,15 +290,13 @@ def resolve_deployment(case: OwnedBenchCase) -> XpoolConfig:
     return config
 
 
-@dataclass(frozen=True, slots=True)
-class BenchCatalog:
+class BenchCatalog(Catalog):
     """Ordered validated cases whose relative paths belong to the declaring file."""
 
-    path: Path
     cases: tuple[BenchCase, ...]
 
     @classmethod
-    def load(cls, path: Path) -> BenchCatalog:
+    def from_file(cls, path: Path) -> Self:
         path = path.expanduser().resolve()
         with path.open("rb") as source:
             raw = tomllib.load(source)
@@ -300,7 +315,7 @@ class BenchCatalog:
 
         cases: list[BenchCase] = []
         for id, case in declaration.serving_cases.items():
-            source_case = raw["serving_cases"][id]
+            source_case = raw["serving_cases"][str(id)]
             targets = []
             for target in case.targets:
                 updates: dict[str, object] = {}
@@ -321,15 +336,14 @@ class BenchCatalog:
             elif case.serving_metadata_path is not None:
                 case_updates["serving_metadata_path"] = resolve(case.serving_metadata_path)
             cases.append(case.model_copy(update=case_updates))
-        return cls(path, tuple(cases))
+        return cls(path=path, cases=tuple(cases))
 
-    def select(self, ids: tuple[str, ...]) -> tuple[BenchCase, ...]:
-        if not ids:
+    def select(self, prefixes: Sequence[str]) -> tuple[BenchCase, ...]:
+        """Select unique full identities from prefixes, preserving invocation order."""
+        if not prefixes:
             return self.cases
-        if len(ids) != len(set(ids)):
-            raise ValueError("selected case IDs must be unique")
         by_id = {case.id: case for case in self.cases}
-        unknown = set(ids) - by_id.keys()
-        if unknown:
-            raise ValueError(f"unknown benchmark cases: {sorted(unknown)}")
-        return tuple(by_id[id] for id in ids)
+        identities = tuple(CaseId.resolve(prefix, by_id) for prefix in prefixes)
+        if len(identities) != len(set(identities)):
+            raise ValueError("selected case IDs must be unique")
+        return tuple(by_id[identity] for identity in identities)

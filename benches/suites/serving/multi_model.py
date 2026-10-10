@@ -10,7 +10,7 @@ import signal
 import sys
 from pathlib import Path
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue
 
 import xbench
 from xbench.harness.serving.case import BenchCase, OwnedBenchCase
@@ -31,7 +31,6 @@ from xkit.serving.sglang.launch import ServingLaunch, SglangLaunchModel
 from xkit.serving.sglang.system import XpoolServingSystem
 from xkit.task import get_task_root
 from xpool.config import CONFIG_REGISTRY, XpoolConfig, init_global_config
-from xpool.model import ModelId
 
 
 def requirements_of(case: BenchCase) -> ResourceRequirements:
@@ -161,8 +160,30 @@ async def run_serving(case: BenchCase, directory: Path) -> None:
                         "warmup_requests_per_target": case.warmup_requests_per_target,
                     }
                 else:
-                    endpoints = TypeAdapter(dict[ModelId, str]).validate_json(os.environ.pop("XBENCH_ENDPOINTS"))
+                    endpoints = {target.model_id: target.base_url for target in case.targets}
                 write_environment(directory, environment)
+                if system is not None:
+                    print("xbench phase=request-limits", file=sys.stderr)
+                    if system.startup_deadline is None:
+                        raise RuntimeError("owned request-limit check requires the serving startup deadline")
+                    prompts = {(prompt.model_id, prompt.prompt_id): prompt for prompt in workload.prompts}
+                    for server in system.servers:
+                        model_id = server.model.model_id
+                        limits = await server.request_limits(
+                            context_length=workload.model_contexts[model_id], deadline=system.startup_deadline
+                        )
+                        for request in (*workload.requests, *workload.warmup):
+                            if request.model_id != model_id:
+                                continue
+                            input_tokens = prompts[model_id, request.prompt_id].input_tokens
+                            if input_tokens is None:
+                                raise ValueError(
+                                    f"{model_id}: prepared request {request.request_id!r} lacks input length"
+                                )
+                            try:
+                                limits.validate_request(input_tokens, request.max_new_tokens)
+                            except ValueError as error:
+                                raise ValueError(f"{model_id}: request {request.request_id!r}: {error}") from error
                 print("xbench phase=warmup", file=sys.stderr)
                 await warmup(case, workload, endpoints, directory, check_alive=system.check_alive if system else None)
                 await run_measurement(

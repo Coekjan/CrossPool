@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+import tomli_w
 from pydantic import TypeAdapter
 
 from xbench.harness.serving.case import (
@@ -9,36 +10,73 @@ from xbench.harness.serving.case import (
     BenchCatalog,
     ClientBenchCase,
     JsonlPrompts,
+    OutputTokenCount,
+    TokenCount,
     TraceArrivals,
 )
+from xkit.case import CaseId
 from xpool.model import ModelId
-from xtest.harness.support.config import TEST_MODEL_ID
+from xtest.harness.support.config import TEST_CASE_ID, TEST_MODEL_ID
+
+
+def test_log_normal_policies_validate_role_specific_ratios_and_interval_fractions() -> None:
+    policy = {"kind": "lognormal", "median_fraction": 0.125, "sigma": 1.0}
+    TypeAdapter(TokenCount).validate_python(policy)
+    TypeAdapter(OutputTokenCount).validate_python({**policy, "max_output_input_ratio": 2.0})
+    with pytest.raises(ValueError, match="max_output_input_ratio"):
+        TypeAdapter(TokenCount).validate_python({**policy, "max_output_input_ratio": 2.0})
+    with pytest.raises(ValueError, match="max_output_input_ratio"):
+        TypeAdapter(OutputTokenCount).validate_python({"min": 1, "max": 8, "max_output_input_ratio": 2.0})
+    for adapter in (TypeAdapter(TokenCount), TypeAdapter(OutputTokenCount)):
+        for fraction in (0.0, 1.01):
+            with pytest.raises(ValueError, match="median_fraction"):
+                adapter.validate_python({**policy, "median_fraction": fraction})
+    with pytest.raises(ValueError, match="max_output_input_ratio"):
+        TypeAdapter(OutputTokenCount).validate_python({**policy, "max_output_input_ratio": 0.0})
 
 
 def test_catalog_resolves_owning_paths_and_preserves_selection_order(tmp_path: Path) -> None:
     path = tmp_path / "catalog.toml"
+    first = TEST_CASE_ID
+    second = CaseId("550e8401-e29b-41d4-a716-446655440000")
     path.write_text(
-        '[serving_cases.a]\nmode = "client"\ndescription = "First target."\nmodule = "serving.multi_model"\n'
-        '[serving_cases.a.arrivals]\nkind = "jsonl"\npath = "trace.jsonl"\n'
-        f'[[serving_cases.a.targets]]\nmodel_id = "{TEST_MODEL_ID}"\nbase_url = "http://localhost:8000"\n'
-        'prompts = {kind = "jsonl", path = "prompts.jsonl"}\n'
-        '[serving_cases.b]\nmode = "client"\ndescription = "Second target."\nmodule = "serving.multi_model"\n'
-        '[serving_cases.b.arrivals]\nkind = "jsonl"\npath = "trace.jsonl"\n'
-        f'[[serving_cases.b.targets]]\nmodel_id = "{TEST_MODEL_ID}"\nbase_url = "http://localhost:8001"\n'
-        'prompts = {kind = "jsonl", path = "prompts.jsonl"}\n',
+        tomli_w.dumps(
+            {
+                "serving_cases": {
+                    str(identity): {
+                        "mode": "client",
+                        "description": description,
+                        "module": "serving.multi_model",
+                        "arrivals": {"kind": "jsonl", "path": "trace.jsonl"},
+                        "targets": [
+                            {
+                                "model_id": str(TEST_MODEL_ID),
+                                "base_url": f"http://localhost:{port}",
+                                "prompts": {"kind": "jsonl", "path": "prompts.jsonl"},
+                            }
+                        ],
+                    }
+                    for identity, description, port in (
+                        (first, "First target.", 8000),
+                        (second, "Second target.", 8001),
+                    )
+                }
+            }
+        ),
         encoding="utf-8",
     )
-    catalog = BenchCatalog.load(path)
-    assert tuple(case.id for case in catalog.select(())) == ("a", "b")
-    assert tuple(case.id for case in catalog.select(("b", "a"))) == ("b", "a")
+    catalog = BenchCatalog.from_file(path)
+    assert tuple(case.id for case in catalog.select(())) == (first, second)
+    assert tuple(case.id for case in catalog.select(("550e8401", "550e8400"))) == (second, first)
     case = catalog.cases[0]
     assert isinstance(case, ClientBenchCase)
     assert isinstance(case.arrivals, TraceArrivals)
     assert isinstance(case.targets[0].prompts, JsonlPrompts)
     assert case.arrivals.path == tmp_path / "trace.jsonl"
     assert case.targets[0].prompts.path == tmp_path / "prompts.jsonl"
+    assert case.request_timeout_seconds is None
     with pytest.raises(ValueError, match="unique"):
-        catalog.select(("a", "a"))
+        catalog.select(("550e8400", str(first)))
     with pytest.raises(ValueError, match="unknown"):
         catalog.select(("missing",))
 
@@ -92,7 +130,7 @@ def test_catalog_resolves_owning_paths_and_preserves_selection_order(tmp_path: P
 )
 def test_case_rejects_mixed_modes_invalid_scalars_and_incomplete_maps(update: dict[str, object], reason: str) -> None:
     case: dict[str, object] = {
-        "id": "case",
+        "id": str(TEST_CASE_ID),
         "description": "Serving declaration validation.",
         "module": "serving.multi_model",
         "mode": "client",
@@ -112,7 +150,7 @@ def test_case_rejects_mixed_modes_invalid_scalars_and_incomplete_maps(update: di
 
 
 def test_initial_catalog_declares_portable_two_model_deployment() -> None:
-    catalog = BenchCatalog.load(Path("benches/benches.toml"))
+    catalog = BenchCatalog.from_file(Path("benches/benches.toml"))
     case = catalog.cases[0]
     assert case.mode == "owned"
     assert (
@@ -130,7 +168,7 @@ def test_initial_catalog_declares_portable_two_model_deployment() -> None:
 
 def test_random_client_requires_local_model_metadata() -> None:
     raw = {
-        "id": "case",
+        "id": str(TEST_CASE_ID),
         "description": "Random prompts require a local tokenizer.",
         "module": "serving.multi_model",
         "mode": "client",
@@ -151,7 +189,7 @@ def test_random_client_requires_local_model_metadata() -> None:
 def test_case_requires_one_target_per_model(mode: str) -> None:
     target: dict[str, object] = {"model_id": str(TEST_MODEL_ID), "prompts": {"kind": "jsonl", "path": "prompts.jsonl"}}
     raw: dict[str, object] = {
-        "id": "case",
+        "id": str(TEST_CASE_ID),
         "description": "One endpoint for each model.",
         "module": "serving.multi_model",
         "mode": mode,

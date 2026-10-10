@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import cast
 
 from xbench.harness.serving.case import BenchCase
-from xbench.harness.serving.measure import BenchCaseManifest
+from xbench.harness.serving.measure import BenchCaseManifest, BenchRunManifest
+from xkit.config import XpoolDevConfig, init_global_config
 from xkit.task import TaskRoot
 
 
@@ -26,6 +27,10 @@ def main() -> int:
     root = TaskRoot.from_environment()
     try:
         try:
+            run_manifest = BenchRunManifest.model_validate_json(
+                (options.directory.parents[2] / "run.json").read_bytes()
+            )
+            init_global_config(resolved=XpoolDevConfig.from_record(run_manifest.tool_config))
             module = importlib.import_module(options.module)
             if module.__file__ is None or Path(module.__file__).resolve() != options.source_path:
                 raise ValueError("benchmark worker imported a different source module")

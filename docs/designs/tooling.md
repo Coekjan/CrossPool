@@ -4,9 +4,9 @@ The CrossPool development environment provides `xtest` for correctness validatio
 and `xbench` for multi-model LLM serving measurements. Their shared resource and
 process mechanisms live in `xkit`; each tool owns its execution policy and
 retained-result semantics.
-Performance measurements remain report-only under
-[Qualification](qualification.md). The [glossary](../../CONTEXT.md) distinguishes
-Benchmark Targets, Measurements and Reports.
+[Serving Benchmarks](benchmark.md) owns workload, measurement, continuation
+and offline report contracts. Performance measurements remain report-only under
+[Qualification](qualification.md).
 
 ## Installed packages and source inputs
 
@@ -20,7 +20,7 @@ src/
     xkit/                   Shared resources, processes, storage and serving
     xtest/cli/              Test command
     xtest/harness/          Collection, scheduling, verdicts and qualification
-    xbench/cli.py           Benchmark command
+    xbench/cli/             Benchmark command
     xbench/harness/serving/ Serving cases, workloads, observations and reporting
 tests/
   tests.toml                Test scenarios and expectations
@@ -62,25 +62,49 @@ Source-owned benchmark programs and prompt/trace inputs belong under
 `benches/suites/<family>/`. Installed serving mechanisms live under
 `xbench.harness.serving`; the catalogue selects the source module that owns the
 scenario's execution.
-The initial random-prompt/Poisson case declares its generators in the catalogue
-and needs no dataset directory.
+Random-prompt/Poisson cases declare their generators in the catalogue and need
+no dataset directory.
 
-Both commands expose `list`, `run`, `report` and `clean`. Exact CLI options and
-typed interfaces belong to their declarations in
+Both commands expose `list`, `run`, `report`, `clean`, `case-gen` and
+`config dump`. Exact CLI options and typed interfaces belong to their declarations in
 [`xtest.cli`](../../src/xpool-dev/xtest/cli/),
-[`xbench.cli`](../../src/xpool-dev/xbench/cli.py) and the owning harness modules.
+[`xbench.cli`](../../src/xpool-dev/xbench/cli/) and the owning harness modules.
 [Test Architecture](../../tests/README.md) owns placement, resource requirements
-and execution commands.
+and execution commands. The [tooling tutorial](../tutorials/tooling.md) owns the
+interactive selection, authoring and reporting workflow.
+
+`xkit.config.XpoolDevConfig` owns one process-global development aggregate,
+selected by a leaf command's `--config` or `XKIT_CONFIG`. Shared retention policy
+lives at the root; test and benchmark policy live in their respective subtrees.
+Entry points freeze effective settings and source records in `ToolConfigRecord`
+before collection or preparation. Workers install that record without rereading
+development files or environment policy. Runtime scene assembly retains its own
+file-resolution lifecycle. [Configuration](../configuration.md#development-tools-and-shared-cache)
+owns user-facing sources, file setup and path-origin rules.
 
 ## Catalogue and source declarations
 
-Both catalogues use named case tables. The table key is the case ID; each case
-has an English description and a dotted source `module`. Serving experiments
-use `serving_cases`, while native FFN topology tests use `topology_cases`.
+Both catalogues use named case tables. The table key is a full, canonical
+lowercase UUIDv4 validated by [`xkit.case.CaseId`](../../src/xpool-dev/xkit/case.py);
+each case has an English description and a dotted source `module`. Serving
+experiments use `serving_cases`, while native FFN topology tests use `topology_cases`.
+`CaseFamily` owns these category and table names. Both concrete catalogues inherit
+`xkit.case.Catalog`, which owns source-file cloning and atomic publication;
+their loaders retain schema validation and tool-specific execution selection.
 [`xkit.source`](../../src/xpool-dev/xkit/source.py) resolves each module below the
 catalogue's sibling `suites/` directory without importing it. Models qualification
 keeps its workload and graph expectations as typed source constants and uses
 the same portable deployments.
+
+Case identity is authored independently of experiment conditions and remains
+permanent. A distinct fixed experiment receives a new UUID; description,
+presentation and execution repetition count do not change it. Benchmark
+selection accepts a nonempty unique prefix, while persisted references retain
+the complete identity. `case-gen` clones one raw declaration, validates it beside
+its catalogue before atomic publication, and prints the new UUID, absolute file
+and inclusive line range. Existing catalogue text and path origins remain intact.
+Authoring assumes one writer. A loaded catalogue remains an immutable snapshot;
+a later load sees the appended declaration.
 
 `xtest` and `xbench` export the shared `requirements` and `parameterize`
 decorators from [`xkit.declaration`](../../src/xpool-dev/xkit/declaration.py).
@@ -140,7 +164,7 @@ The runner prepares fixed workload inputs once per case and owns device admissio
 repetition supervision and final evidence sealing. The
 [`serving suite program`](../../benches/suites/serving/multi_model.py) owns actual
 startup, warmup, measurement and local shutdown, using installed serving and
-measurement mechanisms. A worker invokes that entry once per repetition.
+measurement mechanisms. A worker invokes that entry once per attempt.
 Offline reports depend only on retained evidence, not the catalogue or suite
 source. Repository pytest uses its normal root import path to exercise these
 source programs; suites remain outside installed wheel contents.
@@ -220,6 +244,20 @@ with `ModelId.uri_encode()`, using `+` as the separator. For example,
 `Qwen%2FQwen2.5-0.5B+Qwen%2FQwen3-0.6B` labels one two-model scene; readable
 filenames distinguish its layouts. Model selection remains catalogue-owned.
 
+Layout names use `atnN[-dpD]-ffnM[-tpT]-lanesL`, where `N` and `M` are role
+device counts, `D` is attention DP, `T` is FFN TP and `L` is the Lane count.
+Omit `dpD` for DP1 and `tpT` when TP uses the complete FFN Fleet. Thus `ffn2`
+describes TP2, while `ffn2-tp1` preserves a narrower execution group. Distinct
+model TP widths use a `+`-joined suffix in sorted Model ID order. Explicit TOML
+values own geometry; filenames are descriptive references, not another parser.
+
+Model qualification chooses a minimum feasible scene. Performance comparisons
+retain matching mixed and isolated conditions. A few representative small-model
+scenes own complex topology coverage. Reuse depends on the complete geometry and
+behavior under test, not device count alone. A TP1 group in a two-device FFN Fleet
+does not guarantee one model per device or replicated execution; placement still
+owns layer assignments.
+
 ## Shared process and resource ownership
 
 Each independently scheduled execution uses the same supervised domain:
@@ -261,7 +299,8 @@ an inherited tracker belongs to its ancestor.
 
 `SupervisedTaskScope` accepts a positive finite total deadline or `None`.
 `xtest` retains finite task deadlines. Normal benchmark queue drain uses `None`;
-startup, HTTP requests and exceptional cleanup retain their separate bounds.
+startup and exceptional cleanup retain their separate bounds. HTTP request
+deadlines are opt-in.
 Protected item or aggregate expiry requests cooperative retirement; direct
 pytest and unprotected tasks retain their existing bounded expiry actions.
 The first cancellation establishes one cleanup envelope without renewal.
@@ -283,6 +322,30 @@ Children use a fresh spawn interpreter and an acknowledgement after session/log
 setup. Installed callbacks need no source path. Source-only callbacks
 receive explicit caller-owned import roots; artifact locations and installed
 module parents do not determine a subprocess's working directory.
+
+[`xkit.scheduler.TaskScheduler`](../../src/xpool-dev/xkit/scheduler.py) shares
+first-fitting backfill, active-scope polling and proven lease return between
+the tools. Each tool owns task compilation, priority and verdict interpretation;
+the scheduler imports neither test nor benchmark cases. It admits every fitting
+task without a separate jobs limit. Different benchmark cases may overlap;
+repetitions of one case remain ordered. Preparation completes before supervised
+execution so input reads and replay writes cannot stall task-control polling.
+
+Admission closure is monotonic across stage changes and follow-up repetitions.
+Tests stop admission after safely retired infrastructure failures and retain
+their ordinary-failure stage gates. Benchmarks continue other cases and later
+logical repetitions after safely retired per-case preflight, startup, warmup,
+program and measurement failures by default. They retain the failed outcomes;
+later repetitions are distinct measurements, not retries of the failed one.
+The invocation-only `--fast-fail` flag stops new benchmark admission after a
+newly executed failure while active tasks finish naturally. Earlier retained
+failures affect the final verdict but do not trigger this flag. Input collection,
+workload preparation and artifact-write failures terminate before execution.
+User cancellation closes admission and requests cooperative cancellation of all
+active scopes. Unconfirmed retirement never returns
+a device lease or permits a successor on that domain; it closes admission and
+requests cooperative cancellation of other active tasks. Parallel cases share
+host resources; a single-case invocation provides experiment isolation within the tool.
 
 ### Devices and endpoints
 
@@ -448,263 +511,12 @@ Reports default to `RUN_ID/report/`; `--output DIR` exports below
 not a replacement verdict protocol. Reporting a failed run successfully does
 not change its original result.
 
-## Benchmark cases and workload execution
-
-[`case.py`](../../src/xpool-dev/xbench/harness/serving/case.py) owns strict, immutable catalogue
-declarations. Owned cases reference a portable deployment plus Instance/graph
-launch settings and an optional explicit runtime base. Client cases name
-externally owned endpoints and take no serving, device or MPS ownership.
-Their workload and metric definitions are the
-same. The checked-in family uses Qwen2.5-0.5B and Qwen3-0.6B on one attention
-and one FFN device; this small deployment does not establish representative
-large-model performance.
-
-Prompt and arrival inputs are independent. Prompt JSONL supplies target-scoped
-sample IDs with exactly one of text or token IDs; trace JSONL supplies unique
-request IDs, targets, planned arrivals, prompt references and output caps.
-Random prompts and per-target Poisson arrivals also work without external
-datasets, in all generated/file-backed combinations. New formats normalize to
-the existing `PreparedWorkload` rather than changing the executor.
-
-Preparation is offline and precedes timing. Every file prompt is checked against
-available local model metadata before selection; newly generated prompts are
-validated at creation. Random token IDs come from matching local tokenizer/model
-metadata, excluding special and out-of-vocabulary IDs.
-Random prompt length belongs to the target's prompt declaration. Poisson output
-caps belong to the target's `output_tokens`; arrival declarations own only
-duration and per-target rates. Trace rows supply their own authoritative
-`max_new_tokens`. Lengths and generated output caps use fixed values or inclusive
-ranges. Generated prompts, arrivals, selection and warmup have independent
-seeded random streams.
-Poisson arrivals use exponential first/interarrival gaps within `[0, T)` and a
-stable merge; traces preserve source-row order for ties. Resolved prompt content,
-schedule and horizon, rather than seeds alone, are the replay authority.
-
-The workload is prepared once and reused across repetitions. Every target
-completes separately prepared warmup before the common measurement origin.
-Owned repetitions start fresh systems; client repetitions leave external state
-under external control. Caches are not flushed implicitly. An empty schedule
-retains a no-data result and skips allocation, serving, warmup and timing.
-
-The client dispatches absolute planned arrivals through FIFO admission and a
-global active-request limit, default 128. Capacity queues requests rather than
-rejecting or dropping them. Actual enqueue, HTTP start and termination remain
-separate observations. The absolute request deadline defaults to 600 seconds
-from HTTP start, excluding queue wait; complete owned startup defaults to 1,800
-seconds. Normal drain has no total deadline. Individual request failures are not
-retried and do not stop later arrivals; owned-process or recording failures
-interrupt execution. Cancellation accounts for every planned request and leaves
-external servers running.
-
-Warmup and measured requests flush their terminal records before closing the
-HTTP response. A response-close failure is an infrastructure error; a completed
-successful request retains its sample and latency while the repetition fails.
-Recording failures remain infrastructure failures.
-
-Each target selects `sglang` or `openai` through
-[`ApiAdapter`](../../src/xpool-dev/xbench/harness/serving/api.py). The factory creates fresh
-request-local state for every warmup and measured request. `SglangAdapter`
-implements native `/generate` construction and response validation;
-`OpenaiAdapter` raises `NotImplementedError` during protocol preflight, before
-run allocation or HTTP execution. The client owns transport, timestamps and
-event history. A malformed frame raises `ResponseProtocolError`, retaining its
-rejected observation when available.
-The client counts the current SSE wire frame incrementally, including field
-prefixes and line delimiters, and bounds unfinished lines. Blank-line frame
-boundaries reset the budget. Empty `data:` lines consume it; a transport batch
-containing several individually valid frames does not combine their budgets.
-
-## Measurement definitions
-
-Native `/generate` streaming uses one client monotonic origin per repetition.
-Raw times are seconds; wall time identifies the execution, not latency. Events
-are timestamped before decoding/serialization, and cumulative generated text is
-not repeated in every record. HTTP start is a client observation, not a claimed
-server-receipt timestamp. Startup, warmup and shutdown are outside the window.
-
-- HTTP TTFT is first positive-token observation minus HTTP start.
-- Arrival TTFT is first positive-token observation minus actual enqueue.
-- Queue wait is HTTP start minus enqueue; arrival lateness is enqueue minus
-  planned arrival.
-- Completion is valid `[DONE]` receipt, or establishment of failure/cancellation;
-  subsequent transport close does not extend latency.
-
-Token-count progress, including empty-text chunks, establishes first-token
-timing. HTTP 200 alone is insufficient: success requires monotonic valid counts,
-normal final usage/finish reason and `[DONE]`. Failed requests retain their valid
-prefix and offending observations separately. No-token requests have unavailable
-TTFT/ITL, not zero-valued samples.
-
-A single-token increment after first progress supplies an observed ITL; a
-multi-token increment of `k` supplies a token-estimated gap divided by `k`, with
-interval weight `k`. Duplicate counts preserve the previous positive-progress
-anchor; regressions fail protocol validation. For final count `N > 1` and first
-observed count `C_first`, coverage is `(N - C_first) / (N - 1)`. First-chunk
-intervals are unavailable. `stream_interval=1` does not establish independently
-observed per-token clocks.
-
-Successful requests alone enter main latency and ITL populations. Observed,
-estimated and combined ITL distributions retain their distinct labels and
-token-interval weights. Request TPOT is `(completion - first-token time) /
-(N - 1)` and includes terminal tail; it is not the ITL distribution. Statistics
-use population standard deviation and linear percentile rank
-`(sample_count - 1) * p / 100`; CDFs are empirical steps. Empty populations retain
-sample count zero and nullable statistics.
-
-Logical input throughput includes successful requests' prompt tokens, including
-cache hits, attributed at completion. It does not estimate device Prefill work.
-Output throughput attributes positive count increments at their observed times,
-with failed/cancelled partial output separate. The retained window classification
-distinguishes three lifecycle facts:
-
-- `complete`: normal arrival and queue drain ended. The window ends at the later
-  of the declared horizon and final request termination, including normally
-  drained request failures.
-- `interrupted`: the measurement owner observed cancellation or a failure that
-  aborted measurement and retained its actual stop before HTTP and serving
-  teardown. Cancellation terminal observations fit within this end; neither
-  teardown nor the unelapsed planned horizon extends it.
-- `observed_prefix`: owner loss left no retained stop. Parent recovery uses only
-  the last timestamp supported by validated retained observations. The actual
-  stop is unknown; reports label prefix-only rates and time-series explicitly.
-
-The measurement owner persists normal completion or observable interruption in
-the repetition checkpoint before phase teardown. Later cleanup failure fails the
-repetition without changing that timing fact. Reporting failure preserves
-measurement facts and the original verdict. Terminal records for every request
-do not prove that the planned horizon elapsed: an
-interruption during its idle remainder stays incomplete. Summary execution
-completeness uses the retained lifecycle fact separately from raw-evidence and
-cleanup completeness.
-
-Without usable timed evidence, the window end and classification are both
-unavailable, even with a retained origin and a positive planned horizon. Startup
-and warmup failures likewise have no measured window. Reports preserve valid
-latency/ITL samples and failure/cleanup facts. Buckets use actual window width,
-including a shortened final bucket and observations exactly at the end;
-coalesced tokens receive no invented intra-chunk timestamps.
-
-[`measure.py`](../../src/xpool-dev/xbench/harness/serving/measure.py) owns validation and metric
-math; [`client.py`](../../src/xpool-dev/xbench/harness/serving/client.py) owns transport/timestamps,
-and [`api.py`](../../src/xpool-dev/xbench/harness/serving/api.py) owns protocol construction and
-validation. Live token progress is validated by the adapter and timestamped by
-the client's monotonic clock. Offline measurement validation checks retained
-chronology, token progress and terminal claims before statistical calculation.
-Private interval, distribution and attribution helpers rely on those established
-invariants.
-`RequestState.terminal` calculates request metrics during execution. The recorder
-persists them in `requests.jsonl`. Reporting consumes these saved values for
-request-level distributions. Individual ITL samples and time-resolved throughput
-use retained events, whose token increments and observation times cannot be
-represented by request-level means and totals alone.
-
-## Measurement evidence and reports
-
-One locked benchmark invocation owns its measurements and derived reports:
-
-```text
-run.json
-cases/<case-id>/
-  case.json, workload.json
-  prompts.jsonl, trace.jsonl, warmup.jsonl
-  repetition-0001/
-    repetition.json, requests.jsonl, events.jsonl
-    measurement.json          Common origin, only after timing starts
-    environment.json, warmup.json, launch/, logs/
-    report/                   Derived by offline reporting
-      summary.json, report.md, cdf.csv, throughput.csv, render.json
-      ttft-cdf.*, itl-cdf.*, throughput.*
-```
-
-Tool-owned result records follow their current declarations and contain no
-schema, format, metric-revision or rendering-version tags. Catalogues are
-field-driven declarations without a schema version. External serving metadata
-retains its own input schema field. Actual software/build versions describe the
-environment.
-`run.json` retains selected case IDs, case references and the original invocation
-outcome separately from report generation.
-`case.json` owns the case declaration, deployment provenance and repetition
-references. Repetitions and runtime/report projections obtain their case label
-from that parent declaration. `workload.json` retains lightweight timing, seed
-and digest metadata plus references to the normalized prompt, trace and warmup
-JSONL files. Local model metadata is preparation input. Lightweight repetition
-checkpoints retain timing, execution/error facts, core digests and nullable
-cleanup/evidence flags. The worker cannot seal its own cleanup proof. `run`
-retains JSONL and checkpoints; it neither persists an aggregate summary nor
-invokes CSV export or Matplotlib.
-
-Replay digests identify normalized prompt, trace and warmup content. Repetition
-digests cover requests/events and the origin whenever it is retained,
-independently of window availability. A usable timed window requires an origin;
-reporting validates each retained origin's schema and digest. Recording loss
-preserves original bytes/valid prefix and represents unsupported outcomes as
-`evidence_missing`, with unknown timing rather than fabricated dispatch or engine
-claims. Valid partial samples remain reportable with incomplete labels.
-
-`environment.json` labels its bounded environment whitelist with
-`environment_source`. Owned execution records `effective_serving_launch` from
-the actual `system.launch.environment`; before startup establishes that launch,
-the source is `unknown` with an empty mapping. Client execution records
-`local_client`, describing load-generator inputs rather than external serving
-conditions. Owned hardware observations capture
-the allocated devices' UUID/name, memory bytes, PCI identity, links, CPU/NUMA affinity
-and target/role placement once before timing, using bounded read-only queries.
-Client `serving_metadata_path` optionally supplies declared external hardware and
-package/build versions; absent values remain unknown. The tool does not substitute
-load-generator hardware or query external metadata endpoints. Software values
-identify their source; unavailable CUDA build information stays unknown rather
-than triggering library or installation audits. Metadata capture failures are
-diagnostics, not metric failures.
-
-Prompt content is intentional replay data, explicitly retained by `run`.
-Credentials in endpoint/configuration diagnostics are redacted; the complete
-environment is not dumped. Logs, warmup diagnostics, metadata and generated
-reports are outside mandatory metric digests and do not veto valid offline
-aggregation.
-
-`report` validates retained replay, request accounting, chronology, core digests
-and final checkpoints, then aggregates saved request metrics and event samples.
-It reads no previous aggregate summary and preserves measurement files and
-original execution verdicts. A contradictory zero-result checkpoint is rejected,
-and incomplete recording cannot become a successful measurement through reporting.
-
-Each repetition's fixed `report/` directory owns `summary.json`, `report.md`,
-`cdf.csv`, `throughput.csv`, `render.json` and PDF/SVG/300-DPI PNG figures. Its
-summary contains that repetition's metrics, replay identities, environment,
-deployment and original verdict, plus the available invocation manifest.
-Matplotlib uses a local DejaVu Serif nine-point paper style, 3.3-inch single-column
-or 6.8-inch double-column layouts, embedded/path fonts and colors plus line styles for
-grayscale differentiation. Latency axes use milliseconds; throughput uses tokens
-per second. HTTP/arrival TTFT, observed/estimated/combined ITL and aligned
-input/output throughput remain explicit. Unavailable data is annotated; defaults
-do not smooth or clip tails. Rendering-library versions belong to report output.
-
-`xbench report` accepts run or repetition directories. Run inputs expand to their
-retained repetitions; multiple inputs select a batch of independent reports.
-Each report shows the models and aggregate for exactly one repetition, and CLI
-stdout lists the generated directories. Exclusive run-store protection covers
-loading through publication, coordinating report writers, readers and cleanup.
-
-Repeated reporting overwrites tool-generated files in the existing directory
-while preserving unrelated files. Rendering failure returns an error and leaves
-measurement bytes and saved verdicts unchanged. Publication may partially
-update a report; another invocation regenerates it without manual deletion.
-
-Benchmark run code zero requires complete valid measurement, at least one
-successful sample per repetition and safe cleanup. Drained request failures or
-no-data results use one; configuration, infrastructure or recording failures use
-two. Only a zero worker exit permits the normal measurement-result branch;
-abnormal worker exits, including one, are infrastructure failures even with
-successful retained requests. Signals retain codes 130 and 143 after cleanup.
-Valid raw samples survive worker failure. Both report
-commands return zero for successful reporting even when source execution failed;
-input/schema/output failures return two.
-
 ## Result storage and validation ownership
 
 `xkit.results.RunStore` owns locks, completion markers and explicit retention.
-Both tools reuse `xkit.cli` for shared argument parsing and cleanup presentation;
-each tool owns its selections and execution policy.
+The three CLI roots reuse `xpool.utils.cli` declaration and dispatch mechanisms;
+each tool owns its selections and execution policy. `RunCleanup.print` presents
+the shared cleanup decision without changing its retention or removal logic.
 Tool-owned verdict/checkpoint writers, readiness evidence, collection plans and
 CTest resource files reuse `xkit.results.write_json` for atomic publication.
 Their callers assemble domain values and create parent directories. Shared
@@ -712,15 +524,23 @@ Their callers assemble domain values and create parent directories. Shared
 file and flushes/fsyncs the complete batch. Both writers reject non-finite JSON
 numbers. Live measurement recording and partial-evidence recovery retain their
 benchmark-owned lifecycles.
-Default roots are invocation-relative `.xpool-cache/test-runs` and
-`.xpool-cache/bench-runs`; both tools accept an explicit root. A completion marker
+Runtime configuration owns the shared `cache_root`, defaulting to
+invocation-relative `.xpool-cache`. Tools bootstrap only this setting and its
+source record without requiring a complete deployment, then use disjoint
+`test-runs/` and `bench-runs/` subtrees. Runtime model/config resolution remains
+operation-owned. Memory profiling uses temporary `memory-profile/` workspaces;
+its final calibration destination remains explicit. Python bytecode follows
+interpreter and user policy rather than tooling overrides. See
+[Configuration](../configuration.md#development-tools-and-shared-cache) for
+cache sources and path origins. A completion marker
 means lifecycle completion, not test or measurement success. Execution performs
 no implicit retention cleanup. Default cached measurements and their reports
 are Git-ignored.
 
 Both cleanup commands keep twenty inactive runs by default and support explicit
 count, all and dry-run selection. Benchmark cleanup removes each selected run
-with its repetition-owned reports. Active entries remain locked. Root creation
+with its attempt-owned reports. Retention uses execution age, not report
+publication time. Active entries remain locked. Root creation
 and cleanup serialize before entry locking, resolve the root once and permit
 symlinked root parents; symlink entries inside the root are unlinked rather than
 followed. The result root is dedicated storage, so unrecognized inactive entries

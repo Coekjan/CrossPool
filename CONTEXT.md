@@ -51,6 +51,11 @@ conditions, prompt inputs or generation parameters, and arrival process. It is
 distinct from its executions, observed environments and retained measurements.
 _Avoid_: Workload template, benchmark run
 
+**Isolated Benchmark Deployment**:
+A single-model reference for a mixed-model benchmark, retaining the comparison's
+resource geometry and remaining target's workload while removing the peer model.
+_Avoid_: Mixed deployment with zero peer arrival rate
+
 **Catalogue Case ID**:
 The stable identity of one authored test or benchmark scenario, distinct from
 its Model IDs, concrete test rows and executions.
@@ -65,6 +70,16 @@ _Avoid_: Execution mode, test suite
 Client-observed timing, token progress and request outcomes from one benchmark
 workload execution, independent of their presentation.
 _Avoid_: Benchmark Report, plotted results
+
+**Benchmark Repetition**:
+One requested complete measurement of a Serving Benchmark Case using its
+prepared workload, distinct from its identity, execution attempts and requests.
+_Avoid_: Case ID, Benchmark Attempt
+
+**Benchmark Attempt**:
+One actual execution of a Benchmark Repetition with its own measurements and
+outcome; another attempt does not create another logical repetition.
+_Avoid_: Additional repetition, request retry
 
 **Benchmark Report**:
 An offline presentation derived from retained Benchmark Measurements and their

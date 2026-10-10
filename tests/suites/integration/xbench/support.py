@@ -7,7 +7,7 @@ from pathlib import Path
 from types import TracebackType
 
 from xbench.harness.serving.case import ClientBenchCase
-from xtest.harness.support.config import TEST_MODEL_ID
+from xtest.harness.support.config import TEST_CASE_ID, TEST_MODEL_ID
 
 
 class FakeServingServer:
@@ -17,6 +17,7 @@ class FakeServingServer:
         self.received: list[str] = []
         self.first_started = threading.Event()
         self.gate = threading.Event()
+        self.gate_released = False
         self.block_first = block_first
         self.omit_done = omit_done
         owner = self
@@ -35,7 +36,7 @@ class FakeServingServer:
                 if len(owner.received) == 1:
                     owner.first_started.set()
                     if owner.block_first:
-                        owner.gate.wait(10)
+                        owner.gate_released = owner.gate.wait(30)
                 frames = [
                     b"data: "
                     + json.dumps(
@@ -111,7 +112,7 @@ def client_case(tmp_path: Path, endpoint: str, *, future: bool = False) -> Clien
     return ClientBenchCase.model_validate_json(
         json.dumps(
             {
-                "id": "case",
+                "id": str(TEST_CASE_ID),
                 "description": "Observe HTTP admission, streaming timing and supervised cleanup.",
                 "module": "serving.multi_model",
                 "mode": "client",

@@ -15,7 +15,9 @@ Each setting declares which of these sources it accepts.
 The registry, source records, path-origin handling and CLI override mechanics
 live in [`xpool.utils.config`](../../src/xpool/utils/config.py). Production
 `XpoolConfig` owns runtime fields and validation; the private development tools
-reuse this mechanism without becoming production dependencies.
+reuse this mechanism without becoming production dependencies. The three CLI
+roots share command declaration and registration through
+[`xpool.utils.cli`](../../src/xpool/utils/cli.py).
 [`ModelId`](../../src/xpool/model.py) owns immutable, case-sensitive model
 identity in strict `namespace/name` form. Components admit ASCII letters,
 digits, underscore, hyphen and dot, excluding `.` and `..` components. Identity

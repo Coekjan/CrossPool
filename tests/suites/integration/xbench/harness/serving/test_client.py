@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import signal
 import sys
@@ -17,7 +16,7 @@ from tests.suites.integration.xbench.support import FakeServingServer, client_ca
 
 import xbench.harness.serving.client
 from xbench.harness.serving.api import create_api_adapter
-from xbench.harness.serving.case import BenchCase
+from xbench.harness.serving.case import BenchCase, ClientBenchCase
 from xbench.harness.serving.client import MeasurementRecorder, RequestState, run_measurement, send_request
 from xbench.harness.serving.execution import warmup
 from xbench.harness.serving.measure import BenchCaseManifest, RepetitionManifest, RequestRecord, summarize
@@ -100,7 +99,8 @@ def test_sse_limit_counts_wire_frames_across_chunks_not_transport_batches(
 
 def test_one_timeout_does_not_stop_fifo(tmp_path: Path) -> None:
     with FakeServingServer(block_first=True) as server:
-        case = client_case(tmp_path, server.url).model_copy(update={"request_timeout_seconds": 2.0})
+        original = client_case(tmp_path, server.url)
+        case = ClientBenchCase.model_validate({**original.model_dump(), "request_timeout_seconds": 2.0})
         workload = retain_workload(case, tmp_path / "result")
         recorder = MeasurementRecorder(tmp_path / "result")
         try:
@@ -136,7 +136,6 @@ def test_http_cleanup_failure_preserves_completed_samples_and_fails_repetition(
         )
         repetition = tmp_path / "cases/case/repetition-0001"
         workload = retain_workload(case, repetition)
-        monkeypatch.setenv("XBENCH_ENDPOINTS", json.dumps({str(TEST_MODEL_ID): server.url}))
         if cleanup_phase == "client":
             close_client = httpx.AsyncClient.__aexit__
 
@@ -185,7 +184,6 @@ def test_client_initialization_failure_after_origin_keeps_the_window_unavailable
     case = client_case(tmp_path, "http://127.0.0.1:1")
     repetition = tmp_path / "cases/case/repetition-0001"
     workload = retain_workload(case, repetition)
-    monkeypatch.setenv("XBENCH_ENDPOINTS", json.dumps({str(TEST_MODEL_ID): case.targets[0].base_url}))
     enter = httpx.AsyncClient.__aenter__
 
     async def start(client: httpx.AsyncClient) -> httpx.AsyncClient:
@@ -332,7 +330,7 @@ finally:
             "benchmark-async-cancel",
             [sys.executable, "-c", program, str(repetition)],
             cwd=Path(__file__).resolve().parents[6],
-            env=dict(os.environ, XBENCH_ENDPOINTS=json.dumps({str(TEST_MODEL_ID): server.url})),
+            env=dict(os.environ),
             log_path=tmp_path / "task.log",
             timeout_seconds=30,
         )

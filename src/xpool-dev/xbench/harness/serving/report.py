@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import csv
+import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from textwrap import fill
-from typing import Literal
 
 import matplotlib
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -15,19 +15,18 @@ from matplotlib.figure import Figure
 from pydantic import JsonValue, TypeAdapter
 
 from xbench.harness.serving.measure import (
+    REPETITION_DIRECTORY_PATTERN,
     BenchCaseManifest,
     BenchRunManifest,
     BenchSummary,
     CdfPoint,
-    MeasurementOrigin,
     RepetitionManifest,
-    RequestRecord,
-    StreamEvent,
     ThroughputBucket,
-    summarize,
-    unavailable_summary,
+    load_measurement,
+    retained_file,
 )
-from xbench.harness.serving.workload import PreparedWorkload, file_digest, read_jsonl
+from xbench.harness.serving.workload import PreparedWorkload
+from xkit.config import FigureConfig, XbenchReportConfig, get_global_config
 from xkit.results import RunStore, write_json
 
 
@@ -40,15 +39,6 @@ class ReportSeries:
     case_manifest: BenchCaseManifest
     repetition_manifest: RepetitionManifest
     environment: dict[str, JsonValue] = field(default_factory=dict)
-
-
-def retained_file(directory: Path, reference: str) -> Path:
-    """Resolve a retained artifact inside its owning directory, rejecting escapes."""
-
-    path = (directory / reference).resolve()
-    if not path.is_relative_to(directory.resolve()) or not path.is_file():
-        raise ValueError(f"benchmark artifact is missing or escapes its owner: {reference}")
-    return path
 
 
 def write_metric_csv(summary: BenchSummary, directory: Path) -> None:
@@ -77,75 +67,12 @@ def load_series(directory: Path, label: str) -> ReportSeries:
     incomplete archive/cleanup evidence stays visible beside valid samples.
     """
 
-    manifest = RepetitionManifest.model_validate_json(retained_file(directory, "repetition.json").read_bytes())
     case_directory = directory.parent
     case_manifest = BenchCaseManifest.model_validate_json(retained_file(case_directory, "case.json").read_bytes())
-    workload = PreparedWorkload.load(case_directory, case=case_manifest.case)
-    if (
-        workload.prompt_sha256 != case_manifest.prompt_sha256
-        or workload.trace_sha256 != case_manifest.trace_sha256
-        or workload.warmup_sha256 != case_manifest.warmup_sha256
-    ):
-        raise ValueError("retained replay content identities disagree")
-    if workload.bucket_seconds != case_manifest.case.bucket_seconds or (
-        case_manifest.case.arrivals.duration_seconds is not None
-        and workload.arrival_horizon_seconds != case_manifest.case.arrivals.duration_seconds
-    ):
-        raise ValueError("retained workload declarations disagree with the case")
-    required = {"events.jsonl", "requests.jsonl"}
-    if (
-        manifest.window_end_seconds is not None
-        or "measurement.json" in manifest.artifact_sha256
-        or (directory / "measurement.json").is_file()
-    ):
-        required.add("measurement.json")
-    if not required <= manifest.artifact_sha256.keys():
-        raise ValueError("benchmark repetition lacks required evidence digests")
-    for reference in required:
-        artifact = retained_file(directory, reference)
-        if file_digest(artifact) != manifest.artifact_sha256[reference]:
-            raise ValueError(f"retained benchmark artifact digest mismatch: {reference}")
-    if "measurement.json" in required:
-        MeasurementOrigin.model_validate_json(retained_file(directory, "measurement.json").read_bytes())
-    requests = read_jsonl(directory / "requests.jsonl", RequestRecord)
-    events = read_jsonl(directory / "events.jsonl", StreamEvent)
-    if manifest.window_end_seconds is None and events:
-        raise ValueError("benchmark events require an available measurement window")
-    if (manifest.window_end_seconds is None) != (manifest.window_kind is None):
-        raise ValueError("measurement window end and kind must be available together")
-    summary = (
-        summarize(
-            workload,
-            requests,
-            events,
-            window_end_seconds=manifest.window_end_seconds,
-            window_kind=manifest.window_kind,
-        )
-        if manifest.window_end_seconds is not None and manifest.window_kind is not None
-        else unavailable_summary(workload, requests)
-    ).model_copy(
-        update={"cleanup_verified": manifest.cleanup_verified, "infrastructure_error": manifest.infrastructure_error}
-    )
-    if manifest.result_code == 0 and (
-        not summary.execution_complete
-        or not summary.measurement_available
-        or not summary.evidence_complete
-        or not summary.cleanup_verified
-        or manifest.raw_evidence_complete is False
-        or summary.infrastructure_error is not None
-        or any(summary.outcomes[kind] for kind in ("failed", "cancelled", "not_sent"))
-    ):
-        raise ValueError("successful benchmark checkpoint contradicts its completeness or outcomes")
-    if (
-        not manifest.finished
-        or manifest.result_code is None
-        or manifest.cleanup_verified is None
-        or manifest.raw_evidence_complete is not True
-        or not (directory.parents[2] / ".completed").is_file()
-    ):
+    workload = case_manifest.load_workload(case_directory)
+    manifest, summary = load_measurement(directory.resolve(), workload)
+    if not (directory.parents[2] / ".completed").is_file():
         summary = summary.model_copy(update={"evidence_complete": False})
-    if manifest.raw_evidence_complete is False:
-        summary = summary.model_copy(update={"execution_complete": False})
     environment: dict[str, JsonValue]
     try:
         environment = TypeAdapter(dict[str, JsonValue]).validate_json(
@@ -156,68 +83,155 @@ def load_series(directory: Path, label: str) -> ReportSeries:
     return ReportSeries(label, directory, workload, summary, case_manifest, manifest, environment)
 
 
-def report_bench_runs(
-    inputs: Sequence[Path], *, labels: Sequence[str], layout: Literal["single", "double"]
-) -> tuple[Path, ...]:
-    """Regenerate an independent report inside each selected repetition.
+def retained_repetitions(
+    directory: Path, manifest: BenchRunManifest
+) -> tuple[tuple[Path, ...], tuple[Path, ...], bool]:
+    """Inspect parent-declared repetition metadata, returning complete-run eligibility.
 
-    Run inputs expand to all retained repetitions. Exclusive run protection
-    covers loading and publication, coordinating report writers and cleanup.
+    This boundary checks sealing, addresses and required target declarations.
+    Raw observations and digests are read only during generation.
     """
+    if manifest.run_id != directory.name or not manifest.finished or manifest.result_code is None:
+        raise ValueError(f"benchmark invocation is not sealed: {directory.name}")
+    if not (directory / ".completed").is_file():
+        raise ValueError(f"benchmark invocation is not sealed: {directory.name}")
+    repetitions = []
+    historical = []
+    complete = len(manifest.case_directories) == len(manifest.selected_cases)
+    seen_cases = set()
+    for reference in manifest.case_directories:
+        case_directory = (directory / reference).resolve()
+        if not case_directory.is_relative_to(directory / "cases") or case_directory.parent != directory / "cases":
+            raise ValueError("benchmark case reference escapes its invocation")
+        case = BenchCaseManifest.model_validate_json((case_directory / "case.json").read_bytes())
+        if (
+            str(case.case.id) != case_directory.name
+            or case.case.id not in manifest.selected_cases
+            or case.case.id in seen_cases
+        ):
+            raise ValueError("benchmark retained case does not match its parent selection")
+        seen_cases.add(case.case.id)
+        effective = case.effective_attempts(case_directory)
+        count = manifest.tool_config.settings.xbench.repetitions
+        if any(number > count for number in effective):
+            raise ValueError("retained repetition exceeds the original configured count")
+        complete = complete and set(effective) == set(range(1, count + 1))
+        for repetition_directory in effective.values():
+            try:
+                repetition = RepetitionManifest.from_directory(repetition_directory)
+            except (OSError, ValueError):
+                complete = False
+                continue
+            if repetition.sealed:
+                repetitions.append(repetition_directory)
+            else:
+                complete = False
+        for attempt in sorted(case_directory.iterdir()):
+            if (
+                attempt.is_symlink()
+                or attempt in effective.values()
+                or REPETITION_DIRECTORY_PATTERN.fullmatch(attempt.name) is None
+            ):
+                continue
+            try:
+                checkpoint = RepetitionManifest.from_directory(attempt)
+            except (OSError, ValueError):
+                continue
+            if checkpoint.repetition <= count and checkpoint.sealed:
+                historical.append(attempt)
+    return tuple(repetitions), tuple(historical), complete and bool(repetitions)
 
-    if labels and len(labels) != len(inputs):
-        raise ValueError("supply exactly one label per benchmark input directory")
-    directories = tuple(path.expanduser().resolve() for path in inputs)
+
+def list_bench_artifacts(root: Path) -> tuple[str, ...]:
+    """List sealed inactive target-format addresses using metadata only."""
+    artifacts = []
+    store = RunStore(root)
+    for entry in store.inactive_runs():
+        try:
+            with store.read(entry.name) as directory:
+                manifest = BenchRunManifest.model_validate_json((directory / "run.json").read_bytes())
+                repetitions, historical, complete = retained_repetitions(directory, manifest)
+                if complete:
+                    artifacts.append(entry.name)
+                else:
+                    artifacts.extend(f"{entry.name}/{path.relative_to(directory).as_posix()}" for path in repetitions)
+                artifacts.extend(f"{entry.name}/{path.relative_to(directory).as_posix()}" for path in historical)
+        except (ValueError, FileNotFoundError, BlockingIOError):
+            continue
+    return tuple(artifacts)
+
+
+def report_bench_runs(inputs: Sequence[Path], *, output: Path | None = None) -> tuple[Path, ...]:
+    """Validate retained parents and generate independent repetition reports.
+
+    The CLI supplies exact artifact paths. No catalogue or deployment sources
+    are reopened. Presentation settings come from the installed aggregate.
+    """
+    if not inputs:
+        raise ValueError("supply at least one benchmark artifact ID")
+    config = get_global_config().xbench.report
     outputs = []
-    for index, directory in enumerate(directories):
-        repetition_input = (directory / "repetition.json").is_file()
-        root = directory.parents[2] if repetition_input else directory
+    seen = set()
+    for address in (path.expanduser().absolute() for path in inputs):
+        repetition_match = REPETITION_DIRECTORY_PATTERN.fullmatch(address.name)
+        root = address.parents[2] if repetition_match is not None else address
         with RunStore(root.parent).read(root.name, exclusive=True) as protected:
+            directory = address.resolve()
             manifest = BenchRunManifest.model_validate_json((protected / "run.json").read_bytes())
-            if repetition_input:
+            repetitions, historical, complete = retained_repetitions(protected, manifest)
+            if repetition_match is not None:
+                if directory not in (*repetitions, *historical) or (
+                    address.is_symlink() and directory not in repetitions
+                ):
+                    raise ValueError(f"benchmark repetition is unsealed or not declared by its parent: {directory}")
+                if directory.parent != address.parent.resolve() or (
+                    address.is_symlink()
+                    and (
+                        repetition_match[2] is not None
+                        or RepetitionManifest.from_directory(directory).repetition != int(repetition_match[1])
+                    )
+                ):
+                    raise ValueError("benchmark repetition link does not identify its current same-case attempt")
                 selected = (directory,)
             else:
-                selected_list: list[Path] = []
-                for reference in manifest.case_directories:
-                    case_directory = (protected / reference).resolve()
-                    if not case_directory.is_relative_to(protected):
-                        raise ValueError("benchmark case reference escapes its invocation")
-                    case = BenchCaseManifest.model_validate_json((case_directory / "case.json").read_bytes())
-                    for reference in case.repetitions:
-                        repetition_directory = (case_directory / reference).resolve()
-                        if not repetition_directory.is_relative_to(case_directory):
-                            raise ValueError("benchmark repetition reference escapes its case")
-                        selected_list.append(repetition_directory)
-                selected = tuple(selected_list)
+                if not complete:
+                    raise ValueError(f"benchmark run has no complete reportable repetition set: {directory.name}")
+                selected = repetitions
             for repetition in selected:
-                suffix = f"{repetition.parent.name}/{repetition.name}"
-                label = f"{labels[index]} / {suffix}" if labels else f"{root.name} / {suffix}"
-                item = load_series(repetition, label)
-                if not manifest.finished:
-                    item = replace(item, summary=item.summary.model_copy(update={"evidence_complete": False}))
-                outputs.append(render_report(item, layout=layout, run=manifest))
+                if repetition in seen:
+                    continue
+                seen.add(repetition)
+                item = load_series(repetition, f"{root.name}/{repetition.relative_to(protected).as_posix()}")
+                destination = (
+                    None
+                    if output is None
+                    else output.expanduser().resolve()
+                    / "xbench"
+                    / root.name
+                    / repetition.relative_to(protected)
+                    / "report"
+                )
+                outputs.append(render_report(item, config=config, output=destination, run=manifest))
     return tuple(outputs)
 
 
 def render_report(
     item: ReportSeries,
     *,
-    layout: Literal["single", "double"] = "single",
+    config: XbenchReportConfig,
+    output: Path | None = None,
     run: BenchRunManifest | None = None,
 ) -> Path:
-    """Regenerate one repetition's report using retained ECDF/bucket data.
+    """Render exact configured canvases from retained metrics under the run lock.
 
-    Headless PDF/SVG/300-DPI PNG use a local paper style, embedded fonts and
-    unsmoothed observations. The caller holds the run's exclusive lock.
-    Generated files are overwritten; errors may leave a partially updated
-    report, while measurement files and unrelated report files remain intact.
+    Captions are Markdown text. Regeneration replaces owned files and removes
+    obsolete formats, preserving raw evidence and unrelated output files.
     """
-
-    output = (item.directory / "report").resolve()
-    if not output.is_relative_to(item.directory.resolve()):
-        raise ValueError("benchmark report directory escapes its repetition")
-    output.mkdir(exist_ok=True)
-    write_metric_csv(item.summary, output)
+    destination = (item.directory / "report" if output is None else output).resolve()
+    if destination.is_relative_to(item.directory.resolve()) and destination != item.directory.resolve() / "report":
+        raise ValueError("benchmark report export overlaps source evidence")
+    destination.mkdir(parents=True, exist_ok=True)
+    write_metric_csv(item.summary, destination)
     settings = {
         "font.family": "DejaVu Serif",
         "font.size": 9,
@@ -235,19 +249,19 @@ def render_report(
         "pdf.fonttype": 42,
         "svg.fonttype": "path",
         "text.usetex": False,
-        "savefig.dpi": 300,
+        "savefig.dpi": config.ppi,
     }
     colors = ("#1f4e79", "#b34a33", "#39745a", "#77558f", "#222222")
     line_styles = ("-", "--", "-.", ":")
-    width = 3.3 if layout == "single" else 6.8
+    preset_width = {"single": 3.3, "double": 6.8, "half": 1.65}[config.layout]
     identities = (*(str(model_id) for model_id in item.workload.model_ids), "aggregate")
     styles = {
-        id: {
+        identity: {
             "color": colors[index % len(colors)],
             "linestyle": line_styles[index % len(line_styles)],
-            "linewidth": 1.5 if id == "aggregate" else 1.0,
+            "linewidth": 1.5 if identity == "aggregate" else 1.0,
         }
-        for index, id in enumerate(identities)
+        for index, identity in enumerate(identities)
     }
     match item.summary.window_kind:
         case "interrupted":
@@ -256,27 +270,60 @@ def render_report(
             window_note = "Observed prefix; actual stop unknown"
         case _:
             window_note = None
+    rendered: dict[str, JsonValue] = {}
 
-    def save(figure: Figure, name: str) -> None:
-        legend = {}
-        for axis in figure.axes:
-            handles, labels = axis.get_legend_handles_labels()
-            legend.update(zip(labels, handles, strict=True))
-        if legend:
-            figure.legend(
-                tuple(legend.values()),
-                tuple(legend),
-                loc="upper center",
-                bbox_to_anchor=(0.5, 0.0),
-                ncols=1 if layout == "single" else 2,
-                frameon=False,
-            )
+    def save(figure: Figure, name: str, figure_config: FigureConfig) -> None:
+        """Fit the shared legend inside this canvas and publish selected formats."""
+        if config.legend.visible:
+            handles_by_label = {}
+            for axis in figure.axes:
+                handles, labels = axis.get_legend_handles_labels()
+                handles_by_label.update(zip(labels, handles, strict=True))
+            if handles_by_label:
+                legend_args = {
+                    "ncols": config.legend.columns,
+                    "frameon": False,
+                }
+                if config.legend.location == "best":
+                    figure.axes[0].legend(
+                        tuple(handles_by_label.values()), tuple(handles_by_label), loc="best", **legend_args
+                    )
+                else:
+                    legend = figure.legend(
+                        tuple(handles_by_label.values()),
+                        tuple(handles_by_label),
+                        loc=config.legend.location,
+                        **legend_args,
+                    )
+                    figure.canvas.draw()
+                    bounds = legend.get_window_extent().transformed(figure.transFigure.inverted())
+                    rect = [0.0, 0.0, 1.0, 1.0]
+                    if config.legend.location.startswith("upper"):
+                        rect[3] = max(0.2, 1.0 - bounds.height - 0.02)
+                    elif config.legend.location.startswith("lower"):
+                        rect[1] = min(0.8, bounds.height + 0.02)
+                    elif config.legend.location in {"center left", "center right", "right"}:
+                        if config.legend.location == "center left":
+                            rect[0] = min(0.8, bounds.width + 0.02)
+                        else:
+                            rect[2] = max(0.2, 1.0 - bounds.width - 0.02)
+                    figure.tight_layout(rect=(rect[0], rect[1], rect[2], rect[3]))
         for extension in ("pdf", "svg", "png"):
-            figure.savefig(output / f"{name}.{extension}", bbox_inches="tight")
+            artifact = destination / f"{name}.{extension}"
+            if extension in config.formats:
+                figure.savefig(artifact, dpi=config.ppi)
+            else:
+                artifact.unlink(missing_ok=True)
+        rendered[name] = {
+            "width_inches": float(figure.get_figwidth()),
+            "height_inches": float(figure.get_figheight()),
+            "columns": figure_config.columns,
+            "outputs": [f"{name}.{extension}" for extension in config.formats],
+        }
 
     with matplotlib.rc_context(settings):
-        for name, metrics in (
-            ("ttft-cdf", (("http_ttft_seconds", "HTTP TTFT"), ("arrival_ttft_seconds", "Arrival TTFT"))),
+        for name, metrics, figure_config in (
+            ("ttft-cdf", (("http_ttft_seconds", "HTTP TTFT"), ("arrival_ttft_seconds", "Arrival TTFT")), config.ttft),
             (
                 "itl-cdf",
                 (
@@ -284,32 +331,94 @@ def render_report(
                     ("itl_estimated", "Token-estimated ITL"),
                     ("itl_combined", "Combined token-weighted ITL"),
                 ),
+                config.itl,
+            ),
+            (
+                "throughput",
+                (
+                    ("input_tokens_per_second", "Logical input (including cache hits)"),
+                    ("output_tokens_per_second", "Observed successful output"),
+                ),
+                config.throughput,
             ),
         ):
-            rows, columns = (len(metrics), 1) if layout == "single" else (1, len(metrics))
-            figure = Figure(figsize=(width, 2.05 * rows))
+            rows = math.ceil(len(metrics) / figure_config.columns)
+            width = figure_config.width_inches or preset_width
+            height = figure_config.height_inches or 2.4 * rows
+            text_width = max(10, int(width * 9 / figure_config.columns))
+            figure = Figure(figsize=(width, height))
             FigureCanvasAgg(figure)
             if window_note is not None:
                 figure.suptitle(window_note, fontsize=8)
-            axes = figure.subplots(rows, columns, squeeze=False)
-            for axis, (metric, title) in zip(axes.flat, metrics, strict=True):
-                unavailable: list[str] = []
-                for id in identities:
-                    label = fill(id, width=32 if layout == "single" else 42)
-                    points = tuple(
-                        point for point in item.summary.cdf if point.target_id == id and point.metric == metric
+            axes = figure.subplots(rows, figure_config.columns, squeeze=False)
+            for axis, (metric, title) in zip(axes.flat, metrics):
+                unavailable = []
+                for identity in identities:
+                    label = fill(identity, width=max(10, int(width * 9 / config.legend.columns)))
+                    if name == "throughput":
+                        buckets = tuple(bucket for bucket in item.summary.throughput if bucket.target_id == identity)
+                        if not buckets:
+                            unavailable.append(label)
+                            continue
+                        axis.stairs(
+                            [
+                                bucket.input_tokens_per_second
+                                if metric == "input_tokens_per_second"
+                                else bucket.output_tokens_per_second
+                                for bucket in buckets
+                            ],
+                            [*(bucket.start_seconds for bucket in buckets), buckets[-1].end_seconds],
+                            baseline=None,
+                            label=label,
+                            **styles[identity],
+                        )
+                    else:
+                        points = tuple(
+                            point
+                            for point in item.summary.cdf
+                            if point.target_id == identity and point.metric == metric
+                        )
+                        if not points:
+                            unavailable.append(label)
+                            continue
+                        axis.step(
+                            [points[0].value_seconds * 1000, *(point.value_seconds * 1000 for point in points)],
+                            [0.0, *(point.cumulative_probability for point in points)],
+                            where="post",
+                            label=label,
+                            **styles[identity],
+                        )
+                if name == "throughput":
+                    axis.set(
+                        xlabel=fill("Time since origin (s)", width=text_width),
+                        ylabel="Tokens / second",
+                        title=fill(title, width=text_width),
                     )
-                    if not points:
-                        unavailable.append(label)
-                        continue
-                    axis.step(
-                        [points[0].value_seconds * 1000, *(point.value_seconds * 1000 for point in points)],
-                        [0.0, *(point.cumulative_probability for point in points)],
-                        where="post",
-                        label=label,
-                        **styles[id],
-                    )
-                axis.set(xlabel=f"{title} (ms)", ylabel="Empirical CDF", ylim=(0, 1.02))
+                    if item.summary.window_end_seconds is not None:
+                        axis.set_xlim(right=item.summary.window_end_seconds)
+                        if item.workload.arrival_horizon_seconds <= item.summary.window_end_seconds:
+                            axis.axvline(
+                                item.workload.arrival_horizon_seconds, color="0.3", linewidth=0.6, linestyle=":"
+                            )
+                            if item.workload.arrival_horizon_seconds < item.summary.window_end_seconds:
+                                axis.axvspan(
+                                    item.workload.arrival_horizon_seconds,
+                                    item.summary.window_end_seconds,
+                                    color="0.94",
+                                    zorder=-1,
+                                )
+                                axis.text(
+                                    0.98,
+                                    0.98,
+                                    "shaded: queue drain",
+                                    transform=axis.transAxes,
+                                    ha="right",
+                                    va="top",
+                                    fontsize=6,
+                                )
+                else:
+                    axis.set(xlabel=fill(f"{title} (ms)", width=text_width), ylabel="Empirical CDF", ylim=(0, 1.02))
+                axis.xaxis.labelpad += axis.xaxis.label.get_fontsize()
                 axis.set_xlim(left=0)
                 axis.grid(True)
                 axis.set_axisbelow(True)
@@ -322,82 +431,32 @@ def render_report(
                         va="top",
                         fontsize=6,
                     )
+            for axis in tuple(axes.flat)[len(metrics) :]:
+                axis.set_visible(False)
             figure.tight_layout()
-            save(figure, name)
-
-        figure = Figure(figsize=(width, 4.1))
-        FigureCanvasAgg(figure)
-        if window_note is not None:
-            figure.suptitle(window_note, fontsize=8)
-        axes = figure.subplots(2, 1, sharex=True)
-        for axis, metric, title in zip(
-            axes,
-            ("input_tokens_per_second", "output_tokens_per_second"),
-            ("Logical input (including cache hits)", "Observed successful output"),
-            strict=True,
-        ):
-            for id in identities:
-                buckets = tuple(bucket for bucket in item.summary.throughput if bucket.target_id == id)
-                if not buckets:
-                    continue
-                edges = [*(bucket.start_seconds for bucket in buckets), buckets[-1].end_seconds]
-                axis.stairs(
-                    [getattr(bucket, metric) for bucket in buckets],
-                    edges,
-                    baseline=None,
-                    label=fill(id, width=32 if layout == "single" else 42),
-                    **styles[id],
-                )
-            if (
-                item.summary.window_end_seconds is not None
-                and item.workload.arrival_horizon_seconds <= item.summary.window_end_seconds
-            ):
-                axis.axvline(
-                    item.workload.arrival_horizon_seconds,
-                    color=styles["aggregate"]["color"],
-                    linewidth=0.6,
-                    linestyle=":",
-                )
-                if item.summary.window_end_seconds > item.workload.arrival_horizon_seconds:
-                    axis.axvspan(
-                        item.workload.arrival_horizon_seconds,
-                        item.summary.window_end_seconds,
-                        color="0.94",
-                        zorder=-1,
-                    )
-            axis.set(ylabel="Tokens / second", title=title)
-            axis.grid(True)
-            axis.set_axisbelow(True)
-            if not axis.patches:
-                axis.text(0.5, 0.5, "Unavailable: no measurement window", transform=axis.transAxes, ha="center")
-        axes[-1].set_xlabel("Time since origin (s)")
-        axes[-1].set_xlim(left=0)
-        if item.summary.window_end_seconds is not None:
-            axes[-1].set_xlim(right=item.summary.window_end_seconds)
-        axes[-1].text(0.98, 0.98, "shaded: queue drain", transform=axes[-1].transAxes, ha="right", va="top", fontsize=6)
-        figure.tight_layout()
-        save(figure, "throughput")
+            save(figure, name, figure_config)
 
     write_json(
-        output / "render.json",
+        destination / "render.json",
         {
             "matplotlib_version": matplotlib.__version__,
-            "layout": layout,
-            "width_inches": width,
+            "settings": config.model_dump(mode="json"),
+            "figures": rendered,
             "font": "DejaVu Serif",
             "rc_params": settings,
-            "label": item.label,
-            "series_styles": [{"target_id": id, **styles[id]} for id in identities],
+            "artifact_id": item.label,
+            "series_styles": [{"target_id": identity, **styles[identity]} for identity in identities],
             "latency_figure_units": "milliseconds",
             "throughput_units": "tokens per second",
-            "legend_location": "below figure",
         },
     )
-    write_report_projection(item, output=output, run=run)
-    return output
+    write_report_projection(item, output=destination, run=run, config=config)
+    return destination
 
 
-def write_report_projection(item: ReportSeries, *, output: Path, run: BenchRunManifest | None = None) -> None:
+def write_report_projection(
+    item: ReportSeries, *, output: Path, config: XbenchReportConfig, run: BenchRunManifest | None = None
+) -> None:
     """Export one repetition's summary and original execution/cleanup verdicts."""
 
     write_json(
@@ -421,7 +480,7 @@ def write_report_projection(item: ReportSeries, *, output: Path, run: BenchRunMa
         },
     )
     lines = [
-        "# CrossPool Benchmark Report",
+        f"# {config.title or 'CrossPool Benchmark Report'}",
         "",
         "Main distributions contain successful requests. Partial output remains separate.",
         "",
@@ -432,7 +491,7 @@ def write_report_projection(item: ReportSeries, *, output: Path, run: BenchRunMa
                 f"## Invocation: {run.run_id}",
                 "",
                 f"Original result: {run.result_code}; execution finished: {run.finished}.",
-                f"Selected cases: {', '.join(run.selected_cases)}.",
+                f"Selected cases: {', '.join(str(identity) for identity in run.selected_cases)}.",
                 f"Retained cases: {', '.join(run.case_directories) or 'none'}.",
                 f"Infrastructure error: {run.infrastructure_error or 'none'}.",
                 "",
@@ -470,4 +529,10 @@ def write_report_projection(item: ReportSeries, *, output: Path, run: BenchRunMa
                 "",
             ]
         )
+    for figure, settings in (("ttft-cdf", config.ttft), ("itl-cdf", config.itl), ("throughput", config.throughput)):
+        lines.extend([f"## {figure}", ""])
+        lines.extend(f"[{figure}.{extension}]({figure}.{extension})" for extension in config.formats)
+        if settings.caption is not None:
+            lines.extend(["", settings.caption])
+        lines.append("")
     (output / "report.md").write_text("\n".join(lines), encoding="utf-8")
