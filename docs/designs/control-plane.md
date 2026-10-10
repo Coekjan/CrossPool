@@ -335,6 +335,10 @@ retirement of the old generation owners.
 An Instance rank may retry temporary daemon transport failures within its
 existing bounded deadline, but a daemon response that its registration is
 missing is terminal; it does not re-register or reacquire its Transport lease.
+Instance heartbeat and sticky-failure monitors deliver the original error to
+their integration-owned callback. Terminal `ABORTING` or `STOPPED` responses
+request retirement; they are not ignored while inference continues. Agents
+retain their first failure and request retirement at their own control boundary.
 
 Readiness never derives from process existence alone. It requires live
 registrations, MPS availability, a retained admitted plan, usable Transport
@@ -449,7 +453,8 @@ they also retain CPU-only startup and helper processes through retirement.
 Controller/server domain retirement remains the scope's responsibility.
 
 An Instance rank's exit retires its Generation rather than leaving it reusable.
-The daemon drives the remaining participants through
+For normal retirement of a usable world, the daemon drives the remaining
+participants through
 `QUIESCING -> DRAINING -> FINALIZING -> STOPPED`. While CUDA and NVSHMEM remain
 live, Agents drain asynchronous work, release rank-local resources and Transport
 arenas, and finalize Fabric collectively. Explicit Instance detach serves
@@ -457,19 +462,66 @@ startup rollback and controlled cleanup; unexpected process loss enters the
 watchdog's owner-loss path and is not itself verified retirement. Destructors
 are best-effort guards, not distributed recovery.
 
+A failed Generation seals new work and retires according to remaining resource
+usability. Serving retirement skips normal request drain; necessary device-work
+completion remains a resource-safety obligation. A complete usable Fabric may
+drain and finalize while preserving its failed outcome. A damaged or incomplete
+world skips collective finalization. Joined survivors report role quiescence and
+[outbound-complete local drain](fabric.md#drain-and-backing-lifetime) through
+`ABORTING`. Once every retained Instance owner has exited and every Agent owner
+has either exited or reported `DRAINED` or `FINALIZED`, the daemon publishes
+`STOPPED`. Surviving Agents then exit nonzero with their original failure rather
+than entering a missing-peer collective. Unconfirmed drain retains the living
+owner for manual resolution.
+
+Before native join, an Agent has no participant report or reports `JOIN_READY`.
+An Agent stopping at this boundary requests Generation quiescence and releases its
+process-local owners; role cleanup still retires IPC consumers before their
+exporters. A pre-join failure follows the same local release path and preserves
+its original failure. `JOINING` does not establish a completed or absent join,
+so it does not authorize this local-only exit.
+
+Agents reconcile recoverable quiesce-request failures while continuing to
+consume daemon heartbeats. An acknowledgement or an authoritative retirement
+phase establishes the request's effect. Joined participants advance only
+retirement phases during shutdown, never a cached startup phase. This
+control-request recovery introduces no retry of native cleanup operations.
+Lost registration, a contradictory Generation or an unconfirmed native release
+does not authorize forcing an unsafe owner to exit.
+
+`STOPPED` establishes stopped data-plane work, not host-process exit or resource
+reclamation. The daemon retains exact owner identities until actual exit;
+MPS retirement still requires participant exit and client absence. Ordinary
+request errors alone do not establish Generation failure, and the daemon does
+not replace an unretired world.
+
 An already-admitted Agent may finish initialization and formal registration
 after admission closes. Without a joined generation, formal registration
 establishes its Agent.run signal-handler boundary and permits exact-PID SIGTERM.
 Startup admission alone does not. Joined Agents follow collective Fabric
 retirement; missing peers do not authorize an unconditional finalize in `finally`.
 
-SGLang retains its pinned factories and ready handshake. Startup signals record
-cancellation without interrupting an in-progress initialization transaction.
-At ready, pending cancellation uses the actual returned tokenizer transport and
-worker/cache handles before HTTP startup proceeds. Initialized shutdown prefers
-local release. IPC consumers retire before their cache exporters. Optional cache
-helper lifecycle uses these same boundaries; checkpoint-loader and cache-mode
-compatibility require their own serving evidence.
+SGLang retains its pinned factories and ready handshake. The integration retains
+actual scheduler/cache handles before readiness; the DP controller publishes its
+existing worker handles when synchronous launch returns or unwinds. Cancellation
+seals further creation, unwinds launch and then retires the retained world.
+Unpublished or uncertain creation keeps the relevant owner alive; a descendant
+snapshot does not establish a universal creation fence. Initialized shutdown
+prefers local release. IPC consumers retire before their cache exporters.
+Optional cache-helper lifecycle uses these same boundaries; checkpoint-loader
+and cache-mode compatibility require their own serving evidence.
+
+The importable [`worker entry`](../../src/xpool/integrations/sglang/worker.py)
+retains one `WorkerLifecycle` across the upstream scheduler call. Normal return
+requires a successful event-loop return and completed engine release plus
+Instance detach, without a retained failure. The upstream entry's return alone
+is insufficient because it consumes scheduler exceptions. Background and
+main-thread failures share this owner and notify the exact immediate serving
+parent through SGLang's existing `SIGQUIT`; a DP controller forwards the signal
+and remains owned until its workers retire. Notification does not prove local
+release or authorize process exit. Cooperative shutdown notification may fail
+with `zmq.Again` or exhaust its bounded router wait; context-safety checks and
+reaping still have their own duties.
 
 At destructive engine boundaries, the integration selects its retained worker
 and cache-helper identities and stops further resource creation. The daemon's
@@ -484,6 +536,17 @@ Context termination does not kill a host process, finalize Fabric, retire direct
 FFN participants or establish complete-domain exit. These remain owner duties.
 Target and scope checks validate the operation; caller authentication and
 multi-tenant authorization are outside the supported local deployment boundary.
+
+A locally observed numeric CUDA result that explicitly requires process
+termination supplies a separate exit condition. The narrow platform predicate
+in `xpool.utils.mps` inspects retained `torch.AcceleratorError` metadata and its
+exception chain, without querying the device or matching log text. Native Driver
+error translation preserves the numeric result and source call site through
+this Torch exception boundary. The local worker or Agent records failure and
+exits nonzero without another device or
+collective call. Unknown results, heartbeat loss, `SIGQUIT` and server-wide
+`FAULT` observations do not supply that local evidence. This exit establishes
+no peer or complete-domain retirement; other owners retain their safety duties.
 
 Controller startup, management queries and initial membership inspection reuse
 one selected 30-second bound, capped by an existing owner deadline. Startup
@@ -504,10 +567,11 @@ loss or a partial-world/fatal failure is outside this contract.
 
 | Managed daemon exit | Meaning |
 | --- | --- |
-| `0` | Normal deployment exit with verified resource retirement. |
-| `20` | Deployment failed, but resource retirement was verified. |
+| `0` | Daemon completed without a retained daemon-local failure, with verified resource retirement. |
+| `20` | Daemon-local failure, with verified resource retirement. |
 | Other status or signal death | Cleanup unconfirmed; outer ownership remains. |
 
-These statuses apply to the retained daemon after its MPS scope closes. The
-enclosing task still proves complete-domain exit and preserves its original
-test or benchmark verdict. `XpoolClient.close()` closes only its HTTP client.
+These statuses apply to the retained daemon after its MPS scope closes. Status
+`0` does not establish deployment, test or benchmark success. The enclosing
+owner aggregates participant outcomes, proves complete-domain exit and preserves
+the original execution verdict. `XpoolClient.close()` closes only its HTTP client.

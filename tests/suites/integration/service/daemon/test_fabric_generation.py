@@ -803,7 +803,6 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
 def test_fabric_pe_exit_records_owner_failure_and_selects_fail_stop(
     target_role: str,
     target_pe: int,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = make_config(
         {
@@ -836,6 +835,26 @@ def test_fabric_pe_exit_records_owner_failure_and_selects_fail_stop(
             "reason": "exited",
         }
         assert surviving_agent_id.is_alive() and instance_id.is_alive()
+        surviving_registration, surviving_pe = (ffnagent, 1) if target_role == "atnagent" else (atnagent, 0)
+        for phase in (
+            FabricParticipantPhase.QUIESCED,
+            FabricParticipantPhase.DRAINING,
+            FabricParticipantPhase.DRAINED,
+        ):
+            assert (
+                report_fabric_phase(app, surviving_registration, plan, pe=surviving_pe, phase=phase)
+                == HTTPStatus.NO_CONTENT
+            )
+        app.state.control_plane.watchdog()
+        assert request(app, "GET", "/ready").json()["fabric_phase"] == FabricGenerationPhase.ABORTING
+        stop_proc(instance_process)
+        app.state.control_plane.watchdog()
+        assert request(app, "GET", "/ready").json()["fabric_phase"] == FabricGenerationPhase.STOPPED
+        assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.OK
+        assert surviving_agent_id.is_alive()
+        stop_proc(ffnagent_process if target_role == "atnagent" else atnagent_process)
+        app.state.control_plane.watchdog()
+        assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
     finally:
         for process in (atnagent_process, ffnagent_process, instance_process):
             if process.poll() is None:

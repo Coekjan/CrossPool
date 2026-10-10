@@ -4,10 +4,16 @@
 /// \brief Host-side device utility helpers.
 
 #include <cstdint>
+#include <source_location>
 
+#include <cuda.h>
 #include <cuda_runtime_api.h>
 
 namespace xpool::utils::device {
+
+/// Preserve a failing Driver result and its caller location in Torch's typed error.
+/// \throws c10::AcceleratorError when result differs from CUDA_SUCCESS.
+void check_driver_result(CUresult result, std::source_location location = std::source_location::current());
 
 /// Move-only owner for a host-created CUDA stream.
 ///

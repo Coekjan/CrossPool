@@ -2,44 +2,17 @@
 
 from __future__ import annotations
 
-import logging
 import os
 import signal
 import time
 from dataclasses import dataclass
-from typing import NoReturn, Self
+from typing import Self
 
 import psutil
 
-__all__ = ["ProcUniqId", "bail", "set_process_title"]
+__all__ = ["ProcUniqId", "set_process_title"]
 
 PROCESS_KILL_WAIT_S = 1.0
-
-
-def bail(
-    logger: logging.Logger | None = None,
-    message: str | None = None,
-    *args: object,
-    code: int = 1,
-) -> NoReturn:
-    """Log an optional critical failure and terminate the process with ``os._exit``.
-
-    Args:
-        logger: Logger that owns the failing runtime path. When omitted and
-            ``message`` is provided, the process utility logger is used.
-        message: Optional critical log message format string.
-        *args: Positional format arguments for ``message``.
-        code: Process exit status.
-
-    Side Effects:
-        Terminates the current process immediately without running Python
-        cleanup handlers. Use only for fail-closed paths where raising would
-        leave an unsafe process alive.
-    """
-
-    if message is not None:
-        (logger or logging.getLogger(__name__)).critical(message, *args)
-    os._exit(code)
 
 
 def set_process_title(title: str) -> None:

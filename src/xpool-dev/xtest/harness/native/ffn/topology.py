@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import threading
 import time
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
@@ -14,7 +16,7 @@ from pathlib import Path
 import safetensors.torch
 import torch
 
-from xkit.child import PythonChildProcess
+from xkit.child import PythonChildFailure, PythonChildProcess
 from xkit.network import TcpEndpointReservation
 from xkit.serving.cluster import XpoolCluster, XpoolClusterLaunch
 from xkit.serving.launch import snapshot_cluster_launch
@@ -29,7 +31,7 @@ from xpool.service.client import XpoolClient
 from xpool.service.wire import MpsClientTermination, ServingListener
 from xpool.transport import FfnRequestMetadata
 from xpool.utils.device import normalize_environment, visible_uuids
-from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S, MpsEndpoint
+from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S, MpsEndpoint, is_terminal_device_error
 from xpool.utils.procs import ProcUniqId
 from xpool.utils.sighandler import defer_signal_exceptions
 from xtest.harness.native.ffn.protocol import (
@@ -305,18 +307,44 @@ def run_ffn_instance(connection: Connection, spec: FfnInstanceSpec) -> None:
     finally:
         client.close()
     device = spec.rank
-    bootstrap.init(device, RuntimeRole.INSTANCE)
-    endpoint.require_client()
-    devkit.install()
-    runtime = InstanceRankRuntime.start(
-        model_id=spec.model_id,
-        rank=spec.rank,
-        transport=spec.transport,
-        ffn_profile=spec.ffn_profile,
-        kv_capacity=kv_capacity_profile(),
-        atn_runtime_headroom_bytes=0,
-    )
+    failure: BaseException | None = None
+    send_lock = threading.Lock()
+
+    def report(error: BaseException) -> None:
+        nonlocal failure
+        logger.error("FFN Instance failed model=%s rank=%s", spec.model_id, spec.rank, exc_info=error)
+        if is_terminal_device_error(error):
+            # This local terminal result requires exit even if pipe publication
+            # is blocked. The existing parent observes child death and its log.
+            os._exit(1)
+        with send_lock:
+            if failure is not None:
+                return
+            failure = error
+            try:
+                connection.send(PythonChildFailure("".join(traceback.format_exception(error))))
+            except (OSError, EOFError):
+                logger.exception("FFN Instance failure notification could not reach its owner")
+
+    def publish(message: FfnInstanceReady | FfnInstanceCompleted | FfnInstanceClosed) -> None:
+        with send_lock:
+            if failure is not None:
+                raise failure
+            connection.send(message)
+
     try:
+        bootstrap.init(device, RuntimeRole.INSTANCE)
+        endpoint.require_client()
+        devkit.install()
+        runtime = InstanceRankRuntime.start(
+            model_id=spec.model_id,
+            rank=spec.rank,
+            transport=spec.transport,
+            ffn_profile=spec.ffn_profile,
+            kv_capacity=kv_capacity_profile(),
+            atn_runtime_headroom_bytes=0,
+            on_failure=report,
+        )
         plan = runtime.wait_for_fabric_executable()
         model_plan = plan.model_plans[runtime.instance_index]
         if model_plan.tp_size != spec.ffn_tp_size:
@@ -327,7 +355,7 @@ def run_ffn_instance(connection: Connection, spec: FfnInstanceSpec) -> None:
         runtime.start_failure_monitor()
         runtime.publish_initialized(ServingListener(host="127.0.0.1", port=1))
         runtime.wait_for_ready()
-        connection.send(
+        publish(
             FfnInstanceReady(
                 plan.generation,
                 runtime.instance_index,
@@ -360,10 +388,17 @@ def run_ffn_instance(connection: Connection, spec: FfnInstanceSpec) -> None:
             output = output.detach().to(device="cpu").contiguous()
             with invocation.output_path.open("xb") as output_file:
                 output_file.write(safetensors.torch.save({"hidden_states": output}))
-        connection.send(FfnInstanceCompleted(tuple(invocation.case_id for invocation in spec.invocations)))
+        publish(FfnInstanceCompleted(tuple(invocation.case_id for invocation in spec.invocations)))
         command = connection.recv()
         if command is not FfnInstanceCommand.CLOSE:
             raise RuntimeError(f"FFN Instance expected CLOSE, received {command!r}")
-    finally:
+        if failure is not None:
+            raise failure
         runtime.close()
-    connection.send(FfnInstanceClosed())
+        publish(FfnInstanceClosed())
+    except BaseException as error:
+        report(error)
+        # The existing topology owner terminates this MPS context before host
+        # reaping. A failed Instance must not run blind normal device cleanup.
+        while True:
+            time.sleep(1.0)

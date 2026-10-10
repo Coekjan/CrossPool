@@ -258,6 +258,24 @@ class TaskRoot:
             else:
                 raise RuntimeError(f"task root received invalid control message {message!r}")
 
+    def request_retirement(self, deadline: float) -> None:
+        """Seal creation and publish the earliest absolute cleanup deadline.
+
+        Actual resource owners call this when their cleanup budget expires.
+        Publication neither performs cleanup nor proves resources retired;
+        channel failure leaves ownership retained for manual resolution.
+        """
+        with self.condition:
+            self.sealed = True
+            self.interrupt_pending = False
+            self.cleanup_deadline = deadline if self.cleanup_deadline is None else min(self.cleanup_deadline, deadline)
+            self.condition.notify_all()
+            if self.requested_event is not None:
+                try:
+                    self.connection.send(TaskCancellation(self.cleanup_deadline))
+                except (EOFError, OSError) as error:
+                    logger.error("task retirement channel unavailable pid=%s detail=%s", self.identity.pid, error)
+
     def finish(self) -> None:
         """Seal after full teardown and commit CLEANED only with every proof.
 
@@ -268,18 +286,12 @@ class TaskRoot:
 
         global current_task_root
         with self.condition:
-            self.sealed = True
-            self.interrupt_pending = False
+            deadline = (
+                time.monotonic() + MPS_CLEANUP_TIMEOUT_S if self.cleanup_deadline is None else self.cleanup_deadline
+            )
+            self.request_retirement(deadline)
             for signum in self.handlers:
                 signal.signal(signum, self.handle_cancel)
-            if self.cleanup_deadline is None:
-                self.cleanup_deadline = time.monotonic() + MPS_CLEANUP_TIMEOUT_S
-            deadline = self.cleanup_deadline
-            if self.requested_event is not None:
-                try:
-                    self.connection.send(TaskCancellation(deadline))
-                except (BrokenPipeError, EOFError, OSError) as error:
-                    logger.error("task retirement channel unavailable pid=%s detail=%s", self.identity.pid, error)
             expiry_reported = False
             while self.scopes:
                 if time.monotonic() >= deadline and not expiry_reported:

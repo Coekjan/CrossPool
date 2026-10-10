@@ -9,6 +9,8 @@ import threading
 import time
 from abc import ABC, abstractmethod
 
+import torch
+
 import xpool.native
 from xpool import bootstrap, devkit
 from xpool.config import get_global_config
@@ -34,8 +36,8 @@ from xpool.service.wire import (
 )
 from xpool.utils.background import BackgroundThread
 from xpool.utils.device import normalize_environment, visible_uuids
-from xpool.utils.mps import MpsEndpoint
-from xpool.utils.procs import ProcUniqId, bail
+from xpool.utils.mps import MpsEndpoint, is_terminal_device_error
+from xpool.utils.procs import ProcUniqId
 from xpool.utils.sighandler import sighandle
 
 AGENT_CONTROL_INTERVAL_S = 0.5
@@ -165,6 +167,9 @@ class Agent(ABC):
         self.fabric_phase: FabricGenerationPhase | None = None
         self.participant_report: FabricParticipantReport | None = None
         self.fabric_stopped = False
+        self.failure: BaseException | None = None
+        self.failure_lock = threading.Lock()
+        self.shutdown_requested = threading.Event()
         self.heartbeat_worker: AgentHeartbeat
         logger.info("starting device=%s pid=%s", self.device, self.proc_id.pid)
 
@@ -173,22 +178,52 @@ class Agent(ABC):
         """Activate role-local device progress before reporting readiness."""
 
     def shutdown_fabric(self) -> None:
-        """Request and complete coordinated Fabric quiesce and native drain."""
+        """Reconcile quiesce and advance authoritative retirement phases.
+
+        Unjoined participants return for local-owner cleanup. Recoverable
+        control requests keep receiving heartbeats; native failures propagate
+        to the retained-owner boundary rather than being retried here.
+        """
 
         if self.fabric_plan is None:
             return
-        self.client.request_fabric_quiesce(
-            FabricQuiesceRequest(owner=self.process_ref, generation=self.fabric_plan.generation)
-        )
+        quiesce_requested = False
         while self.fabric_plan is not None:
-            self.heartbeat_worker.raise_if_failed()
+            if self.failure is None:
+                self.heartbeat_worker.raise_if_failed()
             if self.heartbeat_worker.consume_registration_missing():
                 raise AgentError("Agent registration disappeared during coordinated Fabric shutdown")
+            if not quiesce_requested:
+                try:
+                    self.client.request_fabric_quiesce(
+                        FabricQuiesceRequest(owner=self.process_ref, generation=self.fabric_plan.generation)
+                    )
+                except (XpoolClientError, XpoolDaemonError) as error:
+                    if not error.is_recoverable:
+                        raise
+                    logger.debug("fabric quiesce request unavailable device=%s detail=%s", self.device, error)
+                else:
+                    quiesce_requested = True
             response = self.heartbeat_worker.consume_response()
             if response is not None:
                 self.handle_heartbeat_response(response)
-            self.poll_fabric_health()
-            self.advance_fabric_lifecycle()
+            retiring = self.fabric_phase in {
+                FabricGenerationPhase.QUIESCING,
+                FabricGenerationPhase.DRAINING,
+                FabricGenerationPhase.FINALIZING,
+                FabricGenerationPhase.ABORTING,
+                FabricGenerationPhase.STOPPED,
+            }
+            report = self.participant_report
+            if (quiesce_requested or retiring) and (
+                report is None or report.phase is FabricParticipantPhase.JOIN_READY
+            ):
+                return
+            if retiring:
+                quiesce_requested = True
+                if self.failure is None:
+                    self.poll_fabric_health()
+                self.advance_fabric_lifecycle()
             if self.fabric_plan is not None:
                 time.sleep(AGENT_SHUTDOWN_POLL_INTERVAL_S)
 
@@ -281,7 +316,23 @@ class Agent(ABC):
                             self.fabric_plan.generation.format(),
                         )
                 case FabricGenerationPhase.ABORTING:
-                    raise AgentError("daemon selected fail-stop Fabric abort")
+                    if self.failure is None:
+                        self.fail(AgentError("daemon selected fail-stop Fabric abort"))
+                    if report is not None:
+                        match report.phase:
+                            case (
+                                FabricParticipantPhase.JOINED
+                                | FabricParticipantPhase.EXECUTION_READY
+                                | FabricParticipantPhase.ACTIVE
+                            ):
+                                self.quiesce_fabric()
+                                self.report_fabric_phase(FabricParticipantPhase.QUIESCED)
+                            case FabricParticipantPhase.QUIESCED:
+                                xpool.native.fabric.drain_async()
+                                self.report_fabric_phase(FabricParticipantPhase.DRAINING)
+                            case FabricParticipantPhase.DRAINING:
+                                if not xpool.native.fabric.drain_pending():
+                                    self.report_fabric_phase(FabricParticipantPhase.DRAINED)
                 case FabricGenerationPhase.QUIESCING if report is not None:
                     if report.phase is FabricParticipantPhase.ACTIVE:
                         self.quiesce_fabric()
@@ -297,6 +348,9 @@ class Agent(ABC):
                         xpool.native.fabric.finalize()
                         self.report_fabric_phase(FabricParticipantPhase.FINALIZED)
                 case FabricGenerationPhase.STOPPED if report is not None:
+                    if self.failure is not None and report.phase is not FabricParticipantPhase.FINALIZED:
+                        logger.error("failed fabric stopped; exiting device=%s pid=%s", self.device, self.proc_id.pid)
+                        os._exit(1)
                     if report.phase is FabricParticipantPhase.FINALIZED:
                         self.fabric_plan = None
                         self.fabric_arena_projection = None
@@ -337,7 +391,9 @@ class Agent(ABC):
         if previous is None:
             if phase is not FabricParticipantPhase.JOIN_READY:
                 raise AgentError("first local Fabric participant phase must be join_ready")
-        elif phase is not previous.phase and not previous.phase.allows(phase):
+        elif phase is not previous.phase and not previous.phase.allows(
+            phase, aborting=self.fabric_phase is FabricGenerationPhase.ABORTING
+        ):
             raise AgentError(f"local Fabric participant phase cannot move from {previous.phase.value} to {phase.value}")
 
         candidate = FabricParticipantReport(
@@ -378,7 +434,11 @@ class Agent(ABC):
     def report_local_control_failure(self, message: str) -> None:
         """Best-effort enrich the current report with one local control failure."""
 
-        if self.fabric_plan is None or self.participant_report is None:
+        if (
+            self.fabric_plan is None
+            or self.participant_report is None
+            or self.participant_report.control_failure is not None
+        ):
             return
         try:
             self.report_fabric_phase(
@@ -447,51 +507,114 @@ class Agent(ABC):
                 shutdown_requested.wait(AGENT_CONTROL_INTERVAL_S)
 
     def run(self) -> None:
-        """Run registration, role preparation, and Fabric lifecycle."""
+        """Run one normal or failed retirement flow at safe control boundaries.
 
-        shutdown_requested = threading.Event()
+        A pre-join failure owns only local resources. A joined, unusable or
+        unconfirmed world retains its Agent rather than forcing collective
+        finalization or freeing resources still accessed by peers. A confirmed
+        join permits role quiescence and local drain attempts; their completion
+        does not establish peer retirement.
+        """
 
         def request_shutdown(signal_number: int, frame: object) -> None:
             logger.info("shutdown requested device=%s pid=%s", self.device, self.proc_id.pid)
-            shutdown_requested.set()
+            self.shutdown_requested.set()
 
         with (
             sighandle(signal.SIGINT, request_shutdown),
             sighandle(signal.SIGTERM, request_shutdown),
         ):
+            releasing = False
+            released = False
             try:
-                self.run_control_loop(shutdown_requested)
-            except Exception:
-                logger.exception(
-                    "agent failed and will exit without unsafe native cleanup device=%s",
-                    self.device,
-                )
-                if self.participant_report is None:
-                    owners = (
+                self.run_control_loop(self.shutdown_requested)
+                self.shutdown_fabric()
+                releasing = True
+                self.heartbeat_worker.close()
+                self.close_role()
+                torch.cuda.synchronize(self.device)
+                self.client.close()
+                released = True
+                if self.failure is not None:
+                    raise self.failure
+            except BaseException as error:
+                self.fail(error)
+                failure = error if self.failure is None else self.failure
+                if released:
+                    raise failure
+                if (
+                    self.participant_report is not None
+                    and self.participant_report.phase is not FabricParticipantPhase.JOIN_READY
+                    and not releasing
+                ):
+                    self.report_local_control_failure(str(failure))
+                    try:
+                        self.shutdown_fabric()
+                    except Exception as cleanup_error:
+                        self.fail(cleanup_error)
+                        logger.error("failed fabric retirement device=%s", self.device, exc_info=cleanup_error)
+                if not releasing and (
+                    self.participant_report is None
+                    or self.participant_report.phase is FabricParticipantPhase.JOIN_READY
+                ):
+                    # Native join has not begun, or STOPPED cleared the finalized report.
+                    confirmed = True
+                    for name, close in (
                         ("heartbeat worker", self.heartbeat_worker.close),
                         ("role resources", self.close_role),
+                        ("device completion", lambda: torch.cuda.synchronize(self.device)),
                         ("daemon client", self.client.close),
-                    )
-                    for name, close in owners:
+                    ):
                         try:
                             close()
-                        except Exception:
-                            logger.exception("failed to close pre-join %s device=%s", name, self.device)
-                bail(code=1)
-            try:
-                self.shutdown_fabric()
-            except Exception:
-                logger.exception(
-                    "coordinated fabric shutdown failed; skipping unsafe native cleanup device=%s",
-                    self.device,
+                        except BaseException as cleanup_error:
+                            self.fail(cleanup_error)
+                            confirmed = False
+                            logger.error(
+                                "pre-join %s cleanup unconfirmed device=%s", name, self.device, exc_info=cleanup_error
+                            )
+                    if confirmed:
+                        raise failure
+                logger.error(
+                    "agent retirement unconfirmed; retaining resources device=%s pid=%s", self.device, self.proc_id.pid
                 )
-                bail(code=1)
-            self.heartbeat_worker.close()
-            try:
-                self.close_role()
-            finally:
-                self.client.close()
+                while True:
+                    response = self.heartbeat_worker.consume_response()
+                    if response is not None and not releasing:
+                        try:
+                            self.handle_heartbeat_response(response)
+                            if self.fabric_phase is FabricGenerationPhase.STOPPED:
+                                self.advance_fabric_lifecycle()
+                        except Exception as control_error:
+                            self.fail(control_error)
+                    time.sleep(AGENT_SHUTDOWN_POLL_INTERVAL_S)
             logger.info("stopped device=%s pid=%s", self.device, self.proc_id.pid)
+
+    def fail(self, error: BaseException) -> None:
+        """Retain the first failure and request this Agent's retirement.
+
+        Background producers call this on their reporting thread. Ordinary
+        errors stop further control-loop admissions; the main owner retires
+        resources. Every locally observed terminal device result requires
+        nonzero exit, including a later error after the first failure, without
+        another device or collective call. That exit proves no peer retirement.
+        """
+
+        with self.failure_lock:
+            first = self.failure is None
+            if first:
+                self.failure = error
+        if first:
+            logger.error("agent failed device=%s pid=%s", self.device, self.proc_id.pid, exc_info=error)
+        self.shutdown_requested.set()
+        if is_terminal_device_error(error):
+            logger.error(
+                "terminal device result requires agent exit device=%s pid=%s error=%s",
+                self.device,
+                self.proc_id.pid,
+                error,
+            )
+            os._exit(1)
 
 
 class AgentHeartbeat:
@@ -512,6 +635,7 @@ class AgentHeartbeat:
             interval_s=interval_s,
             target=self.heartbeat_once,
             join_timeout_s=AGENT_HEARTBEAT_STOP_JOIN_TIMEOUT_S,
+            on_failure=agent.fail,
         )
         self.lock = threading.Lock()
         self.registration_missing = False

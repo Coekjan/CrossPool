@@ -226,15 +226,7 @@ class XpoolCluster:
         last_diagnostic: tuple[type[Exception], str] | None = None
         while True:
             now = time.monotonic()
-            if now >= deadline and not expiry_reported:
-                logger.error("cluster cleanup expired; retaining owner and device grant; manual resolution required")
-                expiry_reported = True
             try:
-                if not notified and now < deadline:
-                    for daemon in daemons:
-                        if daemon.process.poll() is None:
-                            daemon.process.send_signal(signal.SIGTERM)
-                    notified = True
                 if all(daemon.process.poll() in (0, 20) for daemon in daemons) and all(
                     wait_for_process_group(process.process, 0.0) for process in self.processes
                 ):
@@ -244,12 +236,23 @@ class XpoolCluster:
                     if self.task_scope is not None:
                         self.task_scope.complete()
                     return
+                if not notified and now < deadline:
+                    for daemon in daemons:
+                        if daemon.process.poll() is None:
+                            daemon.process.send_signal(signal.SIGTERM)
+                    notified = True
                 last_diagnostic = None
             except Exception as error:
                 diagnostic = type(error), str(error)
                 if diagnostic != last_diagnostic:
                     logger.error("cluster cleanup incomplete; retaining owner detail=%s", error)
                     last_diagnostic = diagnostic
+            if now >= deadline and not expiry_reported:
+                logger.error("cluster cleanup expired; retaining owner and device grant; manual resolution required")
+                root = get_task_root()
+                if root is not None:
+                    root.request_retirement(deadline)
+                expiry_reported = True
             time.sleep(POLL_INTERVAL_SECONDS)
 
     def __enter__(self) -> XpoolCluster:

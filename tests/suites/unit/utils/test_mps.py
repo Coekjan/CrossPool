@@ -9,8 +9,27 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import torch
+from cuda.bindings.runtime import cudaError_t  # ty: ignore[unresolved-import]
 
 from xpool.utils import mps
+
+
+def test_terminal_device_error_requires_retained_numeric_evidence() -> None:
+    failure = torch.AcceleratorError("device execution failed")
+    setattr(failure, "error_code", int(cudaError_t.cudaErrorLaunchFailure))
+    wrapped = RuntimeError("runtime failed")
+    wrapped.__cause__ = failure
+
+    assert mps.is_terminal_device_error(failure)
+    assert mps.is_terminal_device_error(wrapped)
+    wrapped.__cause__ = None
+    wrapped.__context__ = failure
+    assert mps.is_terminal_device_error(wrapped)
+    setattr(failure, "error_code", int(cudaError_t.cudaErrorInvalidValue))
+    assert not mps.is_terminal_device_error(wrapped)
+    assert not mps.is_terminal_device_error(torch.AcceleratorError("unspecified launch failure"))
+    assert not mps.is_terminal_device_error(RuntimeError("CUDA error 719"))
 
 
 @pytest.fixture

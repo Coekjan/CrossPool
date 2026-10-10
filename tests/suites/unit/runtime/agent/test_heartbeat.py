@@ -20,12 +20,13 @@ class HeartbeatAgent:
 
     def __init__(self, sender: Callable[[], HeartbeatResponse]) -> None:
         self.sender = sender
+        self.failures: list[BaseException] = []
 
     def send_heartbeat(self) -> HeartbeatResponse:
         return self.sender()
 
-    def handle_heartbeat_response(self, response: HeartbeatResponse) -> None:
-        pass
+    def fail(self, error: BaseException) -> None:
+        self.failures.append(error)
 
 
 def heartbeat_response() -> HeartbeatResponse:
@@ -53,14 +54,19 @@ def test_heartbeat_reports_missing_registration() -> None:
 
 
 def test_heartbeat_surfaces_unrecoverable_daemon_error() -> None:
-    def sender() -> HeartbeatResponse:
-        raise XpoolDaemonError("conflict", "pid mismatch")
+    failure = XpoolDaemonError("conflict", "pid mismatch")
 
-    worker = AgentHeartbeat(agent=cast(Agent, HeartbeatAgent(sender)))
+    def sender() -> HeartbeatResponse:
+        raise failure
+
+    agent = HeartbeatAgent(sender)
+    worker = AgentHeartbeat(agent=cast(Agent, agent))
     worker.start()
-    with pytest.raises(AgentError, match="unrecoverable daemon error"):
+    with pytest.raises(AgentError, match="unrecoverable daemon error") as error:
         wait_until_raise(worker.raise_if_failed)
     worker.close()
+    assert error.value.__cause__ is failure
+    assert agent.failures == [error.value]
 
 
 def test_heartbeat_retries_recoverable_client_errors(caplog: pytest.LogCaptureFixture) -> None:

@@ -63,7 +63,7 @@ public:
   /// Repeated calls during or after completed drain are no-ops.
   void drain_async();
 
-  /// Poll whether local Fabric device work remains in terminal drain.
+  /// Poll producer retirement and completion of previously issued GPU communication.
   bool drain_pending();
 
   /// Return the locally published canonical Fabric failure when present.
@@ -98,6 +98,7 @@ private:
   ModuleRegistration module_registration_;
   FfnAgentControl ffnagent_control_;
   xpool::utils::device::OwnedCudaStream drain_stream_;
+  bool outbound_quiet_queued_ = false;
   xpool::utils::device::OwnedCudaStream resident_stream_;
   xpool::ffnagent::ExecutionRuntime ffn_execution_runtime_;
 };

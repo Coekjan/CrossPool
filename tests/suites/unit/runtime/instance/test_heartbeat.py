@@ -9,10 +9,10 @@ import pytest
 
 import xpool.runtime.instance
 import xpool.utils.background
-import xpool.utils.procs
+from xpool.fabric import FabricGenerationPhase
 from xpool.model import ModelId
 from xpool.native import ABI_VERSION
-from xpool.runtime.instance import InstanceRankRuntime
+from xpool.runtime.instance import InstanceRankError, InstanceRankRuntime
 from xpool.service.wire import (
     HeartbeatResponse,
     InstanceRankRegistration,
@@ -147,7 +147,6 @@ def test_instance_heartbeat_retries_recoverable_response_failure(
         monkeypatch,
         heartbeat_results=[failure, failure, failure],
     )
-    monkeypatch.setattr(xpool.utils.procs.os, "_exit", lambda code: (item for item in ()).throw(SystemExit(code)))
     heartbeat = runtime_heartbeat(config, monkeypatch)
 
     heartbeat.step()
@@ -186,62 +185,71 @@ def test_instance_heartbeat_keeps_client_on_recoverable_failure_and_closes_on_st
     assert [record.levelno for record in caplog.records] == [logging.WARNING, logging.INFO]
 
 
-def test_instance_heartbeat_fail_closes_after_transport_error_deadline(
+def test_instance_heartbeat_reports_transport_error_after_recovery_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = runtime_config()
+    failure = xpool.runtime.instance.XpoolClientError("transport", "daemon unavailable")
     client = install_scripted_instance_client(
         monkeypatch,
-        heartbeat_results=[xpool.runtime.instance.XpoolClientError("transport", "daemon unavailable")],
+        heartbeat_results=[failure],
     )
 
     monotonic_values = iter([0.0, xpool.runtime.instance.TRANSPORT_METADATA_RECOVERY_DEADLINE_S + 1.0])
     monkeypatch.setattr(xpool.runtime.instance, "time", SimpleNamespace(monotonic=lambda: next(monotonic_values)))
-    monkeypatch.setattr(xpool.utils.procs.os, "_exit", lambda code: (item for item in ()).throw(SystemExit(code)))
 
-    with pytest.raises(SystemExit) as exc_info:
+    with pytest.raises(InstanceRankError, match="heartbeat transport did not restore") as exc_info:
         runtime_heartbeat(config, monkeypatch).step()
 
-    assert exc_info.value.code == 1
+    assert exc_info.value.__cause__ is failure
     assert client.calls == [
         ("heartbeat", TEST_MODEL_ID, 0, ProcessRef(abi_version=ABI_VERSION, pid=123)),
     ]
-
-
-def test_instance_heartbeat_fail_closes_when_daemon_registration_is_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = runtime_config()
-    client = install_scripted_instance_client(
-        monkeypatch,
-        heartbeat_results=[xpool.runtime.instance.XpoolDaemonError("not_ready", "registration missing")],
-    )
-    monkeypatch.setattr(xpool.utils.procs.os, "_exit", lambda code: (item for item in ()).throw(SystemExit(code)))
-
-    with pytest.raises(SystemExit) as exc_info:
-        runtime_heartbeat(config, monkeypatch).step()
-
-    assert exc_info.value.code == 1
-    assert client.calls == [("heartbeat", TEST_MODEL_ID, 0, ProcessRef(abi_version=ABI_VERSION, pid=123))]
 
 
 @pytest.mark.parametrize(
     "failure",
     [
         xpool.runtime.instance.XpoolDaemonError("conflict", "pid mismatch"),
+        xpool.runtime.instance.XpoolDaemonError("not_ready", "registration missing"),
         ValueError("invalid heartbeat response"),
     ],
 )
-def test_instance_heartbeat_fail_closes_on_fatal_error(
+def test_instance_heartbeat_preserves_unrecoverable_error(
     monkeypatch: pytest.MonkeyPatch,
     failure: BaseException,
 ) -> None:
     config = runtime_config()
     client = install_scripted_instance_client(monkeypatch, heartbeat_results=[failure])
-    monkeypatch.setattr(xpool.utils.procs.os, "_exit", lambda code: (item for item in ()).throw(SystemExit(code)))
 
-    with pytest.raises(SystemExit) as exc_info:
+    with pytest.raises(type(failure)) as exc_info:
         runtime_heartbeat(config, monkeypatch).step()
 
-    assert exc_info.value.code == 1
+    assert exc_info.value is failure
     assert client.calls == [("heartbeat", TEST_MODEL_ID, 0, ProcessRef(abi_version=ABI_VERSION, pid=123))]
+
+
+@pytest.mark.parametrize("phase", [FabricGenerationPhase.ABORTING, FabricGenerationPhase.STOPPED])
+def test_terminal_heartbeat_notifies_lifecycle_without_main_thread_polling(
+    monkeypatch: pytest.MonkeyPatch,
+    phase: FabricGenerationPhase,
+) -> None:
+    install_scripted_instance_client(
+        monkeypatch, heartbeat_results=[HeartbeatResponse(warnings=[], fabric_phase=phase)]
+    )
+    notified = threading.Event()
+    failures: list[BaseException] = []
+
+    def report(error: BaseException) -> None:
+        failures.append(error)
+        notified.set()
+
+    heartbeat = runtime_heartbeat(runtime_config(), monkeypatch, on_failure=report)
+    heartbeat.start()
+    try:
+        assert notified.wait(1.0)
+    finally:
+        heartbeat.worker.stop()
+    with pytest.raises(InstanceRankError, match=phase.value) as error:
+        heartbeat.worker.raise_if_failed()
+    assert failures == [error.value]

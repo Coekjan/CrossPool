@@ -88,6 +88,7 @@ def reset_agent_runtime(
     )
 
     monkeypatch.setattr(xpool.runtime.agent.bootstrap, "init", lambda device, role: None)
+    monkeypatch.setattr(xpool.runtime.agent.torch.cuda, "synchronize", lambda device: None)
     monkeypatch.setattr(
         xpool.runtime.agent,
         "normalize_environment",

@@ -44,6 +44,7 @@ from xpool.integrations.sglang.kv.pool import ElasticMHATokenToKVPool, ElasticML
 from xpool.integrations.sglang.registry import MODELS_PACKAGE, discover_sglang_model_adapters
 from xpool.integrations.sglang.server_args import validate_sglang_server_args
 from xpool.integrations.sglang.shim import iter_ffn_shims
+from xpool.integrations.sglang.worker import WorkerLifecycle
 from xpool.native import RuntimeRole
 from xpool.runtime.instance import InstanceRankRuntime
 from xpool.runtime.transport import InstanceRankTransportProfile
@@ -51,11 +52,6 @@ from xpool.service.wire import ServingListener
 from xpool.utils.device import visible_uuids
 from xpool.utils.mps import MpsEndpoint
 
-MODEL_RUNNER_LOAD_MODEL = "sglang.srt.model_executor.model_runner.ModelRunner.load_model"
-MODEL_RUNNER_ALLOC_MEMORY_POOL = "sglang.srt.model_executor.model_runner.ModelRunner.alloc_memory_pool"
-SCHEDULER_GET_INIT_INFO = "sglang.srt.managers.scheduler.Scheduler.get_init_info"
-SCHEDULER_RELEASE_HOST_RESOURCES = "sglang.srt.managers.scheduler.Scheduler.release_host_resources"
-RUNTIME_CONTEXT_PUBLISH = "sglang.srt.runtime_context.publish"
 SGLANG_DEVKIT_PACKAGE = "xpool.integrations.sglang.devkit"
 logger = logging.getLogger(__name__)
 
@@ -69,33 +65,74 @@ class LifecycleHookSet(SglangHookSet):
         hooks.extend(
             (
                 SglangHook(
-                    MODEL_RUNNER_LOAD_MODEL,
+                    "sglang.srt.managers.scheduler.Scheduler.__init__",
+                    around_scheduler_init,
+                    HookType.AROUND,
+                ),
+                SglangHook(
+                    "sglang.srt.managers.scheduler.Scheduler.run_event_loop",
+                    around_scheduler_run_event_loop,
+                    HookType.AROUND,
+                ),
+                SglangHook(
+                    "sglang.srt.model_executor.model_runner.ModelRunner.load_model",
                     partial(around_model_runner_load_model, adapters),
                     HookType.AROUND,
                 ),
                 SglangHook(
-                    MODEL_RUNNER_ALLOC_MEMORY_POOL,
+                    "sglang.srt.model_executor.model_runner.ModelRunner.alloc_memory_pool",
                     after_model_runner_alloc_memory_pool,
                     HookType.AFTER,
                 ),
                 SglangHook(
-                    SCHEDULER_GET_INIT_INFO,
+                    "sglang.srt.managers.scheduler.Scheduler.get_init_info",
                     after_scheduler_get_init_info,
                     HookType.AFTER,
                 ),
                 SglangHook(
-                    SCHEDULER_RELEASE_HOST_RESOURCES,
+                    "sglang.srt.managers.scheduler.Scheduler.release_host_resources",
                     around_scheduler_release_host_resources,
                     HookType.AROUND,
                 ),
                 SglangHook(
-                    RUNTIME_CONTEXT_PUBLISH,
+                    "sglang.srt.runtime_context.publish",
                     around_runtime_context_publish,
                     HookType.AROUND,
                 ),
             )
         )
         return tuple(hooks)
+
+
+def around_scheduler_init[**P](
+    original_fn: Callable[Concatenate[Scheduler, P], None],
+    scheduler: Scheduler,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> None:
+    """Retain constructor failure before the upstream entry swallows it."""
+
+    lifecycle = WorkerLifecycle.current()
+    try:
+        original_fn(scheduler, *args, **kwargs)
+    except BaseException as error:
+        lifecycle.fail(error)
+        raise
+
+
+def around_scheduler_run_event_loop(
+    original_fn: Callable[[Scheduler], None],
+    scheduler: Scheduler,
+) -> None:
+    """Record actual loop completion rather than upstream entry return."""
+
+    lifecycle = WorkerLifecycle.current()
+    try:
+        original_fn(scheduler)
+    except BaseException as error:
+        lifecycle.fail(error)
+        raise
+    lifecycle.loop_returned = True
 
 
 def around_runtime_context_publish[R](
@@ -194,7 +231,8 @@ def around_model_runner_load_model[**P, R](
 
         binding.bind_shim_runtime(model_runner)
         adapter.validate_after_load(model_runner)
-    except Exception:
+    except BaseException as error:
+        WorkerLifecycle.current().fail(error)
         runtime.detach(model_runner)
         raise
     return result
@@ -259,6 +297,7 @@ def after_model_runner_alloc_memory_pool[R](
             ffn_profile=ffn_profile,
             kv_capacity=pool.backing.capacity_profile,
             atn_runtime_headroom_bytes=atn_runtime_headroom_bytes,
+            on_failure=WorkerLifecycle.current().fail,
         )
         plan = runtime.instance_rank.wait_for_fabric_executable()
         channel_ref = runtime.instance_rank.client.kv_control_channel(plan.generation)
@@ -286,7 +325,8 @@ def after_model_runner_alloc_memory_pool[R](
             os.getpid(),
         )
         runtime.instance_rank.start_failure_monitor()
-    except Exception:
+    except BaseException as error:
+        WorkerLifecycle.current().fail(error)
         runtime.detach(model_runner)
         raise
     return result
@@ -349,8 +389,14 @@ def around_scheduler_release_host_resources[R](
 
     model_runner = scheduler.tp_worker.model_runner
     runtime = SglangInstanceRankRuntime.require(model_runner)
-    result = original_fn(scheduler)
-    runtime.detach(model_runner)
+    lifecycle = WorkerLifecycle.current()
+    try:
+        result = original_fn(scheduler)
+        runtime.detach(model_runner)
+    except BaseException as error:
+        lifecycle.fail(error)
+        raise
+    lifecycle.normal_release_complete = True
     return result
 
 

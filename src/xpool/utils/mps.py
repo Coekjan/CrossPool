@@ -18,6 +18,10 @@ from time import monotonic, sleep
 from typing import BinaryIO
 
 import psutil
+import torch
+
+# cuda-bindings exposes this binary module without Python type stubs.
+from cuda.bindings.runtime import cudaError_t  # ty: ignore[unresolved-import]
 
 from xpool.utils.procs import ProcUniqId
 from xpool.utils.sighandler import defer_signal_exceptions
@@ -29,6 +33,7 @@ __all__ = [
     "MpsEndpoint",
     "MpsProbeResult",
     "MpsScope",
+    "is_terminal_device_error",
 ]
 
 MPS_CONTROL_COMMAND = "nvidia-cuda-mps-control"
@@ -37,6 +42,42 @@ MPS_STARTUP_TIMEOUT_S = 30.0
 MPS_CLEANUP_TIMEOUT_S = 300.0
 MPS_TERMINATION_TIMEOUT_S = 30.0
 MPS_SCOPE_DIRECTORY = Path("/tmp") / f"xpool-mps-{os.getuid()}"
+
+
+def is_terminal_device_error(error: BaseException) -> bool:
+    """Inspect retained CUDA results that explicitly require process exit.
+
+    Follow the original exception's standard cause/context chain. Torch's
+    native exception translator supplies the numeric result dynamically;
+    Python-constructed exceptions can lack it. Missing metadata, ordinary
+    library errors and nonterminal results supply no terminal-exit evidence.
+
+    This predicate performs no device or MPS query. A terminal local result
+    neither proves server-wide fault containment nor complete Fabric retirement.
+    The calling lifecycle owner decides process-exit and resource policy.
+    """
+
+    terminal_codes = (
+        cudaError_t.cudaErrorContained,
+        cudaError_t.cudaErrorIllegalAddress,
+        cudaError_t.cudaErrorLaunchTimeout,
+        cudaError_t.cudaErrorAssert,
+        cudaError_t.cudaErrorHardwareStackError,
+        cudaError_t.cudaErrorIllegalInstruction,
+        cudaError_t.cudaErrorMisalignedAddress,
+        cudaError_t.cudaErrorInvalidAddressSpace,
+        cudaError_t.cudaErrorInvalidPc,
+        cudaError_t.cudaErrorLaunchFailure,
+        cudaError_t.cudaErrorMpsClientTerminated,
+    )
+    current: BaseException | None = error
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, torch.AcceleratorError) and getattr(current, "error_code", None) in terminal_codes:
+            return True
+        current = current.__cause__ if current.__cause__ is not None else current.__context__
+    return False
 
 
 @dataclass(frozen=True, slots=True)

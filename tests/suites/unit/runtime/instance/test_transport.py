@@ -32,33 +32,25 @@ def test_failure_monitor_keeps_polling_healthy_arena(monkeypatch: pytest.MonkeyP
         lambda: calls.append(True) or ResultCode.OK,
     )
 
-    monitor = InstanceRankFailureMonitor(model_id=TEST_MODEL_ID, instance_index=3, rank=2)
+    monitor = InstanceRankFailureMonitor(
+        model_id=TEST_MODEL_ID, instance_index=3, rank=2, on_failure=lambda error: None
+    )
 
     assert monitor.step()
     assert calls == [True]
 
 
-def test_failure_monitor_fail_closes_on_executor_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    class ProcessTerminated(Exception):
-        pass
-
-    def terminate_process(logger: object, message: str, *args: object) -> None:
-        raise ProcessTerminated(message % args)
-
+def test_failure_monitor_reports_executor_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         xpool.runtime.instance.xpool.native.transport,
         "read_generation_failure",
         lambda: ResultCode.PROTOCOL_MISMATCH,
     )
-    monkeypatch.setattr(
-        xpool.runtime.instance,
-        "bail",
-        terminate_process,
+    monitor = InstanceRankFailureMonitor(
+        model_id=TEST_MODEL_ID, instance_index=3, rank=2, on_failure=lambda error: None
     )
 
-    monitor = InstanceRankFailureMonitor(model_id=TEST_MODEL_ID, instance_index=3, rank=2)
-
-    with pytest.raises(ProcessTerminated, match="PROTOCOL_MISMATCH"):
+    with pytest.raises(InstanceRankError, match="PROTOCOL_MISMATCH"):
         monitor.step()
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 
 import xpool.native
 from xpool.config import get_global_config
@@ -23,7 +24,6 @@ from xpool.service.wire import (
 )
 from xpool.transport import TransportArenaHandle
 from xpool.utils.background import BackgroundThread
-from xpool.utils.procs import bail
 
 __all__ = [
     "InstanceRankError",
@@ -43,22 +43,30 @@ logger = logging.getLogger(__name__)
 
 
 class InstanceRankError(RuntimeError):
-    """Raised when daemon-brokered FFN shim transport arenas cannot be attached."""
+    """Raised when an Instance rank cannot safely continue its generation."""
 
 
 class InstanceRankFailureMonitor:
-    """Fail-close an instance when its transport arena records a failure.
+    """Report a transport failure to the owning Instance lifecycle.
 
     Args:
         model_id: Model ID used in fatal diagnostics.
         instance_index: Integer instance index used by the native arena map.
         rank: Rank-local process index within the instance.
+        on_failure: Lifecycle callback receiving the retained original error.
 
     Attributes:
         worker: Periodic background thread that polls native sticky failure state.
     """
 
-    def __init__(self, *, model_id: ModelId, instance_index: int, rank: int) -> None:
+    def __init__(
+        self,
+        *,
+        model_id: ModelId,
+        instance_index: int,
+        rank: int,
+        on_failure: Callable[[BaseException], None],
+    ) -> None:
         """Create a stopped instance failure monitor."""
 
         self.model_id = model_id
@@ -69,6 +77,7 @@ class InstanceRankFailureMonitor:
             interval_s=INSTANCE_FAILURE_MONITOR_INTERVAL_S,
             target=self.step,
             join_timeout_s=INSTANCE_FAILURE_MONITOR_STOP_JOIN_TIMEOUT_S,
+            on_failure=on_failure,
         )
 
     def start(self) -> None:
@@ -82,16 +91,12 @@ class InstanceRankFailureMonitor:
         self.worker.close()
 
     def step(self) -> bool:
-        """Poll once and terminate the process when the arena has failed."""
+        """Poll once and report an unusable generation without exiting here."""
 
         failure = xpool.native.transport.read_generation_failure()
         if failure != ResultCode.OK:
-            bail(
-                logger,
-                "transport executor failed for instance %s rank %s: %s",
-                self.model_id,
-                self.rank,
-                failure.name,
+            raise InstanceRankError(
+                f"transport executor failed for instance {self.model_id} rank {self.rank}: {failure.name}"
             )
         return True
 
@@ -103,6 +108,7 @@ class InstanceRankHeartbeat:
         model_id: Model ID identifying the registered Instance.
         rank: ATN rank-local SGLang process index.
         heartbeat: Stable heartbeat payload for the current process.
+        on_failure: Lifecycle callback receiving terminal heartbeat failures.
 
     Attributes:
         client: Dedicated daemon client used only by the heartbeat thread.
@@ -117,6 +123,7 @@ class InstanceRankHeartbeat:
         model_id: ModelId,
         rank: int,
         heartbeat: ProcessRef,
+        on_failure: Callable[[BaseException], None],
     ) -> None:
         """Create a stopped heartbeat worker owner."""
 
@@ -130,6 +137,7 @@ class InstanceRankHeartbeat:
             interval_s=INSTANCE_HEARTBEAT_INTERVAL_S,
             target=self.step,
             join_timeout_s=INSTANCE_HEARTBEAT_STOP_JOIN_TIMEOUT_S,
+            on_failure=on_failure,
         )
 
     def start(self) -> None:
@@ -150,7 +158,7 @@ class InstanceRankHeartbeat:
 
         try:
             degraded = self.transport_deadline is not None
-            self.client.heartbeat_instance(
+            response = self.client.heartbeat_instance(
                 self.model_id,
                 rank=self.rank,
                 heartbeat=self.heartbeat,
@@ -158,48 +166,27 @@ class InstanceRankHeartbeat:
             self.transport_deadline = None
             if degraded:
                 logger.info("heartbeat transport restored instance=%s rank=%s", self.model_id, self.rank)
-        except XpoolDaemonError as exc:
-            bail(
-                logger,
-                "instance heartbeat rejected instance=%s rank=%s detail=%s",
-                self.model_id,
-                self.rank,
-                exc,
-            )
         except XpoolClientError as exc:
             self.handle_transport_failure(exc)
-        except Exception as exc:
-            bail(
-                logger,
-                "instance heartbeat failed with unexpected error instance=%s rank=%s detail=%s",
-                self.model_id,
-                self.rank,
-                exc,
-            )
+        else:
+            if response.fabric_phase in (FabricGenerationPhase.ABORTING, FabricGenerationPhase.STOPPED):
+                raise InstanceRankError(
+                    f"instance {self.model_id} rank {self.rank} cannot continue fabric {response.fabric_phase.value}"
+                )
         return True
 
     def handle_transport_failure(self, exc: XpoolClientError) -> None:
         """Apply the bounded retry policy for daemon communication failures."""
 
         if not exc.is_recoverable:
-            bail(
-                logger,
-                "instance heartbeat received unrecoverable client error instance=%s rank=%s detail=%s",
-                self.model_id,
-                self.rank,
-                exc,
-            )
+            raise exc
         entered = self.transport_deadline is None
         if entered:
             self.transport_deadline = time.monotonic() + TRANSPORT_METADATA_RECOVERY_DEADLINE_S
         if time.monotonic() >= self.transport_deadline:
-            bail(
-                logger,
-                "heartbeat transport did not restore instance=%s rank=%s detail=%s",
-                self.model_id,
-                self.rank,
-                exc,
-            )
+            raise InstanceRankError(
+                f"heartbeat transport did not restore instance={self.model_id} rank={self.rank}: {exc}"
+            ) from exc
         log = logger.warning if entered else logger.debug
         log("heartbeat transport degraded instance=%s rank=%s detail=%s", self.model_id, self.rank, exc)
 
@@ -222,12 +209,16 @@ class InstanceRankRuntime:
         *,
         model_id: ModelId,
         rank: int,
+        on_failure: Callable[[BaseException], None],
     ) -> None:
         """Construct an unstarted runtime for one configured instance rank.
 
         Args:
             model_id: Model ID owned by this SGLang rank.
             rank: Rank-local SGLang process index within the instance.
+            on_failure: Owning integration's failure callback. Background
+                producers retain errors before invoking it on their thread;
+                the callback owns notification and resource-specific exit.
 
         Raises:
             InstanceRankError: If the identity or rank is absent from global config.
@@ -244,6 +235,7 @@ class InstanceRankRuntime:
         self.model_id = model_id
         self.instance_index = config_instance.instance_index
         self.rank = rank
+        self.on_failure = on_failure
         self.process_ref = ProcessRef(abi_version=ABI_VERSION, pid=pid)
         self.registration = None
         self.heartbeat_worker = None
@@ -261,6 +253,7 @@ class InstanceRankRuntime:
         ffn_profile: InstanceFfnProfile,
         kv_capacity: KvCapacityPartitionProfile,
         atn_runtime_headroom_bytes: int,
+        on_failure: Callable[[BaseException], None],
     ) -> InstanceRankRuntime:
         """Construct and transactionally start one runner-owned runtime.
 
@@ -272,6 +265,7 @@ class InstanceRankRuntime:
             kv_capacity: Immutable elastic KV reservation geometry.
             atn_runtime_headroom_bytes: Attention runtime memory reserved outside
                 the elastic KV Capacity Pool.
+            on_failure: Lifecycle callback shared by background failure producers.
 
         Returns:
             Registered runtime with a running heartbeat worker. Transport
@@ -284,10 +278,11 @@ class InstanceRankRuntime:
             Registers with the daemon and starts the heartbeat worker.
         """
 
-        runtime = cls(model_id=model_id, rank=rank)
+        runtime = cls(model_id=model_id, rank=rank, on_failure=on_failure)
         try:
             runtime.start_runtime(transport, ffn_profile, kv_capacity, atn_runtime_headroom_bytes)
-        except Exception:
+        except BaseException as error:
+            on_failure(error)
             runtime.close()
             raise
         return runtime
@@ -512,6 +507,7 @@ class InstanceRankRuntime:
                 model_id=self.model_id,
                 rank=self.rank,
                 heartbeat=self.process_ref,
+                on_failure=self.on_failure,
             )
         self.heartbeat_worker.start()
 
@@ -533,6 +529,7 @@ class InstanceRankRuntime:
                 model_id=self.model_id,
                 instance_index=self.instance_index,
                 rank=self.rank,
+                on_failure=self.on_failure,
             )
         self.failure_monitor.start()
 

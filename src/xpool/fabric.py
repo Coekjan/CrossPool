@@ -89,9 +89,15 @@ class FabricParticipantPhase(StrEnum):
     DRAINED = "drained"
     FINALIZED = "finalized"
 
-    def allows(self, successor: FabricParticipantPhase) -> bool:
-        """Return whether ``successor`` is one exact participant edge."""
+    def allows(self, successor: FabricParticipantPhase, *, aborting: bool = False) -> bool:
+        """Allow joined participants to quiesce early only during failed retirement."""
 
+        if aborting and successor is FabricParticipantPhase.QUIESCED:
+            return self in {
+                FabricParticipantPhase.JOINED,
+                FabricParticipantPhase.EXECUTION_READY,
+                FabricParticipantPhase.ACTIVE,
+            }
         return {
             FabricParticipantPhase.JOIN_READY: FabricParticipantPhase.JOINING,
             FabricParticipantPhase.JOINING: FabricParticipantPhase.JOINED,

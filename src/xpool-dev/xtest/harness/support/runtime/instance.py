@@ -106,6 +106,7 @@ def runtime_instance(
     *,
     rank: int = 0,
     pid: int = 123,
+    on_failure: Callable[[BaseException], None] = lambda error: None,
 ) -> InstanceRankRuntime:
     monkeypatch.setattr(xpool.runtime.instance.os, "getpid", lambda: pid)
     install_test_config(config)
@@ -113,7 +114,7 @@ def runtime_instance(
         "CUDA_VISIBLE_DEVICES",
         ",".join(f"GPU-00000000-0000-0000-0000-{device:012x}" for device in config.atn.devices),
     )
-    return InstanceRankRuntime(model_id=TEST_MODEL_ID, rank=rank)
+    return InstanceRankRuntime(model_id=TEST_MODEL_ID, rank=rank, on_failure=on_failure)
 
 
 def runtime_heartbeat(
@@ -122,6 +123,7 @@ def runtime_heartbeat(
     *,
     rank: int = 0,
     pid: int = 123,
+    on_failure: Callable[[BaseException], None] = lambda error: None,
 ) -> InstanceRankHeartbeat:
     monkeypatch.setattr(xpool.runtime.instance.os, "getpid", lambda: pid)
     install_test_config(config)
@@ -131,6 +133,7 @@ def runtime_heartbeat(
         model_id=model_id,
         rank=rank,
         heartbeat=heartbeat,
+        on_failure=on_failure,
     )
 
 

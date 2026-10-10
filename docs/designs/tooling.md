@@ -265,6 +265,10 @@ startup, HTTP requests and exceptional cleanup retain their separate bounds.
 Protected item or aggregate expiry requests cooperative retirement; direct
 pytest and unprotected tasks retain their existing bounded expiry actions.
 The first cancellation establishes one cleanup envelope without renewal.
+If an actual owner's cleanup expires before retirement is confirmed, the task
+root seals further resource creation and publishes the original expired deadline
+through the existing cancellation channel. This notification supplies no cleanup
+proof. A verified local System close still permits another System in the task.
 A supervisor-local infrastructure failure can publish a terminal completion
 only after verified local cleanup. Unconfirmed cleanup follows the protected
 retention or unprotected fallback policy above and records infrastructure

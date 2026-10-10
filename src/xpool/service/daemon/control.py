@@ -1087,7 +1087,6 @@ class ControlPlane:
             for registration in registrations:
                 registration.alive = liveness[registration.proc]
 
-        abort_owners: tuple[ProcUniqId, ...] = ()
         # Reconcile only the generation captured above. A replacement makes
         # this watchdog iteration stale and therefore harmless.
         with self.lock:
@@ -1171,16 +1170,18 @@ class ControlPlane:
                 self.fabric_controller.abort(now=now)
 
             if fabric.phase is FabricGenerationPhase.ABORTING:
-                abort_owners = tuple({*fabric.agent_owners.values(), *fabric.instance_owners.values()})
-
-        # Resource owners perform retirement. The daemon observes complete
-        # owner exit; a phase timeout never authorizes device-blind signals.
-        if abort_owners:
-            any_alive = any(owner.is_alive() for owner in abort_owners)
-            with self.lock:
-                fabric = self.fabric_controller.generation
-                if fabric is fabric_snapshot and fabric.phase is FabricGenerationPhase.ABORTING and not any_alive:
-                    fabric.transition(FabricGenerationPhase.STOPPED, now=monotonic())
+                instances_retired = not any(owner_liveness[owner] for owner in fabric.instance_owners.values())
+                agents_drained = all(
+                    not owner_liveness[owner]
+                    or (
+                        (report := fabric.participants.get(pe)) is not None
+                        and report.phase in {FabricParticipantPhase.DRAINED, FabricParticipantPhase.FINALIZED}
+                    )
+                    for pe, owner in fabric.agent_owners.items()
+                )
+                if instances_retired and agents_drained:
+                    # STOPPED permits failed owner exit, not generation reclamation.
+                    fabric.transition(FabricGenerationPhase.STOPPED, now=now)
         self.retire_terminal_generation()
 
     def upsert_atnagent_transport_arenas(

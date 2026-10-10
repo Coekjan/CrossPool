@@ -17,6 +17,9 @@ class BackgroundThread:
             through :meth:`stop`.
         join_timeout_s: Maximum seconds to wait for the worker to stop.
         daemon: Whether to create the underlying thread as a daemon thread.
+        on_failure: Optional lifecycle callback invoked on the worker thread
+            after retaining its original exception. It runs outside the lock;
+            process-exit and resource-retirement policy belongs to the caller.
 
     Side Effects:
         Starts, stops, and joins one process-local Python thread. The target
@@ -30,6 +33,7 @@ class BackgroundThread:
         target: Callable[[threading.Event], None],
         join_timeout_s: float,
         daemon: bool = True,
+        on_failure: Callable[[BaseException], None] | None = None,
     ) -> None:
         """Create a stopped background thread owner."""
 
@@ -37,6 +41,7 @@ class BackgroundThread:
         self.target = target
         self.join_timeout_s = join_timeout_s
         self.daemon = daemon
+        self.on_failure = on_failure
         self.lock = threading.Lock()
         self.stop_signal = threading.Event()
         self.worker_thread: threading.Thread | None = None
@@ -52,6 +57,7 @@ class BackgroundThread:
         target: Callable[[], bool | None],
         join_timeout_s: float,
         daemon: bool = True,
+        on_failure: Callable[[BaseException], None] | None = None,
     ) -> BackgroundThread:
         """Create a stopped periodic background thread owner.
 
@@ -63,6 +69,8 @@ class BackgroundThread:
                 or ``True`` continues.
             join_timeout_s: Maximum seconds to wait for the worker to stop.
             daemon: Whether to create the underlying thread as a daemon thread.
+            on_failure: Lifecycle callback receiving a retained exception on
+                the worker thread, without waiting for main-thread polling.
 
         Returns:
             Background thread owner whose target runs periodically.
@@ -80,6 +88,7 @@ class BackgroundThread:
             target=run_periodically,
             join_timeout_s=join_timeout_s,
             daemon=daemon,
+            on_failure=on_failure,
         )
 
     @property
@@ -160,7 +169,7 @@ class BackgroundThread:
             raise failure
 
     def run_target(self, stop_event: threading.Event) -> None:
-        """Run the target and retain its first ordinary exception."""
+        """Retain the target failure before notifying its lifecycle owner."""
 
         try:
             self.target(stop_event)
@@ -168,3 +177,5 @@ class BackgroundThread:
             with self.lock:
                 if self.failure is None:
                     self.failure = exc
+            if self.on_failure is not None:
+                self.on_failure(exc)

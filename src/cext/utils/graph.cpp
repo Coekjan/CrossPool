@@ -10,11 +10,12 @@
 #include <vector>
 
 #include <c10/cuda/CUDAException.h>
-#include <c10/cuda/driver_api.h>
 #include <c10/util/Exception.h>
 #include <c10/util/TypeCast.h>
 #include <cuda.h>
 #include <cuda_runtime_api.h>
+
+#include <xpool/utils/device.hpp>
 
 namespace xpool::utils::graph {
 
@@ -122,17 +123,17 @@ void KernelNodeArgument::write_address(std::size_t byte_offset, std::uintptr_t a
 
 KernelNodeParameters KernelNodeParameters::read(cudaGraphNode_t node) {
   auto parameters = CUDA_KERNEL_NODE_PARAMS{};
-  C10_CUDA_DRIVER_CHECK(cuGraphKernelNodeGetParams(node, &parameters));
+  xpool::utils::device::check_driver_result(cuGraphKernelNodeGetParams(node, &parameters));
   const auto pointer_array = parameters.kernelParams != nullptr;
   const auto packed_buffer = parameters.extra != nullptr;
   TORCH_CHECK(pointer_array != packed_buffer, "xpool CUDA Graph Kernel Node uses invalid parameter transport");
   const auto packed = packed_buffer ? packed_kernel_parameters(parameters.extra) : std::span<const std::byte>{};
   auto count = std::size_t{0};
   if (parameters.func != nullptr) {
-    C10_CUDA_DRIVER_CHECK(cuFuncGetParamCount(parameters.func, &count));
+    xpool::utils::device::check_driver_result(cuFuncGetParamCount(parameters.func, &count));
   } else {
     TORCH_CHECK(parameters.kern != nullptr, "xpool CUDA Graph Kernel Node has no function identity");
-    C10_CUDA_DRIVER_CHECK(cuKernelGetParamCount(parameters.kern, &count));
+    xpool::utils::device::check_driver_result(cuKernelGetParamCount(parameters.kern, &count));
   }
   auto result = KernelNodeParameters{};
   result.function_ = parameters.func;
@@ -146,9 +147,9 @@ KernelNodeParameters KernelNodeParameters::read(cudaGraphNode_t node) {
     auto offset = std::size_t{0};
     auto size = std::size_t{0};
     if (parameters.func != nullptr) {
-      C10_CUDA_DRIVER_CHECK(cuFuncGetParamInfo(parameters.func, index, &offset, &size));
+      xpool::utils::device::check_driver_result(cuFuncGetParamInfo(parameters.func, index, &offset, &size));
     } else {
-      C10_CUDA_DRIVER_CHECK(cuKernelGetParamInfo(parameters.kern, index, &offset, &size));
+      xpool::utils::device::check_driver_result(cuKernelGetParamInfo(parameters.kern, index, &offset, &size));
     }
     auto bytes = std::vector<std::byte>(size);
     if (pointer_array) {
@@ -210,7 +211,7 @@ void KernelNodeParameters::apply(cudaGraphNode_t node) const {
       .kern = kernel_,
       .ctx = context_,
   };
-  C10_CUDA_DRIVER_CHECK(cuGraphKernelNodeSetParams(node, &parameters));
+  xpool::utils::device::check_driver_result(cuGraphKernelNodeSetParams(node, &parameters));
 }
 
 cudaGraphNodeType node_type(cudaGraphNode_t node) {
@@ -233,7 +234,7 @@ std::vector<cudaGraphNode_t> nodes(cudaGraph_t graph) {
 
 std::vector<cudaGraph_t> conditional_bodies(cudaGraphNode_t node) {
   auto parameters = CUgraphNodeParams{};
-  C10_CUDA_DRIVER_CHECK(cuGraphNodeGetParams(reinterpret_cast<CUgraphNode>(node), &parameters));
+  xpool::utils::device::check_driver_result(cuGraphNodeGetParams(reinterpret_cast<CUgraphNode>(node), &parameters));
   TORCH_CHECK(parameters.type == CU_GRAPH_NODE_TYPE_CONDITIONAL, "xpool CUDA Graph node is not conditional");
   auto result = std::vector<cudaGraph_t>{};
   result.reserve(parameters.conditional.size);

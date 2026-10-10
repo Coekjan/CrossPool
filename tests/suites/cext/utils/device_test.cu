@@ -1,13 +1,26 @@
 #include <atomic>
+#include <string>
 #include <thread>
 #include <utility>
 
+#include <c10/util/Exception.h>
 #include <cuda_runtime_api.h>
 #include <gtest/gtest.h>
 
 #include <xpool/utils/device.hpp>
 
 namespace {
+
+TEST(DriverResultTest, PreservesNumericFailureAndCallerLocation) {
+  EXPECT_NO_THROW(xpool::utils::device::check_driver_result(CUDA_SUCCESS));
+  try {
+    xpool::utils::device::check_driver_result(CUDA_ERROR_LAUNCH_FAILED);
+    FAIL() << "a failing Driver result must throw";
+  } catch (const c10::AcceleratorError &error) {
+    EXPECT_EQ(error.get_error_code(), static_cast<std::int32_t>(CUDA_ERROR_LAUNCH_FAILED));
+    EXPECT_NE(std::string{error.what()}.find(__FILE__), std::string::npos);
+  }
+}
 
 void CUDART_CB wait_for_release(void *state) {
   const auto release = static_cast<std::atomic<bool> *>(state);

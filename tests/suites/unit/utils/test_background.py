@@ -125,14 +125,17 @@ def test_background_thread_timeout_preserves_live_worker_for_retry() -> None:
 
 def test_background_thread_surfaces_target_failure() -> None:
     failure = RuntimeError("worker crashed")
+    reported: list[BaseException] = []
     worker = BackgroundThread(
         name="xpool-test-background",
         target=lambda stop_event: (item for item in ()).throw(failure),
         join_timeout_s=1.0,
+        on_failure=reported.append,
     )
 
     worker.start()
     assert wait_until(lambda: worker.thread is not None and not worker.thread.is_alive())
+    assert reported == [failure]
 
     with pytest.raises(RuntimeError, match="worker crashed") as exc_info:
         worker.raise_if_failed()

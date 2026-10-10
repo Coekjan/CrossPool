@@ -46,6 +46,7 @@ def test_instance_register_rejects_unknown_instance() -> None:
             ffn_profile=ffn_profile(),
             kv_capacity=kv_capacity_profile(),
             atn_runtime_headroom_bytes=0,
+            on_failure=lambda error: None,
         )
 
 
@@ -143,6 +144,7 @@ def test_instance_start_closes_local_client_without_remote_deregistration_on_reg
     runtime_config()
     events: list[str] = []
     failure = RuntimeError("register failed")
+    reported: list[BaseException] = []
 
     class FakeXpoolClient:
         def close(self) -> None:
@@ -172,9 +174,11 @@ def test_instance_start_closes_local_client_without_remote_deregistration_on_reg
             ffn_profile=ffn_profile(),
             kv_capacity=kv_capacity_profile(),
             atn_runtime_headroom_bytes=0,
+            on_failure=reported.append,
         )
 
     assert error.value is failure
+    assert reported == [failure]
     assert events == ["register", "close"]
 
 

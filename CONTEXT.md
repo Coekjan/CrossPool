@@ -71,6 +71,16 @@ The complete attention-side rank set backed by the shared AtnAgent Fleet. Each
 Instance covers this World through attention DP groups of attention TP ranks.
 _Avoid_: Attention TP width, per-model rank subset
 
+**FfnAgent Fleet**:
+The complete set of FfnAgents available for generation-scoped FFN placement,
+distinct from the group selected to execute one layer.
+_Avoid_: FFN TP group
+
+**FFN Execution Group**:
+The ordered FfnAgent participants assigned to one model layer's tensor-parallel
+computation. Its width is that layer's FFN TP width, not the Fleet size.
+_Avoid_: FfnAgent Fleet, model replica
+
 **Prefill Context Parallelism**:
 The SGLang execution mode that partitions Prefill token rows among attention
 context-parallel ranks for attention computation. SGLang may preserve those

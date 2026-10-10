@@ -3,11 +3,22 @@
 #include <utility>
 
 #include <c10/cuda/CUDAException.h>
-#include <c10/cuda/driver_api.h>
 #include <c10/util/Exception.h>
+#include <c10/util/StringUtil.h>
 #include <cuda.h>
 
 namespace xpool::utils::device {
+
+void check_driver_result(CUresult result, std::source_location location) {
+  if (result == CUDA_SUCCESS) {
+    return;
+  }
+  const char *description = nullptr;
+  static_cast<void>(cuGetErrorString(result, &description));
+  throw c10::AcceleratorError{{location.function_name(), location.file_name(), location.line()},
+                              static_cast<std::int32_t>(result),
+                              c10::str("CUDA driver error: ", description == nullptr ? "unknown error" : description)};
+}
 
 OwnedCudaStream OwnedCudaStream::create(unsigned int flags) {
   auto stream = OwnedCudaStream{};
@@ -34,9 +45,8 @@ OwnedCudaStream &OwnedCudaStream::operator=(OwnedCudaStream &&other) {
 void OwnedCudaStream::write_value(std::uint32_t *address, std::uint32_t value) const {
   TORCH_CHECK(stream_ != nullptr, "xpool cannot write through an empty CUDA stream");
   TORCH_CHECK(address != nullptr, "xpool CUDA stream write requires a device address");
-  C10_CUDA_DRIVER_CHECK(cuStreamWriteValue32(reinterpret_cast<CUstream>(stream_),
-                                             reinterpret_cast<CUdeviceptr>(address), value,
-                                             CU_STREAM_WRITE_VALUE_DEFAULT));
+  check_driver_result(cuStreamWriteValue32(reinterpret_cast<CUstream>(stream_), reinterpret_cast<CUdeviceptr>(address),
+                                           value, CU_STREAM_WRITE_VALUE_DEFAULT));
 }
 
 bool OwnedCudaStream::try_write_value(std::uint32_t *address, std::uint32_t value) const noexcept {

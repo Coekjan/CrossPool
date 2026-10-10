@@ -88,6 +88,13 @@ def isolated_fabric_role_guard() -> None:
         xpool.native.ffnagent.activate()
 
 
+def isolated_native_accelerator_error_translation() -> None:
+    with pytest.raises(torch.AcceleratorError) as failure:
+        xpool.native.initialize(RuntimeRole.INSTANCE, 127, None)
+    # Torch's pinned stubs omit the numeric metadata exposed by its exception.
+    assert failure.value.error_code == 101  # ty: ignore[unresolved-attribute]
+
+
 def isolated_native_allocation_sizing() -> None:
     xpool.native.initialize(RuntimeRole.DAEMON, None, DebugConfig().native_options())
     arena_bytes = xpool.native.fabric.arena_allocation_bytes(2, 3, 2, 2, 3, 3, 6, 300, 32)
@@ -126,6 +133,11 @@ def test_fabric_join_validates_metadata_before_collective_initialization(tmp_pat
 @xtest.requirements(device_count=1)
 def test_fabric_binding_rejects_wrong_runtime_role(tmp_path: Path) -> None:
     run_native_case(isolated_fabric_role_guard, workdir=tmp_path / "case")
+
+
+@xtest.requirements(device_count=1)
+def test_native_binding_preserves_accelerator_error_metadata(tmp_path: Path) -> None:
+    run_native_case(isolated_native_accelerator_error_translation, workdir=tmp_path / "case")
 
 
 def test_native_allocation_sizing_is_host_only_and_deterministic(tmp_path: Path) -> None:

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from sglang.srt.entrypoints import engine
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.plugins.hook_registry import HookRegistry
 
@@ -34,7 +35,8 @@ def reset_plugin_required_hook_targets(
     reset_global_config: None,
 ) -> Iterator[None]:
     apply_hooks = HookRegistry.__dict__["apply_hooks"]
-    signal_handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
+    signal_handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGQUIT)}
+    monkeypatch.setattr(engine, "run_data_parallel_controller_process", engine.run_data_parallel_controller_process)
     HookRegistry.reset()
     monkeypatch.setenv("SGLANG_ENABLE_POST_CAPTURE_KV_SIZING", "false")
     monkeypatch.setenv("SGLANG_ONE_VISIBLE_DEVICE_PER_PROCESS", "true")

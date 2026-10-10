@@ -214,10 +214,16 @@ def test_server_close_owns_only_process_resources(monkeypatch: pytest.MonkeyPatc
 def test_server_close_signals_only_live_leader_on_orderly_path(monkeypatch: pytest.MonkeyPatch) -> None:
     family = SglangEndpointFamily("127.0.0.1", 20_000, 21_000, 22_000, 1)
     events: list[str] = []
+
+    def send_signal(signum: int) -> None:
+        events.append(f"signal:{signum}")
+        process.returncode = 0
+
     process = SimpleNamespace(
         pid=123,
-        poll=lambda: None,
-        send_signal=lambda signum: events.append(f"signal:{signum}"),
+        returncode=None,
+        poll=lambda: process.returncode,
+        send_signal=send_signal,
     )
     owner = cast(
         OwnedProcessGroup,
@@ -233,7 +239,9 @@ def test_server_close_signals_only_live_leader_on_orderly_path(monkeypatch: pyte
         owner=owner,
         endpoint=family,
     )
-    monkeypatch.setattr(xkit.serving.sglang.server, "wait_for_process_group", lambda process, timeout: True)
+    monkeypatch.setattr(
+        xkit.serving.sglang.server, "wait_for_process_group", lambda process, timeout: process.poll() is not None
+    )
 
     server.close()
 

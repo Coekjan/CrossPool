@@ -264,8 +264,12 @@ bool Runtime::drain_pending() {
       (ffn_execution_runtime_.installed() && ffn_execution_runtime_.drain_pending())) {
     return true;
   }
-  // Stream completion is the local proof that shutdown publication completed
-  // and every resident kernel owned by this PE has exited.
+  if (!outbound_quiet_queued_) {
+    // Producer completion permits one PE-wide GPU quiet before exported state retires.
+    nvshmemx_quiet_on_stream(drain_stream_.get());
+    outbound_quiet_queued_ = true;
+    return true;
+  }
   drain_stream_.destroy();
   resident_stream_.destroy();
   phase_ = Phase::Drained;

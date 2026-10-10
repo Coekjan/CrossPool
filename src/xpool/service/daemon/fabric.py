@@ -343,13 +343,15 @@ class FabricController:
             self.reject_report("participant reported a different Fabric generation", now=now)
         if report.pe < 0 or report.pe >= len(generation.plan.pe_placements):
             self.reject_report("participant reported an unknown Fabric PE", now=now)
-        if generation.phase in {FabricGenerationPhase.ABORTING, FabricGenerationPhase.STOPPED}:
+        if generation.phase is FabricGenerationPhase.STOPPED:
             raise XpoolDaemonError("conflict", "terminal Fabric generation accepts only an exact report retry")
 
         if previous is None:
             if report.phase is not FabricParticipantPhase.JOIN_READY:
                 self.reject_report("first participant report must be join_ready", now=now)
-        elif report.phase is not previous.phase and not previous.phase.allows(report.phase):
+        elif report.phase is not previous.phase and not previous.phase.allows(
+            report.phase, aborting=generation.phase is FabricGenerationPhase.ABORTING
+        ):
             self.reject_report(
                 f"participant phase cannot transition from {previous.phase.value} to {report.phase.value}",
                 now=now,
@@ -369,6 +371,11 @@ class FabricController:
                 FabricParticipantPhase.DRAINED,
             },
             FabricGenerationPhase.FINALIZING: {FabricParticipantPhase.FINALIZED},
+            FabricGenerationPhase.ABORTING: {
+                FabricParticipantPhase.QUIESCED,
+                FabricParticipantPhase.DRAINING,
+                FabricParticipantPhase.DRAINED,
+            },
         }.get(generation.phase, set())
         phase_changed = previous is None or report.phase is not previous.phase
         if phase_changed and report.phase not in allowed_phases:

@@ -13,7 +13,7 @@ from xkit.supervisor import SupervisedTaskScope, TaskCompletionKind, TaskScopeSt
 from xpool.utils.procs import ProcUniqId
 
 
-@pytest.mark.parametrize("mode", ["passed", "failed", "cancelled"])
+@pytest.mark.parametrize("mode", ["passed", "failed", "cancelled", "owner-expired"])
 def test_protected_invocation_keeps_owner_until_cleanup(tmp_path: Path, mode: str) -> None:
     # CPU stand-ins expose ordering and lifetime without creating device state.
     program = '''
@@ -67,12 +67,22 @@ while not (directory / "allow-cleanup").exists():
     try:
         while not (directory / "finish").exists():
             time.sleep(0.01)
-        verdict = 1 if mode == "failed" else 0
+        verdict = 1 if mode in ("failed", "owner-expired") else 0
     except TaskCancelled:
         verdict = 130
     finally:
         child.stdin.write("retire\\n")
         child.stdin.flush()
+        if mode == "owner-expired":
+            deadline = time.monotonic() - 1
+            root.request_retirement(deadline)
+            root.request_retirement(deadline + 30)
+            try:
+                root.register_scope()
+            except TaskCancelled:
+                pass
+            else:
+                raise AssertionError("retirement must prohibit new resources")
         (directory / "deadline").write_text(str(root.cleanup_deadline))
         assert child.wait() == 0
         child.stdin.close()
@@ -122,18 +132,26 @@ raise SystemExit(verdict)
             assert completion.kind is TaskCompletionKind.EXITED
             assert completion.returncode == (1 if mode == "failed" else 0)
         else:
-            deadline = time.monotonic() + 0.3
-            scope.request_retirement(deadline)
-            scope.request_retirement(deadline + 30)
-            assert scope.cleanup_deadline == deadline
-            if mode == "cancelled":
+            if mode == "owner-expired":
+                (tmp_path / "finish").touch()
+                observation_deadline = time.monotonic() + 10
+                while not (tmp_path / "deadline").exists():
+                    assert time.monotonic() < observation_deadline
+                    time.sleep(0.01)
+                deadline = float((tmp_path / "deadline").read_text(encoding="utf-8"))
+            else:
+                deadline = time.monotonic() + 0.3
+                scope.request_retirement(deadline)
+                scope.request_retirement(deadline + 30)
+                assert scope.cleanup_deadline == deadline
                 observation_deadline = time.monotonic() + 10
                 while time.monotonic() < observation_deadline:
                     if (tmp_path / "deadline").exists() and time.monotonic() > deadline:
                         break
                     time.sleep(0.01)
-                with pytest.raises(TaskSupervisionFailure, match="cleanup expired"):
-                    scope.poll()
+            with pytest.raises(TaskSupervisionFailure, match="cleanup expired"):
+                scope.poll()
+            assert scope.cleanup_deadline == deadline
             # This thread is now the sole root-channel reader. The main thread
             # observes markers, never concurrent scope.poll().
             cancellation = threading.Thread(target=cancel_scope, daemon=True)

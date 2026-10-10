@@ -97,13 +97,17 @@ The default policy is FIFO. A random policy exists for controlled experiments
 and uses the shared CrossPool random utility. Scheduling returns no decision when no
 request and Lane pair is currently admissible.
 
-Expected waiting is Device-side and uses the common wait utility. Timeouts,
-protocol mismatches, invocation failures, participant loss, and control-plane
-failures converge to one canonical generation failure; the first publication
-wins. The AtnAgent leader attempts publication, every thread waits for and
-observes the canonical result, and the block returns one value. After failure,
-no new invocation is admitted. Actual owners coordinate quiesce, drain and
-retirement under [Control Plane](control-plane.md#startup-and-shutdown).
+Expected waiting is Device-side and uses the common wait utility. Native timed
+waits and protocol validation publish a Generation-scoped invocation failure;
+the first publication wins. The AtnAgent leader attempts publication, every
+thread waits for and observes the canonical result, and the block returns one
+value. The native payload admits Timeout and Protocol Mismatch results. Agents
+report that payload to the daemon, which coordinates quiesce and drain while the
+world remains usable. Participant loss, device-operation exceptions and
+control-plane failures have separate daemon-owned failure observations rather
+than being inferred from this native payload. After failure, no new invocation
+is admitted. Actual owners coordinate retirement under
+[Control Plane](control-plane.md#startup-and-shutdown).
 Unresolved peer or collective state retains the living owner for manual
 resolution; there is no request retry or collective recovery.
 
@@ -115,3 +119,20 @@ The Coordinator inspects submissions, completions, and acknowledgements without
 blocking its outer progress loop. An inspection is Pending, Ready, or a Protocol
 Mismatch. This is deliberately distinct from a timed wait: inspection has no
 deadline, cancellation, sleep interval, or retained wait state.
+
+## Drain and backing lifetime
+
+Local drain first stops every producer stream, then completes this PE's prior
+GPU-issued NVSHMEM communication with one `nvshmemx_quiet_on_stream` on the
+retained drain stream. `DRAINED` requires that stream to complete. Attention
+retirement drains Transport before Fabric, so its last publications are covered
+by the same completion boundary. Pending or failed completion keeps the owner
+in drain. This follows the
+[NVSHMEM completion contract](https://docs.nvidia.com/nvshmem/api/latest/gen/api/ordering.html#nvshmem-quiet).
+
+This PE-wide completion is not a collective barrier or proof that peers have
+stopped accessing exported storage. Symmetric release and normal finalization
+require the complete participant world. Failed-world host exit and retention of
+exact owner identities follow
+[Control Plane](control-plane.md#ordered-retirement); a local drain report alone
+does not authorize backing reclamation.

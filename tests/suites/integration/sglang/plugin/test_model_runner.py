@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -16,6 +16,7 @@ from sglang.srt.runtime_context import get_context, get_exec, pre_capture_activa
 
 import xpool.config
 import xpool.integrations.sglang.hooks.lifecycle
+import xpool.integrations.sglang.worker
 from xpool.config import LatencySloConfig, MissingRequiredConfig
 from xpool.fabric import FabricGenerationId
 from xpool.integrations.sglang.adapter import SglangInstanceRankRuntime
@@ -23,10 +24,12 @@ from xpool.integrations.sglang.kv.allocator import ElasticTokenToKVPoolAllocator
 from xpool.integrations.sglang.kv.pool import ElasticMHATokenToKVPool
 from xpool.integrations.sglang.kv.vmm import KvVmmBacking
 from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
+from xpool.integrations.sglang.worker import WorkerLifecycle
 from xpool.model import ModelId
 from xpool.native import RuntimeRole
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.wire import KvControlChannelRef, ServingListener
+from xpool.utils.procs import ProcUniqId
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
 from xtest.harness.support.kv import kv_capacity_profile
 from xtest.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner
@@ -47,6 +50,8 @@ pytestmark = pytest.mark.usefixtures(
 
 @pytest.fixture(autouse=True)
 def fake_device_properties(monkeypatch: pytest.MonkeyPatch, published_sglang_config: None) -> Iterator[None]:
+    monkeypatch.setattr(xpool.integrations.sglang.worker, "worker_lifecycle", WorkerLifecycle(ProcUniqId.current()))
+    monkeypatch.setattr(ProcUniqId, "send_signal", lambda self, signum: None)
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: SimpleNamespace(total_memory=100_000))
     monkeypatch.setattr(torch.cuda, "synchronize", lambda device: None)
     with get_context().override_server_args(
@@ -329,6 +334,7 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         ffn_profile: object,
         kv_capacity: object,
         atn_runtime_headroom_bytes: int,
+        on_failure: Callable[[BaseException], None],
     ) -> FakeInstanceRuntime:
         registrations.append((model_id, rank, transport.payload_row_capacity))
         profiles.append(ffn_profile)
