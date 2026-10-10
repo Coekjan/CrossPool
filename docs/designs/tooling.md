@@ -309,6 +309,12 @@ within its outer test lease; inner cleanup does not replace the outer supervisor
 `xkit.network` reserves listeners through `bind -> listen -> local connect ->
 accept` qualification. `xkit.serving.sglang.endpoints` groups SGLang HTTP, NCCL,
 gRPC, handshake and derived ZMQ endpoints into one owned family.
+NCCL/TCPStore reservations match its wildcard bind scope; HTTP, gRPC and the DP
+handshake retain their declared host. Fixed DP ZMQ reservations cover upstream
+wildcard availability checks. Cooperating namespace locks are keyed by port,
+and reacquisition uses each reservation's original address. Releasing listeners
+for spawn still permits an external bind race; upstream random worker ports
+remain engine-owned.
 A bindable but unreachable endpoint rejects the family;
 during startup, only a post-cleanup `EADDRINUSE` is a retryable conflict.
 Serving startup passes one absolute monotonic deadline through daemon and every

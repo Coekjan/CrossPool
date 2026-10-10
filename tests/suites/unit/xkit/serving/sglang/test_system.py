@@ -34,7 +34,7 @@ def test_system_cleanup_retains_live_clients_and_classifies_conflicts_after_reti
             SimpleNamespace(
                 family=family,
                 tcp_released=True,
-                reacquire_tcp=lambda: events.append("endpoint-inspect") or (family.nccl_port,),
+                reacquire_tcp=lambda: events.append("endpoint-inspect") or (("::", family.nccl_port),),
                 close=lambda: events.append("endpoint-close"),
             ),
         )
@@ -47,7 +47,7 @@ def test_system_cleanup_retains_live_clients_and_classifies_conflicts_after_reti
     else:
         with pytest.raises(TcpEndpointConflict) as error:
             system.close()
-        assert error.value.addresses == ((family.host, family.nccl_port),)
+        assert error.value.addresses == (("::", family.nccl_port),)
         assert events == ["server-close", "cluster-close", "endpoint-inspect", "endpoint-close"]
         assert system.closed
 
@@ -62,7 +62,7 @@ def test_system_rejects_process_exit_and_preserves_inspection_error() -> None:
         system.check_alive()
     events: list[str] = []
 
-    def inspect() -> tuple[int, ...]:
+    def inspect() -> tuple[tuple[str, int], ...]:
         raise OSError(errno.EACCES, "inspection denied")
 
     system.server_endpoints.append(

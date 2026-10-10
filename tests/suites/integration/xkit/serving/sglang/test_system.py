@@ -113,7 +113,11 @@ def test_system_complete_startup_or_partial_rollback(
         if startup == "conflict":
             with pytest.raises(TcpEndpointConflict) as error:
                 system.start(launch, workdir=tmp_path / "run", startup_timeout_seconds=10)
-            assert error.value.addresses == ((leases[-1].family.host, leases[-1].family.nccl_port),)
+            assert error.value.addresses == tuple(
+                reservation.address
+                for reservation in leases[-1].tcp_reservations
+                if reservation.port == leases[-1].family.nccl_port
+            )
             assert isinstance(error.value.__cause__, RuntimeError)
             assert "second server failed" in str(error.value.__cause__)
             assert events == ["cluster-start", "start-test/a", "start-test/b", "close-test/a", "cluster-close"]

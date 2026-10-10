@@ -391,5 +391,5 @@ class XpoolServingSystem:
                 occupied.append(self.daemon_endpoint.address)
         for endpoint in self.server_endpoints:
             if endpoint.tcp_released:
-                occupied.extend((endpoint.family.host, port) for port in endpoint.reacquire_tcp())
+                occupied.extend(endpoint.reacquire_tcp())
         return tuple(occupied)

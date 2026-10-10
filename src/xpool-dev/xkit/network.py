@@ -212,13 +212,15 @@ class TcpEndpointReservation:
 
 
 def create_tcp_listener(address: tuple[str, int]) -> socket.socket:
-    """Create one non-inheritable reusable listener for an exact address."""
+    """Create a reusable listener; an IPv6 wildcard also covers IPv4 binds."""
 
     family = socket.AF_INET6 if ":" in address[0] else socket.AF_INET
     listener = socket.socket(family, socket.SOCK_STREAM)
     try:
         listener.set_inheritable(False)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if address[0] == "::":
+            listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
         listener.bind(address)
         listener.listen()
     except BaseException:
@@ -228,7 +230,10 @@ def create_tcp_listener(address: tuple[str, int]) -> socket.socket:
 
 
 def create_qualified_tcp_listener(address: tuple[str, int], *, deadline: float | None = None) -> socket.socket:
-    """Prove a local round trip, bounding probes by an absolute monotonic deadline."""
+    """Prove a local round trip through loopback for wildcard bind addresses.
+
+    The caller's absolute monotonic deadline bounds each probe.
+    """
 
     if deadline is not None and time.monotonic() >= deadline:
         raise TimeoutError("TCP endpoint allocation exceeded the startup deadline")
@@ -241,7 +246,14 @@ def create_qualified_tcp_listener(address: tuple[str, int], *, deadline: float |
         if remaining <= 0:
             raise TimeoutError("TCP endpoint allocation exceeded the startup deadline")
         client.settimeout(min(1.0, remaining))
-        client.connect(address)
+        match address[0]:
+            case "0.0.0.0":
+                connect_address = ("127.0.0.1", address[1])
+            case "::":
+                connect_address = ("::1", address[1])
+            case _:
+                connect_address = address
+        client.connect(connect_address)
         remaining = 1.0 if deadline is None else deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("TCP endpoint allocation exceeded the startup deadline")

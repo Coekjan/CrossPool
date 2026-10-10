@@ -84,9 +84,10 @@ def test_endpoint_family_lease_reserves_and_releases_every_tcp_port() -> None:
     try:
         assert all(port_space.is_eligible(port) for port in lease.family.ports)
         for port in lease.family.ports:
+            host = "127.0.0.2" if port in (lease.family.nccl_port, lease.family.ports[-1]) else lease.family.host
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as competitor:
                 with pytest.raises(OSError) as error:
-                    competitor.bind((lease.family.host, port))
+                    competitor.bind((host, port))
                 assert error.value.errno == errno.EADDRINUSE
 
         lease.release_tcp_for_spawn()
@@ -106,7 +107,7 @@ def test_endpoint_namespace_lock_survives_tcp_release() -> None:
     try:
         lease.release_tcp_for_spawn()
         with pytest.raises(OSError) as error:
-            reserve_namespace_lock(lease.family.host, lease.family.http_port)
+            reserve_namespace_lock(lease.family.http_port)
         assert error.value.errno == errno.EADDRINUSE
     finally:
         lease.close()
@@ -125,11 +126,14 @@ def test_endpoint_family_reacquires_all_released_ports_and_reports_conflicts() -
         for port in occupied_ports:
             competitor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             competitor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            competitor.bind((lease.family.host, port))
+            competitor.bind(("127.0.0.2", port))
             competitor.listen()
             competitors.append(competitor)
 
-        assert lease.reacquire_tcp() == occupied_ports
+        occupied_addresses = tuple(
+            reservation.address for reservation in lease.tcp_reservations if reservation.port in occupied_ports
+        )
+        assert lease.reacquire_tcp() == occupied_addresses
         for reservation in lease.tcp_reservations:
             if reservation.port in occupied_ports:
                 assert reservation.listener is None

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import errno
-import hashlib
 import socket
 import time
 from dataclasses import dataclass
@@ -68,6 +67,7 @@ class SglangEndpointFamilyLease:
 
         if dp_size <= 0:
             raise ValueError("SGLang endpoint family dp_size must be positive")
+        wildcard_host = "::" if socket.has_dualstack_ipv6() else "0.0.0.0"
         last_collision: OSError | None = None
         for http_port in port_space.candidates():
             if deadline is not None and time.monotonic() >= deadline:
@@ -77,7 +77,7 @@ class SglangEndpointFamilyLease:
             try:
                 http = TcpEndpointReservation.reserve_exact(host, http_port, deadline=deadline)
                 reservations.append(http)
-                nccl = TcpEndpointReservation.reserve(host, port_space=port_space, deadline=deadline)
+                nccl = TcpEndpointReservation.reserve(wildcard_host, port_space=port_space, deadline=deadline)
                 reservations.append(nccl)
                 grpc = TcpEndpointReservation.reserve(host, port_space=port_space, deadline=deadline)
                 reservations.append(grpc)
@@ -87,9 +87,12 @@ class SglangEndpointFamilyLease:
                 reserved_ports = {http.port, nccl.port, grpc.port}
                 for port in family.ports:
                     if port not in reserved_ports:
-                        reservations.append(TcpEndpointReservation.reserve_exact(host, port, deadline=deadline))
+                        # Fixed DP ZMQ ports undergo wildcard availability checks;
+                        # the controller's handshake binds the declared host.
+                        bind_host = host if port == http_port + DP_ATTENTION_HANDSHAKE_PORT_DELTA else wildcard_host
+                        reservations.append(TcpEndpointReservation.reserve_exact(bind_host, port, deadline=deadline))
                         reserved_ports.add(port)
-                locks.extend(reserve_namespace_lock(host, port) for port in family.ports)
+                locks.extend(reserve_namespace_lock(port) for port in family.ports)
                 return cls(family, tuple(reservations), tuple(locks))
             except OSError as error:
                 for reservation in reservations:
@@ -127,19 +130,19 @@ class SglangEndpointFamilyLease:
             reservation.release_for_spawn()
         self.tcp_released = True
 
-    def reacquire_tcp(self) -> tuple[int, ...]:
-        """Reacquire released listeners and return every externally occupied port."""
+    def reacquire_tcp(self) -> tuple[tuple[str, int], ...]:
+        """Reacquire original bind scopes and return externally occupied addresses."""
 
         if not self.tcp_released:
             raise RuntimeError("SGLang endpoint family TCP reservations were not released")
-        occupied: list[int] = []
+        occupied: list[tuple[str, int]] = []
         for reservation in self.tcp_reservations:
             try:
                 reservation.reacquire()
             except OSError as error:
                 if error.errno != errno.EADDRINUSE:
                     raise
-                occupied.append(reservation.port)
+                occupied.append(reservation.address)
         return tuple(occupied)
 
     def close(self) -> None:
@@ -154,14 +157,13 @@ class SglangEndpointFamilyLease:
             lock.close()
 
 
-def reserve_namespace_lock(host: str, port: int) -> socket.socket:
-    """Reserve one Linux abstract-socket lock shared by CrossPool test runners."""
+def reserve_namespace_lock(port: int) -> socket.socket:
+    """Reserve a port across bind addresses within the Linux network namespace."""
 
-    identity = hashlib.sha256(f"{host}:{port}".encode()).hexdigest()
     lock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     try:
         lock.set_inheritable(False)
-        lock.bind(f"\0xpool-test-endpoint-{identity}")
+        lock.bind(f"\0xpool-test-endpoint-{port}")
     except BaseException:
         lock.close()
         raise

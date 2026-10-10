@@ -12,9 +12,9 @@ from xkit.serving.sglang.endpoints import SglangEndpointFamilyLease, reserve_nam
 from xkit.supervisor import prepare_task_supervision
 
 
-def probe_namespace_lock(connection: Connection, endpoint: tuple[str, int]) -> None:
+def probe_namespace_lock(connection: Connection, port: int) -> None:
     try:
-        lock = reserve_namespace_lock(*endpoint)
+        lock = reserve_namespace_lock(port)
     except OSError as error:
         connection.send(error.errno)
         return
@@ -29,12 +29,12 @@ def test_endpoint_family_lock_coordinates_independent_interpreters(tmp_path: Pat
         dp_size=1,
         port_space=TcpPortSpace.local(),
     )
-    endpoint = (lease.family.host, lease.family.http_port)
+    port = lease.family.http_port
     try:
         occupied = PythonChildProcess(
             "occupied-endpoint-lock",
             probe_namespace_lock,
-            endpoint,
+            port,
             log_path=tmp_path / "occupied.log",
             import_paths=(TEST_CATALOG_PATH.resolve().parent.parent,),
         )
@@ -52,7 +52,7 @@ def test_endpoint_family_lock_coordinates_independent_interpreters(tmp_path: Pat
     available = PythonChildProcess(
         "available-endpoint-lock",
         probe_namespace_lock,
-        endpoint,
+        port,
         log_path=tmp_path / "available.log",
         import_paths=(TEST_CATALOG_PATH.resolve().parent.parent,),
     )
