@@ -10,7 +10,8 @@ from typing import ClassVar, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from xkit.config import DeploymentConfig, load_deployment
+from xkit.case import CaseFamily, CaseId, Catalog
+from xkit.config import DeploymentConfig
 from xkit.deployment import resolve_deployment_path
 from xkit.serving.sglang.graph import SglangGraphMode
 from xpool.config import ConfigError
@@ -36,7 +37,7 @@ class E2eServingCase(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    id: str | None = Field(default=None, min_length=1, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    id: CaseId | None = None
     description: str = Field(min_length=1)
     module: str | None = Field(
         default=None, description="Catalogue-bound source module; explicit Python cases omit it."
@@ -65,7 +66,7 @@ class E2eServingCase(BaseModel):
     @cached_property
     def deployment_config(self) -> DeploymentConfig:
         """Load the immutable case's portable topology without workspace resources."""
-        return load_deployment(self.deployment, model_ids=self.models)
+        return DeploymentConfig.from_file(self.deployment, model_ids=self.models)
 
     @property
     def atnagent_count(self) -> int:
@@ -125,7 +126,7 @@ class E2eFfnNumericalCase(BaseModel):
     @cached_property
     def deployment_config(self) -> DeploymentConfig:
         """Resolve numerical resource metadata from the declared deployment."""
-        return load_deployment(self.deployment, model_ids=(self.model_id,))
+        return DeploymentConfig.from_file(self.deployment, model_ids=(self.model_id,))
 
     @property
     def production_required_device_count(self) -> int:
@@ -157,7 +158,7 @@ class E2eFfnTopologyCase(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    id: CaseId
     description: str = Field(min_length=1)
     module: str = Field(min_length=1)
     deployment: Path
@@ -169,7 +170,9 @@ class E2eFfnTopologyCase(BaseModel):
     @cached_property
     def deployment_config(self) -> DeploymentConfig:
         """Load portable geometry for exactly this case's model coordinates."""
-        return load_deployment(self.deployment, model_ids=tuple(instance.model_id for instance in self.instances))
+        return DeploymentConfig.from_file(
+            self.deployment, model_ids=tuple(instance.model_id for instance in self.instances)
+        )
 
     @model_validator(mode="after")
     def validate_case(self) -> Self:
@@ -206,17 +209,15 @@ class E2eFfnTopologyCase(BaseModel):
         return self.atnagent_count + self.ffnagent_count
 
 
-class TestCatalog(BaseModel):
+class TestCatalog(Catalog):
     """Named, source-bound qualification scenes with no machine-local policy."""
 
     __test__: ClassVar[bool] = False
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
     serving_cases: tuple[E2eServingCase, ...] = ()
     topology_cases: tuple[E2eFfnTopologyCase, ...] = ()
 
     @classmethod
-    def load(cls, path: Path) -> TestCatalog:
+    def from_file(cls, path: Path) -> Self:
         """Resolve deployment basenames relative to the selected catalogue.
 
         Table keys supply case identities. Geometry and SLO come from complete
@@ -225,13 +226,13 @@ class TestCatalog(BaseModel):
         path = path.expanduser().resolve()
         with path.open("rb") as source:
             raw = tomllib.load(source)
-        if unknown := raw.keys() - {"serving_cases", "topology_cases"}:
+        if unknown := raw.keys() - {family.table_name for family in CaseFamily}:
             raise ConfigError(f"unknown test catalogue fields: {sorted(unknown)}")
         cases: dict[str, object] = {}
-        for family in ("serving_cases", "topology_cases"):
-            declarations = raw.get(family, {})
+        for family in CaseFamily:
+            declarations = raw.get(family.table_name, {})
             if not isinstance(declarations, dict):
-                raise ConfigError(f"{family} must contain named case tables")
+                raise ConfigError(f"{family.table_name} must contain named case tables")
             values = []
             for id, declaration in declarations.items():
                 if not isinstance(declaration, dict) or "id" in declaration:
@@ -240,19 +241,19 @@ class TestCatalog(BaseModel):
                     raise ConfigError(f"{id}: catalogue cases require module")
                 model_ids = (
                     tuple(ModelId(value) for value in declaration["models"])
-                    if family == "serving_cases"
+                    if family is CaseFamily.SERVING
                     else tuple(ModelId(value["model_id"]) for value in declaration["instances"])
                 )
                 declaration.update(
                     id=id,
                     deployment=str(resolve_deployment_path(path, model_ids, declaration["deployment"])),
                 )
-                value_type = E2eServingCase if family == "serving_cases" else E2eFfnTopologyCase
+                value_type = E2eServingCase if family is CaseFamily.SERVING else E2eFfnTopologyCase
                 case = value_type.model_validate_json(json.dumps(declaration, allow_nan=False))
                 case.deployment_config
                 values.append(case)
-            cases[family] = tuple(values)
-        return cls.model_validate(cases)
+            cases[family.table_name] = tuple(values)
+        return cls.model_validate({"path": path, **cases})
 
     @model_validator(mode="after")
     def validate_catalogue(self) -> Self:

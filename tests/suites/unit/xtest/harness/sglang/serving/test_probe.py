@@ -185,7 +185,6 @@ def probe_launch(tmp_path: Path) -> ServingLaunch:
 
 def probe_case() -> E2eServingCase:
     return E2eServingCase(
-        id="probe",
         description="Probe lifecycle and endpoint-conflict retry policy.",
         deployment=Path("deployment.toml"),
         models=(TEST_MODEL_ID,),

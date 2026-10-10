@@ -51,6 +51,16 @@ conditions, prompt inputs or generation parameters, and arrival process. It is
 distinct from its executions, observed environments and retained measurements.
 _Avoid_: Workload template, benchmark run
 
+**Catalogue Case ID**:
+The stable identity of one authored test or benchmark scenario, distinct from
+its Model IDs, concrete test rows and executions.
+_Avoid_: Run ID, pytest node ID, Model ID
+
+**Case Family**:
+The scenario category shared by catalogue cases, such as serving or topology,
+distinct from a serving case's owned or client execution mode.
+_Avoid_: Execution mode, test suite
+
 **Benchmark Measurement**:
 Client-observed timing, token progress and request outcomes from one benchmark
 workload execution, independent of their presentation.

@@ -1,11 +1,104 @@
+import argparse
 from pathlib import Path
 
 import pytest
 import tomli_w
+from pydantic import ValidationError
 
-from xkit.config import assemble_config, resolve_model_weights
+import xkit.config
+from xkit.config import ToolConfigRecord, XpoolDevConfig, assemble_config, resolve_model_weights
 from xpool.config import ConfigError, ConfigSource
 from xpool.model import ModelId
+
+
+@pytest.fixture
+def development_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(xkit.config, "global_config", None)
+    for name in ("XKIT_CONFIG", "XPOOL_CONFIG", "XPOOL_CACHE_ROOT"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_development_cli_preserves_file_defaults_and_boolean_overrides(tmp_path: Path) -> None:
+    path = tmp_path / "development.toml"
+    path.write_text(
+        '[xtest]\ncatalog = "../tests.toml"\nsuites = ["unit"]\nstrict_requirements = true\n',
+        encoding="utf-8",
+    )
+    parser = argparse.ArgumentParser()
+    XpoolDevConfig.add_cli_args(parser, names=("xtest_suites", "xtest_strict_requirements"))
+    assert vars(parser.parse_args([])) == {}
+    config = XpoolDevConfig.from_file(path, cli=vars(parser.parse_args(["--no-strict-requirements"])))
+    assert config.xtest.catalog == tmp_path.parent / "tests.toml"
+    assert config.xtest.suites == ("unit",)
+    assert config.xtest.strict_requirements is False
+    sources = {record["name"]: record for record in config.sources}
+    assert sources["xtest.catalog"]["source"] is ConfigSource.CONFIG
+    assert sources["xtest.strict_requirements"]["source"] is ConfigSource.CLI
+    assert XpoolDevConfig.from_file(
+        path, cli=vars(parser.parse_args(["--suite", "integration", "--suite", "models"]))
+    ).xtest.suites == ("integration", "models")
+
+
+@pytest.mark.usefixtures("development_environment")
+def test_development_snapshot_preserves_settings_and_sources_without_rereading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = tmp_path / "runtime.toml"
+    runtime.write_text('cache_root = "storage"\n', encoding="utf-8")
+    development = tmp_path / "development.toml"
+    development.write_text('[xtest]\nsuites = ["unit"]\n', encoding="utf-8")
+    monkeypatch.setenv("XPOOL_CONFIG", str(runtime))
+    monkeypatch.setenv("XKIT_CONFIG", str(development))
+    configured = xkit.config.init_global_config(cli={"width": 4.0, "xbench_report_ppi": 150})
+    record = ToolConfigRecord.model_validate_json(configured.record().model_dump_json())
+    assert configured.cache_root == tmp_path / "storage"
+    assert record.cache_source["source"] is ConfigSource.CONFIG
+    assert record.development_config_path == development
+    assert record.runtime_config_path == runtime
+    assert configured.xbench.report.ttft.width_inches == 4.0
+    assert configured.xbench.report.itl.width_inches == 4.0
+    assert configured.xbench.report.throughput.width_inches == 4.0
+
+    development.write_text("[malformed", encoding="utf-8")
+    runtime.write_text("[malformed", encoding="utf-8")
+    monkeypatch.setenv("XPOOL_CACHE_ROOT", str(tmp_path / "different"))
+    monkeypatch.setattr(xkit.config, "global_config", None)
+    worker = xkit.config.init_global_config(resolved=XpoolDevConfig.from_record(record))
+    assert worker.record().model_dump(mode="json") == record.model_dump(mode="json")
+    assert worker.xtest.suites == ("unit",)
+    assert worker.xbench.report.ppi == 150
+
+
+@pytest.mark.usefixtures("development_environment")
+def test_development_bootstrap_uses_defaults_but_rejects_explicit_invalid_file(
+    tmp_path: Path,
+) -> None:
+    configured = xkit.config.init_global_config()
+    assert configured.xtest.suites == ("cext", "unit", "integration", "e2e")
+    assert configured.cache_root == (Path.cwd() / ".xpool-cache").resolve()
+    assert configured.keep_runs == 20
+    assert configured.xbench.repetitions == 1
+    with pytest.raises(FileNotFoundError):
+        xkit.config.init_global_config(config_path=tmp_path / "missing.toml")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"keep_runs": True},
+        {"xbench": {"repetitions": True}},
+        {"xbench": {"repetitions": 0}},
+        {"xbench": {"repetitions": 1.5}},
+        {"xbench": {"report": {"ppi": 1.5}}},
+        {"xbench": {"report": {"ttft": {"columns": True}}}},
+        {"xbench": {"report": {"ttft": {"width_inches": float("inf")}}}},
+        {"xbench": {"report": {"formats": []}}},
+        {"xbench": {"report": {"formats": ["png", "png"]}}},
+    ],
+)
+def test_development_presentation_and_retention_validate_values(payload: dict[str, object]) -> None:
+    with pytest.raises((ConfigError, ValidationError)):
+        XpoolDevConfig.from_mapping(payload)
 
 
 def write_base(path: Path) -> Path:

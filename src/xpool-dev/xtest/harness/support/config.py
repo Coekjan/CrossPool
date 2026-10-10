@@ -8,13 +8,48 @@ from pathlib import Path
 import pytest
 import tomli_w
 
+import xkit.config
 import xpool.config
+from xkit.case import CaseId
+from xkit.config import ToolConfigRecord, XpoolDevConfig
 from xpool.config import XpoolConfig
 from xpool.model import ModelId
 from xtest.harness.runner.pytest_plugin import resolved_config_key
 from xtest.harness.runner.requirements import ResolvedConfig
 
 TEST_MODEL_ID = ModelId("test/test-model")
+TEST_CASE_ID = CaseId("550e8400-e29b-41d4-a716-446655440000")
+
+
+def tool_config_record(cache_root: Path) -> ToolConfigRecord:
+    """Build explicit tool evidence independently of machine configuration."""
+    settings = XpoolDevConfig.from_mapping({})
+    cache_root, cache_source = XpoolConfig.resolve_cache_root(cli={"cache_root": str(cache_root)}, env={})
+    return ToolConfigRecord(
+        settings=settings,
+        sources=settings.sources,
+        cache_root=cache_root,
+        cache_source=cache_source,
+        development_config_path=None,
+        runtime_config_path=None,
+    )
+
+
+@pytest.fixture
+def reset_development_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep tool command tests independent of the enclosing invocation snapshot."""
+    monkeypatch.setattr(xkit.config, "global_config", None)
+    monkeypatch.delenv("XKIT_CONFIG", raising=False)
+    monkeypatch.delenv("XPOOL_CONFIG", raising=False)
+    monkeypatch.setenv("XPOOL_CACHE_ROOT", str(tmp_path / ".xpool-cache"))
+
+
+@pytest.fixture
+def development_config(reset_development_config: None, tmp_path: Path) -> XpoolDevConfig:
+    """Install a pure parent snapshot for harness calls outside a CLI entry."""
+    return xkit.config.init_global_config(
+        resolved=XpoolDevConfig.from_record(tool_config_record(tmp_path / ".xpool-cache"))
+    )
 
 
 def minimal_config(*, env: Mapping[str, str] | None = None) -> XpoolConfig:

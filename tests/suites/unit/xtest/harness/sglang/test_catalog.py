@@ -20,12 +20,12 @@ from xtest.harness.sglang.catalog import (
 
 def test_catalogue_collects_deployment_resources_without_workspace_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("XPOOL_CONFIG", raising=False)
-    catalogue = TestCatalog.load(TEST_CATALOG_PATH)
-    serving = {case.id: case for case in catalogue.serving_cases}
-    topology = {case.id: case for case in catalogue.topology_cases}
-    assert serving["serving-001"].required_device_count == 2
-    assert serving["serving-006"].required_device_count == 4
-    assert topology["topology-005"].required_device_count == 6
+    catalogue = TestCatalog.from_file(TEST_CATALOG_PATH)
+    serving = {str(case.id): case for case in catalogue.serving_cases}
+    topology = {str(case.id): case for case in catalogue.topology_cases}
+    assert serving["4c410873-88b0-427f-a635-d9572dddd057"].required_device_count == 2
+    assert serving["b32a64ef-4374-4263-b5ca-246c19e5b3e3"].required_device_count == 4
+    assert topology["a765f184-cabe-4216-bda9-630556bf8df7"].required_device_count == 6
     assert all(
         case.deployment is not None and case.deployment.is_file()
         for case in (*catalogue.serving_cases, *catalogue.topology_cases)
@@ -33,7 +33,7 @@ def test_catalogue_collects_deployment_resources_without_workspace_config(monkey
 
 
 def test_catalogue_rejects_unknown_fields() -> None:
-    declaration = TestCatalog.load(TEST_CATALOG_PATH).model_dump()
+    declaration = TestCatalog.from_file(TEST_CATALOG_PATH).model_dump()
     declaration["serving_cases"][0]["unknown"] = True
     with pytest.raises(ValidationError, match="unknown"):
         TestCatalog.model_validate(declaration)

@@ -43,8 +43,9 @@ persist memory, commit, or push.
 | E - Environment Hardcoding | No hardcoded `/home/`, `/data/`, hostnames, ports, model paths, CUDA paths, local build directories, or cluster assumptions bypass config. Local reference paths may appear only as clearly labeled non-runtime evidence. |
 | F - Engineering Quality | Code follows `docs/code-style.md`; terminology, current architecture, active target changes, configuration, testing, and workflow remain consistent with their owning repository documents. |
 
-Axis F reviewers must read `docs/code-style.md` and apply its complete current
-rules. Read `CONTEXT.md`, current design documents, and active plans only when
+Axis F reviewers must read [code style](../../../docs/code-style.md) and apply
+its complete current rules. Read [CONTEXT.md](../../../CONTEXT.md),
+[current designs](../../../docs/designs/README.md), and active plans only when
 they are relevant to the selected scope. Reviewer prompts must reference the
 owning files rather than embedding copied checklists. Treat documented blocking
 requirements as blocking unless an applicable plan records a scoped exception.

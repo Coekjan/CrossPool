@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import importlib.metadata
 import os
 import platform
@@ -12,6 +11,7 @@ import time
 from contextlib import ExitStack
 from pathlib import Path
 
+from xkit.config import XpoolDevConfig, get_global_config
 from xkit.device import DevicePool
 from xkit.results import RunStore
 from xkit.supervisor import TaskScopeFailure
@@ -26,18 +26,16 @@ from xtest.harness.runner.task import compile_execution_tasks
 from xtest.harness.sglang.serving.alignment import ServingGraphAdapter
 
 
-def run_tests(options: argparse.Namespace, selectors: tuple[str, ...], parser: argparse.ArgumentParser) -> int:
+def run_tests(selectors: tuple[str, ...], config: XpoolDevConfig) -> int:
     """Collect, plan, and execute the selected test suites."""
 
     configure_console()
 
-    try:
-        selected_suites = select_suites(Path.cwd(), tuple(options.suites or ()), selectors, options.integration)
-    except ValueError as error:
-        parser.error(str(error))
+    selected_suites = select_suites(Path.cwd(), config.xtest.suites)
+    tool_config = config.record()
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{time.monotonic_ns()}"
     try:
-        result_store = RunStore(options.result_root.expanduser())
+        result_store = RunStore(config.cache_root / "test-runs")
         test_run = result_store.start(run_id)
     except (OSError, ValueError) as error:
         print(f"xpool test result setup failure: {error}", file=sys.stderr)
@@ -54,10 +52,10 @@ def run_tests(options: argparse.Namespace, selectors: tuple[str, ...], parser: a
             test_run.directory,
             TestRunManifest(
                 run_id=run_id,
+                tool_config=tool_config,
                 selected_suites=selected_suites,
                 selectors=selectors,
-                integration=options.integration,
-                strict_requirements=options.strict_requirements,
+                strict_requirements=config.xtest.strict_requirements,
                 tool_software={
                     "source": "local_distribution_metadata",
                     "python": platform.python_version(),
@@ -68,9 +66,8 @@ def run_tests(options: argparse.Namespace, selectors: tuple[str, ...], parser: a
         result_code = execute_test_run(
             selected_suites,
             tuple(selectors),
-            strict_requirements=options.strict_requirements,
+            strict_requirements=config.xtest.strict_requirements,
             run_directory=test_run.directory,
-            integration=options.integration,
             result_writer=writer,
         )
         writer.finish(result_code, cleanup_verified=writer.results.cleanup_verified)
@@ -92,20 +89,18 @@ def execute_test_run(
     *,
     strict_requirements: bool,
     run_directory: Path,
-    integration: str | None = None,
     result_writer: TestResultWriter | None = None,
 ) -> int:
     """Collect, schedule, and fully reap one durable test run."""
 
     print(f"xpool test run directory: {run_directory}")
     repository_root = Path.cwd().resolve()
-    catalogue_path = repository_root / "tests/tests.toml"
+    catalogue_path = get_global_config().xtest.catalog
     try:
         plan = collect_plan(
             repository_root,
             selected_suites,
             selectors,
-            integration=integration,
             strict_requirements=strict_requirements,
             directory=run_directory / "collection",
             catalogue_path=catalogue_path,
@@ -115,6 +110,11 @@ def execute_test_run(
         if result_writer is not None:
             result_writer.fail(str(error))
         return 2
+
+    if plan is not None:
+        selected_suites = plan.selected_suites
+        if result_writer is not None:
+            result_writer.selection(selected_suites)
 
     needs_device_pool = "cext" in selected_suites or (
         plan is not None and any(case.requirements.device_count for case in plan.cases)
@@ -172,6 +172,7 @@ def execute_test_run(
             device_pool=device_pool,
             result_writer=result_writer,
             catalogue_path=catalogue_path,
+            tool_config_path=run_directory / "collection/tool-config.json",
         )
         with ExitStack() as stack:
             stack.enter_context(sighandle(signal.SIGINT, runner.request_stop))

@@ -11,8 +11,9 @@ steps does not need a tracked plan.
 
 ## Workflow
 
-1. Read `CONTEXT.md`, the relevant current documents under `docs/designs/`,
-   adjacent source and tests, and an existing task plan when one exists.
+1. Read [CONTEXT.md](../../../CONTEXT.md), the relevant
+   [current designs](../../../docs/designs/README.md), adjacent source and tests,
+   and an existing task plan when one exists.
 2. Resolve repository facts and previously accepted decisions before asking
    questions. Ask about unresolved choices that materially affect behavior,
    interfaces, ownership, resource use, or acceptance. Do not reopen settled

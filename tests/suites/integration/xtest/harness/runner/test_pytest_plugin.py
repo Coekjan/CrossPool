@@ -22,7 +22,10 @@ def bound_catalogue(pytester: pytest.Pytester) -> Path:
     shutil.copytree(root / "configs/deployments", pytester.path / "configs/deployments")
     with TEST_CATALOG_PATH.open("rb") as source:
         declarations = tomllib.load(source)
-    cases = {name: declarations["serving_cases"][name] for name in ("serving-001", "serving-002")}
+    cases = {
+        name: declarations["serving_cases"][name]
+        for name in ("4c410873-88b0-427f-a635-d9572dddd057", "e2be87cf-3a62-4ae5-9de3-bb551ad046c0")
+    }
     for case in cases.values():
         case["module"] = "integration.test_program"
     catalogue = pytester.path / "tests/tests.toml"
@@ -79,8 +82,8 @@ def test_plain(tmp_path):
     plan = xtest.harness.runner.plan.TestPlan.read(output)
     assert len(plan.cases) == 7
     assert tuple(case.requirements.device_count for case in plan.cases) == (2, 3, 0, 0, 1, 2, 0)
-    assert plan.cases[0].nodeid.endswith("test_bound[serving-001]")
-    assert plan.cases[1].nodeid.endswith("test_bound[serving-002]")
+    assert plan.cases[0].nodeid.endswith("test_bound[4c410873-88b0-427f-a635-d9572dddd057]")
+    assert plan.cases[1].nodeid.endswith("test_bound[e2be87cf-3a62-4ae5-9de3-bb551ad046c0]")
     assert plan.cases[0].requirements.model_ids == (ModelId("Qwen/Qwen3-0.6B"),)
     executed = pytester.runpytest(
         "-p",
@@ -137,7 +140,7 @@ from xkit.serving.sglang.graph import SglangGraphMode
 from xtest.harness.sglang.catalog import TestCatalog
 from xtest.harness.sglang.serving.qualification import graph_rows
 
-base = TestCatalog.load(Path({str(bound_catalogue)!r})).serving_cases[0]
+base = TestCatalog.from_file(Path({str(bound_catalogue)!r})).serving_cases[0]
 cases = tuple(
     base.model_copy(update={{
         "id": None, "description": str(index), "graph_modes": tuple(SglangGraphMode),

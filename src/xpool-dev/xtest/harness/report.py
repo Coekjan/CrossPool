@@ -5,12 +5,12 @@ from __future__ import annotations
 import math
 from collections import Counter
 from collections.abc import Sequence
-from contextlib import ExitStack
 from pathlib import Path
 from typing import ClassVar, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, JsonValue, model_validator
 
+from xkit.config import ToolConfigRecord
 from xkit.results import RunStore, write_json
 from xkit.supervisor import TaskCompletion
 from xtest.harness.runner.artifact import ArtifactGroupResult
@@ -28,9 +28,9 @@ class TestRunManifest(TestRecord):
     """Original selection and expected cases, written before task admission."""
 
     run_id: str
+    tool_config: ToolConfigRecord
     selected_suites: tuple[str, ...]
     selectors: tuple[str, ...] = ()
-    integration: str | None = None
     strict_requirements: bool
     tool_software: dict[str, JsonValue] = Field(default_factory=dict)
     python_cases: tuple[str, ...] = ()
@@ -97,6 +97,11 @@ class TestResultWriter:
         )
         write_json(self.directory / "run.json", self.manifest.model_dump(mode="json"))
 
+    def selection(self, selected_suites: tuple[str, ...]) -> None:
+        """Retain collection's effective scope before task admission."""
+        self.manifest = self.manifest.model_copy(update={"selected_suites": selected_suites})
+        write_json(self.directory / "run.json", self.manifest.model_dump(mode="json"))
+
     def checkpoint(self) -> None:
         # ponytail: whole-run checkpoints; use append-only records if task counts make snapshots expensive.
         write_json(self.directory / "results.json", self.results.model_dump(mode="json"))
@@ -151,14 +156,10 @@ class TestRunReport(TestRecord):
             raise ValueError(f"unsupported test report format: no run.json in {run_directory}")
         manifest = TestRunManifest.model_validate_json(manifest_path.read_bytes())
         results_path = run_directory / "results.json"
-        results = (
-            TestRunResults.model_validate_json(results_path.read_bytes()) if results_path.exists() else TestRunResults()
-        )
+        results = TestRunResults.model_validate_json(results_path.read_bytes())
+        if not (run_directory / ".completed").is_file() or not results.finished or results.overall_result_code is None:
+            raise ValueError(f"test run is not sealed: {run_directory.name}")
         missing: list[str] = []
-        if not (run_directory / ".completed").is_file():
-            missing.append(".completed")
-        if not results_path.exists():
-            missing.append("results.json")
         artifacts = ([manifest.collection_plan] if manifest.collection_plan is not None else []) + [
             f"{task.artifact_directory}/{'ctest.xml' if task.stage == 'cext' else 'pytest.xml'}"
             for task in results.tasks
@@ -212,34 +213,58 @@ class TestRunReport(TestRecord):
         }
 
 
-def report_test_runs(inputs: Sequence[Path], *, output: Path, labels: Sequence[str] | None = None) -> None:
-    """Render separate JSON/Markdown reports while preserving source evidence."""
+def list_test_artifacts(root: Path) -> tuple[str, ...]:
+    """Discover inactive, sealed target-format runs using metadata only."""
+    artifacts = []
+    store = RunStore(root)
+    for entry in store.inactive_runs():
+        try:
+            with store.read(entry.name) as directory:
+                manifest = TestRunManifest.model_validate_json((directory / "run.json").read_bytes())
+                results = TestRunResults.model_validate_json((directory / "results.json").read_bytes())
+                if (
+                    manifest.run_id == directory.name
+                    and (directory / ".completed").is_file()
+                    and results.finished
+                    and results.overall_result_code is not None
+                ):
+                    artifacts.append(entry.name)
+        except (ValueError, FileNotFoundError, BlockingIOError):
+            continue
+    return tuple(artifacts)
 
-    if not inputs or (labels is not None and len(labels) != len(inputs)):
-        raise ValueError("report labels must correspond one-to-one with input directories")
-    directories = [path.resolve(strict=True) for path in inputs]
-    destination = output.resolve()
-    if any(destination.is_relative_to(path) or path.is_relative_to(destination) for path in directories):
-        raise ValueError("report output must be separate from every source run")
-    summaries: list[JsonValue] = []
-    paragraphs = ["# CrossPool Test Report\n"]
-    with ExitStack() as stack:
-        for index, directory in enumerate(directories):
-            protected = stack.enter_context(RunStore(directory.parent).read(directory.name))
-            report = TestRunReport.load(protected)
-            label = labels[index] if labels is not None else report.manifest.run_id
-            summary = report.summary()
-            summaries.append({"label": label, "summary": summary})
-            paragraphs.extend(
-                [
-                    f"## {label}\n",
-                    f"Original result: {report.results.overall_result_code}; "
-                    f"strict requirements: {report.manifest.strict_requirements}; "
-                    f"cleanup verified: {report.results.cleanup_verified}.\n",
-                    f"Passed: {summary['passed']}; failed: {summary['failed']}; skipped: {summary['skipped']}; "
-                    f"unexecuted or unavailable: {summary['unexecuted_or_unavailable']}.\n",
-                ]
+
+def report_test_runs(inputs: Sequence[Path], *, output: Path | None = None) -> tuple[Path, ...]:
+    """Report each exact retained run ID under exclusive run protection.
+
+    Default output belongs to that run. An export root receives the same
+    tool/run hierarchy. Regeneration preserves raw evidence and unrelated files.
+    """
+    if not inputs:
+        raise ValueError("supply at least one test artifact ID")
+    outputs = []
+    for path in dict.fromkeys(path.expanduser().resolve() for path in inputs):
+        identity = path.name
+        with RunStore(path.parent).read(identity, exclusive=True) as directory:
+            report = TestRunReport.load(directory)
+            destination = (
+                directory / "report"
+                if output is None
+                else output.expanduser().resolve() / "xtest" / identity / "report"
             )
+            if destination.resolve().is_relative_to(directory) and destination.resolve() != directory / "report":
+                raise ValueError("test report export overlaps source evidence")
+            destination.mkdir(parents=True, exist_ok=True)
+            summary = report.summary()
+            paragraphs = [
+                "# CrossPool Test Report\n",
+                f"## {identity}\n",
+                f"Original result: {report.results.overall_result_code}; "
+                f"strict requirements: {report.manifest.strict_requirements}; "
+                f"cleanup verified: {report.results.cleanup_verified}.\n",
+                f"Passed: {summary['passed']}; failed: {summary['failed']}; skipped: {summary['skipped']}; "
+                f"unexecuted or unavailable: {summary['unexecuted_or_unavailable']}.\n",
+            ]
             if not summary["evidence_complete"]:
                 paragraphs.append("Evidence is incomplete; this report does not establish acceptance.\n")
             if report.results.infrastructure_error is not None:
@@ -256,6 +281,7 @@ def report_test_runs(inputs: Sequence[Path], *, output: Path, labels: Sequence[s
                 paragraphs.append(f"\nArtifacts: [{task.artifact_directory}]({directory / task.artifact_directory}).\n")
             for group in report.results.groups:
                 paragraphs.append(f"\nGroup `{group.name}`: result {group.result_code}; {group.detail or ''}.\n")
-        destination.mkdir(parents=True, exist_ok=False)
-        write_json(destination / "summary.json", {"runs": summaries})
-        (destination / "report.md").write_text("\n".join(paragraphs) + "\n", encoding="utf-8")
+            write_json(destination / "summary.json", summary)
+            (destination / "report.md").write_text("\n".join(paragraphs) + "\n", encoding="utf-8")
+            outputs.append(destination)
+    return tuple(outputs)

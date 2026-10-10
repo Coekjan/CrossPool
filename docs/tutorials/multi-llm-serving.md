@@ -11,7 +11,7 @@ Stop the single-model SGLang process, then request daemon shutdown and wait for
 its Agent/Fabric and MPS retirement before editing the shared configuration.
 
 Keep the same two physical UUIDs in `.env` and the same device roles in
-`configs/dev.local.toml`:
+`configs/xpool.local.toml`:
 
 ```toml
 [atn]

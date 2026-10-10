@@ -162,8 +162,8 @@ selection rather than a duplicate handwritten typing module.
 Installed test and benchmark commands share resource/serving mechanisms in
 `xkit`, with their distinct policies in `xtest.harness` and `xbench.harness`.
 Production `xpool` does not depend on these packages. See
-[Test and Benchmark Tooling](tooling.md) for process ownership, measurement and
-offline report contracts.
+[Test and Benchmark Tooling](tooling.md) for shared process ownership and
+[Serving Benchmarks](benchmark.md) for measurement and offline report contracts.
 
 The current implementation provides real Dense and MoE FFN execution, true-TP
 weight ownership, Device-resident Transport and Fabric progress, per-Lane

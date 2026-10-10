@@ -18,7 +18,7 @@ def test_plan_round_trips_strict_unversioned_json(tmp_path: Path) -> None:
     plan.write(path)
 
     assert xtest.harness.runner.plan.TestPlan.read(path) == plan
-    assert set(json.loads(path.read_text(encoding="utf-8"))) == {"cases"}
+    assert set(json.loads(path.read_text(encoding="utf-8"))) == {"cases", "selected_suites"}
     assert not tuple(tmp_path.glob(".*.tmp"))
 
 
@@ -26,7 +26,7 @@ def test_plan_rejects_unknown_case_fields(tmp_path: Path) -> None:
     case = unit_case().raw()
     case["unknown"] = True
     path = tmp_path / "plan.json"
-    path.write_text(json.dumps({"cases": [case]}), encoding="utf-8")
+    path.write_text(json.dumps({"cases": [case], "selected_suites": []}), encoding="utf-8")
 
     with pytest.raises(ValueError, match="exactly"):
         xtest.harness.runner.plan.TestPlan.read(path)

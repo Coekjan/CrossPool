@@ -22,6 +22,24 @@ def test_json_checkpoint_preserves_previous_value_on_serialization_failure(tmp_p
     assert tuple(tmp_path.iterdir()) == (path,)
 
 
+def test_resume_keeps_existing_evidence_locked_through_reopening(tmp_path: Path) -> None:
+    store = xkit.results.RunStore(tmp_path)
+    run = store.start("20261009-100000-1-1")
+    xkit.results.write_json(run.directory / "run.json", {"finished": True})
+    run.complete()
+    with store.resume(run.directory.name) as entry:
+        assert (entry.directory / ".completed").is_file()
+        assert (entry.directory / "run.json").read_bytes() == (run.directory / "run.json").read_bytes()
+        with pytest.raises(BlockingIOError):
+            with store.read(run.directory.name):
+                pytest.fail("resuming run became readable")
+        entry.reopen()
+        assert not (entry.directory / ".completed").exists()
+        assert store.cleanup(keep_runs=0).active == (entry.directory,)
+        entry.complete()
+    assert (run.directory / ".completed").is_file()
+
+
 def test_jsonl_round_trip_preserves_existing_file(tmp_path: Path) -> None:
     path = tmp_path / "records.jsonl"
     values: tuple[JsonValue, ...] = ({"text": "你好", "count": 2}, None)
@@ -65,6 +83,10 @@ def test_cleanup_retains_newest_inactive_runs(tmp_path: Path) -> None:
         run = store.start(run_id)
         run.complete()
         os.utime(run.directory, ns=(timestamp, timestamp))
+        os.utime(run.directory / ".run.lock", ns=(timestamp, timestamp))
+
+    # Derived reports can change directory age, but not execution start age.
+    (tmp_path / run_ids[0] / "report").mkdir()
 
     cleanup = store.cleanup(keep_runs=2)
 
@@ -185,3 +207,22 @@ def test_start_holds_cleanup_lock_until_run_lock_is_acquired(
     assert cleaned[0].active == (started[0].directory,)
     assert started[0].directory.is_dir()
     started[0].complete()
+
+
+def test_inactive_inventory_is_read_only_and_excludes_active_and_unrecognized_entries(tmp_path: Path) -> None:
+    missing = xkit.results.RunStore(tmp_path / "missing")
+    assert missing.inactive_runs() == ()
+    assert not missing.root.exists()
+    store = xkit.results.RunStore(tmp_path / "runs")
+    finished = store.start("20260727-100000-1-1")
+    finished.complete()
+    active = store.start("20260727-100001-1-2")
+    (store.root / "notes").mkdir()
+    before = {path: (path.stat().st_mtime_ns, path.read_bytes()) for path in store.root.rglob("*") if path.is_file()}
+    try:
+        assert store.inactive_runs() == (finished.directory,)
+        assert before == {
+            path: (path.stat().st_mtime_ns, path.read_bytes()) for path in store.root.rglob("*") if path.is_file()
+        }
+    finally:
+        active.complete()

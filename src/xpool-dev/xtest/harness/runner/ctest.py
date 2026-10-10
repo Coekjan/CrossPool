@@ -133,7 +133,7 @@ class CtestSuite:
         device_assignments = ",".join(
             f"{device_pool.physical_index_by_uuid[uuid]}:{uuid}" for uuid in device_pool.uuids
         )
-        logger.info("cext devices=%s", device_assignments, extra={"status": "RUNNING"})
+        logger.info("ctest devices=%s", device_assignments, extra={"status": "RUNNING"})
         started_at = time.monotonic()
         lease = device_pool.try_lease(len(device_pool.uuids))
         if lease is None:
@@ -159,7 +159,7 @@ class CtestSuite:
         else:
             result_code = 0 if completion.returncode == 0 else 1
         logger.info(
-            "cext devices=%s elapsed=%.3fs code=%s log=%s junit=%s",
+            "ctest devices=%s elapsed=%.3fs code=%s log=%s junit=%s",
             device_assignments,
             time.monotonic() - started_at,
             result_code,

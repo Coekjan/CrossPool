@@ -18,7 +18,7 @@ src/
   xpool-dev/
     pyproject.toml          Private xpool-dev project
     xkit/                   Shared resources, processes, storage and serving
-    xtest/cli.py            Test command
+    xtest/cli/              Test command
     xtest/harness/          Collection, scheduling, verdicts and qualification
     xbench/cli.py           Benchmark command
     xbench/harness/serving/ Serving cases, workloads, observations and reporting
@@ -67,7 +67,7 @@ and needs no dataset directory.
 
 Both commands expose `list`, `run`, `report` and `clean`. Exact CLI options and
 typed interfaces belong to their declarations in
-[`xtest.cli`](../../src/xpool-dev/xtest/cli.py),
+[`xtest.cli`](../../src/xpool-dev/xtest/cli/),
 [`xbench.cli`](../../src/xpool-dev/xbench/cli.py) and the owning harness modules.
 [Test Architecture](../../tests/README.md) owns placement, resource requirements
 and execution commands.
@@ -417,11 +417,18 @@ Models in canonical order. Device tasks are ordered by resource count and estima
 duration and backfilled over idle leases. Test strictness, JUnit classification
 and cross-task qualification verdicts remain test-owned.
 
-`run.json` retains source-labeled tool software metadata, selections, strictness,
+`run.json` retains required `tool_config`, source-labeled tool software metadata, selections, strictness,
 expected cases and task/artifact mapping. Atomic `results.json`
 checkpoints retain supervision outcomes, JUnit projections, stage/group verdicts,
 timing and nullable final result and cleanup proof. Cases never admitted remain
 unexecuted, not passed or skipped. Recording failure is an infrastructure failure.
+
+JUnit phase records are grouped by the collected node ID into one result per
+item, in collection order. Any phase failure or error makes the item failed;
+the result retains all outcome messages and tracebacks and sums record durations.
+A missing record duration leaves the item's duration unavailable. XML summary
+counters are validated against raw records and outcomes before this projection;
+retained report totals count unique test items.
 
 The collected plan and retained task/artifact mapping own serving comparison
 membership. Serving artifacts supply graph settings and model outputs for that
@@ -430,11 +437,16 @@ isolated reference and production workdirs. The runner mapping supplies test
 attribution for both evidence types.
 
 `TestRunReport` projects that original outcome without recollection or current
-qualification reevaluation. `xtest report` writes labeled JSON/Markdown with
-original strictness, failures, skip reasons, durations, artifacts and completeness.
-Inactive interrupted runs remain explicitly incomplete. Missing manifests are
-unsupported input; logs are not a replacement verdict protocol. Reporting a
-failed run successfully does not change its original result.
+qualification reevaluation. `xtest report` writes JSON/Markdown with retained
+run identity, original strictness, failures, skip reasons, durations, artifacts and completeness.
+Inactive interrupted runs remain explicitly incomplete. `xtest report --list`
+discovers inactive metadata with supported execution settings, without parsing
+all samples; report generation validates the complete retained evidence.
+Artifact addresses are exact `RUN_ID` values below the configured test-run root.
+Reports default to `RUN_ID/report/`; `--output DIR` exports below
+`DIR/xtest/RUN_ID/report/`. Missing manifests are unsupported input; logs are
+not a replacement verdict protocol. Reporting a failed run successfully does
+not change its original result.
 
 ## Benchmark cases and workload execution
 

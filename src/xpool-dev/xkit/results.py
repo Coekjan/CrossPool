@@ -61,6 +61,12 @@ class RunCleanup:
     retained: tuple[Path, ...]
     active: tuple[Path, ...]
 
+    def print(self) -> None:
+        """Print decisions in remove/keep/active order without changing files."""
+        for action, paths in (("remove", self.removable), ("keep", self.retained), ("active", self.active)):
+            for path in paths:
+                print(f"{action} {path}")
+
 
 @dataclass(slots=True)
 class RunEntry:
@@ -69,6 +75,12 @@ class RunEntry:
     directory: Path
     lock_file: BinaryIO
     closed: bool = False
+
+    def reopen(self) -> None:
+        """Withdraw a completion marker while holding this entry's exclusive lock."""
+        if self.closed:
+            raise RuntimeError("cannot reopen a closed run entry")
+        (self.directory / ".completed").unlink(missing_ok=True)
 
     def complete(self) -> None:
         """Mark the run complete and release its exclusive lifecycle lock."""
@@ -109,9 +121,8 @@ class RunStore:
                 raise
         return RunEntry(directory, lock_file)
 
-    @contextmanager
-    def read(self, run_id: str, *, exclusive: bool = False) -> Generator[Path]:
-        """Protect one inactive invocation while loading its evidence.
+    def acquire(self, run_id: str, *, exclusive: bool = True) -> RunEntry:
+        """Acquire an existing entry without creating or changing evidence.
 
         Active runs and linked entry/lock files are rejected. Existing lock files
         are opened without creating or modifying source evidence; cleanup uses
@@ -135,10 +146,29 @@ class RunStore:
             except BaseException:
                 run_lock.close()
                 raise
+        return RunEntry(directory, run_lock)
+
+    @contextmanager
+    def read(self, run_id: str, *, exclusive: bool = False) -> Generator[Path]:
+        """Protect retained evidence for reading or exclusive report publication."""
+        entry = self.acquire(run_id, exclusive=exclusive)
         try:
-            yield directory
+            yield entry.directory
         finally:
-            run_lock.close()
+            entry.lock_file.close()
+
+    @contextmanager
+    def resume(self, run_id: str) -> Generator[RunEntry]:
+        """Hold an existing run exclusively through validation, reopening and execution.
+
+        Acquisition does not change evidence. The caller reopens only after its
+        own input validation; abandoning or completing the entry releases protection.
+        """
+        entry = self.acquire(run_id)
+        try:
+            yield entry
+        finally:
+            entry.lock_file.close()
 
     def cleanup(self, *, keep_runs: int, dry_run: bool = False) -> RunCleanup:
         """Select or remove inactive entries below one resolved result root."""
@@ -154,6 +184,7 @@ class RunStore:
             inactive: list[Path] = []
             active: list[Path] = []
             acquired_run_locks: list[BinaryIO] = []
+            ages: dict[Path, int] = {}
             try:
                 for entry in root.iterdir():
                     if entry.name == CLEANUP_LOCK_NAME:
@@ -169,9 +200,15 @@ class RunStore:
                                 active.append(entry)
                                 continue
                             acquired_run_locks.append(run_lock)
+                            if RUN_ID_PATTERN.fullmatch(entry.name) is not None:
+                                ages[entry] = run_lock_path.stat().st_mtime_ns
                     inactive.append(entry)
 
-                newest_first = sorted(inactive, key=lambda path: (path.lstat().st_mtime_ns, path.name), reverse=True)
+                newest_first = sorted(
+                    inactive,
+                    key=lambda path: (ages[path] if path in ages else path.lstat().st_mtime_ns, path.name),
+                    reverse=True,
+                )
                 retained = tuple(newest_first[:keep_runs])
                 removable = tuple(newest_first[keep_runs:])
                 if not dry_run:
@@ -188,3 +225,24 @@ class RunStore:
             finally:
                 for run_lock in acquired_run_locks:
                     run_lock.close()
+
+    def inactive_runs(self) -> tuple[Path, ...]:
+        """Enumerate recognized inactive entries without creating or changing files.
+
+        A later reader reacquires protection; this inventory is not a lease.
+        Vanished entries and currently held run locks are omitted.
+        """
+        if not self.root.is_dir():
+            return ()
+        inactive = []
+        for entry in sorted(self.root.iterdir()):
+            if RUN_ID_PATTERN.fullmatch(entry.name) is None or not entry.is_dir() or entry.is_symlink():
+                continue
+            if not (entry / RUN_LOCK_NAME).is_file() or (entry / RUN_LOCK_NAME).is_symlink():
+                continue
+            try:
+                with self.read(entry.name, exclusive=True) as directory:
+                    inactive.append(directory)
+            except (BlockingIOError, FileNotFoundError):
+                continue
+        return tuple(inactive)

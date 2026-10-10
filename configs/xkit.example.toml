@@ -1,0 +1,33 @@
+# Copy to xkit.local.toml and select it with XKIT_CONFIG.
+keep_runs = 20
+
+[xtest]
+catalog = "../tests/tests.toml"
+suites = ["cext", "unit", "integration", "e2e"]
+strict_requirements = false
+
+[xbench]
+catalog = "../benches/benches.toml"
+repetitions = 1
+
+[xbench.report]
+layout = "single"
+formats = ["pdf", "svg", "png"]
+ppi = 300
+
+[xbench.report.legend]
+visible = true
+location = "upper center"
+columns = 1
+
+[xbench.report.ttft]
+columns = 1
+caption = "Client-observed time to first token."
+
+[xbench.report.itl]
+columns = 1
+caption = "Client-observed and chunk-estimated inter-token latency."
+
+[xbench.report.throughput]
+columns = 1
+caption = "Aligned input and output token throughput over time."

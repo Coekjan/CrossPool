@@ -9,8 +9,11 @@ Add one concrete Model ID without broadening the architecture speculatively.
 
 ## Preconditions
 
-1. Read `AGENTS.md`, `docs/supported-models.md`, `docs/designs/ffn-execution.md`,
-   `docs/designs/qualification.md`, and `tests/README.md`.
+1. Read [repository constraints](../../../AGENTS.md),
+   [supported models](../../../docs/supported-models.md),
+   [FFN execution](../../../docs/designs/ffn-execution.md),
+   [qualification](../../../docs/designs/qualification.md), and
+   [test architecture](../../../tests/README.md).
 2. Require the requested Model ID to exist in `[[models]]` in the effective
    CrossPool configuration.
 3. Resolve its local path only with `XpoolConfig.model_path_of(model_id)`. Stop
@@ -39,11 +42,11 @@ Add one concrete Model ID without broadening the architecture speculatively.
 6. Run the focused checks and then:
 
    ```bash
-   uv run xtest run --integration=sglang --suite <model-id> --strict-requirements
+   uv run xtest run --suite <model-id> --strict-requirements
    ```
 
    Complete the task's applicable acceptance and invalidated qualification as
-   defined in `docs/designs/qualification.md`. When the task includes native
+   defined by Qualification. When the task includes native
    multimodal input acceptance, decoder/text-only success completes a phase;
    finish the required native-input acceptance before claiming support.
 

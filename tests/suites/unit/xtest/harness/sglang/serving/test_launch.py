@@ -18,7 +18,7 @@ def test_prepare_applies_deployment_policy_and_sanitizes_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manifest = TestCatalog.load(TEST_CATALOG_PATH)
+    manifest = TestCatalog.from_file(TEST_CATALOG_PATH)
     case = next(case for case in manifest.serving_cases if len(case.models) == 2)
     base_config = base_e2e_config(manifest, tmp_path)
     inherited = {
@@ -94,7 +94,7 @@ def test_prepare_elastic_kv_preserves_absolute_memory_budget(
     external_utilization: float,
     expected_utilization: float,
 ) -> None:
-    manifest = TestCatalog.load(TEST_CATALOG_PATH)
+    manifest = TestCatalog.from_file(TEST_CATALOG_PATH)
     case = next(case for case in manifest.serving_cases if case.elastic_kv is not None)
     monkeypatch.setattr(
         xkit.device,
@@ -125,7 +125,7 @@ def test_prepare_rejects_incompatible_elastic_kv_gpu_capacity(
     visible_memory: tuple[int, ...],
     message: str,
 ) -> None:
-    manifest = TestCatalog.load(TEST_CATALOG_PATH)
+    manifest = TestCatalog.from_file(TEST_CATALOG_PATH)
     case = next(case for case in manifest.serving_cases if case.elastic_kv is not None and case.atnagent_count == 2)
     monkeypatch.setattr(
         xkit.device,
@@ -155,7 +155,7 @@ def test_prepare_enables_prefill_logit_observer_for_alignment_modes(
     graph_mode: SglangGraphMode,
     expected_enable: bool,
 ) -> None:
-    manifest = TestCatalog.load(TEST_CATALOG_PATH)
+    manifest = TestCatalog.from_file(TEST_CATALOG_PATH)
     case = manifest.serving_cases[0].model_copy(
         update={
             "graph_modes": (
@@ -179,7 +179,7 @@ def test_prepare_enables_prefill_logit_observer_for_alignment_modes(
 
 
 def test_prepare_keeps_prefill_logit_observer_off_for_routine_serving(tmp_path: Path) -> None:
-    manifest = TestCatalog.load(TEST_CATALOG_PATH)
+    manifest = TestCatalog.from_file(TEST_CATALOG_PATH)
     case = manifest.serving_cases[0]
 
     launch = prepare(

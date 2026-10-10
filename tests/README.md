@@ -36,8 +36,9 @@ public behavior is broken, replace it with a behavior test.
   cross-graph qualification, including token or logit comparison. Engine-specific
   files use names such as `test_sglang_model_qualification.py`.
 - `src/xpool-dev/xkit/` owns shared process, device, endpoint, run-store and serving
-  lifecycle mechanisms. `src/xpool-dev/xtest/harness/` owns test collection,
-  scheduling, verdicts, fixtures, native support and qualification;
+  lifecycle mechanisms and supervised-task admission. `src/xpool-dev/xtest/harness/`
+  owns test collection, stage ordering, verdicts, fixtures, native support and
+  qualification;
   `src/xpool-dev/xbench/harness/` owns
   benchmark workloads, measurements and reports. Harness modules are installed
   tooling, not test suites, and must not import collected test modules.
@@ -47,7 +48,7 @@ setup belongs in a focused harness module or an explicitly imported fixture;
 do not create implicit fixture dependencies through directory `conftest.py`
 imports. Put engine-owned Integration and E2E files under an engine-named
 directory; do not mix their cases with engine-neutral files. E2E files use
-`test_e2e_*.py` names. Named cases in `tests/tests.toml` select models, source
+`test_e2e_*.py` names. Full-UUID cases in `tests/tests.toml` select models, source
 modules, graph modes and test-only KV limits, with English descriptions.
 Catalogue cases reference portable scenes under `configs/deployments/` for
 complete device placement, model TP/DP geometry, Executor Lane count and SLO;
@@ -154,8 +155,8 @@ Unavailable resources skip by default and fail with
 `--strict-requirements`; malformed explicit configuration always fails. Every
 pytest session preflights `xpool.native` and the sole `xpool.ops.ffn_shim`
 dispatcher registration and loads the complete portable test catalogue once
-before collection, including Unit-only sessions. Collection does not resolve
-machine configuration, read checkpoints or probe devices. CTest device cases
+before collection, including Unit-only sessions. Resource collection does not read checkpoints or probe devices. The CLI resolves
+development policy and the runtime-owned cache location before collection. CTest device cases
 declare a `devices` resource and execute directly. Role-aware deployment and
 topology owners prepare MPS when their actual execution needs it.
 
@@ -185,11 +186,11 @@ The package runner performs these steps:
 3. Run CTest, Unit, Integration, E2E, and any explicitly selected Models in
    canonical order. Device work is sorted
    by resource count and estimated duration and backfilled across idle devices.
-4. Run each Python device task in a `SupervisedTaskScope`; managed owners protect
+4. Run each Python task in a `SupervisedTaskScope`; managed owners protect
    their clients from generic descendant signals. Return the allocation only
    after resource cleanup proof and complete descendant-domain reaping.
 5. Parse JUnit and E2E artifacts, evaluate declared serving-graph groups, and
-   retain logs under `.xpool-cache/test-runs/`.
+   retain logs under `test-runs/` in the resolved cache root.
 
 Task `RUNNING` and terminal `PASSED` or `FAILED` lines identify leased physical
 device indices and UUIDs. Terminal lines report task elapsed time and available
@@ -227,16 +228,18 @@ uv run xtest run
 uv run xtest run --suite unit
 uv run xtest run --suite cext --suite integration
 uv run xtest run --suite e2e --strict-requirements
-uv run xtest run --suite integration --suite e2e --integration=sglang
-uv run xtest run --suite Qwen/Qwen3-0.6B --integration=sglang
+uv run xtest run --suite integration --suite e2e
+uv run xtest run --suite Qwen/Qwen3-0.6B
 uv run xtest run --suite models --strict-requirements
 
 # Inventory concrete cases without running fixtures or probing resources.
 uv run xtest list --suite unit
-uv run xtest list --suite integration --integration=sglang
+uv run xtest list --suite integration
 
 # Offline reporting preserves the original test verdict and strictness.
-uv run xtest report .xpool-cache/test-runs/RUN_ID --output /tmp/test-report
+uv run xtest report --list
+uv run xtest report RUN_ID
+uv run xtest report RUN_ID --output exported-reports
 
 # Explicit durable-result cleanup; default is --keep 20.
 uv run xtest clean --dry-run
@@ -252,10 +255,12 @@ Use `pytest --collect-only` to inspect concrete parameterized cases. Build and
 install the native extension with the repository's canonical uv/scikit-build
 command before running native or E2E tests.
 
-`--integration` filters engine-owned files in the selected Integration, E2E,
-and Models suites before pytest imports them; engine-neutral tests remain.
-Omitting it selects all integrations. Currently `sglang` is the only accepted
-value. The file-level filter cannot be combined with explicit pytest selectors.
+Explicit `--suite` establishes scope; `-k` and `-m` narrow its Python rows.
+Explicit Python paths without `--suite` establish their own Python scope.
+Filter-only invocations use configured Python suites and do not implicitly run
+CTest. Model qualification retains complete graph-comparison groups. See the
+[tooling tutorial](../docs/tutorials/tooling.md) for configuration, catalogue
+cloning, artifact IDs and report exports.
 
 ## Verification And Commit Hooks
 

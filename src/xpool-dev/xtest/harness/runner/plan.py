@@ -8,10 +8,14 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Self, TypeGuard
 
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from xkit import ResourceRequirements
+from xkit.case import CaseId
+from xkit.config import DeploymentConfig
 from xkit.results import write_json
+from xkit.serving.sglang.graph import SglangGraphMode
+from xpool.model import ModelId
 from xtest.harness.runner.artifact import ArtifactGroupRef
 
 type JsonObject = dict[str, object]
@@ -44,6 +48,17 @@ class TestStage(StrEnum):
             raise ValueError(f"test path is outside a canonical test stage: {path!r}") from error
 
 
+class CaseInspection(BaseModel):
+    """Portable conditions projected from known typed test case values."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    id: CaseId | None
+    description: str
+    models: tuple[ModelId, ...]
+    deployment: DeploymentConfig
+    graph_mode: SglangGraphMode | None
+
+
 @dataclass(frozen=True, slots=True)
 class CollectedTestCase:
     """One concrete pytest item and its complete scheduling metadata."""
@@ -55,6 +70,7 @@ class CollectedTestCase:
     estimated_duration_seconds: float | None
     timeout_seconds: float
     artifact_group: ArtifactGroupRef | None
+    inspection: CaseInspection | None = None
 
     def __post_init__(self) -> None:
         parsed_path = PurePosixPath(self.path)
@@ -83,6 +99,7 @@ class CollectedTestCase:
             "estimated_duration_seconds",
             "timeout_seconds",
             "artifact_group",
+            "inspection",
         }
         if not is_json_object(raw) or set(raw) != expected:
             raise ValueError(f"collected test case must contain exactly {sorted(expected)}")
@@ -106,6 +123,9 @@ class CollectedTestCase:
             estimated_duration_seconds=float(estimate) if estimate is not None else None,
             timeout_seconds=float(timeout),
             artifact_group=ArtifactGroupRef.from_raw(artifact_group) if artifact_group is not None else None,
+            inspection=CaseInspection.model_validate_json(json.dumps(raw["inspection"]))
+            if raw["inspection"] is not None
+            else None,
         )
 
     def raw(self) -> dict[str, JsonValue]:
@@ -119,6 +139,7 @@ class CollectedTestCase:
             "estimated_duration_seconds": self.estimated_duration_seconds,
             "timeout_seconds": self.timeout_seconds,
             "artifact_group": self.artifact_group.raw() if self.artifact_group is not None else None,
+            "inspection": self.inspection.model_dump(mode="json") if self.inspection is not None else None,
         }
 
 
@@ -127,6 +148,7 @@ class TestPlan:
     """Strict ordered result of one isolated pytest collection worker."""
 
     cases: tuple[CollectedTestCase, ...]
+    selected_suites: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.cases:
@@ -155,9 +177,17 @@ class TestPlan:
     def from_raw(cls, raw: object) -> Self:
         """Strictly parse one complete Test Plan JSON object."""
 
-        if not is_json_object(raw) or set(raw) != {"cases"} or not isinstance(raw["cases"], list):
-            raise ValueError("test plan must contain exactly one cases array")
-        return cls(tuple(CollectedTestCase.from_raw(case) for case in raw["cases"]))
+        if not is_json_object(raw) or set(raw) != {"cases", "selected_suites"} or not isinstance(raw["cases"], list):
+            raise ValueError("test plan must contain cases and selected_suites arrays")
+        suites = raw["selected_suites"]
+        if not isinstance(suites, list):
+            raise ValueError("selected_suites must contain strings")
+        selected_suites = []
+        for suite in suites:
+            if not isinstance(suite, str):
+                raise ValueError("selected_suites must contain strings")
+            selected_suites.append(suite)
+        return cls(tuple(CollectedTestCase.from_raw(case) for case in raw["cases"]), tuple(selected_suites))
 
     @classmethod
     def read(cls, path: Path) -> Self:
@@ -178,4 +208,4 @@ class TestPlan:
     def raw(self) -> dict[str, JsonValue]:
         """Project this Test Plan to its JSON representation."""
 
-        return {"cases": [case.raw() for case in self.cases]}
+        return {"cases": [case.raw() for case in self.cases], "selected_suites": list(self.selected_suites)}

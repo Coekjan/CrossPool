@@ -107,10 +107,15 @@ runtime, preserving arguments, process identity and the inherited process group.
 
 ## Validation and Development
 
+`uv sync --group dev` installs the private `xpool-dev` workspace member editably
+alongside `xpool`, using the shared root lockfile and environment. Its console
+entries are `xtest.cli:main` and `xbench.cli:main`; the production wheel contains
+only production packages and its command.
+
 `xtest run` is the canonical composition root. It runs native CTest,
 Unit, Integration, and E2E stages in their accepted order, schedules device work
-against explicit resource requirements, and retains artifacts under
-`.xpool-cache/test-runs/`.
+against explicit resource requirements, and retains artifacts under `test-runs/`
+in the configured cache root (default `.xpool-cache`).
 
 ```bash
 if [ -f .env ]; then export UV_ENV_FILE="$PWD/.env"; fi

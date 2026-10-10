@@ -10,11 +10,14 @@ import pytest
 from _pytest.mark.structures import Mark, MarkDecorator, ParameterSet
 
 from xkit import ResourceRequirements
+from xkit.config import ToolConfigRecord, XpoolDevConfig, init_global_config
 from xkit.declaration import Parameterization
+from xkit.serving.sglang.graph import SglangGraphMode
 from xkit.source import resolve_source_path
 from xtest.harness.runner.artifact import ArtifactGroupRef
 from xtest.harness.runner.bootstrap import TestBootstrapError, ensure_test_native
 from xtest.harness.runner.plan import (
+    CaseInspection,
     CollectedTestCase,
     TestPlan,
     TestStage,
@@ -27,7 +30,8 @@ from xtest.harness.runner.requirements import (
     require_devices,
     require_model_weights,
 )
-from xtest.harness.sglang.catalog import E2eFfnTopologyCase, E2eServingCase, TestCatalog
+from xtest.harness.runner.selection import configure_selection, selected_suites_key
+from xtest.harness.sglang.catalog import E2eFfnNumericalCase, E2eFfnTopologyCase, E2eServingCase, TestCatalog
 
 catalogue_key = pytest.StashKey[tuple[Path, TestCatalog]]()
 resource_requirements_key = pytest.StashKey[ResourceRequirements]()
@@ -37,6 +41,8 @@ resolved_config_key = pytest.StashKey[ResolvedConfig]()
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Register CrossPool test requirement command-line options."""
 
+    parser.addoption("--xpool-tool-config", default=None, help="internal resolved development configuration input")
+    parser.addoption("--xpool-pytest-inputs", action="store_true", default=False, help="internal invocation selection")
     parser.addoption(
         "--strict-requirements",
         action="store_true",
@@ -71,6 +77,12 @@ def task_artifact_dir(request: pytest.FixtureRequest) -> Path | None:
 def pytest_configure(config: pytest.Config) -> None:
     """Register selection and scheduling metadata for pytest."""
 
+    tool_config_path = config.getoption("--xpool-tool-config")
+    if tool_config_path is not None:
+        record = ToolConfigRecord.model_validate_json(Path(tool_config_path).read_bytes())
+        init_global_config(resolved=XpoolDevConfig.from_record(record))
+        if config.getoption("--xpool-test-plan") is not None:
+            configure_selection(config)
     config.addinivalue_line("markers", "requires_config: selects tests declaring local configuration")
     config.addinivalue_line("markers", "requires_device(min_devices=1): selects tests declaring device resources")
     config.addinivalue_line("markers", "requires_model_weights(model_id): selects tests declaring local checkpoints")
@@ -95,7 +107,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         .resolve()
     )
     try:
-        session.config.stash[catalogue_key] = (catalogue_path, TestCatalog.load(catalogue_path))
+        session.config.stash[catalogue_key] = (catalogue_path, TestCatalog.from_file(catalogue_path))
     except (OSError, ValueError) as error:
         pytest.exit(f"xpool test catalogue failure: {error}", returncode=2)
 
@@ -127,7 +139,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             values = tuple(
                 pytest.param(
                     case,
-                    id=case.id,
+                    id=str(case.id),
                     marks=(
                         pytest.mark.timeout(case.timeout_seconds),
                         pytest.mark.estimated_duration(seconds=case.estimated_duration_seconds),
@@ -317,6 +329,27 @@ def pytest_collection_finish(session: pytest.Session) -> None:
             path = item.path.resolve().relative_to(root).as_posix()
         except ValueError as error:
             raise pytest.UsageError(f"{item.nodeid}: collected path is outside repository root") from error
+        inspection = None
+        if isinstance(item, pytest.Function) and hasattr(item, "callspec"):
+            known_case = item.callspec.params.get("case")
+            graph_mode = item.callspec.params.get("graph_mode")
+            if isinstance(known_case, E2eServingCase | E2eFfnTopologyCase | E2eFfnNumericalCase):
+                if isinstance(known_case, E2eServingCase):
+                    models = known_case.models
+                    identity = known_case.id
+                elif isinstance(known_case, E2eFfnTopologyCase):
+                    models = tuple(instance.model_id for instance in known_case.instances)
+                    identity = known_case.id
+                else:
+                    models = (known_case.model_id,)
+                    identity = None
+                inspection = CaseInspection(
+                    id=identity,
+                    description=known_case.description,
+                    models=models,
+                    deployment=known_case.deployment_config,
+                    graph_mode=graph_mode if isinstance(graph_mode, SglangGraphMode) else None,
+                )
         cases.append(
             CollectedTestCase(
                 path=path,
@@ -326,9 +359,10 @@ def pytest_collection_finish(session: pytest.Session) -> None:
                 estimated_duration_seconds=estimated_duration(item),
                 timeout_seconds=timeout_seconds(item),
                 artifact_group=serving_graph_group(item),
+                inspection=inspection,
             )
         )
     try:
-        TestPlan(tuple(cases)).write(Path(output))
+        TestPlan(tuple(cases), session.config.stash.get(selected_suites_key, ())).write(Path(output))
     except ValueError as error:
         raise pytest.UsageError(str(error)) from error

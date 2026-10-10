@@ -13,7 +13,7 @@ implementation change.
 ## Validation
 
 <!--
-List the commands and results that support this change. For model, GPU,
+List the commands and results that support this change. For model, device,
 topology, or performance claims, include the tested setup. State any skipped
 acceptance checks and why.
 -->

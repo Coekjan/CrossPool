@@ -6,18 +6,22 @@ from pathlib import Path
 
 import pytest
 
-import xtest.cli
+import xkit.config
 import xtest.harness.runner.execution
 import xtest.harness.runner.plan
 import xtest.harness.runner.selection
 from xkit import ResourceRequirements
+from xkit.config import ToolConfigRecord
+from xtest.harness.support.config import reset_development_config
 
 
-def test_model_suite_collects_only_its_literal_model_directory(
+@pytest.mark.usefixtures(reset_development_config.__name__)
+def test_execution_uses_collection_scope_and_parent_configuration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model_directory = "tests/suites/models/Qwen/Qwen3-0.6B"
+    config = xkit.config.init_global_config(cli={"xtest_suites": ["Qwen/Qwen3-0.6B"]})
     collected_selectors: list[tuple[str, ...]] = []
     collected = xtest.harness.runner.plan.CollectedTestCase(
         path=f"{model_directory}/test_sglang_model_qualification.py",
@@ -38,13 +42,15 @@ def test_model_suite_collects_only_its_literal_model_directory(
             selectors: tuple[str, ...],
             strict_requirements: bool,
             catalogue_path: Path,
+            tool_config: ToolConfigRecord,
         ) -> None:
             del repository_root, run_directory, strict_requirements
             assert catalogue_path == Path.cwd().resolve() / "tests/tests.toml"
             collected_selectors.append(selectors)
+            assert tool_config.settings.xtest.suites == config.xtest.suites
 
         def collect(self) -> xtest.harness.runner.plan.TestPlan:
-            return xtest.harness.runner.plan.TestPlan((collected,))
+            return xtest.harness.runner.plan.TestPlan((collected,), config.xtest.suites)
 
     class FakeSuiteRunner:
         resources_releasable = True
@@ -67,5 +73,4 @@ def test_model_suite_collects_only_its_literal_model_directory(
         )
         == 0
     )
-    assert collected_selectors == [(model_directory,)]
-    assert "models" not in xtest.cli.SUITE_ORDER
+    assert collected_selectors == [()]

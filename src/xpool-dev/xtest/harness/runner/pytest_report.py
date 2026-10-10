@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import xml.etree.ElementTree
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -34,37 +35,56 @@ class PytestCaseReport:
     elapsed_seconds: float | None = None
 
     @classmethod
-    def from_element(cls, nodeid: str, element: xml.etree.ElementTree.Element) -> PytestCaseReport:
-        """Parse one testcase while ignoring standard nonsemantic attachments."""
+    def from_elements(cls, nodeid: str, elements: Sequence[xml.etree.ElementTree.Element]) -> PytestCaseReport:
+        """Combine phase records into one item, preserving errors and total time."""
 
-        outcomes = tuple(child for child in element if child.tag in {"failure", "error", "skipped"})
+        outcomes = tuple(
+            child for element in elements for child in element if child.tag in {"failure", "error", "skipped"}
+        )
         unknown = tuple(
             child.tag
+            for element in elements
             for child in element
             if child.tag not in {"failure", "error", "skipped", "system-out", "system-err", "properties"}
         )
         if unknown:
             raise ValueError(f"JUnit testcase {nodeid!r} contains unknown elements: {unknown}")
-        if len(outcomes) > 1:
-            raise ValueError(f"JUnit testcase {nodeid!r} contains multiple outcomes")
-        elapsed_raw = element.get("time")
-        try:
-            elapsed_seconds = float(elapsed_raw) if elapsed_raw is not None else None
-        except ValueError as error:
-            raise ValueError(f"JUnit testcase {nodeid!r} has invalid elapsed time") from error
-        if elapsed_seconds is not None and (not math.isfinite(elapsed_seconds) or elapsed_seconds < 0):
+        elapsed_seconds = 0.0
+        elapsed_complete = True
+        for element in elements:
+            elapsed_raw = element.get("time")
+            if elapsed_raw is None:
+                elapsed_complete = False
+                continue
+            try:
+                elapsed = float(elapsed_raw)
+            except ValueError as error:
+                raise ValueError(f"JUnit testcase {nodeid!r} has invalid elapsed time") from error
+            if not math.isfinite(elapsed) or elapsed < 0:
+                raise ValueError(f"JUnit testcase {nodeid!r} has invalid elapsed time")
+            elapsed_seconds += elapsed
+        if not math.isfinite(elapsed_seconds):
             raise ValueError(f"JUnit testcase {nodeid!r} has invalid elapsed time")
-        if not outcomes:
-            return cls(nodeid=nodeid, status=PytestCaseStatus.PASSED, detail=None, elapsed_seconds=elapsed_seconds)
-        outcome = outcomes[0]
-        detail = outcome.get("message") or (outcome.text or "").strip() or None
-        if outcome.tag == "skipped":
-            if outcome.get("type") == "pytest.xfail":
-                raise ValueError(f"JUnit testcase {nodeid!r} contains prohibited pytest.xfail outcome")
-            if detail is None:
-                raise ValueError(f"JUnit skipped testcase {nodeid!r} has no reason")
-            return cls(nodeid=nodeid, status=PytestCaseStatus.SKIPPED, detail=detail, elapsed_seconds=elapsed_seconds)
-        return cls(nodeid=nodeid, status=PytestCaseStatus.FAILED, detail=detail, elapsed_seconds=elapsed_seconds)
+        details: list[str] = []
+        for outcome in outcomes:
+            detail = "\n".join(part for part in (outcome.get("message"), (outcome.text or "").strip()) if part)
+            if outcome.tag == "skipped":
+                if outcome.get("type") == "pytest.xfail":
+                    raise ValueError(f"JUnit testcase {nodeid!r} contains prohibited pytest.xfail outcome")
+                if not detail:
+                    raise ValueError(f"JUnit skipped testcase {nodeid!r} has no reason")
+            if detail:
+                details.append(detail)
+        if any(outcome.tag in {"failure", "error"} for outcome in outcomes):
+            status = PytestCaseStatus.FAILED
+        else:
+            status = PytestCaseStatus.SKIPPED if outcomes else PytestCaseStatus.PASSED
+        return cls(
+            nodeid=nodeid,
+            status=status,
+            detail="\n\n".join(details) or None,
+            elapsed_seconds=elapsed_seconds if elapsed_complete else None,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +95,7 @@ class PytestTaskReport:
 
     @classmethod
     def read(cls, path: Path, expected_cases: tuple[ExpectedPytestCase, ...]) -> PytestTaskReport:
-        """Read one pytest JUnit report and match every expected case exactly."""
+        """Normalize JUnit phase records to expected items in collection order."""
 
         try:
             root = xml.etree.ElementTree.parse(path).getroot()
@@ -101,7 +121,8 @@ class PytestTaskReport:
                 raise ValueError(f"expected pytest cases have duplicate JUnit identity: {identity}")
             expected_by_identity[identity] = case
 
-        parsed: dict[str, PytestCaseReport] = {}
+        cls.validate_summary(suite, elements)
+        grouped: dict[str, list[xml.etree.ElementTree.Element]] = {}
         for element in elements:
             classname = element.get("classname")
             name = element.get("name")
@@ -110,16 +131,12 @@ class PytestTaskReport:
             expected = expected_by_identity.get((classname, name))
             if expected is None:
                 raise ValueError(f"pytest JUnit contains unexpected testcase {(classname, name)!r}")
-            if expected.nodeid in parsed:
-                raise ValueError(f"pytest JUnit contains duplicate testcase {expected.nodeid!r}")
-            parsed[expected.nodeid] = PytestCaseReport.from_element(expected.nodeid, element)
-        missing = tuple(case.nodeid for case in expected_cases if case.nodeid not in parsed)
+            grouped.setdefault(expected.nodeid, []).append(element)
+        missing = tuple(case.nodeid for case in expected_cases if case.nodeid not in grouped)
         if missing:
             raise ValueError(f"pytest JUnit is missing expected testcases: {missing}")
 
-        report = cls(tuple(parsed[case.nodeid] for case in expected_cases))
-        report.validate_summary(suite)
-        return report
+        return cls(tuple(PytestCaseReport.from_elements(case.nodeid, grouped[case.nodeid]) for case in expected_cases))
 
     @staticmethod
     def junit_identity(nodeid: str) -> tuple[str, str]:
@@ -131,14 +148,17 @@ class PytestTaskReport:
         names[-1] += bracket + parameters
         return ".".join(names[:-1]), names[-1]
 
-    def validate_summary(self, suite: xml.etree.ElementTree.Element) -> None:
-        """Require JUnit summary counters to agree with testcase elements."""
+    @staticmethod
+    def validate_summary(
+        suite: xml.etree.ElementTree.Element, elements: Sequence[xml.etree.ElementTree.Element]
+    ) -> None:
+        """Validate raw XML counters before phase records become item results."""
 
         expected = {
-            "tests": len(self.cases),
-            "failures": sum(case.status is PytestCaseStatus.FAILED for case in self.cases),
-            "errors": 0,
-            "skipped": sum(case.status is PytestCaseStatus.SKIPPED for case in self.cases),
+            "tests": len(elements),
+            "failures": sum(child.tag == "failure" for element in elements for child in element),
+            "errors": sum(child.tag == "error" for element in elements for child in element),
+            "skipped": sum(child.tag == "skipped" for element in elements for child in element),
         }
         actual: dict[str, int] = {}
         for name in expected:
@@ -150,11 +170,7 @@ class PytestTaskReport:
             if parsed < 0:
                 raise ValueError(f"pytest JUnit summary {name} must be nonnegative")
             actual[name] = parsed
-        if (
-            actual["tests"] != expected["tests"]
-            or actual["skipped"] != expected["skipped"]
-            or actual["failures"] + actual["errors"] != expected["failures"]
-        ):
+        if actual != expected:
             raise ValueError(f"pytest JUnit summary counts disagree with testcase outcomes: {actual}")
 
     @property

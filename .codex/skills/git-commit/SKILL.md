@@ -73,5 +73,6 @@ authorization, or change git identity configuration.
 Run non-hook checks proportional to the staged diff. Let installed pre-commit
 hooks run normally during `git commit`; a manual all-files run is reserved for
 an explicit request, hook configuration changes, or hook-failure diagnosis.
-Use the canonical commands and environment policy in `tests/README.md` and
-inspect `.pre-commit-config.yaml` when exact hook composition matters.
+Use the canonical commands and environment policy in
+[test architecture](../../../tests/README.md) and inspect
+[hook definitions](../../../.pre-commit-config.yaml) when exact composition matters.

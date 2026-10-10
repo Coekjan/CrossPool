@@ -15,7 +15,8 @@ From the repository root, create ignored machine-local files:
 uv --version
 nvcc --version
 cp .env.example .env
-cp configs/xpool.example.toml configs/dev.local.toml
+cp configs/xpool.example.toml configs/xpool.local.toml
+cp configs/xkit.example.toml configs/xkit.local.toml
 nvidia-smi --query-gpu=index,uuid,name --format=csv
 ```
 
@@ -26,7 +27,8 @@ the CUDA compiler remains a host prerequisite.
 Choose two devices from the last command, in attention-then-FFN order. Numeric
 selectors name the `nvidia-smi` indices shown by the query; runtime entries
 normalize the ordered selection to full physical UUIDs before initialization.
-In `.env`, keep `XPOOL_CONFIG=configs/dev.local.toml` and
+In `.env`, keep `XPOOL_CONFIG=configs/xpool.local.toml`,
+`XKIT_CONFIG=configs/xkit.local.toml` and
 `SGLANG_PLUGINS=xpool`, and set `CUDA_VISIBLE_DEVICES` to the two selected UUIDs
 in that order. Their deployment-visible indices are 0 and 1. Use the same
 `.env` in every terminal; do not independently remap devices for different
@@ -35,7 +37,7 @@ roles.
 Leave MPS pipe/log selection to the role entry points. They install the
 attention endpoint or direct FFN bypass before driver initialization.
 
-In `configs/dev.local.toml`, keep `atn.devices = [0]` and
+In `configs/xpool.local.toml`, keep `atn.devices = [0]` and
 `ffn.devices = [1]`. Set `vendor.model_base_uri` to the absolute directory
 containing `Qwen/`, remove the example's other `[[models]]` entries, and keep
 only:

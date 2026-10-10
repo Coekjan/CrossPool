@@ -9,6 +9,7 @@ import pytest
 import xtest.harness.runner.collection
 import xtest.harness.runner.plan
 from xkit import ResourceRequirements
+from xtest.harness.support.config import tool_config_record
 
 
 def test_collection_worker_runs_isolated_pytest_and_reads_plan(
@@ -22,6 +23,8 @@ def test_collection_worker_runs_isolated_pytest_and_reads_plan(
     observed_command: list[str] = []
     observed_cwd: list[Path] = []
     observed_environment: dict[str, str] = {}
+    monkeypatch.setenv("PYTHONPYCACHEPREFIX", str(tmp_path / "user-pycache"))
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
 
     def run_worker(
         command: list[str],
@@ -52,6 +55,7 @@ def test_collection_worker_runs_isolated_pytest_and_reads_plan(
         selectors=("tests/suites/unit", "-k", "alpha"),
         strict_requirements=True,
         catalogue_path=repository_root / "tests/tests.toml",
+        tool_config=tool_config_record(tmp_path / ".xpool-cache"),
     ).collect()
 
     assert actual == expected
@@ -66,9 +70,12 @@ def test_collection_worker_runs_isolated_pytest_and_reads_plan(
         "alpha",
         f"--xpool-test-catalog={repository_root / 'tests/tests.toml'}",
         f"--xpool-test-plan={run_directory / 'test-plan.json'}",
+        f"--xpool-tool-config={run_directory / 'tool-config.json'}",
+        "--xpool-pytest-inputs",
         "--strict-requirements",
     ]
-    assert observed_environment["PYTHONPYCACHEPREFIX"] == str(repository_root / ".xpool-cache" / "pycache")
+    assert observed_environment["PYTHONPYCACHEPREFIX"] == str(tmp_path / "user-pycache")
+    assert observed_environment["PYTHONDONTWRITEBYTECODE"] == "1"
     assert (run_directory / "collection.log").read_text(encoding="utf-8") == "collected\n"
 
 
@@ -84,7 +91,12 @@ def test_collection_worker_preserves_failure_log(tmp_path: Path, monkeypatch: py
 
     with pytest.raises(xtest.harness.runner.collection.CollectionFailure, match="exited with code 4"):
         xtest.harness.runner.collection.CollectionWorker(
-            repository_root, run_directory, (), False, repository_root / "tests/tests.toml"
+            repository_root,
+            run_directory,
+            (),
+            False,
+            repository_root / "tests/tests.toml",
+            tool_config_record(tmp_path / ".xpool-cache"),
         ).collect()
 
     assert (run_directory / "collection.log").read_text(encoding="utf-8") == "partial\ncollection failed\n"

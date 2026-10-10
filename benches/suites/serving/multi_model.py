@@ -25,7 +25,7 @@ from xbench.harness.serving.execution import (
 from xbench.harness.serving.measure import BenchCaseManifest, RepetitionManifest, RequestRecord
 from xbench.harness.serving.workload import PreparedWorkload
 from xkit import ResourceRequirements
-from xkit.config import load_deployment
+from xkit.config import DeploymentConfig
 from xkit.results import write_json
 from xkit.serving.sglang.launch import ServingLaunch, SglangLaunchModel
 from xkit.serving.sglang.system import XpoolServingSystem
@@ -40,7 +40,7 @@ def requirements_of(case: BenchCase) -> ResourceRequirements:
     if not isinstance(case, OwnedBenchCase):
         return ResourceRequirements(0, False, ())
     model_ids = tuple(target.model_id for target in case.targets)
-    deployment = load_deployment(case.deployment, model_ids=model_ids)
+    deployment = DeploymentConfig.from_file(case.deployment, model_ids=model_ids)
     return ResourceRequirements(len(deployment.atn.devices) + len(deployment.ffn.devices), True, model_ids)
 
 

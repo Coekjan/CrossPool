@@ -12,24 +12,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from xkit.device import DeviceLease, DevicePool
-from xkit.supervisor import (
-    SupervisedTaskScope,
-    TaskCompletion,
-    TaskCompletionKind,
-    TaskScopeFailure,
-    TaskScopeState,
-    TaskStartFailure,
-    TaskSupervisionFailure,
-    drain_unprotected_subreaper_descendants,
-)
+from xkit.device import DevicePool
+from xkit.scheduler import ActiveTask, TaskScheduler
+from xkit.supervisor import TaskCompletion, TaskCompletionKind
 from xtest.harness.report import TaskReportRecord, TestResultWriter
 from xtest.harness.runner.artifact import ArtifactGroupAdapter, ArtifactGroupRef, ArtifactGroupResult
 from xtest.harness.runner.plan import CollectedTestCase, TestPlan, TestStage
 from xtest.harness.runner.pytest_report import PytestTaskReport
 from xtest.harness.runner.task import ExecutionTask, compile_execution_tasks
 
-SCHEDULER_POLL_INTERVAL_SECONDS = 0.05
 logger = logging.getLogger("xtest.runner")
 
 
@@ -64,20 +55,8 @@ class TaskOutcome:
         return 2
 
 
-@dataclass(slots=True)
-class RunningTask:
-    """One live supervised task and its optional device lease."""
-
-    task: ExecutionTask
-    directory: Path
-    scope: SupervisedTaskScope
-    lease: DeviceLease | None
-    device_assignments: str
-    started_at: float
-
-
 class SuiteRunner:
-    """Own staged scheduling, supervised scopes, device leases, and suite artifacts."""
+    """Own test-stage ordering, pytest verdicts and artifacts on shared scheduling."""
 
     def __init__(
         self,
@@ -87,6 +66,7 @@ class SuiteRunner:
         run_directory: Path,
         strict_requirements: bool,
         catalogue_path: Path,
+        tool_config_path: Path,
         artifact_group_adapters: Sequence[ArtifactGroupAdapter] = (),
         device_pool: DevicePool | None = None,
         result_writer: TestResultWriter | None = None,
@@ -98,6 +78,7 @@ class SuiteRunner:
         self.run_directory = run_directory
         self.strict_requirements = strict_requirements
         self.catalogue_path = catalogue_path
+        self.tool_config_path = tool_config_path
         self.artifact_group_adapters = {adapter.kind: adapter for adapter in artifact_group_adapters}
         if len(self.artifact_group_adapters) != len(artifact_group_adapters):
             raise ValueError("artifact group adapter kinds must be unique")
@@ -105,21 +86,19 @@ class SuiteRunner:
         missing_kinds = declared_kinds - self.artifact_group_adapters.keys()
         if missing_kinds:
             raise ValueError(f"artifact groups have no injected adapter: {sorted(missing_kinds)}")
-        self.device_pool = device_pool
-        self.active: dict[str, RunningTask] = {}
+        self.scheduler = TaskScheduler[ExecutionTask](device_pool=device_pool, on_complete=self.complete_task)
         self.outcomes: dict[str, TaskOutcome] = {}
-        self.retained_leases: list[DeviceLease] = []
         self.stop_signal: int | None = None
         device_tasks = tuple(task for task in self.tasks if task.requirements.device_count)
-        if device_tasks and self.device_pool is None:
+        if device_tasks and device_pool is None:
             raise ValueError("device execution tasks require a borrowed device pool")
-        if self.device_pool is not None:
+        if device_pool is not None:
             oversized = tuple(
-                task.key for task in device_tasks if task.requirements.device_count > len(self.device_pool.uuids)
+                task.key for task in device_tasks if task.requirements.device_count > len(device_pool.uuids)
             )
             if oversized:
                 raise ValueError(
-                    f"execution tasks exceed the eligible device pool of {len(self.device_pool.uuids)}: {oversized}"
+                    f"execution tasks exceed the eligible device pool of {len(device_pool.uuids)}: {oversized}"
                 )
 
     def request_stop(self, signal_number: int, frame: object) -> None:
@@ -128,6 +107,7 @@ class SuiteRunner:
         del frame
         if self.stop_signal is None:
             self.stop_signal = signal_number
+            self.scheduler.request_cancel()
 
     def run(self) -> int:
         """Execute every admitted stage and return the canonical suite exit code."""
@@ -143,6 +123,8 @@ class SuiteRunner:
                 return self.result_code(integration_code)
             e2e_code = self.run_stage(TestStage.E2E)
             self.report_stage(TestStage.E2E, e2e_code)
+            if e2e_code == 2 or self.stop_signal is not None:
+                return self.result_code(e2e_code)
             models_code = self.run_stage(TestStage.MODELS)
             self.report_stage(TestStage.MODELS, models_code)
             artifact_results = self.artifact_group_results()
@@ -154,7 +136,7 @@ class SuiteRunner:
         except (OSError, RuntimeError, ValueError) as error:
             print(f"xpool test infrastructure failure: {error}", file=sys.stderr)
             try:
-                self.cancel_active_tasks()
+                self.scheduler.cancel_active()
             except (OSError, RuntimeError) as cleanup_error:
                 print(f"xpool test cleanup failure: {cleanup_error}", file=sys.stderr)
             if self.result_writer is not None:
@@ -186,27 +168,13 @@ class SuiteRunner:
         )
         if not pending:
             return 0
-        stage_code = 0
         try:
-            while pending or self.active:
-                completed = self.collect_completed_tasks()
-                stage_code = max((stage_code, *(outcome.result_code for outcome in completed)))
-                if self.stop_signal is not None:
-                    self.cancel_active_tasks()
-                    return stage_code
-                if stage_code == 2:
-                    self.cancel_active_tasks()
-                    return 2
-                launched = self.launch_fitting_tasks(pending)
-                if not launched and not completed:
-                    if not self.active:
-                        raise SuiteInfrastructureFailure(
-                            f"stage {stage.value} has pending tasks that cannot fit the idle device pool"
-                        )
-                    time.sleep(SCHEDULER_POLL_INTERVAL_SECONDS)
+            for task in pending:
+                self.scheduler.submit(task, device_count=task.requirements.device_count)
+            self.scheduler.run(self.start_task)
         except BaseException as error:
             try:
-                self.cancel_active_tasks()
+                self.scheduler.cancel_active()
             except BaseException as cleanup_error:
                 raise SuiteInfrastructureFailure(
                     f"stage {stage.value} failed ({error}) and cleanup failed: {cleanup_error}"
@@ -214,37 +182,13 @@ class SuiteRunner:
             if isinstance(error, SuiteInfrastructureFailure):
                 raise
             raise SuiteInfrastructureFailure(f"stage {stage.value} scheduling failed: {error}") from error
-        return stage_code
-
-    def launch_fitting_tasks(self, pending: list[ExecutionTask]) -> bool:
-        """Launch fixed-priority tasks while their complete requirements fit."""
-
-        launched = False
-        while True:
-            selected_index = next(
-                (
-                    index
-                    for index, task in enumerate(pending)
-                    if task.requirements.device_count == 0
-                    or (
-                        self.device_pool is not None
-                        and task.requirements.device_count <= self.device_pool.available_count
-                    )
-                ),
-                None,
-            )
-            if selected_index is None:
-                return launched
-            task = pending.pop(selected_index)
-            self.start_task(task)
-            launched = True
+        return max(
+            (outcome.result_code for outcome in self.outcomes.values() if outcome.task.stage is stage), default=0
+        )
 
     def start_task(self, task: ExecutionTask) -> None:
         """Acquire resources and atomically start one supervised pytest root."""
 
-        if task.requirements.device_count:
-            if self.device_pool is None:
-                raise SuiteInfrastructureFailure(f"device task {task.key} has no device pool")
         directory = self.run_directory / task.key
         artifact_directory = directory / "artifacts"
         temporary_directory = directory / "pytest-tmp"
@@ -255,6 +199,7 @@ class SuiteRunner:
             "xtest.harness.runner.worker",
             *(case.nodeid for case in task.cases),
             f"--xpool-test-catalog={self.catalogue_path}",
+            f"--xpool-tool-config={self.tool_config_path}",
             f"--basetemp={temporary_directory}",
             f"--junitxml={directory / 'pytest.xml'}",
         ]
@@ -263,152 +208,62 @@ class SuiteRunner:
         if self.strict_requirements:
             command.append("--strict-requirements")
         command.append(f"--xpool-task-artifact-dir={artifact_directory}")
-        lease: DeviceLease | None = None
-        if task.requirements.device_count:
-            assert self.device_pool is not None
-            lease = self.device_pool.try_lease(task.requirements.device_count)
-            if lease is None:
-                raise SuiteInfrastructureFailure(f"scheduler selected device task {task.key} without capacity")
-        device_assignments = (
-            ",".join(f"{self.device_pool.physical_index_by_uuid[uuid]}:{uuid}" for uuid in lease.uuids)
-            if lease is not None and self.device_pool is not None
-            else "none"
+        running = self.scheduler.start(
+            task,
+            name=task.key,
+            device_count=task.requirements.device_count,
+            command=command,
+            cwd=self.repository_root,
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": ""},
+            log_path=directory / "pytest.log",
+            timeout_seconds=task.timeout_seconds,
         )
-        try:
-            started_at = time.monotonic()
-            scope = SupervisedTaskScope.start(
-                task.key,
-                command,
-                cwd=self.repository_root,
-                env=self.task_environment(lease),
-                log_path=directory / "pytest.log",
-                timeout_seconds=task.timeout_seconds,
-            )
-        except TaskStartFailure:
-            if lease is not None:
-                assert self.device_pool is not None
-                self.device_pool.release(lease)
-            raise
-        except BaseException:
-            if lease is not None:
-                self.retained_leases.append(lease)
-            raise
-        self.active[task.key] = RunningTask(task, directory, scope, lease, device_assignments, started_at)
-        logger.info("%s devices=%s", task.key, device_assignments, extra={"status": "RUNNING"})
+        logger.info("%s devices=%s", task.key, running.device_assignments, extra={"status": "RUNNING"})
 
-    def collect_completed_tasks(self) -> tuple[TaskOutcome, ...]:
-        """Poll every active scope and release only proven-empty task leases."""
-
-        completed: list[TaskOutcome] = []
-        for key, running in tuple(self.active.items()):
-            completion = running.scope.poll()
-            if completion is None:
-                continue
-            running.scope.close()
-            if running.lease is not None:
-                assert self.device_pool is not None
-                self.device_pool.release(running.lease)
-            report: PytestTaskReport | None = None
-            if completion.kind is TaskCompletionKind.EXITED and completion.returncode in {0, 1}:
-                try:
-                    report = PytestTaskReport.read(running.directory / "pytest.xml", running.task.cases)
-                except ValueError as error:
-                    print(f"INVALID {key}: {error}; see {running.directory}", file=sys.stderr)
-            outcome = TaskOutcome(running.task, completion, report, running.directory)
-            self.outcomes[key] = outcome
-            del self.active[key]
-            if self.result_writer is not None:
-                self.result_writer.task(
-                    TaskReportRecord(
-                        key=key,
-                        stage=running.task.stage.value,
-                        completion=completion,
-                        result_code=outcome.result_code,
-                        elapsed_seconds=time.monotonic() - running.started_at,
-                        cases=report.cases if report is not None else (),
-                        artifact_directory=str(running.directory.relative_to(self.run_directory)),
-                    )
+    def complete_task(self, running: ActiveTask[ExecutionTask], completion: TaskCompletion) -> None:
+        """Interpret pytest/JUnit facts after the shared owner retires the domain."""
+        key = running.task.key
+        directory = self.run_directory / key
+        report: PytestTaskReport | None = None
+        if completion.kind is TaskCompletionKind.EXITED and completion.returncode in {0, 1}:
+            try:
+                report = PytestTaskReport.read(directory / "pytest.xml", running.task.cases)
+            except ValueError as error:
+                print(f"INVALID {key}: {error}; see {directory}", file=sys.stderr)
+        outcome = TaskOutcome(running.task, completion, report, directory)
+        self.outcomes[key] = outcome
+        if outcome.result_code == 2:
+            self.scheduler.stop_admission()
+        if self.result_writer is not None:
+            self.result_writer.task(
+                TaskReportRecord(
+                    key=key,
+                    stage=running.task.stage.value,
+                    completion=completion,
+                    result_code=outcome.result_code,
+                    elapsed_seconds=time.monotonic() - running.started_at,
+                    cases=report.cases if report is not None else (),
+                    artifact_directory=str(directory.relative_to(self.run_directory)),
                 )
-            completed.append(outcome)
-            status = "PASSED" if outcome.result_code == 0 else "FAILED"
-            pytest_summary = outcome.report.summary() if outcome.report is not None else "pytest-report=unavailable"
-            logger.info(
-                "%s devices=%s elapsed=%.3fs (%s, returncode=%s); %s; log=%s junit=%s",
-                key,
-                running.device_assignments,
-                time.monotonic() - running.started_at,
-                completion.kind.value,
-                completion.returncode,
-                pytest_summary,
-                running.directory / "pytest.log",
-                running.directory / "pytest.xml",
-                extra={"status": status},
             )
-            if outcome.report is not None:
-                for case in outcome.report.cases:
-                    duration = "unavailable" if case.elapsed_seconds is None else f"{case.elapsed_seconds:.3f}s"
-                    logger.info("  %s elapsed=%s", case.nodeid, duration)
-        return tuple(completed)
-
-    def cancel_active_tasks(self) -> None:
-        """Fan out cancellation and release only scopes proven empty."""
-
-        running_tasks = tuple(self.active.values())
-        terminal_failures: list[str] = []
-        recovered_failures: list[str] = []
-        if running_tasks:
-            try:
-                SupervisedTaskScope.terminate_all(tuple(running.scope for running in running_tasks))
-            except TaskScopeFailure as error:
-                terminal_failures.append(str(error))
-        for running in running_tasks:
-            if running.scope.state in (TaskScopeState.COMPLETED, TaskScopeState.DRAINED):
-                try:
-                    running.scope.close()
-                except TaskSupervisionFailure as error:
-                    recovered_failures.append(str(error))
-                    continue
-                if running.lease is not None:
-                    assert self.device_pool is not None
-                    self.device_pool.release(running.lease)
-                self.active.pop(running.task.key, None)
-        failed_scopes = tuple(
-            running.scope for running in running_tasks if running.scope.state is TaskScopeState.FAILED
+        status = "PASSED" if outcome.result_code == 0 else "FAILED"
+        pytest_summary = outcome.report.summary() if outcome.report is not None else "pytest-report=unavailable"
+        logger.info(
+            "%s devices=%s elapsed=%.3fs (%s, returncode=%s); %s; log=%s junit=%s",
+            key,
+            running.device_assignments,
+            time.monotonic() - running.started_at,
+            completion.kind.value,
+            completion.returncode,
+            pytest_summary,
+            directory / "pytest.log",
+            directory / "pytest.xml",
+            extra={"status": status},
         )
-        if failed_scopes and not terminal_failures:
-            try:
-                SupervisedTaskScope.terminate_all(failed_scopes)
-            except TaskScopeFailure as error:
-                terminal_failures.append(str(error))
-            else:
-                for running in running_tasks:
-                    if running.scope.state is not TaskScopeState.DRAINED:
-                        continue
-                    try:
-                        running.scope.close()
-                    except TaskSupervisionFailure as error:
-                        terminal_failures.append(str(error))
-                        continue
-                    if running.lease is not None:
-                        assert self.device_pool is not None
-                        self.device_pool.release(running.lease)
-                    self.active.pop(running.task.key, None)
-        try:
-            drain_unprotected_subreaper_descendants()
-        except TaskScopeFailure as error:
-            terminal_failures.append(str(error))
-        if terminal_failures:
-            raise SuiteInfrastructureFailure("; ".join((*recovered_failures, *terminal_failures)))
-        if recovered_failures:
-            raise SuiteInfrastructureFailure("; ".join(recovered_failures))
-
-    def task_environment(self, lease: DeviceLease | None) -> dict[str, str]:
-        """Build one task-local process environment without ownership tokens."""
-
-        environment = os.environ.copy()
-        environment["PYTHONPYCACHEPREFIX"] = str(self.repository_root / ".xpool-cache" / "pycache")
-        environment["CUDA_VISIBLE_DEVICES"] = "" if lease is None else ",".join(lease.uuids)
-        return environment
+        if outcome.report is not None:
+            for case in outcome.report.cases:
+                duration = "unavailable" if case.elapsed_seconds is None else f"{case.elapsed_seconds:.3f}s"
+                logger.info("  %s elapsed=%s", case.nodeid, duration)
 
     def artifact_group_results(self) -> tuple[ArtifactGroupResult, ...]:
         """Classify every complete cross-task artifact group."""
@@ -463,8 +318,4 @@ class SuiteRunner:
     def resources_releasable(self) -> bool:
         """Return whether every borrowed task lease was safely returned."""
 
-        return (
-            not self.retained_leases
-            and not self.active
-            and (self.device_pool is None or not self.device_pool.active_leases)
-        )
+        return self.scheduler.resources_releasable

@@ -170,7 +170,7 @@ def test_e2e_ffn_topology(
     outputs = compare_outputs(case, references, output_paths)
     processes, mps_servers = platform_evidence(live_observations[0], config=task_config)
     evidence = FfnTopologyEvidence(
-        case_id=case.id,
+        case_id=str(case.id),
         generation=generation,
         processes=processes,
         mps_servers=mps_servers,

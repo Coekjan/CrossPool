@@ -14,14 +14,18 @@ import psutil
 import pytest
 from pydantic import JsonValue
 
+import xkit.config
 import xtest.cli
 import xtest.harness.report
 import xtest.harness.runner.execution
 import xtest.harness.runner.plan
 import xtest.harness.runner.selection
 from xkit.results import RunStore
-from xtest.harness.report import TestResultWriter, TestRunReport
+from xtest.harness.report import TestResultWriter, TestRunReport, TestRunResults
 from xtest.harness.runner.ctest import current_build_directory
+from xtest.harness.support.config import reset_development_config
+
+pytestmark = pytest.mark.usefixtures(reset_development_config.__name__)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 
@@ -58,7 +62,7 @@ def source_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def command(cwd: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ, CUDA_VISIBLE_DEVICES="", CUDA_MPS_PIPE_DIRECTORY=str(cwd / "missing-mps"))
     return subprocess.run(
-        ["uv", "run", "--project", str(REPOSITORY_ROOT), "--no-sync", "xtest", *arguments],
+        ["uv", "run", "--project", str(REPOSITORY_ROOT), "--no-sync", "--no-env-file", "xtest", *arguments],
         cwd=cwd,
         env=env,
         capture_output=True,
@@ -81,8 +85,8 @@ def test_cli_lists_then_executes_source_cases_and_reports_original_outcomes(
         assert not (source_checkout / ".xpool-cache/test-runs").exists()
 
     selected = f"{selector}::test_result[pass]" if success else selector
-    root = source_checkout / "selected-results"
-    arguments = ["run", "--suite", "unit", "--strict-requirements", "--result-root", str(root), selected]
+    root = source_checkout / "selected-results/test-runs"
+    arguments = ["run", "--suite", "unit", "--strict-requirements", "--cache-root", str(root.parent), selected]
     if success:
         completed = command(source_checkout, *arguments)
         assert completed.returncode == 0, completed.stderr
@@ -104,9 +108,10 @@ def test_cli_lists_then_executes_source_cases_and_reports_original_outcomes(
     outside.mkdir()
     monkeypatch.chdir(outside)
     output = outside / "report"
-    assert xtest.cli.main(["report", str(run), "--output", str(output), "--label", "original"]) == 0
-    retained = json.loads((output / "summary.json").read_bytes())["runs"][0]
-    assert retained["label"] == "original" and retained["summary"] == summary
+    reported = command(outside, "report", run.name, "--cache-root", str(root.parent), "--output", str(output))
+    assert reported.returncode == 0, reported.stderr
+    retained = json.loads((output / "xtest" / run.name / "report/summary.json").read_bytes())
+    assert retained == summary
     assert before == {path.relative_to(run): path.read_bytes() for path in run.rglob("*") if path.is_file()}
 
 
@@ -175,6 +180,7 @@ def test_interrupted_cli_retains_original_outcome_and_cleanup_proof(source_check
                 "--project",
                 str(REPOSITORY_ROOT),
                 "--no-sync",
+                "--no-env-file",
                 "xtest",
                 "run",
                 "--suite",
@@ -214,9 +220,9 @@ def test_interrupted_cli_retains_original_outcome_and_cleanup_proof(source_check
     if not worker_loss:
         outside = source_checkout / "outside"
         outside.mkdir()
-        reported = command(outside, "report", str(run), "--output", str(outside / "report"))
+        reported = command(outside, "report", run.name, "--output", str(outside / "report"))
         assert reported.returncode == 0, reported.stderr
-        assert json.loads((outside / "report/summary.json").read_bytes())["runs"][0]["summary"] == summary
+        assert json.loads((outside / "report/xtest" / run.name / "report/summary.json").read_bytes()) == summary
 
 
 def test_result_checkpoint_failure_returns_infrastructure_error_after_cleanup(
@@ -246,11 +252,15 @@ def test_result_checkpoint_failure_returns_infrastructure_error_after_cleanup(
     assert report.results.infrastructure_error is not None
     assert "terminal checkpoint unavailable" in report.results.infrastructure_error
     assert (run / ".completed").is_file()
-    assert xtest.cli.main(["report", str(run), "--output", str(source_checkout / "report")]) == 0
-    assert "terminal checkpoint unavailable" in (source_checkout / "report/report.md").read_text()
+    monkeypatch.setattr(xkit.config, "global_config", None)
+    assert xtest.cli.main(["report", run.name, "--output", str(source_checkout / "report")]) == 0
+    assert (
+        "terminal checkpoint unavailable"
+        in (source_checkout / "report/xtest" / run.name / "report/report.md").read_text()
+    )
 
 
-def test_completion_marker_failure_returns_infrastructure_error_with_readable_original_result(
+def test_unsealed_invocation_retains_original_verdict_but_is_not_reportable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     original_touch = Path.touch
@@ -266,13 +276,14 @@ def test_completion_marker_failure_returns_infrastructure_error_with_readable_or
 
     monkeypatch.setattr(Path, "touch", touch)
     monkeypatch.setattr(xtest.harness.runner.execution, "execute_test_run", execute)
-    root = tmp_path / "runs"
-    assert xtest.cli.main(["run", "--suite", "unit", "--result-root", str(root)]) == 2
+    root = tmp_path / "runs/test-runs"
+    assert xtest.cli.main(["run", "--suite", "unit", "--cache-root", str(root.parent)]) == 2
     directory = next(path for path in root.iterdir() if path.is_dir())
+    results = TestRunResults.model_validate_json((directory / "results.json").read_bytes())
+    assert results.overall_result_code == 0 and results.finished
     with RunStore(root).read(directory.name) as protected:
-        summary = TestRunReport.load(protected).summary()
-    assert summary["original_result_code"] == 0 and summary["execution_finished"] is True
-    assert summary["evidence_complete"] is False and summary["missing_artifacts"] == [".completed"]
+        with pytest.raises(ValueError, match="not sealed"):
+            TestRunReport.load(protected)
 
 
 def test_clean_defaults_to_twenty_retained_runs(source_checkout: Path) -> None:
@@ -288,7 +299,7 @@ def test_clean_defaults_to_twenty_retained_runs(source_checkout: Path) -> None:
     assert len(tuple(path for path in result_root.iterdir() if path.name != ".cleanup.lock")) == 20
 
 
-def test_clean_applies_explicit_dry_run_and_all(source_checkout: Path) -> None:
+def test_clean_applies_explicit_dry_run_and_all(source_checkout: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result_root = source_checkout / ".xpool-cache" / "test-runs"
     entries = tuple(result_root / f"unrecognized-{index}" for index in range(3))
     for entry in entries:
@@ -296,5 +307,39 @@ def test_clean_applies_explicit_dry_run_and_all(source_checkout: Path) -> None:
 
     assert xtest.cli.main(["clean", "--keep", "1", "--dry-run"]) == 0
     assert all(entry.is_dir() for entry in entries)
+    monkeypatch.setattr(xkit.config, "global_config", None)
     assert xtest.cli.main(["clean", "--all"]) == 0
     assert tuple(path for path in result_root.iterdir() if path.name != ".cleanup.lock") == ()
+
+
+@pytest.mark.parametrize(
+    "arguments,expected_scope,expected_count",
+    [
+        (("-k", "pass"), ("unit", "integration"), 2),
+        (("--suite", "unit", "-k", "pass"), ("unit",), 1),
+        (("tests/suites/integration/test_scope.py",), ("integration",), 1),
+    ],
+)
+def test_run_resolves_python_filters_and_paths_within_declared_scope(
+    source_checkout: Path, arguments: tuple[str, ...], expected_scope: tuple[str, ...], expected_count: int
+) -> None:
+    suite = source_checkout / "tests/suites/integration"
+    suite.mkdir()
+    (suite / "test_scope.py").write_text("def test_pass(): pass\n", encoding="utf-8")
+    configuration = source_checkout / "xkit.toml"
+    configuration.write_text('[xtest]\nsuites = ["unit", "integration"]\n', encoding="utf-8")
+    completed = command(source_checkout, "run", "--config", str(configuration), *arguments)
+    assert completed.returncode == 0, completed.stderr
+    run = next(path for path in (source_checkout / ".xpool-cache/test-runs").iterdir() if path.is_dir())
+    report = TestRunReport.load(run)
+    assert report.manifest.selected_suites == expected_scope
+    assert report.summary()["passed"] == expected_count
+
+
+def test_explicit_pytest_path_must_belong_to_explicit_suite(source_checkout: Path) -> None:
+    suite = source_checkout / "tests/suites/integration"
+    suite.mkdir()
+    (suite / "test_scope.py").write_text("def test_pass(): pass\n", encoding="utf-8")
+    completed = command(source_checkout, "list", "--suite", "unit", "tests/suites/integration/test_scope.py")
+    assert completed.returncode == 2
+    assert "outside selected suites" in completed.stderr

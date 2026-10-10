@@ -44,10 +44,10 @@ updating it. Read-only reviewers, when explicitly assigned, must use
 
 ## Persistence
 
-Use the existing owner: code conventions in `docs/code-style.md`, repository
-routing in `AGENTS.md`, vocabulary in `CONTEXT.md`, current architecture in
-`docs/designs/`, target changes in `docs/plans/<task>/`, and reusable
-procedures in their skill. Improve an existing rule before adding a new one.
+Use the document owner selected by
+[repository routing](../../../AGENTS.md#design-and-documentation) and
+[code style](../../../docs/code-style.md). Keep reusable procedures in their
+skill, and improve an existing rule before adding a new one.
 
 Memory writes require explicit user authorization and must use the active
 memory mechanism. Neither this skill nor commit preparation grants it.

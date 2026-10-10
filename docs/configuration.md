@@ -29,6 +29,7 @@ Bootstrap environment variables are separate from the TOML schema:
 | Variable | Purpose |
 | --- | --- |
 | `XPOOL_CONFIG` | Selects the runtime TOML file. |
+| `XKIT_CONFIG` | Selects the xtest/xbench development TOML file. |
 | `SGLANG_PLUGINS=xpool` | Loads the CrossPool SGLang plugin. |
 | `CUDA_VISIBLE_DEVICES` | Selects ordered physical devices by `nvidia-smi` index or full UUID. |
 
@@ -38,6 +39,45 @@ install MPS pipe/log variables before driver initialization: attention uses the
 daemon-owned endpoint, while FFN uses an empty pipe value to bypass MPS. Keep
 endpoint selection out of machine-local `.env` files. See
 [managed startup](designs/control-plane.md#startup-and-shutdown).
+
+## Development tools and shared cache
+
+Copy `configs/xkit.example.toml` to ignored `configs/xkit.local.toml` and select it
+with `XKIT_CONFIG` or a tool leaf's `--config FILE`. The root owns `keep_runs`;
+the `xtest` tree owns catalogue, default suites and strict requirements; the
+`xbench` tree owns catalogue, repetition count and report presentation. Runtime
+topology and model paths remain in `configs/xpool.local.toml`, selected by
+`XPOOL_CONFIG`.
+
+Allowed overrides retain CLI > environment > TOML > default precedence.
+Run selections (`--all`, `--case`, pytest inputs) and report export destinations
+are invocation actions. They are not stored as configured defaults. An explicitly
+selected unreadable or malformed configuration file fails the command.
+
+`cache_root` belongs to runtime configuration and is shared by both tools and
+`xpool memory-profile`. Select it through runtime TOML, `XPOOL_CACHE_ROOT` or
+an applicable command's `--cache-root`. Tools resolve only this runtime setting
+for storage; model and topology validation waits for an operation that needs
+them. Development TOML does not declare a second cache root.
+
+Relative TOML catalogue and cache paths resolve against their declaring file.
+Relative CLI, environment and default paths resolve against the invocation
+directory. Paths in retained tool settings are absolute. Default catalogue paths
+expect the checkout as the invocation directory. From elsewhere, select absolute
+configuration file paths with TOML catalogue paths relative to those files, or
+provide explicit catalogue paths.
+
+The shared root contains `test-runs/`, `bench-runs/` and temporary
+`memory-profile/` workspaces. Profiling's final calibration file remains at
+`ffn.device_memory_calibration`. Explicit `clean` commands affect only their
+tool's run subtree. Python bytecode follows the interpreter and user's
+`PYTHONPYCACHEPREFIX`/`PYTHONDONTWRITEBYTECODE` policy.
+
+Inspect both the effective development settings and their sources with:
+
+```bash
+uv run xtest config dump
+```
 
 ## Native build settings
 

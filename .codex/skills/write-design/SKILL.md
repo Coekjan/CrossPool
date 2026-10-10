@@ -10,7 +10,8 @@ target that is still being designed or implemented remains under `docs/plans/`.
 
 ## Workflow
 
-1. Read `CONTEXT.md`, the relevant current design documents, the complete task
+1. Read [CONTEXT.md](../../../CONTEXT.md), the relevant
+   [current designs](../../../docs/designs/README.md), the complete task
    directory when one exists, final source declarations, and acceptance tests
    or evidence.
 2. Confirm the implementation and its required validation are complete. When

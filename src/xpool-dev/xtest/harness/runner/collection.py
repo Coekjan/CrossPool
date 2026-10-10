@@ -8,6 +8,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from xkit.config import ToolConfigRecord
+from xkit.results import write_json
 from xtest.harness.runner.plan import TestPlan
 
 
@@ -24,6 +26,7 @@ class CollectionWorker:
     selectors: tuple[str, ...]
     strict_requirements: bool
     catalogue_path: Path
+    tool_config: ToolConfigRecord
 
     def collect(self) -> TestPlan:
         """Run final pytest discovery and strictly parse its atomic output."""
@@ -31,6 +34,8 @@ class CollectionWorker:
         self.run_directory.mkdir(parents=True, exist_ok=False)
         plan_path = self.run_directory / "test-plan.json"
         log_path = self.run_directory / "collection.log"
+        tool_config_path = self.run_directory / "tool-config.json"
+        write_json(tool_config_path, self.tool_config.model_dump(mode="json"))
         command = [
             sys.executable,
             "-m",
@@ -39,11 +44,13 @@ class CollectionWorker:
             *self.selectors,
             f"--xpool-test-catalog={self.catalogue_path}",
             f"--xpool-test-plan={plan_path}",
+            f"--xpool-tool-config={tool_config_path}",
         ]
+        if self.selectors:
+            command.append("--xpool-pytest-inputs")
         if self.strict_requirements:
             command.append("--strict-requirements")
         environment = os.environ.copy()
-        environment["PYTHONPYCACHEPREFIX"] = str(self.repository_root / ".xpool-cache" / "pycache")
         try:
             completed = subprocess.run(
                 command,

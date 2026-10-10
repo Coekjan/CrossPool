@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import xkit.scheduler
 import xtest.harness.runner.artifact
 import xtest.harness.runner.console
 import xtest.harness.runner.plan
@@ -151,6 +152,57 @@ def test_pytest_task_report_matches_exact_parametrized_nodeids(tmp_path: Path) -
     assert all(case.status is xtest.harness.runner.pytest_report.PytestCaseStatus.PASSED for case in report.cases)
 
 
+def test_pytest_task_report_combines_phase_failures_per_collected_item(tmp_path: Path) -> None:
+    expected = tuple(
+        case("tests/suites/unit/test_phases.py", name, requirements=requirements())
+        for name in ("test_pass", "test_call", "test_skip")
+    )
+    path = tmp_path / "pytest.xml"
+    path.write_text(
+        '<testsuites><testsuite name="pytest" tests="4" failures="1" errors="2" skipped="1">'
+        '<testcase classname="tests.suites.unit.test_phases" name="test_call" time="0.25">'
+        '<failure message="call failed">call traceback</failure></testcase>'
+        '<testcase classname="tests.suites.unit.test_phases" name="test_call" time="0.05">'
+        '<error message="cleanup failed">cleanup traceback</error></testcase>'
+        '<testcase classname="tests.suites.unit.test_phases" name="test_skip" time="0.1">'
+        '<skipped message="resource unavailable"/>'
+        '<error message="skip cleanup failed">skip cleanup traceback</error></testcase>'
+        '<testcase classname="tests.suites.unit.test_phases" name="test_pass" time="0.5"/>'
+        "</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+
+    report = xtest.harness.runner.pytest_report.PytestTaskReport.read(path, expected)
+
+    assert tuple(case.nodeid for case in report.cases) == tuple(case.nodeid for case in expected)
+    assert tuple(case.status for case in report.cases) == (
+        xtest.harness.runner.pytest_report.PytestCaseStatus.PASSED,
+        xtest.harness.runner.pytest_report.PytestCaseStatus.FAILED,
+        xtest.harness.runner.pytest_report.PytestCaseStatus.FAILED,
+    )
+    failed_call = report.case(expected[1].nodeid)
+    assert failed_call.elapsed_seconds == pytest.approx(0.3)
+    assert failed_call.detail is not None
+    assert all(
+        detail in failed_call.detail
+        for detail in ("call failed", "call traceback", "cleanup failed", "cleanup traceback")
+    )
+    failed_skip = report.case(expected[2].nodeid)
+    assert failed_skip.elapsed_seconds == pytest.approx(0.1)
+    assert failed_skip.detail is not None
+    assert all(
+        detail in failed_skip.detail
+        for detail in ("resource unavailable", "skip cleanup failed", "skip cleanup traceback")
+    )
+    task = xtest.harness.runner.task.build_task("unit", expected)
+    assert (
+        xtest.harness.runner.suite.TaskOutcome(
+            task, TaskCompletion(TaskCompletionKind.EXITED, 1, None), report, tmp_path
+        ).result_code
+        == 1
+    )
+
+
 def test_pytest_task_report_rejects_summary_drift_and_xfail(tmp_path: Path) -> None:
     expected = (case("tests/suites/e2e/test_e2e_model.py", "test_model[eager]", requirements=requirements()),)
     path = tmp_path / "pytest.xml"
@@ -279,7 +331,7 @@ def test_suite_runner_stops_after_failed_unit_gate(
             write_pytest_junit(command, log_path.parent / "pytest.xml", failed=returncode == 1)
             return FakeScope(TaskCompletion(TaskCompletionKind.EXITED, returncode, None))
 
-    monkeypatch.setattr(xtest.harness.runner.suite, "SupervisedTaskScope", ScopeFactory)
+    monkeypatch.setattr(xkit.scheduler, "SupervisedTaskScope", ScopeFactory)
     plan = xtest.harness.runner.plan.TestPlan(
         (
             case("tests/suites/unit/test_alpha.py", "test_alpha", requirements=requirements()),
@@ -290,6 +342,7 @@ def test_suite_runner_stops_after_failed_unit_gate(
         plan,
         repository_root=tmp_path,
         catalogue_path=tmp_path / "tests/tests.toml",
+        tool_config_path=tmp_path / "tool-config.json",
         run_directory=tmp_path / "run",
         strict_requirements=False,
     )
@@ -332,10 +385,11 @@ def test_suite_runner_preserves_e2e_failure_during_completion_or_stop(
         @staticmethod
         def terminate_all(scopes: tuple[FakeScope, ...]) -> None:
             for scope in scopes:
-                scope.state = TaskScopeState.DRAINED
+                if scope.poll() is None:
+                    scope.state = TaskScopeState.DRAINED
 
-    monkeypatch.setattr(xtest.harness.runner.suite, "SupervisedTaskScope", ScopeFactory)
-    monkeypatch.setattr(xtest.harness.runner.suite, "drain_unprotected_subreaper_descendants", lambda: None)
+    monkeypatch.setattr(xkit.scheduler, "SupervisedTaskScope", ScopeFactory)
+    monkeypatch.setattr(xkit.scheduler, "drain_unprotected_subreaper_descendants", lambda: None)
     plan = xtest.harness.runner.plan.TestPlan(
         (
             case("tests/suites/e2e/test_e2e_alpha.py", "test_alpha", requirements=requirements()),
@@ -346,13 +400,74 @@ def test_suite_runner_preserves_e2e_failure_during_completion_or_stop(
         plan,
         repository_root=tmp_path,
         catalogue_path=tmp_path / "tests/tests.toml",
+        tool_config_path=tmp_path / "tool-config.json",
         run_directory=tmp_path / "run",
         strict_requirements=False,
     )
 
     assert runner.run() == (128 + signal.SIGTERM if stop else 1)
     assert len(starts) == 2
-    assert "STAGE e2e: code=1" in capsys.readouterr().out
+    assert f"STAGE e2e: code={2 if stop else 1}" in capsys.readouterr().out
+    assert any(outcome.result_code == 1 for outcome in runner.outcomes.values())
+
+
+def test_infrastructure_failure_drains_active_tasks_and_starts_no_later_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    starts: list[str] = []
+    pool = DevicePool(("GPU-a", "GPU-b"), {"GPU-a": 0, "GPU-b": 1})
+
+    class ScopeFactory:
+        @staticmethod
+        def start(
+            name: str,
+            command: list[str],
+            *,
+            cwd: Path,
+            env: dict[str, str],
+            log_path: Path,
+            timeout_seconds: float,
+        ) -> FakeScope:
+            selected = case_name(command)
+            starts.append(selected)
+            write_pytest_junit(command, log_path.parent / "pytest.xml")
+            return FakeScope(
+                TaskCompletion(TaskCompletionKind.EXITED, 2 if selected == "test_alpha" else 0, None),
+                polls_before_completion=2 if selected == "test_beta" else 0,
+            )
+
+    monkeypatch.setattr(xkit.scheduler, "SupervisedTaskScope", ScopeFactory)
+    plan = xtest.harness.runner.plan.TestPlan(
+        (
+            *(
+                case(
+                    f"tests/suites/e2e/test_e2e_{name}.py",
+                    f"test_{name}",
+                    requirements=requirements(device_count=1),
+                    estimate=estimate,
+                )
+                for name, estimate in (("alpha", 3), ("beta", 2), ("gamma", 1))
+            ),
+            case(
+                "tests/suites/models/test-model/test_model.py",
+                "test_model",
+                requirements=requirements(device_count=1),
+            ),
+        )
+    )
+    runner = xtest.harness.runner.suite.SuiteRunner(
+        plan,
+        repository_root=tmp_path,
+        catalogue_path=tmp_path / "tests/tests.toml",
+        tool_config_path=tmp_path / "tool-config.json",
+        run_directory=tmp_path / "run",
+        strict_requirements=False,
+        device_pool=pool,
+    )
+    assert runner.run() == 2
+    assert starts == ["test_alpha", "test_beta"]
+    assert sorted(outcome.result_code for outcome in runner.outcomes.values()) == [0, 2]
+    assert runner.resources_releasable
 
 
 def test_suite_runner_backfills_device_pool_and_builds_exact_pytest_commands(
@@ -394,7 +509,7 @@ def test_suite_runner_backfills_device_pool_and_builds_exact_pytest_commands(
                 polls_before_completion=poll_counts[case_name(command)],
             )
 
-    monkeypatch.setattr(xtest.harness.runner.suite, "SupervisedTaskScope", ScopeFactory)
+    monkeypatch.setattr(xkit.scheduler, "SupervisedTaskScope", ScopeFactory)
     plan = xtest.harness.runner.plan.TestPlan(
         (
             case(
@@ -421,6 +536,7 @@ def test_suite_runner_backfills_device_pool_and_builds_exact_pytest_commands(
         plan,
         repository_root=tmp_path,
         catalogue_path=tmp_path / "tests/tests.toml",
+        tool_config_path=tmp_path / "tool-config.json",
         run_directory=tmp_path / "run",
         strict_requirements=True,
         device_pool=device_pool,
@@ -479,7 +595,7 @@ def test_suite_runner_classifies_gpu_lease_after_start_failure(
             del args, kwargs
             raise failure
 
-    monkeypatch.setattr(xtest.harness.runner.suite, "SupervisedTaskScope", ScopeFactory)
+    monkeypatch.setattr(xkit.scheduler, "SupervisedTaskScope", ScopeFactory)
     plan = xtest.harness.runner.plan.TestPlan(
         (
             case(
@@ -493,6 +609,7 @@ def test_suite_runner_classifies_gpu_lease_after_start_failure(
         plan,
         repository_root=tmp_path,
         catalogue_path=tmp_path / "tests/tests.toml",
+        tool_config_path=tmp_path / "tool-config.json",
         run_directory=tmp_path / "run",
         strict_requirements=False,
         device_pool=device_pool,
@@ -501,7 +618,6 @@ def test_suite_runner_classifies_gpu_lease_after_start_failure(
     with pytest.raises(type(failure), match=str(failure)):
         runner.start_task(runner.tasks[0])
 
-    assert bool(runner.retained_leases) is lease_retained
     assert bool(device_pool.active_leases) is lease_retained
     assert runner.resources_releasable is not lease_retained
     for lease in tuple(device_pool.active_leases):
@@ -531,6 +647,7 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
         plan,
         repository_root=tmp_path,
         catalogue_path=tmp_path / "tests/tests.toml",
+        tool_config_path=tmp_path / "tool-config.json",
         run_directory=blocked_run_directory,
         strict_requirements=False,
         device_pool=device_pool,
@@ -626,19 +743,22 @@ def test_serving_graph_omits_group_without_complete_ordinary_outcomes(tmp_path: 
 
 @dataclass(slots=True)
 class FakeScope:
-    completion: TaskCompletion
+    result: TaskCompletion
     polls_before_completion: int = 0
     state: TaskScopeState = TaskScopeState.RUNNING
+    completion: TaskCompletion | None = None
 
     def poll(self) -> TaskCompletion | None:
         if self.polls_before_completion:
             self.polls_before_completion -= 1
             return None
         self.state = TaskScopeState.COMPLETED
+        self.completion = self.result
         return self.completion
 
     def wait(self) -> TaskCompletion:
         self.state = TaskScopeState.COMPLETED
+        self.completion = self.result
         return self.completion
 
     def close(self) -> None:
@@ -739,6 +859,7 @@ def serving_graph_runner(
         plan,
         repository_root=root,
         catalogue_path=root / "tests/tests.toml",
+        tool_config_path=root / "tool-config.json",
         run_directory=root / "run",
         strict_requirements=False,
         artifact_group_adapters=(xtest.harness.sglang.serving.alignment.ServingGraphAdapter(),),
