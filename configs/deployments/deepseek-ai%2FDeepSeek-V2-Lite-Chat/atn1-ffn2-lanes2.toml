@@ -1,0 +1,18 @@
+[atn]
+devices = [0]
+
+[ffn]
+devices = [1, 2]
+
+[scheduler]
+ffn_concurrency = 2
+
+[scheduler.slo]
+ttft_ms = 1000
+tbt_ms = 50
+
+[[models]]
+id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+atn_tp_size = 1
+atn_dp_size = 1
+ffn_tp_size = 2

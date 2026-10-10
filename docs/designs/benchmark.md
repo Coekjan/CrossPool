@@ -16,7 +16,10 @@ Measurements and Reports.
 declarations. Owned cases reference a portable deployment plus Instance/graph
 launch settings and an optional explicit runtime base. Client cases name
 externally owned endpoints and take no serving, device or MPS ownership.
-Their workload and metric definitions are the same. Exact
+Their workload and metric definitions are the same. The checked-in
+[catalogue](../../benches/benches.toml) compares mixed deployments with matched
+isolated references across offered loads, then varies traffic asymmetry,
+request-length policies, Executor Lanes or TP geometry independently. Exact
 models, rates, layouts and length policies belong to those fixed declarations.
 Listing validates declarations without establishing deployment feasibility or
 performance.

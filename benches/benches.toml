@@ -1,3 +1,125 @@
+# Mixed-model load comparisons.
+
+[serving_cases.61eb95ab-d842-4202-9eb6-8fb5ee88303c]
+description = "Small-pair mixed serving with interval-relative log-normal lengths at 0.1 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.61eb95ab-d842-4202-9eb6-8fb5ee88303c.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 0.1, "Qwen/Qwen3-0.6B" = 0.1 }
+
+[[serving_cases.61eb95ab-d842-4202-9eb6-8fb5ee88303c.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.61eb95ab-d842-4202-9eb6-8fb5ee88303c.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.1ff5ddb5-92a0-462e-893b-3482ebb748b9]
+description = "Small-pair mixed serving with interval-relative log-normal lengths at 0.2 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.1ff5ddb5-92a0-462e-893b-3482ebb748b9.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 0.2, "Qwen/Qwen3-0.6B" = 0.2 }
+
+[[serving_cases.1ff5ddb5-92a0-462e-893b-3482ebb748b9.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.1ff5ddb5-92a0-462e-893b-3482ebb748b9.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.a0ee7837-fa61-4f98-bf91-6750e5433629]
+description = "Small-pair mixed serving with interval-relative log-normal lengths at 0.5 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.a0ee7837-fa61-4f98-bf91-6750e5433629.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 0.5, "Qwen/Qwen3-0.6B" = 0.5 }
+
+[[serving_cases.a0ee7837-fa61-4f98-bf91-6750e5433629.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.a0ee7837-fa61-4f98-bf91-6750e5433629.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.1e135e83-4846-4461-8573-2fc7c4e6f668]
+description = "Small-pair mixed serving with interval-relative log-normal lengths at 1 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.1e135e83-4846-4461-8573-2fc7c4e6f668.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 1.0, "Qwen/Qwen3-0.6B" = 1.0 }
+
+[[serving_cases.1e135e83-4846-4461-8573-2fc7c4e6f668.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.1e135e83-4846-4461-8573-2fc7c4e6f668.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.566dfb01-d535-4a5b-b782-0e6850daf17b]
+description = "Small-pair mixed serving with interval-relative log-normal lengths at 2 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.566dfb01-d535-4a5b-b782-0e6850daf17b.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 2.0, "Qwen/Qwen3-0.6B" = 2.0 }
+
+[[serving_cases.566dfb01-d535-4a5b-b782-0e6850daf17b.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.566dfb01-d535-4a5b-b782-0e6850daf17b.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
 [serving_cases.58fcaacc-d3bc-4a7f-af68-a3eb1dbd79c1]
 description = "Small-pair mixed serving with interval-relative log-normal lengths at 4 RPS per model."
 module = "serving.multi_model"
@@ -18,6 +140,1113 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [[serving_cases.58fcaacc-d3bc-4a7f-af68-a3eb1dbd79c1.targets]]
 model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.206484a1-ab7f-4168-8098-16e2b17b123a]
+description = "Medium-pair mixed serving with interval-relative log-normal lengths at 0.1 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.206484a1-ab7f-4168-8098-16e2b17b123a.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 0.1, "deepseek-ai/DeepSeek-V2-Lite-Chat" = 0.1 }
+
+[[serving_cases.206484a1-ab7f-4168-8098-16e2b17b123a.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.206484a1-ab7f-4168-8098-16e2b17b123a.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.de6248f3-2680-4f20-8f2c-3ac8e2d22d6d]
+description = "Medium-pair mixed serving with interval-relative log-normal lengths at 0.2 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.de6248f3-2680-4f20-8f2c-3ac8e2d22d6d.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 0.2, "deepseek-ai/DeepSeek-V2-Lite-Chat" = 0.2 }
+
+[[serving_cases.de6248f3-2680-4f20-8f2c-3ac8e2d22d6d.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.de6248f3-2680-4f20-8f2c-3ac8e2d22d6d.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.07c451e0-fd68-4506-bda0-449b180a9592]
+description = "Medium-pair mixed serving with interval-relative log-normal lengths at 0.5 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.07c451e0-fd68-4506-bda0-449b180a9592.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 0.5, "deepseek-ai/DeepSeek-V2-Lite-Chat" = 0.5 }
+
+[[serving_cases.07c451e0-fd68-4506-bda0-449b180a9592.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.07c451e0-fd68-4506-bda0-449b180a9592.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+[serving_cases.f026b2aa-3af0-45e6-b0fd-cf649b7c2c70]
+description = "Medium-pair mixed serving with interval-relative log-normal lengths at 1 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.f026b2aa-3af0-45e6-b0fd-cf649b7c2c70.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 1.0, "deepseek-ai/DeepSeek-V2-Lite-Chat" = 1.0 }
+
+[[serving_cases.f026b2aa-3af0-45e6-b0fd-cf649b7c2c70.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.f026b2aa-3af0-45e6-b0fd-cf649b7c2c70.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.d3a63ac7-63d2-44ff-b1b6-fcdad934c84d]
+description = "Medium-pair mixed serving with interval-relative log-normal lengths at 2 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.d3a63ac7-63d2-44ff-b1b6-fcdad934c84d.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 2.0, "deepseek-ai/DeepSeek-V2-Lite-Chat" = 2.0 }
+
+[[serving_cases.d3a63ac7-63d2-44ff-b1b6-fcdad934c84d.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.d3a63ac7-63d2-44ff-b1b6-fcdad934c84d.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.00dc170c-76da-4416-86c5-900ef3e63677]
+description = "Medium-pair mixed serving with interval-relative log-normal lengths at 4 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.00dc170c-76da-4416-86c5-900ef3e63677.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 4.0, "deepseek-ai/DeepSeek-V2-Lite-Chat" = 4.0 }
+
+[[serving_cases.00dc170c-76da-4416-86c5-900ef3e63677.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.00dc170c-76da-4416-86c5-900ef3e63677.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.a70c7355-22b7-4121-b197-19dd46e459cb]
+description = "Large-pair mixed serving with interval-relative log-normal lengths at 0.1 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.a70c7355-22b7-4121-b197-19dd46e459cb.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 0.1, "zai-org/GLM-4.7-Flash" = 0.1 }
+
+[[serving_cases.a70c7355-22b7-4121-b197-19dd46e459cb.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.a70c7355-22b7-4121-b197-19dd46e459cb.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.aa725225-6363-4b4b-b560-67a0188dc450]
+description = "Large-pair mixed serving with interval-relative log-normal lengths at 0.2 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.aa725225-6363-4b4b-b560-67a0188dc450.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 0.2, "zai-org/GLM-4.7-Flash" = 0.2 }
+
+[[serving_cases.aa725225-6363-4b4b-b560-67a0188dc450.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.aa725225-6363-4b4b-b560-67a0188dc450.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.38f99168-e28b-44b4-82e5-b242f4af26e8]
+description = "Large-pair mixed serving with interval-relative log-normal lengths at 0.5 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.38f99168-e28b-44b4-82e5-b242f4af26e8.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 0.5, "zai-org/GLM-4.7-Flash" = 0.5 }
+
+[[serving_cases.38f99168-e28b-44b4-82e5-b242f4af26e8.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.38f99168-e28b-44b4-82e5-b242f4af26e8.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.05eb5a11-e7f4-4d4c-8459-ef6af81ef444]
+description = "Large-pair mixed serving with interval-relative log-normal lengths at 1 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.05eb5a11-e7f4-4d4c-8459-ef6af81ef444.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 1.0, "zai-org/GLM-4.7-Flash" = 1.0 }
+
+[[serving_cases.05eb5a11-e7f4-4d4c-8459-ef6af81ef444.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.05eb5a11-e7f4-4d4c-8459-ef6af81ef444.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.e15aca7f-2f48-478c-9aec-7fdc93e44e9a]
+description = "Large-pair mixed serving with interval-relative log-normal lengths at 2 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.e15aca7f-2f48-478c-9aec-7fdc93e44e9a.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 2.0, "zai-org/GLM-4.7-Flash" = 2.0 }
+
+[[serving_cases.e15aca7f-2f48-478c-9aec-7fdc93e44e9a.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.e15aca7f-2f48-478c-9aec-7fdc93e44e9a.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.f52073e4-0b80-4bdf-ba50-f5a625a06ebc]
+description = "Large-pair mixed serving with interval-relative log-normal lengths at 4 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.f52073e4-0b80-4bdf-ba50-f5a625a06ebc.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 4.0, "zai-org/GLM-4.7-Flash" = 4.0 }
+
+[[serving_cases.f52073e4-0b80-4bdf-ba50-f5a625a06ebc.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.f52073e4-0b80-4bdf-ba50-f5a625a06ebc.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+# Isolated references retain each mixed baseline's remaining target and resource geometry.
+
+[serving_cases.52934f1f-b39c-4856-8a01-8abfb4819718]
+description = "Isolated Qwen/Qwen2.5-0.5B at 0.1 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.52934f1f-b39c-4856-8a01-8abfb4819718.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 0.1 }
+
+[[serving_cases.52934f1f-b39c-4856-8a01-8abfb4819718.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.f0bb341f-7c11-4c47-b58d-e4b9f34de002]
+description = "Isolated Qwen/Qwen2.5-0.5B at 0.2 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.f0bb341f-7c11-4c47-b58d-e4b9f34de002.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 0.2 }
+
+[[serving_cases.f0bb341f-7c11-4c47-b58d-e4b9f34de002.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.99d38317-eba7-4360-a41a-e5c556ba27cb]
+description = "Isolated Qwen/Qwen2.5-0.5B at 0.5 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.99d38317-eba7-4360-a41a-e5c556ba27cb.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 0.5 }
+
+[[serving_cases.99d38317-eba7-4360-a41a-e5c556ba27cb.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.03d3a8ba-bf28-447c-911f-b50080b059b6]
+description = "Isolated Qwen/Qwen2.5-0.5B at 1 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.03d3a8ba-bf28-447c-911f-b50080b059b6.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 1.0 }
+
+[[serving_cases.03d3a8ba-bf28-447c-911f-b50080b059b6.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.ad814edd-cf5e-4c8d-928f-c1d48142c58a]
+description = "Isolated Qwen/Qwen2.5-0.5B at 2 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.ad814edd-cf5e-4c8d-928f-c1d48142c58a.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 2.0 }
+
+[[serving_cases.ad814edd-cf5e-4c8d-928f-c1d48142c58a.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.d21d2b24-eb1e-44e1-9c74-f7fbb0106709]
+description = "Isolated Qwen/Qwen2.5-0.5B at 4 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.d21d2b24-eb1e-44e1-9c74-f7fbb0106709.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 4.0 }
+
+[[serving_cases.d21d2b24-eb1e-44e1-9c74-f7fbb0106709.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.a2d7e15f-707c-444f-adad-62671d4ffe67]
+description = "Isolated Qwen/Qwen3-0.6B at 0.1 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.a2d7e15f-707c-444f-adad-62671d4ffe67.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-0.6B" = 0.1 }
+
+[[serving_cases.a2d7e15f-707c-444f-adad-62671d4ffe67.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.e637e52d-7f23-4c59-9d64-e6b588dab1c7]
+description = "Isolated Qwen/Qwen3-0.6B at 0.2 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.e637e52d-7f23-4c59-9d64-e6b588dab1c7.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-0.6B" = 0.2 }
+
+[[serving_cases.e637e52d-7f23-4c59-9d64-e6b588dab1c7.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.72e70291-b150-4682-a075-57a5bfb22ae2]
+description = "Isolated Qwen/Qwen3-0.6B at 0.5 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.72e70291-b150-4682-a075-57a5bfb22ae2.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-0.6B" = 0.5 }
+
+[[serving_cases.72e70291-b150-4682-a075-57a5bfb22ae2.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.7f6715fa-0b13-4a93-81de-8d73f7c22b2f]
+description = "Isolated Qwen/Qwen3-0.6B at 1 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.7f6715fa-0b13-4a93-81de-8d73f7c22b2f.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-0.6B" = 1.0 }
+
+[[serving_cases.7f6715fa-0b13-4a93-81de-8d73f7c22b2f.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.253026ed-bf3e-42ac-9769-efc216390c2c]
+description = "Isolated Qwen/Qwen3-0.6B at 2 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.253026ed-bf3e-42ac-9769-efc216390c2c.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-0.6B" = 2.0 }
+
+[[serving_cases.253026ed-bf3e-42ac-9769-efc216390c2c.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.c3666060-455d-4f8d-9f48-88ddf54c5108]
+description = "Isolated Qwen/Qwen3-0.6B at 4 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes2"
+seed = 0
+
+[serving_cases.c3666060-455d-4f8d-9f48-88ddf54c5108.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-0.6B" = 4.0 }
+
+[[serving_cases.c3666060-455d-4f8d-9f48-88ddf54c5108.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.fd51cc77-a718-4dca-92dc-e2be3b67c73d]
+description = "Isolated Qwen/Qwen3-14B at 0.1 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.fd51cc77-a718-4dca-92dc-e2be3b67c73d.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 0.1 }
+
+[[serving_cases.fd51cc77-a718-4dca-92dc-e2be3b67c73d.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.4a51a55d-5617-40ed-ac28-37d7d502b70b]
+description = "Isolated Qwen/Qwen3-14B at 0.2 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.4a51a55d-5617-40ed-ac28-37d7d502b70b.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 0.2 }
+
+[[serving_cases.4a51a55d-5617-40ed-ac28-37d7d502b70b.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.915e575d-377d-48e0-9b30-6b8fc0b039db]
+description = "Isolated Qwen/Qwen3-14B at 0.5 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.915e575d-377d-48e0-9b30-6b8fc0b039db.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 0.5 }
+
+[[serving_cases.915e575d-377d-48e0-9b30-6b8fc0b039db.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.f032c014-e5f1-49ff-ac00-be868cc400d3]
+description = "Isolated Qwen/Qwen3-14B at 1 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.f032c014-e5f1-49ff-ac00-be868cc400d3.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 1.0 }
+
+[[serving_cases.f032c014-e5f1-49ff-ac00-be868cc400d3.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.4878c596-a7b8-4128-b6bc-3877e2a49273]
+description = "Isolated Qwen/Qwen3-14B at 2 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.4878c596-a7b8-4128-b6bc-3877e2a49273.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 2.0 }
+
+[[serving_cases.4878c596-a7b8-4128-b6bc-3877e2a49273.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.ed659b73-22f1-4637-9aa3-204a82bf0f0d]
+description = "Isolated Qwen/Qwen3-14B at 4 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.ed659b73-22f1-4637-9aa3-204a82bf0f0d.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 4.0 }
+
+[[serving_cases.ed659b73-22f1-4637-9aa3-204a82bf0f0d.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.fc0b2d65-34d1-4636-afcb-1d19694948d4]
+description = "Isolated deepseek-ai/DeepSeek-V2-Lite-Chat at 0.1 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.fc0b2d65-34d1-4636-afcb-1d19694948d4.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "deepseek-ai/DeepSeek-V2-Lite-Chat" = 0.1 }
+
+[[serving_cases.fc0b2d65-34d1-4636-afcb-1d19694948d4.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.eb2b550c-bd77-4a95-9880-b975fff7b60d]
+description = "Isolated deepseek-ai/DeepSeek-V2-Lite-Chat at 0.2 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.eb2b550c-bd77-4a95-9880-b975fff7b60d.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "deepseek-ai/DeepSeek-V2-Lite-Chat" = 0.2 }
+
+[[serving_cases.eb2b550c-bd77-4a95-9880-b975fff7b60d.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.0beadc94-ab63-4e03-8f6a-d9756ff130e2]
+description = "Isolated deepseek-ai/DeepSeek-V2-Lite-Chat at 0.5 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.0beadc94-ab63-4e03-8f6a-d9756ff130e2.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "deepseek-ai/DeepSeek-V2-Lite-Chat" = 0.5 }
+
+[[serving_cases.0beadc94-ab63-4e03-8f6a-d9756ff130e2.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.4ad44ca3-a29a-4fc8-8753-a0f6655f6238]
+description = "Isolated deepseek-ai/DeepSeek-V2-Lite-Chat at 1 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.4ad44ca3-a29a-4fc8-8753-a0f6655f6238.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "deepseek-ai/DeepSeek-V2-Lite-Chat" = 1.0 }
+
+[[serving_cases.4ad44ca3-a29a-4fc8-8753-a0f6655f6238.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.1dea5bf3-64db-45b2-9aad-f5328a84d4dd]
+description = "Isolated deepseek-ai/DeepSeek-V2-Lite-Chat at 2 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.1dea5bf3-64db-45b2-9aad-f5328a84d4dd.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "deepseek-ai/DeepSeek-V2-Lite-Chat" = 2.0 }
+
+[[serving_cases.1dea5bf3-64db-45b2-9aad-f5328a84d4dd.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.32750ae6-a562-489e-b16c-bdd4419b2092]
+description = "Isolated deepseek-ai/DeepSeek-V2-Lite-Chat at 4 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.32750ae6-a562-489e-b16c-bdd4419b2092.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "deepseek-ai/DeepSeek-V2-Lite-Chat" = 4.0 }
+
+[[serving_cases.32750ae6-a562-489e-b16c-bdd4419b2092.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.404afe2a-2317-44a0-baa5-28b4688b2af2]
+description = "Isolated Qwen/Qwen3-30B-A3B at 0.1 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.404afe2a-2317-44a0-baa5-28b4688b2af2.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 0.1 }
+
+[[serving_cases.404afe2a-2317-44a0-baa5-28b4688b2af2.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.f75b9247-e24d-4415-9ba7-face3079d20e]
+description = "Isolated Qwen/Qwen3-30B-A3B at 0.2 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.f75b9247-e24d-4415-9ba7-face3079d20e.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 0.2 }
+
+[[serving_cases.f75b9247-e24d-4415-9ba7-face3079d20e.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.034e5dc7-021b-4a0d-aeb6-cf7ff0f276e0]
+description = "Isolated Qwen/Qwen3-30B-A3B at 0.5 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.034e5dc7-021b-4a0d-aeb6-cf7ff0f276e0.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 0.5 }
+
+[[serving_cases.034e5dc7-021b-4a0d-aeb6-cf7ff0f276e0.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.43a79e9e-73ee-42f5-9559-6739c76d6174]
+description = "Isolated Qwen/Qwen3-30B-A3B at 1 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.43a79e9e-73ee-42f5-9559-6739c76d6174.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 1.0 }
+
+[[serving_cases.43a79e9e-73ee-42f5-9559-6739c76d6174.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.098fe71b-1456-4120-8daf-1f152588a526]
+description = "Isolated Qwen/Qwen3-30B-A3B at 2 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.098fe71b-1456-4120-8daf-1f152588a526.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 2.0 }
+
+[[serving_cases.098fe71b-1456-4120-8daf-1f152588a526.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.8253e12a-8a7c-4c37-85ac-842350542996]
+description = "Isolated Qwen/Qwen3-30B-A3B at 4 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.8253e12a-8a7c-4c37-85ac-842350542996.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 4.0 }
+
+[[serving_cases.8253e12a-8a7c-4c37-85ac-842350542996.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.d1d44945-c2c4-4dc8-ae79-6dc4a6c80a7e]
+description = "Isolated zai-org/GLM-4.7-Flash at 0.1 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.d1d44945-c2c4-4dc8-ae79-6dc4a6c80a7e.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "zai-org/GLM-4.7-Flash" = 0.1 }
+
+[[serving_cases.d1d44945-c2c4-4dc8-ae79-6dc4a6c80a7e.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.298721af-97c2-46fe-9659-896c3f0d125a]
+description = "Isolated zai-org/GLM-4.7-Flash at 0.2 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.298721af-97c2-46fe-9659-896c3f0d125a.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "zai-org/GLM-4.7-Flash" = 0.2 }
+
+[[serving_cases.298721af-97c2-46fe-9659-896c3f0d125a.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.fd6a9362-51cd-4ffe-8e89-d358adbeb160]
+description = "Isolated zai-org/GLM-4.7-Flash at 0.5 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.fd6a9362-51cd-4ffe-8e89-d358adbeb160.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "zai-org/GLM-4.7-Flash" = 0.5 }
+
+[[serving_cases.fd6a9362-51cd-4ffe-8e89-d358adbeb160.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.415a8a90-89cd-400d-8f12-f559d6674014]
+description = "Isolated zai-org/GLM-4.7-Flash at 1 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.415a8a90-89cd-400d-8f12-f559d6674014.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "zai-org/GLM-4.7-Flash" = 1.0 }
+
+[[serving_cases.415a8a90-89cd-400d-8f12-f559d6674014.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.1842615c-5c29-492c-821b-c984b4c6b6f4]
+description = "Isolated zai-org/GLM-4.7-Flash at 2 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.1842615c-5c29-492c-821b-c984b4c6b6f4.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "zai-org/GLM-4.7-Flash" = 2.0 }
+
+[[serving_cases.1842615c-5c29-492c-821b-c984b4c6b6f4.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.05fbca29-3a1b-4e8d-9cba-f7284a917199]
+description = "Isolated zai-org/GLM-4.7-Flash at 4 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.05fbca29-3a1b-4e8d-9cba-f7284a917199.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "zai-org/GLM-4.7-Flash" = 4.0 }
+
+[[serving_cases.05fbca29-3a1b-4e8d-9cba-f7284a917199.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+# Single-factor comparisons use their pair's declared reference arrival rates.
+
+[serving_cases.a0788212-f547-4e17-a4cc-f8b93e1ad0c8]
+description = "Medium-pair traffic asymmetry at 0.8/0.2 RPS against the balanced 0.5/0.5 baseline."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.a0788212-f547-4e17-a4cc-f8b93e1ad0c8.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 0.8, "deepseek-ai/DeepSeek-V2-Lite-Chat" = 0.2 }
+
+[[serving_cases.a0788212-f547-4e17-a4cc-f8b93e1ad0c8.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.a0788212-f547-4e17-a4cc-f8b93e1ad0c8.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.6f540c88-baff-4e37-9e84-9f354f27b963]
+description = "Medium-pair traffic asymmetry at 0.2/0.8 RPS against the balanced 0.5/0.5 baseline."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.6f540c88-baff-4e37-9e84-9f354f27b963.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 0.2, "deepseek-ai/DeepSeek-V2-Lite-Chat" = 0.8 }
+
+[[serving_cases.6f540c88-baff-4e37-9e84-9f354f27b963.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.6f540c88-baff-4e37-9e84-9f354f27b963.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.60068998-ea3c-4002-9139-cb492797e483]
+description = "Large-pair input-heavy serving with input median fraction 0.25 and output median fraction 0.03125 within their legal intervals."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.60068998-ea3c-4002-9139-cb492797e483.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 0.2, "zai-org/GLM-4.7-Flash" = 0.2 }
+
+[[serving_cases.60068998-ea3c-4002-9139-cb492797e483.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.25, sigma = 1.0 } }
+
+[[serving_cases.60068998-ea3c-4002-9139-cb492797e483.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.25, sigma = 1.0 } }
+
+[serving_cases.204b58ef-6cc1-4ddb-ae58-eca7b23b4be3]
+description = "Large-pair output-heavy serving with input median fraction 0.125 and output median fraction 0.0625 within their legal intervals."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-lanes2"
+seed = 0
+
+[serving_cases.204b58ef-6cc1-4ddb-ae58-eca7b23b4be3.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-30B-A3B" = 0.2, "zai-org/GLM-4.7-Flash" = 0.2 }
+
+[[serving_cases.204b58ef-6cc1-4ddb-ae58-eca7b23b4be3.targets]]
+model_id = "Qwen/Qwen3-30B-A3B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.0625, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.204b58ef-6cc1-4ddb-ae58-eca7b23b4be3.targets]]
+model_id = "zai-org/GLM-4.7-Flash"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.0625, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.085f0137-e7ff-411f-a36d-3d29fa8b9fce]
+description = "Small-pair one-Lane comparison against two Lanes on the same device fleet at 4 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn1-lanes1"
+seed = 0
+
+[serving_cases.085f0137-e7ff-411f-a36d-3d29fa8b9fce.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 4.0, "Qwen/Qwen3-0.6B" = 4.0 }
+
+[[serving_cases.085f0137-e7ff-411f-a36d-3d29fa8b9fce.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.085f0137-e7ff-411f-a36d-3d29fa8b9fce.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.118215d8-1afb-49e2-aa73-d84f4d135f38]
+description = "Small-pair attention TP2/DP1 comparison with two attention devices and one FFN device at 4 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn2-ffn1-lanes2"
+seed = 0
+
+[serving_cases.118215d8-1afb-49e2-aa73-d84f4d135f38.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen2.5-0.5B" = 4.0, "Qwen/Qwen3-0.6B" = 4.0 }
+
+[[serving_cases.118215d8-1afb-49e2-aa73-d84f4d135f38.targets]]
+model_id = "Qwen/Qwen2.5-0.5B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.118215d8-1afb-49e2-aa73-d84f4d135f38.targets]]
+model_id = "Qwen/Qwen3-0.6B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[serving_cases.8d4af85e-eac0-44d5-b2c3-2636d85d4b8f]
+description = "Medium-pair FFN TP1 comparison against the TP2 baseline on the same two-device FFN fleet at 0.5 RPS per model."
+module = "serving.multi_model"
+mode = "owned"
+deployment = "atn1-ffn2-tp1-lanes2"
+seed = 0
+
+[serving_cases.8d4af85e-eac0-44d5-b2c3-2636d85d4b8f.arrivals]
+kind = "poisson"
+duration_seconds = 60.0
+rates = { "Qwen/Qwen3-14B" = 0.5, "deepseek-ai/DeepSeek-V2-Lite-Chat" = 0.5 }
+
+[[serving_cases.8d4af85e-eac0-44d5-b2c3-2636d85d4b8f.targets]]
+model_id = "Qwen/Qwen3-14B"
+graph_mode = "decode-full-prefill-breakable"
+output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
+prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
+
+[[serving_cases.8d4af85e-eac0-44d5-b2c3-2636d85d4b8f.targets]]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
 graph_mode = "decode-full-prefill-breakable"
 output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, max_output_input_ratio = 2.0 }
 prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }

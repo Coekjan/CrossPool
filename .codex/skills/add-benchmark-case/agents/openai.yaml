@@ -1,0 +1,4 @@
+interface:
+  display_name: "Add Benchmark Case"
+  short_description: "Add concrete serving benchmark comparisons"
+  default_prompt: "Use $add-benchmark-case to add a concrete serving benchmark comparison using the existing catalogue."
