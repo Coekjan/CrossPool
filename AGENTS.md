@@ -28,8 +28,10 @@ without prior chat context or host-specific files.
 Source declarations and generated native stubs remain authoritative for exact
 implemented interfaces. Read the current design and active plan relevant to the
 task. Use `write-plan` for non-trivial changes needing a tracked target design;
-use `write-design` after implementation and acceptance to fold durable decisions
-into their owners and handle user-confirmed plan cleanup.
+use `explain-plan` when the user asks to understand that plan and `implement-plan`
+when the user authorizes its execution. Use `write-design` after implementation
+and acceptance to fold durable decisions into their owners and handle
+user-confirmed plan cleanup.
 
 ## Configuration
 

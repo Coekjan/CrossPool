@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implement Plan"
+  short_description: "Implement accepted xpool plans and validate changes"
+  default_prompt: "Use $implement-plan to implement the accepted task plan, validate it and align the documentation."

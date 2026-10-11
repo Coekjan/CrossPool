@@ -1,0 +1,4 @@
+interface:
+  display_name: "Explain Plan"
+  short_description: "Explain xpool plans with architecture and code examples"
+  default_prompt: "Use $explain-plan to explain the task plan against current code, including structure, architecture, data structures, APIs and core changes."
