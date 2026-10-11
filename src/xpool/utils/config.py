@@ -244,12 +244,15 @@ class ConfigModel(BaseModel):
     """Registry-backed root schema with resolved leaf provenance.
 
     Concrete schemas own their setting registry and environment prefix.
+    ``non_config_env_vars`` recognizes internal metadata only for unknown-name
+    diagnostics; those names do not participate in configuration resolution.
     File reading never installs a process-global value or reads implicit env.
     """
 
     model_config = ConfigDict(extra="forbid")
     registry: ClassVar[tuple[ConfigSetting, ...]]
     env_prefix: ClassVar[str]
+    non_config_env_vars: ClassVar[frozenset[str]] = frozenset()
     _sources: tuple[ConfigSourceRecord, ...] = PrivateAttr(default_factory=tuple)
 
     @classmethod
@@ -360,7 +363,10 @@ class ConfigModel(BaseModel):
         effective_cli = cli or {}
         effective_env = env or {}
         if env is not None:
-            allowed_env_vars = frozenset(setting.env_var for setting in cls.registry if setting.env_var is not None)
+            allowed_env_vars = (
+                frozenset(setting.env_var for setting in cls.registry if setting.env_var is not None)
+                | cls.non_config_env_vars
+            )
             unknown_env_vars = tuple(
                 sorted(
                     name for name in effective_env if name.startswith(cls.env_prefix) and name not in allowed_env_vars

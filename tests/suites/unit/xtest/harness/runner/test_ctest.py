@@ -9,6 +9,7 @@ import pytest
 import xtest.harness.runner.ctest
 from xkit.device import DevicePool
 from xkit.supervisor import TaskCompletion, TaskCompletionKind
+from xtest.envs import CTEST_INFRASTRUCTURE_SENTINEL
 from xtest.harness.runner.ctest import (
     CtestResourceSpec,
     CtestSuite,
@@ -113,7 +114,9 @@ def test_ctest_suite_classifies_infrastructure_failure(
         if write_junit:
             Path(command[command.index("--output-junit") + 1]).write_text("<testsuites/>", encoding="utf-8")
         if write_sentinel:
-            Path(env["XPOOL_CTEST_INFRASTRUCTURE_SENTINEL"]).write_text("failed\n", encoding="utf-8")
+            sentinel = CTEST_INFRASTRUCTURE_SENTINEL.get(env=env)
+            assert sentinel is not None
+            Path(sentinel).write_text("failed\n", encoding="utf-8")
         return completion
 
     monkeypatch.setattr(xtest.harness.runner.ctest.SupervisedTaskScope, "run", run)

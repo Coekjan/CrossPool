@@ -8,6 +8,8 @@ from importlib.metadata import distribution
 from pathlib import Path
 from typing import NoReturn
 
+from xtest.envs import CTEST_CANONICAL, CTEST_INFRASTRUCTURE_SENTINEL
+
 
 def native_library_paths() -> tuple[Path, ...]:
     """Return runtime library directories for native Python dependencies."""
@@ -29,7 +31,7 @@ def launch(arguments: list[str]) -> NoReturn:
     except (OSError, RuntimeError, ValueError) as error:
         report_infrastructure_failure(str(error))
         raise SystemExit(125) from error
-    if environment.get("XPOOL_CTEST_CANONICAL") == "1":
+    if CTEST_CANONICAL.get(env=environment) == "1":
         print(f"DEVICE ASSIGNMENT devices={environment['CUDA_VISIBLE_DEVICES'] or 'none'}", flush=True)
     paths = tuple(str(path) for path in native_library_paths())
     existing = environment.get("LD_LIBRARY_PATH")
@@ -40,7 +42,7 @@ def launch(arguments: list[str]) -> NoReturn:
 def configure_device_visibility(environment: dict[str, str]) -> None:
     """Project one CTest device resource into driver visibility."""
 
-    if environment.get("XPOOL_CTEST_CANONICAL") != "1":
+    if CTEST_CANONICAL.get(env=environment) != "1":
         return
     resource_count = int(environment.get("CTEST_RESOURCE_GROUP_COUNT", "0"))
     if resource_count == 0:
@@ -70,7 +72,7 @@ def report_infrastructure_failure(diagnostic: str) -> None:
     """Persist one launcher failure for canonical CTest classification."""
 
     print(diagnostic, file=sys.stderr)
-    sentinel = os.environ.get("XPOOL_CTEST_INFRASTRUCTURE_SENTINEL")
+    sentinel = CTEST_INFRASTRUCTURE_SENTINEL.get()
     if sentinel is not None:
         Path(sentinel).write_text(diagnostic + "\n", encoding="utf-8")
 

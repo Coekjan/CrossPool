@@ -1,4 +1,5 @@
 import argparse
+import logging
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ from pydantic import ValidationError
 
 import xkit.config
 from xkit.config import ToolConfigRecord, XpoolDevConfig, assemble_config, resolve_model_weights
+from xkit.envs import TASK_ROOT_CONTROL_FD
 from xpool.config import ConfigError, ConfigSource
 from xpool.model import ModelId
 
@@ -37,6 +39,24 @@ def test_development_cli_preserves_file_defaults_and_boolean_overrides(tmp_path:
     assert XpoolDevConfig.from_file(
         path, cli=vars(parser.parse_args(["--suite", "integration", "--suite", "models"]))
     ).xtest.suites == ("integration", "models")
+
+
+def test_internal_environment_metadata_is_recognized_but_not_resolved(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    environment = {"XKIT_UNKNOWN_SETTING": "1", "OTHER_UNKNOWN_SETTING": "1"}
+    TASK_ROOT_CONTROL_FD.set("not-a-descriptor", env=environment)
+    with caplog.at_level(logging.WARNING, logger="xkit.config"):
+        configured = XpoolDevConfig.from_mapping({}, env=environment)
+
+    baseline = XpoolDevConfig.from_mapping({})
+    assert configured.model_dump() == baseline.model_dump()
+    assert configured.sources == baseline.sources
+    assert configured.to_config_mapping() == baseline.to_config_mapping()
+    assert TASK_ROOT_CONTROL_FD.get(env=environment) == "not-a-descriptor"
+    assert "XKIT_UNKNOWN_SETTING" in caplog.text
+    assert TASK_ROOT_CONTROL_FD.name not in caplog.text
+    assert "OTHER_UNKNOWN_SETTING" not in caplog.text
 
 
 @pytest.mark.usefixtures("development_environment")

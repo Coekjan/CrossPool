@@ -13,12 +13,11 @@ from multiprocessing.connection import Connection
 from types import FrameType
 from typing import Self
 
+from xkit.envs import TASK_ROOT_CONTROL_FD
 from xkit.process import PROCESS_POLL_INTERVAL_SECONDS
 from xpool.utils.background import BackgroundThread
 from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S
 from xpool.utils.procs import ProcUniqId
-
-TASK_ROOT_CONTROL_FD_ENV = "XPOOL_TASK_ROOT_CONTROL_FD"
 
 __all__ = ("TaskCancelled", "TaskCleanupScope", "TaskRoot", "get_task_root")
 
@@ -135,7 +134,7 @@ class TaskRoot:
         """
 
         global current_task_root
-        value = os.environ.pop(TASK_ROOT_CONTROL_FD_ENV, None)
+        value = TASK_ROOT_CONTROL_FD.pop()
         if value is None:
             return None
         if current_task_root is not None:

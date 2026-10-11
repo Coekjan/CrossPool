@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from xkit.envs import TASK_ROOT_CONTROL_FD
 from xkit.serving.launch import snapshot_cluster_launch
 from xpool.config import XpoolConfig
 
@@ -18,6 +19,7 @@ def test_snapshot_preserves_complete_settings_and_freezes_environment(tmp_path: 
         "HF_HUB_OFFLINE": "0",
         "TRANSFORMERS_OFFLINE": "0",
     }
+    TASK_ROOT_CONTROL_FD.set("23", env=environment)
     original_environment = environment.copy()
     config = XpoolConfig.from_mapping(
         {
@@ -49,6 +51,7 @@ def test_snapshot_preserves_complete_settings_and_freezes_environment(tmp_path: 
     assert launch.environment["TRANSFORMERS_OFFLINE"] == "0"
     assert launch.environment["LD_LIBRARY_PATH"] == "/runtime/lib"
     assert launch.environment["NCCL_DEBUG"] == "INFO"
+    assert TASK_ROOT_CONTROL_FD.get(env=launch.environment) == "23"
     assert launch.config.debug.graph_observer.enable
     assert launch.cwd == tmp_path
     assert environment == original_environment

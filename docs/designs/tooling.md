@@ -82,6 +82,15 @@ development files or environment policy. Runtime scene assembly retains its own
 file-resolution lifecycle. [Configuration](../configuration.md#development-tools-and-shared-cache)
 owns user-facing sources, file setup and path-origin rules.
 
+Internal process metadata has package-local declarations.
+[`xkit.envs`](../../src/xpool-dev/xkit/envs.py) owns raw environment access and
+task-control metadata; [`xtest.envs`](../../src/xpool-dev/xtest/envs.py) owns
+CTest metadata. Declaration objects read the current process environment or an
+explicitly supplied mapping without caching or interpreting values. Raw strings,
+including empty ones, remain distinct from missing values. Protocol owners
+perform parsing and validation. The development schema recognizes its task-control
+name under the [configuration diagnostic contract](control-plane.md#configuration-and-integration).
+
 ## Catalogue and source declarations
 
 Both catalogues use named case tables. The table key is a full, canonical
@@ -274,6 +283,13 @@ The supervisor owns execution limits, cancellation and complete-domain recovery.
 For ordinary unprotected tasks, it signals exact PID/create-time identities
 with bounded TERM/KILL and reaps adopted children. Managed resource retirement
 uses the actual owners instead of this generic descendant path.
+
+The supervisor passes the task root's control descriptor and publishes its number
+as `XKIT_TASK_ROOT_CONTROL_FD` in the copied child environment.
+`TaskRoot.from_environment()` consumes that metadata before descriptor validation,
+including on failure; missing metadata does not install a root. Consumption prevents
+descendants from installing a second root. Descriptor transfer, validation and
+closure remain part of the task protocol rather than environment access.
 
 [`xkit.task`](../../src/xpool-dev/xkit/task.py) carries the task root's aggregate
 resource proof, independently of its test or benchmark verdict. Before controller
@@ -479,6 +495,14 @@ preflight and executes CTest, Unit, Integration, E2E and explicitly selected
 Models in canonical order. Device tasks are ordered by resource count and estimated
 duration and backfilled over idle leases. Test strictness, JUnit classification
 and cross-task qualification verdicts remain test-owned.
+
+Canonical CTest execution sets `XTEST_CTEST_CANONICAL` in a copied child
+environment. Only exact `"1"` enables projection of the assigned device resource;
+missing or other values leave the caller's visibility unchanged. Launcher
+infrastructure diagnostics go to stderr. When
+`XTEST_CTEST_INFRASTRUCTURE_SENTINEL` is present, the diagnostic is also written
+as UTF-8 to that unmodified path. Relative paths use the launcher's working
+directory, and file-write failures propagate.
 
 `run.json` retains required `tool_config`, source-labeled tool software metadata, selections, strictness,
 expected cases and task/artifact mapping. Atomic `results.json`

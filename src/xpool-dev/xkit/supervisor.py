@@ -26,6 +26,7 @@ from typing import Self, TextIO, cast
 import psutil
 
 from xkit.child import start_spawn_process
+from xkit.envs import TASK_ROOT_CONTROL_FD
 from xkit.process import (
     LOG_TAIL_CHARS,
     PROCESS_KILL_TIMEOUT_SECONDS,
@@ -33,7 +34,6 @@ from xkit.process import (
     PROCESS_TERMINATE_TIMEOUT_SECONDS,
 )
 from xkit.task import (
-    TASK_ROOT_CONTROL_FD_ENV,
     TaskCancellation,
     TaskExecutionWindow,
     TaskResourceEvent,
@@ -668,7 +668,7 @@ def run_task_supervisor(
         os.setsid()
         set_child_subreaper()
         task_connection = Connection(multiprocessing.reduction.recv_handle(connection))
-        env[TASK_ROOT_CONTROL_FD_ENV] = str(task_connection.fileno())
+        TASK_ROOT_CONTROL_FD.set(str(task_connection.fileno()), env=env)
         log_file = log_path.open("w", encoding="utf-8")
         root = subprocess.Popen(
             command,

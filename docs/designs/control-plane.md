@@ -52,6 +52,12 @@ defaults are the accepted sources. For example, Graph Observer uses
 `XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE` and
 `XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR`.
 
+Each schema checks unknown names only within its own environment prefix.
+`ConfigModel.non_config_env_vars` recognizes exact schema-local internal names
+for that diagnostic check; these names are not settings and do not participate
+in precedence, provenance or serving-snapshot filtering. [Tooling](tooling.md)
+owns development process metadata.
+
 `ModelConfig.path` is the schema's explicit path override. Machine-local paths
 belong in ignored `*.local.toml` files.
 

@@ -23,6 +23,7 @@ from pydantic import JsonValue
 from xkit.device import DevicePool
 from xkit.results import write_json
 from xkit.supervisor import SupervisedTaskScope, TaskCompletion, TaskCompletionKind, TaskScopeFailure
+from xtest.envs import CTEST_CANONICAL, CTEST_INFRASTRUCTURE_SENTINEL
 from xtest.harness.runner.pytest_report import PytestCaseReport, PytestCaseStatus
 
 CTEST_SUITE_TIMEOUT_SECONDS = 1800.0
@@ -111,12 +112,8 @@ class CtestSuite:
         junit_path = run_directory / "ctest.xml"
         sentinel_path = run_directory / "infrastructure-failure.txt"
         environment = os.environ.copy()
-        environment.update(
-            {
-                "XPOOL_CTEST_CANONICAL": "1",
-                "XPOOL_CTEST_INFRASTRUCTURE_SENTINEL": str(sentinel_path),
-            }
-        )
+        CTEST_CANONICAL.set("1", env=environment)
+        CTEST_INFRASTRUCTURE_SENTINEL.set(str(sentinel_path), env=environment)
         command = [
             "ctest",
             "--test-dir",

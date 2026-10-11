@@ -310,12 +310,14 @@ def test_unknown_xpool_env_warns(caplog: pytest.LogCaptureFixture) -> None:
                 "XPOOL_UNKNOWN_SETTING": "0",
                 "XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE": "0",
                 "XPOOL_UNKNOWN": "1",
+                "XKIT_UNKNOWN_SETTING": "1",
             },
         )
 
     assert config.debug.graph_observer.enable is False
     assert "XPOOL_UNKNOWN_SETTING" in caplog.text
     assert "XPOOL_UNKNOWN" in caplog.text
+    assert "XKIT_UNKNOWN_SETTING" not in caplog.text
 
 
 def test_init_global_config_warns_once_for_unknown_xpool_env(
