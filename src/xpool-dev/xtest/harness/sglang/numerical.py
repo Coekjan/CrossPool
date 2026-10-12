@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 import safetensors.torch
-import torch
 from _pytest.mark.structures import ParameterSet
 
 from xkit import ResourceRequirements
@@ -39,6 +38,7 @@ from xtest.harness.support.ffn import (
     compare_ffn_routing,
     generate_ffn_hidden_states,
     read_ffn_routing_records,
+    resolve_ffn_payload_dtype,
 )
 from xtest.harness.support.wait import remaining_seconds
 
@@ -98,10 +98,12 @@ def run_numerical_case(
     model_spec = architecture.load(model_id=case.model_id, model_path=model_path)
     assert representative_layer_ids(model_spec.layers) == case.layer_ids
 
+    payload_dtype = resolve_ffn_payload_dtype(case.input_matrix.payload_dtype)
     hidden_states = generate_ffn_hidden_states(
         hidden_size=model_spec.hidden_size,
         seed=case.input_matrix.seed,
         row_counts=case.input_matrix.row_counts,
+        dtype=payload_dtype,
     )
     reference_cases = tuple(
         SglangFfnReferenceCase(
@@ -156,7 +158,7 @@ def run_numerical_case(
                 )
             )
     ffn_profile = InstanceFfnProfile(
-        payload_dtype=torch.bfloat16,
+        payload_dtype=payload_dtype,
         hidden_size=model_spec.hidden_size,
         layers=tuple(InstanceFfnLayerProfile(layer_id=layer.layer_id, kind=layer.kind) for layer in model_spec.layers),
         decode_payload_row_capacity=1,
@@ -238,6 +240,7 @@ def run_numerical_case(
         model_id=case.model_id,
         model_spec_digest=model_spec.digest(),
         generation=ready.generation,
+        payload_dtype=case.input_matrix.payload_dtype,
         samples=tuple(samples),
     )
     evidence.write((task_artifact_dir or tmp_path) / FFN_NUMERICAL_ARTIFACT_FILENAME)

@@ -16,6 +16,7 @@ SUPPORTED_MODEL_CLASSES = frozenset(
     {
         "DeepseekV2ForCausalLM",
         "Glm4MoeLiteForCausalLM",
+        "LlamaForCausalLM",
         "Qwen2ForCausalLM",
         "Qwen3ForCausalLM",
         "Qwen3MoeForCausalLM",

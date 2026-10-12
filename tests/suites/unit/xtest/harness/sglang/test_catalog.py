@@ -58,6 +58,14 @@ def test_ffn_input_matrix_rejects_unordered_rows() -> None:
         E2eFfnInputMatrix(seed=17, row_counts=(32, 1))
 
 
+def test_ffn_input_matrix_defaults_to_bf16_and_accepts_fp16() -> None:
+    assert E2eFfnInputMatrix(seed=17, row_counts=(1,)).payload_dtype == "bfloat16"
+    assert E2eFfnInputMatrix(seed=17, row_counts=(1,), payload_dtype="float16").payload_dtype == "float16"
+
+    with pytest.raises(ValidationError, match="payload_dtype"):
+        E2eFfnInputMatrix(seed=17, row_counts=(1,), payload_dtype="float32")  # ty: ignore[invalid-argument-type]
+
+
 def test_serving_case_graph_modes_belong_to_the_matching_test_path() -> None:
     models = (
         ModelId("organization/first"),

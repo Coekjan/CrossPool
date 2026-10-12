@@ -16,6 +16,7 @@ from xkit.deployment import resolve_deployment_path
 from xkit.serving.sglang.graph import SglangGraphMode
 from xpool.config import ConfigError
 from xpool.model import ModelId
+from xtest.harness.support.ffn import FfnPayloadDtypeName
 
 
 class E2eElasticKvWorkload(BaseModel):
@@ -92,6 +93,7 @@ class E2eFfnInputMatrix(BaseModel):
 
     seed: int = Field(ge=0)
     row_counts: tuple[int, ...]
+    payload_dtype: FfnPayloadDtypeName = "bfloat16"
 
     @model_validator(mode="after")
     def validate_rows(self) -> Self:

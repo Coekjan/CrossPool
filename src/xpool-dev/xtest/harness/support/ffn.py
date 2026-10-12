@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Self, cast
+from typing import Literal, Self, cast
 
 import safetensors
 import torch
@@ -24,21 +24,38 @@ FFN_OUTPUT_MAXIMUM_SCALED_ERROR_LIMIT = 0.10
 FFN_ROUTING_ATOL = 0.0001
 FFN_ROUTING_RTOL = 0.001
 
+type FfnPayloadDtypeName = Literal["bfloat16", "float16"]
+
+
+def resolve_ffn_payload_dtype(name: FfnPayloadDtypeName) -> torch.dtype:
+    """Resolve one closed qualification payload dtype name."""
+
+    match name:
+        case "bfloat16":
+            return torch.bfloat16
+        case "float16":
+            return torch.float16
+        case _:
+            raise ValueError(f"unsupported FFN payload dtype name: {name!r}")
+
 
 def generate_ffn_hidden_states(
     *,
     hidden_size: int,
     seed: int,
     row_counts: tuple[int, ...],
+    dtype: torch.dtype,
 ) -> tuple[torch.Tensor, ...]:
-    """Generate deterministic BF16 prefix inputs from one CPU normal sample."""
+    """Generate deterministic admitted-dtype prefixes from one CPU normal sample."""
 
     if hidden_size <= 0 or seed < 0 or not row_counts or any(row_count <= 0 for row_count in row_counts):
         raise ValueError("FFN input geometry and seed must be positive, nonempty, and nonnegative")
     if tuple(sorted(set(row_counts))) != row_counts:
         raise ValueError("FFN input row counts must be strictly increasing")
+    if dtype not in (torch.bfloat16, torch.float16):
+        raise ValueError(f"FFN input dtype must be BF16 or FP16, received {dtype}")
     generator = torch.Generator(device="cpu").manual_seed(seed)
-    full = torch.randn((row_counts[-1], hidden_size), generator=generator).to(torch.bfloat16).contiguous()
+    full = torch.randn((row_counts[-1], hidden_size), generator=generator).to(dtype).contiguous()
     if not torch.isfinite(full).all():
         raise RuntimeError("FFN input generator produced non-finite values")
     return tuple(full[:row_count].clone() for row_count in row_counts)
@@ -160,6 +177,7 @@ class FfnNumericalEvidence(BaseModel):
     model_id: ModelId
     model_spec_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     generation: FabricGenerationId
+    payload_dtype: FfnPayloadDtypeName
     samples: tuple[FfnNumericalSampleEvidence, ...]
 
     @model_validator(mode="after")
@@ -272,13 +290,13 @@ def compare_ffn_outputs(
     normalized_rmse_limit: float,
     maximum_scaled_error_limit: float,
 ) -> FfnOutputComparison:
-    """Measure one BF16 production output against its reference."""
+    """Measure one admitted-dtype production output against its reference."""
 
     if reference.shape != actual.shape:
         raise AssertionError(f"FFN output shape mismatch: reference={reference.shape}, actual={actual.shape}")
-    if reference.dtype != torch.bfloat16 or actual.dtype != torch.bfloat16:
+    if reference.dtype != actual.dtype or reference.dtype not in (torch.bfloat16, torch.float16):
         raise AssertionError(
-            f"FFN output dtype must be torch.bfloat16: reference={reference.dtype}, actual={actual.dtype}"
+            f"FFN output dtypes must match and be BF16 or FP16: reference={reference.dtype}, actual={actual.dtype}"
         )
     if reference.numel() == 0:
         raise AssertionError("FFN output tensors must be nonempty")

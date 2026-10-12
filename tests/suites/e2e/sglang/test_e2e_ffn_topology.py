@@ -105,6 +105,7 @@ def test_e2e_ffn_topology(
             hidden_size=model_specs[request.instance_index].hidden_size,
             seed=FFN_TOPOLOGY_INPUT_SEED + request_ordinal,
             row_counts=(sum(request.dp_rank_payload_rows),),
+            dtype=torch.bfloat16,
         )[0]
         for request_ordinal, request in enumerate(case.requests)
     )

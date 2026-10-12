@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from xpool.ffn import DenseFfnSpec
 from xpool.runtime.ffnagent import architecture
 from xtest.harness.support.config import TEST_MODEL_ID
 
@@ -55,6 +57,28 @@ def test_load_rejects_duplicate_config_member(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="duplicate JSON member 'architectures'"):
         architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
+
+
+def test_load_compiles_float16_llama_dense_layers(tmp_path: Path) -> None:
+    config = {
+        "architectures": ["LlamaForCausalLM"],
+        "model_type": "llama",
+        "hidden_act": "silu",
+        "torch_dtype": "float16",
+        "hidden_size": 16,
+        "intermediate_size": 32,
+        "num_hidden_layers": 3,
+    }
+    keys = tuple(key for layer_id in range(3) for key in dense_keys(layer_id))
+    model_path = tmp_path / "model"
+    write_indexed_model(model_path, config, keys)
+
+    spec = architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
+
+    assert spec.architecture_name == "LlamaForCausalLM"
+    assert spec.hidden_size == 16
+    assert len(spec.layers) == 3
+    assert all(cast(DenseFfnSpec, layer).intermediate_size == 32 for layer in spec.layers)
 
 
 def test_source_config_reads_strict_types_and_constraints() -> None:
