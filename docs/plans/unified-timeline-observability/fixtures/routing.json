@@ -1,0 +1,687 @@
+{
+  "contract_version": 1,
+  "cases": [
+    {
+      "id": "routing_published",
+      "input": {
+        "metadata": "metadata.json",
+        "capabilities": {
+          "routing": "enabled"
+        },
+        "events": [
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 10,
+              "raw_time_ns": 215,
+              "clock_domain_id": 4,
+              "kind": 550,
+              "presence": 132577,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 5,
+              "attachment_sequence": 1,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 1,
+              "data1": 2,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "attachments": [
+          {
+            "owner": 5,
+            "sequence": 1,
+            "status": "published",
+            "path": "routing.safetensors",
+            "sha256": "02ef712dbfbf550ac0a7fa0deaabc0203d21f99f78be306f6ad7f458969d34e2",
+            "tensor_keys": [
+              "records.0.topk_ids",
+              "records.0.topk_weights"
+            ],
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1,
+            "lane_index": 0,
+            "lease_sequence": 1,
+            "layer_ordinal": 0,
+            "publisher": 5,
+            "pe": 1,
+            "clock_domain_id": 4,
+            "raw_publication_time_ns": 215,
+            "shape": [
+              2,
+              2
+            ],
+            "dtypes": [
+              "int32",
+              "float32"
+            ]
+          }
+        ],
+        "closing_index_complete": true
+      },
+      "expected": {
+        "event_available": true,
+        "attachment_status": "published",
+        "attachment_available": true,
+        "link_by_identity": [
+          5,
+          1
+        ],
+        "quality": []
+      }
+    },
+    {
+      "id": "routing_not_collected",
+      "input": {
+        "metadata": "metadata.json",
+        "capabilities": {
+          "routing": "enabled"
+        },
+        "events": [
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 11,
+              "raw_time_ns": 215,
+              "clock_domain_id": 4,
+              "kind": 550,
+              "presence": 132577,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 5,
+              "attachment_sequence": 1,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 2,
+              "data1": 2,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "attachments": [
+          {
+            "owner": 5,
+            "sequence": 1,
+            "status": "not_collected",
+            "path": null,
+            "sha256": null,
+            "tensor_keys": [
+              "records.0.topk_ids",
+              "records.0.topk_weights"
+            ],
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1,
+            "lane_index": 0,
+            "lease_sequence": 1,
+            "layer_ordinal": 0,
+            "publisher": 5,
+            "pe": 1,
+            "clock_domain_id": 4,
+            "raw_publication_time_ns": 215,
+            "shape": [
+              2,
+              2
+            ],
+            "dtypes": [
+              "int32",
+              "float32"
+            ]
+          }
+        ],
+        "closing_index_complete": true
+      },
+      "expected": {
+        "event_available": true,
+        "attachment_status": "not_collected",
+        "attachment_available": false,
+        "link_by_identity": [
+          5,
+          1
+        ],
+        "quality": [
+          "attachment_not_collected"
+        ]
+      }
+    },
+    {
+      "id": "routing_capacity_exhausted",
+      "input": {
+        "metadata": "metadata.json",
+        "capabilities": {
+          "routing": "enabled"
+        },
+        "events": [
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 12,
+              "raw_time_ns": 215,
+              "clock_domain_id": 4,
+              "kind": 550,
+              "presence": 132577,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 5,
+              "attachment_sequence": 1,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 3,
+              "data1": 2,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "attachments": [
+          {
+            "owner": 5,
+            "sequence": 1,
+            "status": "capacity_exhausted",
+            "path": null,
+            "sha256": null,
+            "tensor_keys": [
+              "records.0.topk_ids",
+              "records.0.topk_weights"
+            ],
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1,
+            "lane_index": 0,
+            "lease_sequence": 1,
+            "layer_ordinal": 0,
+            "publisher": 5,
+            "pe": 1,
+            "clock_domain_id": 4,
+            "raw_publication_time_ns": 215,
+            "shape": [
+              2,
+              2
+            ],
+            "dtypes": [
+              "int32",
+              "float32"
+            ]
+          }
+        ],
+        "closing_index_complete": true
+      },
+      "expected": {
+        "event_available": true,
+        "attachment_status": "capacity_exhausted",
+        "attachment_available": false,
+        "link_by_identity": [
+          5,
+          1
+        ],
+        "quality": [
+          "attachment_capacity_exhausted"
+        ]
+      }
+    },
+    {
+      "id": "routing_payload_oversize",
+      "input": {
+        "metadata": "metadata.json",
+        "capabilities": {
+          "routing": "enabled"
+        },
+        "events": [
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 13,
+              "raw_time_ns": 215,
+              "clock_domain_id": 4,
+              "kind": 550,
+              "presence": 132577,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 5,
+              "attachment_sequence": 1,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 4,
+              "data1": 2,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "attachments": [
+          {
+            "owner": 5,
+            "sequence": 1,
+            "status": "payload_oversize",
+            "path": null,
+            "sha256": null,
+            "tensor_keys": [
+              "records.0.topk_ids",
+              "records.0.topk_weights"
+            ],
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1,
+            "lane_index": 0,
+            "lease_sequence": 1,
+            "layer_ordinal": 0,
+            "publisher": 5,
+            "pe": 1,
+            "clock_domain_id": 4,
+            "raw_publication_time_ns": 215,
+            "shape": [
+              2,
+              2
+            ],
+            "dtypes": [
+              "int32",
+              "float32"
+            ]
+          }
+        ],
+        "closing_index_complete": true
+      },
+      "expected": {
+        "event_available": true,
+        "attachment_status": "payload_oversize",
+        "attachment_available": false,
+        "link_by_identity": [
+          5,
+          1
+        ],
+        "quality": [
+          "attachment_payload_oversize"
+        ]
+      }
+    },
+    {
+      "id": "routing_publish_failed",
+      "input": {
+        "metadata": "metadata.json",
+        "capabilities": {
+          "routing": "enabled"
+        },
+        "events": [
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 14,
+              "raw_time_ns": 215,
+              "clock_domain_id": 4,
+              "kind": 550,
+              "presence": 132577,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 5,
+              "attachment_sequence": 1,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 1,
+              "data1": 2,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "attachments": [
+          {
+            "owner": 5,
+            "sequence": 1,
+            "status": "publish_failed",
+            "path": null,
+            "sha256": null,
+            "tensor_keys": [
+              "records.0.topk_ids",
+              "records.0.topk_weights"
+            ],
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1,
+            "lane_index": 0,
+            "lease_sequence": 1,
+            "layer_ordinal": 0,
+            "publisher": 5,
+            "pe": 1,
+            "clock_domain_id": 4,
+            "raw_publication_time_ns": 215,
+            "shape": [
+              2,
+              2
+            ],
+            "dtypes": [
+              "int32",
+              "float32"
+            ]
+          }
+        ],
+        "closing_index_complete": true
+      },
+      "expected": {
+        "event_available": true,
+        "attachment_status": "publish_failed",
+        "attachment_available": false,
+        "link_by_identity": [
+          5,
+          1
+        ],
+        "quality": [
+          "attachment_publish_failed"
+        ]
+      }
+    },
+    {
+      "id": "routing_missing",
+      "input": {
+        "metadata": "metadata.json",
+        "capabilities": {
+          "routing": "enabled"
+        },
+        "events": [
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 15,
+              "raw_time_ns": 215,
+              "clock_domain_id": 4,
+              "kind": 550,
+              "presence": 132577,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 5,
+              "attachment_sequence": 1,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 1,
+              "data1": 2,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "attachments": [
+          {
+            "owner": 5,
+            "sequence": 1,
+            "status": "missing",
+            "path": null,
+            "sha256": null,
+            "tensor_keys": [
+              "records.0.topk_ids",
+              "records.0.topk_weights"
+            ],
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1,
+            "lane_index": 0,
+            "lease_sequence": 1,
+            "layer_ordinal": 0,
+            "publisher": 5,
+            "pe": 1,
+            "clock_domain_id": 4,
+            "raw_publication_time_ns": 215,
+            "shape": [
+              2,
+              2
+            ],
+            "dtypes": [
+              "int32",
+              "float32"
+            ]
+          }
+        ],
+        "closing_index_complete": true
+      },
+      "expected": {
+        "event_available": true,
+        "attachment_status": "missing",
+        "attachment_available": false,
+        "link_by_identity": [
+          5,
+          1
+        ],
+        "quality": [
+          "attachment_missing"
+        ]
+      }
+    },
+    {
+      "id": "routing_event_lost",
+      "input": {
+        "events": [],
+        "attachments": [
+          {
+            "owner": 5,
+            "sequence": 1,
+            "status": "published",
+            "path": "routing.safetensors",
+            "sha256": "02ef712dbfbf550ac0a7fa0deaabc0203d21f99f78be306f6ad7f458969d34e2",
+            "tensor_keys": [
+              "records.0.topk_ids",
+              "records.0.topk_weights"
+            ],
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1,
+            "lane_index": 0,
+            "lease_sequence": 1,
+            "layer_ordinal": 0,
+            "publisher": 5,
+            "pe": 1,
+            "clock_domain_id": 4,
+            "raw_publication_time_ns": 215,
+            "shape": [
+              2,
+              2
+            ],
+            "dtypes": [
+              "int32",
+              "float32"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "event_available": false,
+        "attachment_available": true,
+        "invent_publication_event": false,
+        "quality": [
+          "event_missing"
+        ]
+      }
+    },
+    {
+      "id": "routing_unknown_tail",
+      "input": {
+        "events": [
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 10,
+              "raw_time_ns": 215,
+              "clock_domain_id": 4,
+              "kind": 550,
+              "presence": 132577,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 5,
+              "attachment_sequence": 1,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 1,
+              "data1": 2,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "attachments": [],
+        "closing_index_complete": false
+      },
+      "expected": {
+        "attachment_status": "unknown",
+        "quality": [
+          "tail_unknown"
+        ]
+      }
+    }
+  ]
+}

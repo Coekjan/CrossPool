@@ -1,0 +1,196 @@
+{
+  "contract_version": 1,
+  "run_id": "11111111-1111-4111-8111-111111111111",
+  "producer_id": 3,
+  "revision": 1,
+  "process": {
+    "creation_id": "22222222-2222-4222-8222-222222222222",
+    "pid": 101,
+    "runtime_role": "instance"
+  },
+  "clock_domain_id": 2,
+  "producers": [
+    {
+      "id": 1,
+      "source": "host",
+      "process": {
+        "creation_id": "22222222-2222-4222-8222-222222222222",
+        "pid": 101,
+        "runtime_role": "instance"
+      },
+      "process_creation_id": "22222222-2222-4222-8222-222222222222",
+      "clock_domain_id": 1
+    },
+    {
+      "id": 2,
+      "source": "device",
+      "process": {
+        "creation_id": "33333333-3333-4333-8333-333333333333",
+        "pid": 102,
+        "runtime_role": "atnagent"
+      },
+      "process_creation_id": "33333333-3333-4333-8333-333333333333",
+      "clock_domain_id": 3
+    },
+    {
+      "id": 3,
+      "source": "device",
+      "process": {
+        "creation_id": "22222222-2222-4222-8222-222222222222",
+        "pid": 101,
+        "runtime_role": "instance"
+      },
+      "process_creation_id": "22222222-2222-4222-8222-222222222222",
+      "clock_domain_id": 2
+    },
+    {
+      "id": 4,
+      "source": "host",
+      "process": {
+        "creation_id": "44444444-4444-4444-8444-444444444444",
+        "pid": 103,
+        "runtime_role": "ffnagent"
+      },
+      "process_creation_id": "44444444-4444-4444-8444-444444444444",
+      "clock_domain_id": 1
+    },
+    {
+      "id": 5,
+      "source": "device",
+      "process": {
+        "creation_id": "44444444-4444-4444-8444-444444444444",
+        "pid": 103,
+        "runtime_role": "ffnagent"
+      },
+      "process_creation_id": "44444444-4444-4444-8444-444444444444",
+      "clock_domain_id": 4
+    }
+  ],
+  "generations": [
+    {
+      "id": 1,
+      "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "atnagent_count": 1,
+      "ffnagent_count": 1,
+      "model_topologies": [
+        {
+          "atn_tp_size": 1,
+          "atn_dp_size": 1
+        }
+      ],
+      "scheduler": "fifo",
+      "models": [
+        {
+          "instance_index": 0,
+          "model_id": "test/test-model"
+        }
+      ]
+    }
+  ],
+  "clock_domains": [
+    {
+      "id": 1,
+      "kind": "host_monotonic",
+      "host_creation_id": "55555555-5555-4555-8555-555555555555",
+      "unit": "ns"
+    },
+    {
+      "id": 2,
+      "kind": "device_globaltimer",
+      "process_creation_id": "22222222-2222-4222-8222-222222222222",
+      "physical_device_uuid": "GPU-fixture-attention",
+      "logical_device": 0,
+      "raw_epoch": 1,
+      "unit": "ns"
+    },
+    {
+      "id": 3,
+      "kind": "device_globaltimer",
+      "process_creation_id": "33333333-3333-4333-8333-333333333333",
+      "physical_device_uuid": "GPU-fixture-attention",
+      "logical_device": 0,
+      "raw_epoch": 1,
+      "unit": "ns"
+    },
+    {
+      "id": 4,
+      "kind": "device_globaltimer",
+      "process_creation_id": "44444444-4444-4444-8444-444444444444",
+      "physical_device_uuid": "GPU-fixture-ffn",
+      "logical_device": 0,
+      "raw_epoch": 1,
+      "unit": "ns"
+    }
+  ],
+  "endpoints": [
+    {
+      "owner_producer": 2,
+      "endpoint_sequence": 1,
+      "generation": 1,
+      "instance_index": 0,
+      "instance_rank": 0,
+      "model_id": "test/test-model",
+      "arena_handle_suffix": "0123456789abcdef",
+      "sites": [
+        {
+          "producer": 3,
+          "site": "instance"
+        },
+        {
+          "producer": 2,
+          "site": "atnagent"
+        }
+      ]
+    }
+  ],
+  "graph_templates": [
+    {
+      "owner_producer": 1,
+      "template_sequence": 1,
+      "kind": "sglang_decode",
+      "backend_class": "FixtureBackend"
+    },
+    {
+      "owner_producer": 4,
+      "template_sequence": 1,
+      "kind": "primary",
+      "signature_index": 0
+    },
+    {
+      "owner_producer": 4,
+      "template_sequence": 2,
+      "kind": "lane_service",
+      "lane_index": 0,
+      "compute_templates": [
+        1
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "id": 1,
+      "kind": "graph_structure",
+      "status": "unavailable",
+      "path": null,
+      "sha256": null
+    }
+  ],
+  "capabilities": {
+    "transport": "enabled",
+    "fabric": "enabled",
+    "graph": "enabled",
+    "routing": "not_applicable",
+    "calibration": "enabled"
+  },
+  "configuration": {
+    "timeline": true,
+    "device_bytes": 8388608,
+    "host_bytes": 33554432,
+    "chunk_bytes": 1048576,
+    "collection_interval_ms": 100,
+    "disk_bytes": 1073741824,
+    "metadata_reserve_bytes": 8388608,
+    "shutdown_wait_ms": 5000,
+    "calibration_block_attempts": 10
+  }
+}

@@ -1,0 +1,553 @@
+{
+  "contract_version": 1,
+  "input_case": "causality.json#normal_dense",
+  "phase_pairs": {
+    "transport": [
+      [
+        "request_staging",
+        "request_staging_started",
+        "request_staging_completed"
+      ],
+      [
+        "request_publication",
+        "request_staging_completed",
+        "request_published"
+      ],
+      [
+        "request_processing",
+        "request_observed",
+        "result_published"
+      ],
+      [
+        "execution",
+        "execution_started",
+        "execution_completed"
+      ],
+      [
+        "output_copy",
+        "result_observed",
+        "output_copied"
+      ],
+      [
+        "result_acknowledgement",
+        "output_copied",
+        "result_acknowledged"
+      ],
+      [
+        "result_acknowledged_total",
+        "request_staging_started",
+        "result_acknowledged"
+      ],
+      [
+        "closed_total",
+        "request_staging_started",
+        "closed"
+      ]
+    ],
+    "atnagent": [
+      [
+        "admission_wait",
+        "submission_published",
+        "admission_observed"
+      ],
+      [
+        "output_wait",
+        "admission_observed",
+        "output_commit_observed"
+      ],
+      [
+        "total",
+        "submission_prepared",
+        "output_acknowledgement_published"
+      ]
+    ],
+    "coordinator": [
+      [
+        "scheduling",
+        "enqueued",
+        "scheduled"
+      ],
+      [
+        "execution",
+        "lane_execution_published",
+        "ffnagent_completions_observed"
+      ],
+      [
+        "active_total",
+        "scheduled",
+        "lane_released"
+      ],
+      [
+        "total",
+        "enqueued",
+        "lane_released"
+      ]
+    ],
+    "ffnagent": [
+      [
+        "input_wait",
+        "lane_execution_observed",
+        "input_ready_observed"
+      ],
+      [
+        "compute",
+        "compute_started",
+        "compute_completed"
+      ],
+      [
+        "total",
+        "lane_execution_observed",
+        "completion_published"
+      ]
+    ]
+  },
+  "expected_transport": [
+    {
+      "pid": 101,
+      "site": "instance",
+      "model_id": "test/test-model",
+      "rank": 0,
+      "arena_handle_suffix": "0123456789abcdef",
+      "sequence": 1,
+      "dropped": 0,
+      "phase_summary": {
+        "request_staging": {
+          "count": 1,
+          "min_ns": 10,
+          "median_ns": 10,
+          "p95_ns": 10,
+          "p99_ns": 10,
+          "max_ns": 10
+        },
+        "request_publication": {
+          "count": 1,
+          "min_ns": 10,
+          "median_ns": 10,
+          "p95_ns": 10,
+          "p99_ns": 10,
+          "max_ns": 10
+        },
+        "output_copy": {
+          "count": 1,
+          "min_ns": 10,
+          "median_ns": 10,
+          "p95_ns": 10,
+          "p99_ns": 10,
+          "max_ns": 10
+        },
+        "result_acknowledgement": {
+          "count": 1,
+          "min_ns": 10,
+          "median_ns": 10,
+          "p95_ns": 10,
+          "p99_ns": 10,
+          "max_ns": 10
+        },
+        "result_acknowledged_total": {
+          "count": 1,
+          "min_ns": 230,
+          "median_ns": 230,
+          "p95_ns": 230,
+          "p99_ns": 230,
+          "max_ns": 230
+        }
+      },
+      "record_counts": {
+        "retained": 1,
+        "completed": 1,
+        "closed": 0,
+        "incomplete": 0
+      },
+      "records": [
+        {
+          "trace_id": 1,
+          "payload_rows": 2,
+          "layer_ordinal": 0,
+          "forward_mode": "decode",
+          "output_requirement": "per_rank_complete",
+          "dp_row_layout": "none",
+          "result_code": "ok",
+          "request_staging_started": 100,
+          "request_staging_completed": 110,
+          "request_published": 120,
+          "request_observed": 0,
+          "execution_started": 0,
+          "execution_completed": 0,
+          "result_published": 0,
+          "result_observed": 310,
+          "output_copied": 320,
+          "result_acknowledged": 330,
+          "closed": 0,
+          "durations_ns": {
+            "request_staging": 10,
+            "request_publication": 10,
+            "output_copy": 10,
+            "result_acknowledgement": 10,
+            "result_acknowledged_total": 230
+          }
+        }
+      ]
+    },
+    {
+      "pid": 102,
+      "site": "atnagent",
+      "model_id": "test/test-model",
+      "rank": 0,
+      "arena_handle_suffix": "0123456789abcdef",
+      "sequence": 1,
+      "dropped": 0,
+      "phase_summary": {
+        "request_processing": {
+          "count": 1,
+          "min_ns": 170,
+          "median_ns": 170,
+          "p95_ns": 170,
+          "p99_ns": 170,
+          "max_ns": 170
+        },
+        "execution": {
+          "count": 1,
+          "min_ns": 150,
+          "median_ns": 150,
+          "p95_ns": 150,
+          "p99_ns": 150,
+          "max_ns": 150
+        }
+      },
+      "record_counts": {
+        "retained": 1,
+        "completed": 1,
+        "closed": 0,
+        "incomplete": 0
+      },
+      "records": [
+        {
+          "trace_id": 1,
+          "payload_rows": 2,
+          "layer_ordinal": 0,
+          "forward_mode": "decode",
+          "output_requirement": "per_rank_complete",
+          "dp_row_layout": "none",
+          "result_code": "ok",
+          "request_staging_started": 0,
+          "request_staging_completed": 0,
+          "request_published": 0,
+          "request_observed": 130,
+          "execution_started": 140,
+          "execution_completed": 290,
+          "result_published": 300,
+          "result_observed": 0,
+          "output_copied": 0,
+          "result_acknowledged": 0,
+          "closed": 0,
+          "durations_ns": {
+            "request_processing": 170,
+            "execution": 150
+          }
+        }
+      ]
+    }
+  ],
+  "expected_fabric": [
+    {
+      "generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "pe": 0,
+      "atnagent_count": 1,
+      "ffnagent_count": 1,
+      "model_topologies": [
+        {
+          "atn_tp_size": 1,
+          "atn_dp_size": 1
+        }
+      ],
+      "sequence": 2,
+      "dropped": 0,
+      "records": [
+        {
+          "local_trace_id": 1,
+          "instance_index": 0,
+          "invocation_sequence": 1,
+          "layer_ordinal": 0,
+          "payload_rows": 2,
+          "output_requirement": "per_rank_complete",
+          "kind": "atnagent",
+          "dp_row_layout": "none",
+          "facts": {
+            "dp_rank_payload_rows": 2,
+            "forward_mode": "decode",
+            "executor_lane_index": 0,
+            "executor_lease_sequence": 1
+          },
+          "events_ns": {
+            "submission_prepared": 146,
+            "submission_published": 150,
+            "admission_observed": 170,
+            "input_ready_published": 180,
+            "output_commit_observed": 280,
+            "output_acknowledgement_published": 285
+          },
+          "durations_ns": {
+            "admission_wait": 20,
+            "output_wait": 110,
+            "total": 139
+          }
+        },
+        {
+          "local_trace_id": 2,
+          "instance_index": 0,
+          "invocation_sequence": 1,
+          "layer_ordinal": 0,
+          "payload_rows": 2,
+          "output_requirement": "per_rank_complete",
+          "kind": "coordinator",
+          "dp_row_layout": null,
+          "facts": {
+            "executor_lane_index": 0,
+            "executor_lease_sequence": 1,
+            "scheduler": {
+              "policy": "fifo",
+              "ready_ticket": 7
+            }
+          },
+          "events_ns": {
+            "enqueued": 155,
+            "scheduled": 160,
+            "admission_published": 165,
+            "lane_execution_published": 190,
+            "ffnagent_completions_observed": 260,
+            "output_commit_published": 270,
+            "output_acknowledgements_observed": 286,
+            "lane_released": 287
+          },
+          "durations_ns": {
+            "scheduling": 5,
+            "execution": 70,
+            "active_total": 127,
+            "total": 132
+          }
+        }
+      ]
+    },
+    {
+      "generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "pe": 1,
+      "atnagent_count": 1,
+      "ffnagent_count": 1,
+      "model_topologies": [
+        {
+          "atn_tp_size": 1,
+          "atn_dp_size": 1
+        }
+      ],
+      "sequence": 1,
+      "dropped": 0,
+      "records": [
+        {
+          "local_trace_id": 1,
+          "instance_index": 0,
+          "invocation_sequence": 1,
+          "layer_ordinal": 0,
+          "payload_rows": 2,
+          "output_requirement": "per_rank_complete",
+          "kind": "ffnagent",
+          "dp_row_layout": null,
+          "facts": {
+            "executor_lane_index": 0,
+            "executor_lease_sequence": 1,
+            "payload_row_capacity": 16,
+            "delivery": "direct_partial"
+          },
+          "events_ns": {
+            "lane_execution_observed": 200,
+            "input_ready_observed": 210,
+            "routing_metadata_published": 0,
+            "routing_metadata_observed": 0,
+            "compute_started": 220,
+            "compute_completed": 240,
+            "partial_ready_published": 245,
+            "peer_partials_ready_observed": 250,
+            "completion_published": 255
+          },
+          "durations_ns": {
+            "input_wait": 10,
+            "compute": 20,
+            "total": 55
+          }
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "prefix_retention",
+      "input": {
+        "capacity": 2,
+        "operations_attempted": 3,
+        "events": [
+          {
+            "local_trace_id": 1,
+            "kind": "begin",
+            "time": 100
+          },
+          {
+            "local_trace_id": 2,
+            "kind": "begin",
+            "time": 200
+          },
+          {
+            "local_trace_id": 3,
+            "kind": "begin",
+            "time": 300
+          },
+          {
+            "local_trace_id": 1,
+            "kind": "end",
+            "time": 400
+          }
+        ]
+      },
+      "expected": {
+        "sequence": 3,
+        "dropped": 1,
+        "retained_ids": [
+          1,
+          2
+        ],
+        "retained_1_end": 400,
+        "event_collection_stopped": false
+      }
+    },
+    {
+      "id": "lost_operation",
+      "input": {
+        "capacity": 2,
+        "operations_attempted": 2,
+        "observed_local_trace_ids": [
+          2
+        ]
+      },
+      "expected": {
+        "sequence": 2,
+        "dropped": 0,
+        "retained_ids": [
+          2
+        ],
+        "unobserved_operations": 1,
+        "assert_len_equals_sequence_minus_dropped": false
+      }
+    },
+    {
+      "id": "unknown_result",
+      "input": {
+        "record": "instance",
+        "known_request_facts": true,
+        "result_event_missing": true
+      },
+      "expected": {
+        "result_code": "protocol_mismatch",
+        "classification": "incomplete",
+        "quality": [
+          "unknown_result"
+        ]
+      }
+    },
+    {
+      "id": "fifo_missing_ticket",
+      "input": {
+        "scheduler": "fifo",
+        "ticket_present": false
+      },
+      "expected": {
+        "legacy_record_available": false,
+        "scheduler_projection": null,
+        "quality": [
+          "legacy_fact_missing"
+        ]
+      }
+    },
+    {
+      "id": "zero_timestamp",
+      "input": {
+        "kind": "RequestStagingStarted",
+        "raw_time_ns": 0,
+        "recorded": true
+      },
+      "expected": {
+        "raw_event_retained": true,
+        "legacy_time": 0,
+        "legacy_duration_available": false,
+        "quality": [
+          "legacy_zero_timestamp"
+        ]
+      }
+    },
+    {
+      "id": "reversed_phase",
+      "input": {
+        "start": 200,
+        "end": 100,
+        "clock_domain_id": 2
+      },
+      "expected": {
+        "duration": null,
+        "quality": [
+          "temporal_conflict"
+        ]
+      }
+    },
+    {
+      "id": "pre_assignment_lane",
+      "input": {
+        "role": "atnagent",
+        "event": "SubmissionPublished",
+        "lease_present": false
+      },
+      "expected": {
+        "executor_lane_index": null,
+        "executor_lease_sequence": null
+      }
+    },
+    {
+      "id": "host_budget_rejected",
+      "input": {
+        "host_bytes": 33554432,
+        "transport_endpoint_count": 17,
+        "transport_capacity": 8192,
+        "transport_slot_bytes": 256,
+        "other_host_bytes": 0
+      },
+      "expected": {
+        "minimum_view_bytes": 35651584,
+        "startup_accepted": false,
+        "error": "resource_budget"
+      }
+    },
+    {
+      "id": "legacy_quantile_indices",
+      "input": {
+        "durations_ns": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+        ]
+      },
+      "expected": {
+        "count": 12,
+        "min_ns": 0,
+        "median_ns": 5,
+        "p95_ns": 10,
+        "p99_ns": 11,
+        "max_ns": 11
+      }
+    }
+  ]
+}

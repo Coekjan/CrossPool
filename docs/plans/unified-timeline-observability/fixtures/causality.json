@@ -1,0 +1,4657 @@
+{
+  "contract_version": 1,
+  "case_identity_notation": {
+    "operation": [
+      "endpoint_owner",
+      "endpoint_sequence",
+      "operation_sequence"
+    ],
+    "invocation": [
+      "generation",
+      "instance_index",
+      "invocation_sequence"
+    ],
+    "graph_execution": [
+      "graph_owner",
+      "graph_execution"
+    ]
+  },
+  "cases": [
+    {
+      "id": "normal_dense",
+      "input": {
+        "metadata": "metadata.json",
+        "events": [
+          {
+            "producer": 1,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 10,
+              "clock_domain_id": 1,
+              "kind": 500,
+              "presence": 8,
+              "generation": 0,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 0,
+              "layer_ordinal": 0,
+              "payload_rows": 0,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 0,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 1,
+              "data1": 1,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 1,
+            "record": {
+              "event_sequence": 2,
+              "raw_time_ns": 20,
+              "clock_domain_id": 1,
+              "kind": 501,
+              "presence": 8,
+              "generation": 0,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 0,
+              "layer_ordinal": 0,
+              "payload_rows": 0,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 0,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 1,
+              "data1": 1,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 1,
+            "record": {
+              "event_sequence": 3,
+              "raw_time_ns": 25,
+              "clock_domain_id": 1,
+              "kind": 503,
+              "presence": 8,
+              "generation": 0,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 0,
+              "layer_ordinal": 0,
+              "payload_rows": 0,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 0,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 1,
+              "data1": 1,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 1,
+            "record": {
+              "event_sequence": 4,
+              "raw_time_ns": 90,
+              "clock_domain_id": 1,
+              "kind": 504,
+              "presence": 24,
+              "generation": 0,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 0,
+              "layer_ordinal": 0,
+              "payload_rows": 0,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 0,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 1,
+              "data1": 1,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 100,
+              "clock_domain_id": 2,
+              "kind": 100,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 2,
+              "raw_time_ns": 110,
+              "clock_domain_id": 2,
+              "kind": 101,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 3,
+              "raw_time_ns": 120,
+              "clock_domain_id": 2,
+              "kind": 102,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 4,
+              "raw_time_ns": 310,
+              "clock_domain_id": 2,
+              "kind": 107,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 5,
+              "raw_time_ns": 320,
+              "clock_domain_id": 2,
+              "kind": 108,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 6,
+              "raw_time_ns": 330,
+              "clock_domain_id": 2,
+              "kind": 109,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 130,
+              "clock_domain_id": 3,
+              "kind": 103,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 2,
+              "raw_time_ns": 140,
+              "clock_domain_id": 3,
+              "kind": 104,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 3,
+              "raw_time_ns": 290,
+              "clock_domain_id": 3,
+              "kind": 105,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 4,
+              "raw_time_ns": 300,
+              "clock_domain_id": 3,
+              "kind": 106,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 5,
+              "raw_time_ns": 145,
+              "clock_domain_id": 3,
+              "kind": 450,
+              "presence": 200487,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 2,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 6,
+              "raw_time_ns": 146,
+              "clock_domain_id": 3,
+              "kind": 200,
+              "presence": 134945,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 2,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 7,
+              "raw_time_ns": 150,
+              "clock_domain_id": 3,
+              "kind": 201,
+              "presence": 134945,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 2,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 8,
+              "raw_time_ns": 170,
+              "clock_domain_id": 3,
+              "kind": 202,
+              "presence": 135009,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 2,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 9,
+              "raw_time_ns": 180,
+              "clock_domain_id": 3,
+              "kind": 203,
+              "presence": 135009,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 2,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 10,
+              "raw_time_ns": 280,
+              "clock_domain_id": 3,
+              "kind": 204,
+              "presence": 135009,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 2,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 11,
+              "raw_time_ns": 285,
+              "clock_domain_id": 3,
+              "kind": 205,
+              "presence": 135009,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 2,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 12,
+              "raw_time_ns": 155,
+              "clock_domain_id": 3,
+              "kind": 300,
+              "presence": 140577,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 7,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 3,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 13,
+              "raw_time_ns": 160,
+              "clock_domain_id": 3,
+              "kind": 301,
+              "presence": 140641,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 7,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 3,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 14,
+              "raw_time_ns": 165,
+              "clock_domain_id": 3,
+              "kind": 302,
+              "presence": 140641,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 7,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 3,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 15,
+              "raw_time_ns": 190,
+              "clock_domain_id": 3,
+              "kind": 303,
+              "presence": 140641,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 7,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 3,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 16,
+              "raw_time_ns": 260,
+              "clock_domain_id": 3,
+              "kind": 304,
+              "presence": 140641,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 7,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 3,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 17,
+              "raw_time_ns": 270,
+              "clock_domain_id": 3,
+              "kind": 305,
+              "presence": 140641,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 7,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 3,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 18,
+              "raw_time_ns": 286,
+              "clock_domain_id": 3,
+              "kind": 306,
+              "presence": 140641,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 7,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 3,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 19,
+              "raw_time_ns": 287,
+              "clock_domain_id": 3,
+              "kind": 307,
+              "presence": 140641,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 7,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 3,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 200,
+              "clock_domain_id": 4,
+              "kind": 400,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 2,
+              "raw_time_ns": 210,
+              "clock_domain_id": 4,
+              "kind": 401,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 3,
+              "raw_time_ns": 220,
+              "clock_domain_id": 4,
+              "kind": 404,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 4,
+              "raw_time_ns": 240,
+              "clock_domain_id": 4,
+              "kind": 405,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 5,
+              "raw_time_ns": 245,
+              "clock_domain_id": 4,
+              "kind": 406,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 6,
+              "raw_time_ns": 250,
+              "clock_domain_id": 4,
+              "kind": 407,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 7,
+              "raw_time_ns": 255,
+              "clock_domain_id": 4,
+              "kind": 408,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 8,
+              "raw_time_ns": 220,
+              "clock_domain_id": 4,
+              "kind": 507,
+              "presence": 132473,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 4,
+              "graph_template": 1,
+              "graph_execution": 9223372036854775809,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 3,
+              "data1": 3,
+              "data2": 0,
+              "data3": 1,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 9,
+              "raw_time_ns": 240,
+              "clock_domain_id": 4,
+              "kind": 508,
+              "presence": 132473,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 4,
+              "graph_template": 1,
+              "graph_execution": 9223372036854775809,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 3,
+              "data1": 3,
+              "data2": 0,
+              "data3": 1,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 1,
+            "record": {
+              "event_sequence": 5,
+              "raw_time_ns": 350,
+              "clock_domain_id": 1,
+              "kind": 505,
+              "presence": 24,
+              "generation": 0,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 0,
+              "layer_ordinal": 0,
+              "payload_rows": 0,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 0,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 1,
+              "data1": 1,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "attachments": [],
+        "capabilities": {
+          "routing": "not_applicable"
+        }
+      },
+      "expected": {
+        "status": "complete",
+        "operation_count": 1,
+        "invocation_count": 1,
+        "operation_to_invocation": [
+          [
+            [
+              2,
+              1,
+              1
+            ],
+            [
+              1,
+              0,
+              1
+            ]
+          ]
+        ],
+        "graph_to_operations": [
+          [
+            [
+              1,
+              1
+            ],
+            [
+              [
+                2,
+                1,
+                1
+              ]
+            ]
+          ]
+        ],
+        "invocation_to_graph_activity": [
+          [
+            [
+              1,
+              0,
+              1
+            ],
+            [
+              4,
+              9223372036854775809
+            ]
+          ]
+        ],
+        "routing_count": 0,
+        "device_completion_from_host_return": false,
+        "quality": []
+      }
+    },
+    {
+      "id": "missing_opening",
+      "input": {
+        "base_case": "normal_dense",
+        "remove_events": [
+          [
+            3,
+            1
+          ]
+        ]
+      },
+      "expected": {
+        "status": "partial",
+        "operation_count": 1,
+        "retained_request_facts": true,
+        "missing_boundaries": [
+          "RequestStagingStarted"
+        ],
+        "quality": [
+          "event_missing"
+        ]
+      }
+    },
+    {
+      "id": "missing_result",
+      "input": {
+        "base_case": "normal_dense",
+        "remove_events": [
+          [
+            3,
+            4
+          ],
+          [
+            3,
+            5
+          ],
+          [
+            3,
+            6
+          ]
+        ]
+      },
+      "expected": {
+        "status": "partial",
+        "instance_result": null,
+        "legacy_result_code": "protocol_mismatch",
+        "instance_terminal": "incomplete",
+        "quality": [
+          "unknown_result",
+          "event_missing"
+        ]
+      }
+    },
+    {
+      "id": "missing_association",
+      "input": {
+        "base_case": "normal_dense",
+        "remove_events": [
+          [
+            2,
+            5
+          ]
+        ]
+      },
+      "expected": {
+        "status": "partial",
+        "operation_to_invocation": [],
+        "quality": [
+          "association_missing"
+        ]
+      }
+    },
+    {
+      "id": "missing_publication",
+      "input": {
+        "base_case": "normal_dense",
+        "remove_events": [
+          [
+            2,
+            7
+          ]
+        ]
+      },
+      "expected": {
+        "status": "partial",
+        "fabric_entry_proven": true,
+        "submission_publication": "unknown",
+        "quality": [
+          "event_missing"
+        ]
+      }
+    },
+    {
+      "id": "duplicate_event",
+      "input": {
+        "base_case": "normal_dense",
+        "append_events": [
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 100,
+              "clock_domain_id": 2,
+              "kind": 100,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "status": "complete",
+        "duplicate_event_count": 1,
+        "quality": [
+          "duplicate_event"
+        ],
+        "operation_count": 1
+      }
+    },
+    {
+      "id": "conflicting_event",
+      "input": {
+        "base_case": "normal_dense",
+        "append_events": [
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 101,
+              "clock_domain_id": 2,
+              "kind": 100,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "event_conflict",
+        "producer": 3,
+        "event_sequence": 1
+      }
+    },
+    {
+      "id": "conflicting_fact",
+      "input": {
+        "base_case": "normal_dense",
+        "replace_events": [
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 2,
+              "raw_time_ns": 110,
+              "clock_domain_id": 2,
+              "kind": 101,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 3,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "identity_conflict",
+        "fact": "payload_rows"
+      }
+    },
+    {
+      "id": "endpoint_recreated",
+      "input": {
+        "base_case": "normal_dense",
+        "append_events": [
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 7,
+              "raw_time_ns": 600,
+              "clock_domain_id": 2,
+              "kind": 100,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 2,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 8,
+              "raw_time_ns": 610,
+              "clock_domain_id": 2,
+              "kind": 101,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 2,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 9,
+              "raw_time_ns": 620,
+              "clock_domain_id": 2,
+              "kind": 102,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 2,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 10,
+              "raw_time_ns": 810,
+              "clock_domain_id": 2,
+              "kind": 107,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 2,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 11,
+              "raw_time_ns": 820,
+              "clock_domain_id": 2,
+              "kind": 108,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 2,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 12,
+              "raw_time_ns": 830,
+              "clock_domain_id": 2,
+              "kind": 109,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 2,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "metadata_overrides": {
+          "endpoints_add": [
+            {
+              "owner_producer": 2,
+              "endpoint_sequence": 2,
+              "generation": 1,
+              "instance_index": 0,
+              "instance_rank": 0,
+              "model_id": "test/test-model",
+              "arena_handle_suffix": "0123456789abcdef",
+              "sites": [
+                {
+                  "producer": 3,
+                  "site": "instance"
+                },
+                {
+                  "producer": 2,
+                  "site": "atnagent"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "status": "partial",
+        "operation_ids": [
+          [
+            2,
+            1,
+            1
+          ],
+          [
+            2,
+            2,
+            1
+          ]
+        ],
+        "identity_reused": false,
+        "quality": [
+          "association_missing",
+          "event_missing"
+        ]
+      }
+    },
+    {
+      "id": "graph_replay",
+      "input": {
+        "base_case": "normal_dense",
+        "append_events": [
+          {
+            "producer": 1,
+            "record": {
+              "event_sequence": 14,
+              "raw_time_ns": 590,
+              "clock_domain_id": 1,
+              "kind": 504,
+              "presence": 24,
+              "generation": 0,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 0,
+              "layer_ordinal": 0,
+              "payload_rows": 0,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 0,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 1,
+              "data1": 1,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 11,
+              "raw_time_ns": 600,
+              "clock_domain_id": 2,
+              "kind": 100,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 2,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 12,
+              "raw_time_ns": 610,
+              "clock_domain_id": 2,
+              "kind": 101,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 2,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 13,
+              "raw_time_ns": 620,
+              "clock_domain_id": 2,
+              "kind": 102,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 2,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 14,
+              "raw_time_ns": 810,
+              "clock_domain_id": 2,
+              "kind": 107,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 2,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 15,
+              "raw_time_ns": 820,
+              "clock_domain_id": 2,
+              "kind": 108,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 2,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 16,
+              "raw_time_ns": 830,
+              "clock_domain_id": 2,
+              "kind": 109,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 2,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 1,
+            "record": {
+              "event_sequence": 15,
+              "raw_time_ns": 850,
+              "clock_domain_id": 1,
+              "kind": 505,
+              "presence": 24,
+              "generation": 0,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 2,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 0,
+              "layer_ordinal": 0,
+              "payload_rows": 0,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 0,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 1,
+              "data1": 1,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "graph_executions": [
+          [
+            1,
+            1
+          ],
+          [
+            1,
+            2
+          ]
+        ],
+        "template_ids": [
+          [
+            1,
+            1
+          ]
+        ],
+        "operation_ids": [
+          [
+            2,
+            1,
+            1
+          ],
+          [
+            2,
+            1,
+            2
+          ]
+        ],
+        "capture_reused_as_execution": false
+      }
+    },
+    {
+      "id": "graph_one_to_many",
+      "input": {
+        "base_case": "normal_dense",
+        "append_events": [
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 7,
+              "raw_time_ns": 500,
+              "clock_domain_id": 2,
+              "kind": 100,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 2,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 1,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 8,
+              "raw_time_ns": 510,
+              "clock_domain_id": 2,
+              "kind": 101,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 2,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 1,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 9,
+              "raw_time_ns": 520,
+              "clock_domain_id": 2,
+              "kind": 102,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 2,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 1,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 10,
+              "raw_time_ns": 710,
+              "clock_domain_id": 2,
+              "kind": 107,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 2,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 1,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 11,
+              "raw_time_ns": 720,
+              "clock_domain_id": 2,
+              "kind": 108,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 2,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 1,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 12,
+              "raw_time_ns": 730,
+              "clock_domain_id": 2,
+              "kind": 109,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 2,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 1,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "graph_to_operations": [
+          [
+            [
+              1,
+              1
+            ],
+            [
+              [
+                2,
+                1,
+                1
+              ],
+              [
+                2,
+                1,
+                2
+              ]
+            ]
+          ]
+        ],
+        "operation_count": 2
+      }
+    },
+    {
+      "id": "tp_many_to_one",
+      "input": {
+        "metadata": "metadata.json",
+        "metadata_overrides": {
+          "producers_add": [
+            {
+              "id": 6,
+              "source": "host",
+              "process": {
+                "creation_id": "88888888-8888-4888-8888-888888888888",
+                "pid": 104,
+                "runtime_role": "instance"
+              },
+              "process_creation_id": "88888888-8888-4888-8888-888888888888",
+              "clock_domain_id": 1
+            },
+            {
+              "id": 7,
+              "source": "device",
+              "process": {
+                "creation_id": "77777777-7777-4777-8777-777777777777",
+                "pid": 105,
+                "runtime_role": "atnagent"
+              },
+              "process_creation_id": "77777777-7777-4777-8777-777777777777",
+              "clock_domain_id": 5
+            },
+            {
+              "id": 8,
+              "source": "device",
+              "process": {
+                "creation_id": "88888888-8888-4888-8888-888888888888",
+                "pid": 104,
+                "runtime_role": "instance"
+              },
+              "process_creation_id": "88888888-8888-4888-8888-888888888888",
+              "clock_domain_id": 6
+            }
+          ],
+          "clock_domains_add": [
+            {
+              "id": 5,
+              "kind": "device_globaltimer",
+              "process_creation_id": "77777777-7777-4777-8777-777777777777",
+              "physical_device_uuid": "GPU-fixture-attention-rank1",
+              "logical_device": 0,
+              "raw_epoch": 1,
+              "unit": "ns"
+            },
+            {
+              "id": 6,
+              "kind": "device_globaltimer",
+              "process_creation_id": "88888888-8888-4888-8888-888888888888",
+              "physical_device_uuid": "GPU-fixture-attention-rank1",
+              "logical_device": 0,
+              "raw_epoch": 1,
+              "unit": "ns"
+            }
+          ],
+          "endpoints_add": [
+            {
+              "owner_producer": 7,
+              "endpoint_sequence": 1,
+              "generation": 1,
+              "instance_index": 0,
+              "instance_rank": 1,
+              "model_id": "test/test-model",
+              "arena_handle_suffix": "0123456789abcdef",
+              "sites": [
+                {
+                  "producer": 8,
+                  "site": "instance"
+                },
+                {
+                  "producer": 7,
+                  "site": "atnagent"
+                }
+              ]
+            }
+          ],
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 2,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 2,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ]
+            }
+          ]
+        },
+        "events": [
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 5,
+              "raw_time_ns": 145,
+              "clock_domain_id": 3,
+              "kind": 450,
+              "presence": 200487,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 2,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 7,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 145,
+              "clock_domain_id": 5,
+              "kind": 450,
+              "presence": 200487,
+              "generation": 1,
+              "endpoint_owner": 7,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 2,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 1,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "attachments": [],
+        "capabilities": {
+          "routing": "not_applicable"
+        }
+      },
+      "expected": {
+        "status": "partial",
+        "operation_to_invocation": [
+          [
+            [
+              2,
+              1,
+              1
+            ],
+            [
+              1,
+              0,
+              1
+            ]
+          ],
+          [
+            [
+              7,
+              1,
+              1
+            ],
+            [
+              1,
+              0,
+              1
+            ]
+          ]
+        ],
+        "participant_ranks": [
+          0,
+          1
+        ],
+        "participant_pes": [
+          0,
+          1
+        ],
+        "rank_durations_added": false,
+        "quality": [
+          "event_missing"
+        ]
+      }
+    },
+    {
+      "id": "rejected_before_fabric",
+      "input": {
+        "base_case": "normal_dense",
+        "remove_events": [
+          [
+            1,
+            1
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            3,
+            5
+          ],
+          [
+            3,
+            6
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            2,
+            4
+          ],
+          [
+            2,
+            5
+          ],
+          [
+            2,
+            6
+          ],
+          [
+            2,
+            7
+          ],
+          [
+            2,
+            8
+          ],
+          [
+            2,
+            9
+          ],
+          [
+            2,
+            10
+          ],
+          [
+            2,
+            11
+          ],
+          [
+            2,
+            12
+          ],
+          [
+            2,
+            13
+          ],
+          [
+            2,
+            14
+          ],
+          [
+            2,
+            15
+          ],
+          [
+            2,
+            16
+          ],
+          [
+            2,
+            17
+          ],
+          [
+            2,
+            18
+          ],
+          [
+            2,
+            19
+          ],
+          [
+            5,
+            1
+          ],
+          [
+            5,
+            2
+          ],
+          [
+            5,
+            3
+          ],
+          [
+            5,
+            4
+          ],
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            5,
+            7
+          ],
+          [
+            5,
+            8
+          ],
+          [
+            5,
+            9
+          ],
+          [
+            1,
+            5
+          ]
+        ],
+        "replace_events": [
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 4,
+              "raw_time_ns": 310,
+              "clock_domain_id": 2,
+              "kind": 107,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 2,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "append_events": [
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 20,
+              "raw_time_ns": 145,
+              "clock_domain_id": 3,
+              "kind": 106,
+              "presence": 100103,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 2,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 7,
+              "raw_time_ns": 315,
+              "clock_domain_id": 2,
+              "kind": 110,
+              "presence": 100103,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 2,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "operation_to_invocation": [],
+        "fabric_entry_proven": false,
+        "instance_terminal": "closed",
+        "result_code": "protocol_mismatch"
+      }
+    },
+    {
+      "id": "eager",
+      "input": {
+        "base_case": "normal_dense",
+        "remove_events": [
+          [
+            1,
+            1
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            1,
+            3
+          ]
+        ],
+        "replace_events": [
+          {
+            "producer": 1,
+            "record": {
+              "event_sequence": 4,
+              "raw_time_ns": 90,
+              "clock_domain_id": 1,
+              "kind": 504,
+              "presence": 16,
+              "generation": 0,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 1,
+              "graph_template": 0,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 0,
+              "layer_ordinal": 0,
+              "payload_rows": 0,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 0,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 2,
+              "data1": 1,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 100,
+              "clock_domain_id": 2,
+              "kind": 100,
+              "presence": 67351,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 0,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 2,
+              "raw_time_ns": 110,
+              "clock_domain_id": 2,
+              "kind": 101,
+              "presence": 67351,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 0,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 3,
+              "raw_time_ns": 120,
+              "clock_domain_id": 2,
+              "kind": 102,
+              "presence": 67351,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 0,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 4,
+              "raw_time_ns": 310,
+              "clock_domain_id": 2,
+              "kind": 107,
+              "presence": 100119,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 0,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 5,
+              "raw_time_ns": 320,
+              "clock_domain_id": 2,
+              "kind": 108,
+              "presence": 100119,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 0,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 6,
+              "raw_time_ns": 330,
+              "clock_domain_id": 2,
+              "kind": 109,
+              "presence": 100119,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 0,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 130,
+              "clock_domain_id": 3,
+              "kind": 103,
+              "presence": 67351,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 0,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 2,
+              "raw_time_ns": 140,
+              "clock_domain_id": 3,
+              "kind": 104,
+              "presence": 67351,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 0,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 3,
+              "raw_time_ns": 290,
+              "clock_domain_id": 3,
+              "kind": 105,
+              "presence": 67351,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 0,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 4,
+              "raw_time_ns": 300,
+              "clock_domain_id": 3,
+              "kind": 106,
+              "presence": 100119,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 0,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 1,
+            "record": {
+              "event_sequence": 5,
+              "raw_time_ns": 350,
+              "clock_domain_id": 1,
+              "kind": 505,
+              "presence": 16,
+              "generation": 0,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 1,
+              "graph_template": 0,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 0,
+              "layer_ordinal": 0,
+              "payload_rows": 0,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 0,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 2,
+              "data1": 1,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "execution_mode": "eager",
+        "graph_executions": [
+          [
+            1,
+            1
+          ]
+        ],
+        "template_ids": []
+      }
+    },
+    {
+      "id": "dp_zero_contribution",
+      "input": {
+        "metadata": "metadata.json",
+        "metadata_overrides": {
+          "producers_add": [
+            {
+              "id": 6,
+              "source": "host",
+              "process": {
+                "creation_id": "88888888-8888-4888-8888-888888888888",
+                "pid": 104,
+                "runtime_role": "instance"
+              },
+              "process_creation_id": "88888888-8888-4888-8888-888888888888",
+              "clock_domain_id": 1
+            },
+            {
+              "id": 7,
+              "source": "device",
+              "process": {
+                "creation_id": "77777777-7777-4777-8777-777777777777",
+                "pid": 105,
+                "runtime_role": "atnagent"
+              },
+              "process_creation_id": "77777777-7777-4777-8777-777777777777",
+              "clock_domain_id": 5
+            },
+            {
+              "id": 8,
+              "source": "device",
+              "process": {
+                "creation_id": "88888888-8888-4888-8888-888888888888",
+                "pid": 104,
+                "runtime_role": "instance"
+              },
+              "process_creation_id": "88888888-8888-4888-8888-888888888888",
+              "clock_domain_id": 6
+            }
+          ],
+          "clock_domains_add": [
+            {
+              "id": 5,
+              "kind": "device_globaltimer",
+              "process_creation_id": "77777777-7777-4777-8777-777777777777",
+              "physical_device_uuid": "GPU-fixture-attention-rank1",
+              "logical_device": 0,
+              "raw_epoch": 1,
+              "unit": "ns"
+            },
+            {
+              "id": 6,
+              "kind": "device_globaltimer",
+              "process_creation_id": "88888888-8888-4888-8888-888888888888",
+              "physical_device_uuid": "GPU-fixture-attention-rank1",
+              "logical_device": 0,
+              "raw_epoch": 1,
+              "unit": "ns"
+            }
+          ],
+          "endpoints_add": [
+            {
+              "owner_producer": 7,
+              "endpoint_sequence": 1,
+              "generation": 1,
+              "instance_index": 0,
+              "instance_rank": 1,
+              "model_id": "test/test-model",
+              "arena_handle_suffix": "0123456789abcdef",
+              "sites": [
+                {
+                  "producer": 8,
+                  "site": "instance"
+                },
+                {
+                  "producer": 7,
+                  "site": "atnagent"
+                }
+              ]
+            }
+          ],
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 2,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 2
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ]
+            }
+          ]
+        },
+        "events": [
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 5,
+              "raw_time_ns": 145,
+              "clock_domain_id": 3,
+              "kind": 450,
+              "presence": 200487,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 2,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 1,
+              "output_requirement": 1,
+              "dp_row_layout": 2,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 7,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 145,
+              "clock_domain_id": 5,
+              "kind": 450,
+              "presence": 200487,
+              "generation": 1,
+              "endpoint_owner": 7,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 4,
+              "output_requirement": 1,
+              "dp_row_layout": 2,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 1,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "attachments": [],
+        "capabilities": {
+          "routing": "not_applicable"
+        }
+      },
+      "expected": {
+        "dp_rank_payload_rows": 0,
+        "fact_present": true,
+        "forward_mode": "idle"
+      }
+    },
+    {
+      "id": "context_capacity_exhausted",
+      "input": {
+        "capacity": 1,
+        "live_contexts": [
+          {
+            "slot": 0,
+            "generation": 1,
+            "execution": [
+              1,
+              1
+            ]
+          }
+        ],
+        "new_execution": [
+          1,
+          2
+        ],
+        "completed": []
+      },
+      "expected": {
+        "new_context": null,
+        "existing_context_unchanged": true,
+        "quality": [
+          "context_unavailable"
+        ],
+        "production_wait": false
+      }
+    },
+    {
+      "id": "context_reuse_after_completion",
+      "input": {
+        "capacity": 1,
+        "live_contexts": [
+          {
+            "slot": 0,
+            "generation": 1,
+            "execution": [
+              1,
+              1
+            ]
+          }
+        ],
+        "new_execution": [
+          1,
+          2
+        ],
+        "completed": [
+          [
+            1,
+            1
+          ]
+        ]
+      },
+      "expected": {
+        "new_context": {
+          "slot": 0,
+          "generation": 2,
+          "execution": [
+            1,
+            2
+          ]
+        },
+        "old_token_valid": false
+      }
+    },
+    {
+      "id": "identity_exhausted",
+      "input": {
+        "endpoint": [
+          2,
+          1
+        ],
+        "operation_counter": 18446744073709551615,
+        "claim_succeeded": true
+      },
+      "expected": {
+        "operation_identity": null,
+        "observation_state": "stopped",
+        "quality": [
+          "identity_exhausted"
+        ],
+        "production_changed": false
+      }
+    },
+    {
+      "id": "out_of_order_commit",
+      "input": {
+        "reserved": [
+          1,
+          2,
+          3
+        ],
+        "committed": [
+          3,
+          1
+        ],
+        "copy_completed": [
+          3
+        ]
+      },
+      "expected": {
+        "consumable_sequences": [
+          1,
+          3
+        ],
+        "reusable_sequences": [
+          3
+        ],
+        "pending_sequences": [
+          2
+        ],
+        "wait_for_sequence_2": false
+      }
+    },
+    {
+      "id": "stale_token",
+      "input": {
+        "slot": 0,
+        "slot_generation": 2,
+        "token": {
+          "slot": 0,
+          "slot_generation": 1,
+          "event_sequence": 1
+        }
+      },
+      "expected": {
+        "commit_status": "StaleToken",
+        "new_event_modified": false,
+        "quality": [
+          "stale_token"
+        ]
+      }
+    },
+    {
+      "id": "crashed_tail",
+      "input": {
+        "published_chunks": [
+          1
+        ],
+        "temporary_chunks": [
+          2
+        ],
+        "final_quality": null
+      },
+      "expected": {
+        "recoverable_chunks": [
+          1
+        ],
+        "tail": "unknown",
+        "normal_completion": false
+      }
+    },
+    {
+      "id": "disk_quota",
+      "input": {
+        "disk_bytes": 10485760,
+        "metadata_reserve_bytes": 8388608,
+        "charged_data_bytes": 2097152,
+        "next_chunk_bytes": 384
+      },
+      "expected": {
+        "publish_next": false,
+        "collection_state": "stopped",
+        "stop_reason": "disk_quota",
+        "delete_old_files": false
+      }
+    },
+    {
+      "id": "generation_recreated",
+      "input": {
+        "invocation_keys": [
+          [
+            1,
+            0,
+            1
+          ],
+          [
+            2,
+            0,
+            1
+          ]
+        ],
+        "generation_metadata": [
+          {
+            "id": 1,
+            "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "id": 2,
+            "fabric_generation": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ]
+      },
+      "expected": {
+        "invocation_count": 2,
+        "merged": false
+      }
+    },
+    {
+      "id": "producer_pid_reused",
+      "input": {
+        "processes": [
+          {
+            "creation_id": "22222222-2222-4222-8222-222222222222",
+            "pid": 101,
+            "runtime_role": "instance"
+          },
+          {
+            "creation_id": "66666666-6666-4666-8666-666666666666",
+            "pid": 101,
+            "runtime_role": "instance"
+          }
+        ],
+        "producer_ids": [
+          3,
+          6
+        ],
+        "event_sequences": [
+          1,
+          1
+        ]
+      },
+      "expected": {
+        "event_count": 2,
+        "merged": false
+      }
+    },
+    {
+      "id": "dp_many_to_one",
+      "input": {
+        "metadata": "metadata.json",
+        "metadata_overrides": {
+          "producers_add": [
+            {
+              "id": 6,
+              "source": "host",
+              "process": {
+                "creation_id": "88888888-8888-4888-8888-888888888888",
+                "pid": 104,
+                "runtime_role": "instance"
+              },
+              "process_creation_id": "88888888-8888-4888-8888-888888888888",
+              "clock_domain_id": 1
+            },
+            {
+              "id": 7,
+              "source": "device",
+              "process": {
+                "creation_id": "77777777-7777-4777-8777-777777777777",
+                "pid": 105,
+                "runtime_role": "atnagent"
+              },
+              "process_creation_id": "77777777-7777-4777-8777-777777777777",
+              "clock_domain_id": 5
+            },
+            {
+              "id": 8,
+              "source": "device",
+              "process": {
+                "creation_id": "88888888-8888-4888-8888-888888888888",
+                "pid": 104,
+                "runtime_role": "instance"
+              },
+              "process_creation_id": "88888888-8888-4888-8888-888888888888",
+              "clock_domain_id": 6
+            }
+          ],
+          "clock_domains_add": [
+            {
+              "id": 5,
+              "kind": "device_globaltimer",
+              "process_creation_id": "77777777-7777-4777-8777-777777777777",
+              "physical_device_uuid": "GPU-fixture-attention-rank1",
+              "logical_device": 0,
+              "raw_epoch": 1,
+              "unit": "ns"
+            },
+            {
+              "id": 6,
+              "kind": "device_globaltimer",
+              "process_creation_id": "88888888-8888-4888-8888-888888888888",
+              "physical_device_uuid": "GPU-fixture-attention-rank1",
+              "logical_device": 0,
+              "raw_epoch": 1,
+              "unit": "ns"
+            }
+          ],
+          "endpoints_add": [
+            {
+              "owner_producer": 7,
+              "endpoint_sequence": 1,
+              "generation": 1,
+              "instance_index": 0,
+              "instance_rank": 1,
+              "model_id": "test/test-model",
+              "arena_handle_suffix": "0123456789abcdef",
+              "sites": [
+                {
+                  "producer": 8,
+                  "site": "instance"
+                },
+                {
+                  "producer": 7,
+                  "site": "atnagent"
+                }
+              ]
+            }
+          ],
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 2,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 2
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ]
+            }
+          ]
+        },
+        "events": [
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 5,
+              "raw_time_ns": 145,
+              "clock_domain_id": 3,
+              "kind": 450,
+              "presence": 200487,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 2,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 1,
+              "output_requirement": 1,
+              "dp_row_layout": 2,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 7,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 145,
+              "clock_domain_id": 5,
+              "kind": 450,
+              "presence": 200487,
+              "generation": 1,
+              "endpoint_owner": 7,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 4,
+              "output_requirement": 1,
+              "dp_row_layout": 2,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 1,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ],
+        "attachments": [],
+        "capabilities": {
+          "routing": "not_applicable"
+        }
+      },
+      "expected": {
+        "status": "partial",
+        "operation_to_invocation": [
+          [
+            [
+              2,
+              1,
+              1
+            ],
+            [
+              1,
+              0,
+              1
+            ]
+          ],
+          [
+            [
+              7,
+              1,
+              1
+            ],
+            [
+              1,
+              0,
+              1
+            ]
+          ]
+        ],
+        "dp_rank_payload_rows": [
+          2,
+          0
+        ],
+        "forward_modes": [
+          "prefill",
+          "idle"
+        ],
+        "dp_row_layout": "packed_by_rank",
+        "quality": [
+          "event_missing"
+        ]
+      }
+    }
+  ]
+}
