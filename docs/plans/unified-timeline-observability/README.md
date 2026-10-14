@@ -7,8 +7,6 @@ reconstruction to be implemented independently. The target is one single-Host
 Transport/Fabric/Graph/Routing timeline with protocol-derived causality,
 paired Host/Device clock sampling, and explicit uncertainty and data quality.
 
-This directory specifies target behavior. It does not declare that runtime
-collection, clock calibration, or two-Device qualification is implemented.
 The independently usable contracts are:
 
 - [Shared contract](shared-contract.md): events, identities, Native interfaces,
@@ -19,7 +17,6 @@ The independently usable contracts are:
 
 ## Baseline
 
-The source baseline is `21554ea78533590ff2f122ce05f91b485d6da156` on `main`.
 Current implementation owners are [Devkit](../../designs/devkit.md),
 [Transport](../../designs/transport.md), [Fabric](../../designs/fabric.md),
 [FFN Execution](../../designs/ffn-execution.md), and
@@ -60,6 +57,9 @@ authoritative only when implemented.
 - Add fresh Graph execution identities and bounded, Stream-ordered dynamic
   Context. Separate Host calls, Device activity, templates, and long-lived Lane
   service Graphs. Attach Routing evidence by exact attachment identity.
+  Dynamic Context storage is process-wide per Graph owner; the IPC
+  `observation_region` carries only a short-lived per-Endpoint relay for the
+  association write, never the canonical Context array.
 - Provide one bounded Collector/Writer per process, shared by independently
   enabled observers and unified mode. Add `debug.timeline` through
   `xpool.config`; collection policy is immutable before native initialization
@@ -78,7 +78,7 @@ authoritative only when implemented.
 
 | Resource | Default and accounting |
 | --- | --- |
-| Device collection | 8 MiB per process/Device, including event slots, control, Context, and sampling |
+| Device collection | 8 MiB per process/Device, split by formula into the event ring, per-Endpoint `observation_region`s, process-wide Graph Context, and per-process calibration sampler storage; see [the device collection budget composition](shared-contract.md#device-collection-budget-composition) |
 | Host collection | 32 MiB per process, including queues, staging, Writer-held blocks, metadata, and snapshot views |
 | Raw chunk | At most 1 MiB including the 128-byte header |
 | Collection and periodic sampling | 100 ms; at most one in-flight sample per sampler |
