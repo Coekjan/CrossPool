@@ -480,17 +480,34 @@ token, writes the entire Event, then release-publishes completion. Token checks
 cannot race reclamation: reserved slots are ineligible for reclamation.
 Stale/double commits are observation failures, with explicit counters.
 
+Each process owns a background collection thread that runs during serving,
+using `collection_interval_ms` (default 100 ms) to drive collection. It submits
+asynchronous Device-to-Host event copies and checks their completion so that
+Device slots can be reclaimed promptly rather than only at shutdown. This
+reduces capacity pressure but does not guarantee loss-free collection. Writer
+file I/O runs outside this thread and must not block its collection or
+completion checks; handoff uses bounded Host-owned batches without waiting
+for the Writer or allocating an unbounded queue. Staging, in-flight transfers,
+queues, and Writer-held batches remain within the Host collection budget.
+Host capacity exhaustion must have explicit loss accounting and never cause
+premature reuse of a Device slot or a Host batch still owned by the Writer.
+
 Collector acquire-observes completion before starting a Device-to-Host copy;
 an asynchronous copy may read only immutable committed slots. It does not
 synchronize production Streams. Out-of-order completion is consumable without
 waiting for a pending lower sequence. A slot cannot be reused before the full
-copy completes and its previous ownership is retired. `poll` returns a bounded
+copy completes and its previous ownership is retired; reclamation does not
+wait for file publication. `poll` returns a bounded
 Host-owned batch or an empty result; its span stays valid until `release`.
 The Writer releases it after publication or a counted discard. A failed Writer
 may stop export while the Collector still drains committed slots into counted
 post-commit loss. No unbounded retry queue or device reservation leak is allowed.
 Teardown preserves unfinished slots until CUDA retirement; their tail is
 unknown if no reliable final checkpoint is possible.
+Background-thread shutdown follows the same Quiesce/Detach/Drain boundaries
+and shutdown deadline. A timeout does not permit releasing resources still
+used by a collection thread or in-flight CUDA/IPC work. Disabled observation
+starts no collection thread.
 
 ## Raw Chunks and Errors
 

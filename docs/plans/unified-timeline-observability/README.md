@@ -61,7 +61,11 @@ authoritative only when implemented.
   `observation_region` carries only a short-lived per-Endpoint relay for the
   association write, never the canonical Context array.
 - Provide one bounded Collector/Writer per process, shared by independently
-  enabled observers and unified mode. Add `debug.timeline` through
+  enabled observers and unified mode. A process-local background collection
+  thread periodically drives asynchronous Device-to-Host event transfer and
+  completion checks, reclaiming Device slots after complete transfer without
+  waiting for file publication. Writer file I/O must not block this thread.
+  Add `debug.timeline` through
   `xpool.config`; collection policy is immutable before native initialization
   and Graph Capture.
 - Preserve existing Transport/Fabric snapshot APIs and JSON shapes through
@@ -114,7 +118,9 @@ two conflicting interpretations of v1.
 
 Focused tests must cover concurrent reservation/commit/reclamation, multiple
 CTAs/Streams, IPC identity lifetime, repeated Replay and Context isolation,
-partial events, slow Writer, I/O failure, quota exhaustion, and shutdown.
+partial events, periodic background transfer during serving, Device slot
+reclamation before file publication, slow Writer isolation, bounded Host
+exhaustion, I/O failure, quota exhaustion, and background-thread shutdown.
 Follow [test conventions](../../../tests/README.md), repository-managed Ruff,
 type, and clang-format checks. Native Host tests attempt ASAN/UBSAN with the
 required execution approval.
