@@ -14,7 +14,7 @@ must not round them through IEEE-754 doubles.
 | Process creation | 16-byte UUID | New OS process creation, even after PID reuse |
 | Producer | Positive u64 within Run | Launcher registers one Host source per process and one Device source per process/Device; retries never reuse IDs |
 | Generation | Positive u64 metadata reference within Run | Resolves to the exact production FabricGenerationId string |
-| Endpoint | `(owner_producer, endpoint_sequence)` | AtnAgent Device source allocates a positive sequence for each new IPC observation region |
+| Endpoint | `(owner_producer, endpoint_sequence)` | `owner_producer` is the AtnAgent process's Device Producer; the AtnAgent Device source allocates a positive sequence for each new IPC observation region. One region is exported per Transport Arena pairing, matching the existing one-Arena-per-Instance-rank export granularity; it is never shared across TP/DP ranks |
 | Operation | `(Run, Endpoint, operation_sequence)` | Positive Device counter after successful Mailbox Claim; independent of event reservations |
 | Graph template | `(Run, graph_owner, template_sequence)` | Host source registers a fresh template when capturing/installing; actual CUDA handles are not identity |
 | Graph execution | `(Run, graph_owner, execution_sequence)` | Fresh positive sequence per actual invocation of the execution path; Eager has no template |
@@ -40,19 +40,208 @@ Handle uses the existing canonical hexadecimal CUDA IPC handle representation;
 it is never persisted in raw timeline metadata. Disabled related observation
 exports null and allocates no region. Version or preparation-policy mismatch
 fails startup; all participants use the same Native ABI, with no old-worker
-fallback. The separate region's leading-word layout is:
-`operation_sequence:u64`, `graph_owner:u64`, `graph_execution:u64`,
-`graph_template:u64`, `context_generation:u64`, followed by the allocation
-owner's private counter/control storage. The first five words occupy 40 bytes;
-each is naturally eight-byte aligned. The descriptor advertises the allocation
-size, not its private control layout. The Instance writes these words after
-Claim and before release-publishing the request; the AtnAgent reads them only
-after acquiring Published. A subsequent successful Claim may update them only
-after acknowledgement permits reuse. Endpoint recreation allocates a new region
-and sequence. The operation word is monotonically incremented by the successful
-claimant; no collector reservation controls it. No observation state enters
-production RequestMetadata or the production Arena allocation. Mappings retire
-after IPC detach and in-flight work.
+fallback.
+
+### Endpoint allocation, export, and attachment
+
+One `observation_region` is allocated per Transport Arena pairing, in the same
+`cudaMalloc` call sequence that creates that Arena (the existing
+`Arena::create()` allocation path). The AtnAgent process's Device Producer
+assigns a fresh positive `endpoint_sequence` immediately before this
+allocation; sequences are never reused within a process lifetime. The region's
+IPC handle is exported through `cudaIpcGetMemHandle` and encoded with the
+existing `xpool::utils::hex::HexValue<cudaIpcMemHandle_t>` convention,
+identical to the Transport Arena handle encoding (`Arena::handle()`). It is
+published to the Daemon broker as additional sibling fields on the same
+descriptor record already used for the Arena handle (the existing
+`TransportBroker.publish()` path); no new RPC is introduced. The Instance
+fetches and attaches it with `cudaIpcOpenMemHandle` at the same call site
+where it already attaches the Transport Arena handle. When
+`debug.timeline.enable` is false, the descriptor's `observation_region` field
+is null and no CUDA allocation is made; this is the only condition under
+which the Instance must tolerate a missing region.
+
+### Endpoint recreation
+
+A new region and a new `endpoint_sequence` are allocated whenever the
+underlying Transport Arena is itself recreated: an AtnAgent process restart
+(new process-creation identity), or an explicit Arena re-pairing following a
+Fabric Generation rollover. `generation` in the descriptor is the Generation
+reference current at the moment of this allocation. The prior region's CUDA
+allocation and IPC mapping retire only after the Instance has detached
+(`cudaIpcCloseMemHandle`) and any Collector or snapshot-reconstruction work
+still reading the prior generation's events has drained, following the
+general rule above that mappings retire after IPC detach and in-flight work.
+The hot descriptor itself carries no "superseded" field; Endpoint lineage
+across recreation is a metadata concern (see Metadata revision below), not a
+per-export wire concern.
+
+### Leading-word layout and write/read timing
+
+The region's leading-word layout is: `operation_sequence:u64`,
+`graph_owner:u64`, `graph_execution:u64`, `graph_template:u64`,
+`context_generation:u64`. The first five words occupy 40 bytes; each is
+naturally eight-byte aligned. The descriptor advertises the allocation size,
+not its private control layout; everything after byte 40 is the allocation
+owner's private storage and is never part of the versioned wire format.
+
+Field ownership and write/read timing:
+
+| Word | Writer | Written | Read by | Read after |
+| --- | --- | --- | --- | --- |
+| `operation_sequence` | Instance | After successful Claim (`try_begin_staging()` returns true), before `publish_request()` | AtnAgent | After `observe()` returns `Published` |
+| `graph_owner`, `graph_execution`, `graph_template`, `context_generation` | AtnAgent | After `fabric::atnagent::execute(fabric_arena, transport_arena)` returns and the triggered Graph execution mode (Replay/Eager/none) is known, before `publish_result()` | AtnAgent's own Collector, committing the `TransportFabricAssociated`/Graph events | Synchronously within the same critical section, before `publish_result()`; never deferred to a later decoupled pass |
+
+No new atomic primitive is introduced. `operation_sequence` visibility reuses
+the Mailbox's existing release-acquire pair: `publish_request()`'s
+release-store and `observe()`'s acquire-load already order the Instance's
+write before the AtnAgent's read, the same ordering that already protects
+`payload_rows` and `request`. `graph_*` visibility to AtnAgent's own Collector
+is plain program order inside the same thread and never crosses a process
+boundary, because the writer and the only production-critical reader are the
+same AtnAgent thread executing `execute_request()`.
+
+A subsequent successful Claim may update `operation_sequence` only after
+`acknowledge()` (Evaluated to Idle) has executed. This follows from the
+existing Mailbox state machine: the Instance only calls `try_begin_staging()`
+again after observing `Evaluated` and calling `acknowledge()`, and `Evaluated`
+is only reachable through AtnAgent's `publish_result()`, which by construction
+happens strictly after AtnAgent has already written and consumed this cycle's
+`graph_*` words (see the table above). Consequently, by the time the Instance's
+next Claim is eligible to overwrite `operation_sequence`, AtnAgent has already
+finished every read of this cycle's `graph_*` words, and no additional fence
+is required to prevent the next Claim from racing a stale `graph_*` read.
+
+This ordering guarantee holds only for readers inside the critical section
+described above (synchronous, same-thread, before `publish_result()`). Any
+out-of-band reader that samples `observation_region` outside that window (for
+example, an offline diagnostic peek) MUST treat `context_generation` as a
+seqlock: read it, read `operation_sequence`/`graph_*`, then re-read
+`context_generation`, and discard the sample if the two reads differ.
+Production collection never needs this fallback because it never reads
+outside the critical section; the rule exists only to make misuse detectable
+rather than silently wrong.
+
+Endpoint recreation allocates a new region and sequence. The operation word is
+monotonically incremented by the successful claimant using the existing
+read-check-increment pattern (`abort_if(prev == UINT64_MAX)` then `+1`, as
+already used for `invocation_sequence` and `executor_lease_sequence`); no
+collector reservation controls it. No observation state enters production
+RequestMetadata or the production Arena allocation. Mappings retire after IPC
+detach and in-flight work.
+
+### Private control storage: recommended default layout
+
+The bytes after offset 40 are private and not wire-versioned, but both
+implementers must agree on one default layout so B1 and B2 interoperate
+without a second interpretation. The recommended default holds only a small
+per-Endpoint *relay* scratch area for Graph-association handoff; it is not the
+canonical Dynamic Context store (see "Dynamic Context storage" below for why
+that store is process-wide, not per-Endpoint).
+
+| Offset (from byte 40) | Field | Type | Purpose |
+| --- | --- | --- | --- |
+| 0, 8, 16 | `slot_generation`, `resolved_execution_sequence`, `resolved_template_sequence` | u64 each | One relay slot: the Graph identity AtnAgent most recently resolved for this Endpoint's current cycle, before copying it into the public prefix |
+| 24 | `resolved_context_generation` | u64 | Matches the Context slot generation this relay entry refers to |
+| 32 | `state` | u32 | `Free=0`, `Resolving=1`, `Copied=2` |
+| 36 | (padding) | u32 | Zero, keeps the slot eight-byte aligned |
+
+Slot size is 40 bytes. Default relay slot capacity
+(`timeline_relay_slot_capacity`) is **2**, allowing one Mailbox cycle's relay
+write to overlap the previous cycle's acknowledgement without blocking.
+Per-Endpoint private bytes are `2 * 40 = 80`, so one `observation_region`'s
+total size is `40 + 80 = 120` bytes before allocation-alignment rounding.
+
+### Dynamic Context storage: process-wide, not per-Endpoint
+
+Context identity `(graph_owner, execution_sequence, template_sequence,
+context_generation)` is scoped to the AtnAgent process's Host Producer
+(`graph_owner`), not to any single Endpoint: a `lane_service` execution can
+serve multiple Endpoints concurrently, and TP/DP activity under one
+Invocation is not attributable to exactly one Endpoint. The canonical bounded
+Context slot array is therefore a separate, process-wide Device allocation
+owned by the Graph Observer, sized once per `graph_owner`, independent of how
+many Endpoints that process currently has open. Its recommended default
+layout:
+
+| Offset | Field | Type | Purpose |
+| --- | --- | --- | --- |
+| 0 | `slot_generation` | u64 | Incremented on every reuse; the generation a reader must match |
+| 8 | `execution_sequence` | u64 | Owning Graph execution identity |
+| 16 | `template_sequence` | u64 | Zero for Eager |
+| 24 | `stream_ordinal` | u64 | Process-local monotonic registration ID of the owning Stream; never a raw `CUstream` handle |
+| 32 | `state` | u32 | `Free=0`, `Reserved=1`, `Committed=2` |
+| 36 | (padding) | u32 | Zero |
+
+Slot size is 40 bytes. Default capacity (`context_slot_capacity`) is **64**
+per process, sized for the worst-case concurrent-Stream count across all
+Lanes/Eager paths in one AtnAgent process; `context_slots_bytes =
+64 * 40 = 2560` bytes. Concurrent Streams use distinct live slots; slot reuse
+follows the existing completion-boundary rule. Context overflow increments
+`context_unavailable` and leaves association unavailable; it never overwrites
+an in-flight slot.
+
+An alternative of folding this array into each `observation_region` (one full
+Context array per Endpoint) was evaluated and rejected: it requires either
+duplicating `lane_service` Context across every Endpoint it serves or picking
+one arbitrary "owning" Endpoint for it, both of which conflict with the
+Context identity's process-wide scope. This record is kept only so a future
+reviewer does not re-propose it without seeing why it was declined.
+
+### Calibration sampler storage: per-process Device Producer, not inside observation_region
+
+A sampler's identity is `(Run, Host Producer, Device clock_domain_id)` and
+must exist for every process with a Device Producer, including FfnAgent
+processes that never create an `observation_region` at all (FfnAgent has no
+Transport Endpoint). Sampler storage is therefore a separate, non-IPC,
+per-process Device allocation, parallel to `observation_region` rather than
+inside it:
+
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `raw_g_ns` | u64 | Written by the short sampling Kernel on the dedicated Stream; read back by the Host via `cudaMemcpyAsync` after completion confirmation |
+
+Default `sampler_slot_capacity` is **1** per process (one clock domain per
+Device Producer in the common case), configurable up to a small bound for a
+process observing more than one Device. `sampler_bytes =
+sampler_slot_capacity * 8`. All other sampler bookkeeping (`in_flight` flag,
+last `attempt_sequence`, stashed `H_before`, current Epoch id) is ordinary
+Host-process memory, not a Device allocation, and is accounted under the
+existing Host collection budget, not the Device budget.
+
+### Device collection budget composition
+
+`debug.timeline.device_bytes` (default 8388608) must cover, per
+process/Device:
+
+```text
+device_bytes_required =
+    device_event_slot_capacity * (256 + 16)                        # event ring payload + control
+  + endpoint_capacity * (40 + timeline_relay_slot_capacity * 40)    # observation_region(s)
+  + context_slot_capacity * 40                                     # process-wide Dynamic Context
+  + sampler_slot_capacity * 8                                      # calibration raw-G buffers
+  + 256                                                            # fixed Collector head/tail/epoch control
+```
+
+Recommended defaults: `device_event_slot_capacity=16384`,
+`endpoint_capacity=8`, `timeline_relay_slot_capacity=2`,
+`context_slot_capacity=64`, `sampler_slot_capacity=1`. Substituting these
+values:
+
+```text
+16384 * 272 = 4,456,448
+   8 * 120  =       960
+      2,560 =     2,560
+          8 =         8
+        256 =       256
+total        = 4,460,232 bytes
+```
+
+This total is comfortably under the 8,388,608-byte default, leaving headroom
+for configuration overrides. Startup computes `device_bytes_required` from the
+active configuration and rejects the process if it exceeds `device_bytes`,
+per the existing rule that startup rejects a configuration whose minimum
+allocations exceed its budget.
 
 Every identity/counter exhaustion is explicit: stop observation in the affected
 identity domain, set `identity_exhausted`, and preserve production results.
@@ -75,6 +264,10 @@ Endpoint and template entries use their composite identities. References are
 immutable across revisions. Import metadata for every referenced remote owner
 and identity before publishing a referencing chunk. Graph executions and
 operation sequences are dynamic identities, not per-operation dictionary entries.
+Endpoint entries optionally carry `supersedes_endpoint_sequence` naming the
+prior Endpoint this one replaces under the same `owner_producer`, letting
+offline reconstruction stitch Endpoint-recreation lineage without widening the
+hot IPC descriptor.
 
 Revision starts at one and increases. Hash the exact UTF-8 file bytes, including
 its final newline; chunk headers contain the first 16 bytes of SHA-256.
@@ -134,6 +327,9 @@ Capture warmup uses construction-only Context with no production execution ID;
 Replay resolves fresh Context from Device storage. Concurrent Streams use
 distinct live slots. A Context overflow leaves association unavailable and
 increments quality; no stale Capture ID or guessed replacement is allowed.
+This storage is process-wide per `graph_owner`, not per `observation_region`;
+see "Dynamic Context storage: process-wide, not per-Endpoint" above for its
+default layout and capacity.
 
 ## Fixed Event Layout
 
@@ -399,9 +595,15 @@ and add template references through the artifact index.
 `debug.timeline` adds enable=false, outdir=null, device_bytes=8388608,
 host_bytes=33554432, chunk_bytes=1048576, collection_interval_ms=100,
 disk_bytes=1073741824, metadata_reserve_bytes=8388608, shutdown_wait_ms=5000,
-and calibration_block_attempts=10. Enable and outdir must be set together.
-Block attempts is fixed to ten in v1. Other positive resource values are
-validated against the minimum required allocations and chunk layout; chunk_bytes
+calibration_block_attempts=10, device_event_slot_capacity=16384,
+endpoint_capacity=8, timeline_relay_slot_capacity=2, context_slot_capacity=64,
+and sampler_slot_capacity=1. Enable and outdir must be set together.
+Block attempts is fixed to ten in v1. `device_event_slot_capacity`,
+`endpoint_capacity`, `timeline_relay_slot_capacity`, `context_slot_capacity`,
+and `sampler_slot_capacity` are positive; startup first evaluates the device
+collection budget composition formula against `device_bytes` using these
+five values, then validates each remaining positive resource value against
+the minimum required allocations and chunk layout; chunk_bytes
 cannot exceed 1 MiB and shutdown_wait_ms cannot exceed 5000. Run-wide policy
 is installed before workers start. Configuration uses the existing environment
 registration/precedence rules and rejects inconsistent participants at preparation.

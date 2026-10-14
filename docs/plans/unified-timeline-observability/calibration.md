@@ -11,6 +11,13 @@ identifies physical Device UUID, process creation, and raw-clock Epoch; two
 processes on the same physical Device have distinct domains until independently
 validated mappings establish their relationship to the Host reference.
 
+The sampler's Device-side storage (the raw-`G` readout buffer written by the
+sampling Kernel) is a per-process allocation owned by that process's Device
+Producer, independent of any Transport `observation_region`; see
+[the shared contract's calibration sampler storage](shared-contract.md#calibration-sampler-storage-per-process-device-producer-not-inside-observation_region)
+for its default layout and budget accounting. This placement does not change
+the sampling or fitting algorithm described below.
+
 Sample attempt sequences are positive and contiguous over a sampler Epoch.
 Use one independent nonblocking CUDA Stream and at most one in-flight sample.
 Read CLOCK_MONOTONIC immediately before submission (`H_before`), sample raw
