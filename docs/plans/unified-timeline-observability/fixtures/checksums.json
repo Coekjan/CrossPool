@@ -1,0 +1,50 @@
+{
+  "algorithm": "sha256",
+  "files": [
+    {
+      "path": "calibration.json",
+      "bytes": 65562,
+      "sha256": "7bffe1d0a08cc1a3306565ec51e99986a2b735f1cbb9fcac7dcb82bbe5785238"
+    },
+    {
+      "path": "causality.json",
+      "bytes": 134541,
+      "sha256": "35e9b52a152d8a1ad9992d8ae2cb038b16215a06df5b44eaa6331d23be93d29c"
+    },
+    {
+      "path": "encoding.json",
+      "bytes": 13209,
+      "sha256": "a6b9fdace56e2c89957240e34007adafd2f1e5f6135398b39136eb3f10c731e6"
+    },
+    {
+      "path": "layout.json",
+      "bytes": 9002,
+      "sha256": "99e3b8828054b3dd23e598535684df4adc37d025feb7798d1981466efddb6677"
+    },
+    {
+      "path": "metadata.json",
+      "bytes": 4629,
+      "sha256": "d4dd9a69bdb5455586715182dee0a851a3560fe133e7fcec18b5dd5cf3771ad6"
+    },
+    {
+      "path": "quality.json",
+      "bytes": 3842,
+      "sha256": "3b3dc201505ef2ce74232f24e9cd6821ddd03ad6eccc377e87fa52a71a45a283"
+    },
+    {
+      "path": "routing.json",
+      "bytes": 18734,
+      "sha256": "0bc2825aab8843f2db8f11b9e4f1c654cab3a4dfd75daf4412b5bd18d1bf887a"
+    },
+    {
+      "path": "routing.safetensors",
+      "bytes": 672,
+      "sha256": "02ef712dbfbf550ac0a7fa0deaabc0203d21f99f78be306f6ad7f458969d34e2"
+    },
+    {
+      "path": "snapshots.json",
+      "bytes": 12971,
+      "sha256": "5374a7646157cdcc53d192ef0f76285bd0d99f6d313785b474e44e06f24bb837"
+    }
+  ]
+}

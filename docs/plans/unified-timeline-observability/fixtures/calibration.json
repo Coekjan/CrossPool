@@ -1,0 +1,2746 @@
+{
+  "contract_version": 1,
+  "algorithm_version": 1,
+  "cases": [
+    {
+      "id": "known_offset",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 110,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 120,
+            "G": 20,
+            "H_after": 120,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 130,
+            "G": 30,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 140,
+            "G": 40,
+            "H_after": 140,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 150,
+            "G": 50,
+            "H_after": 150,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 160,
+            "G": 60,
+            "H_after": 160,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 170,
+            "G": 70,
+            "H_after": 170,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 180,
+            "G": 80,
+            "H_after": 180,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 190,
+            "G": 90,
+            "H_after": 190,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 200,
+            "G": 100,
+            "H_after": 200,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          10,
+          55,
+          100,
+          101
+        ]
+      },
+      "expected": {
+        "status": "valid",
+        "model_id": {
+          "sampler": [
+            "11111111-1111-4111-8111-111111111111",
+            1,
+            2
+          ],
+          "block_index": 0
+        },
+        "algorithm_version": 1,
+        "G0": 10,
+        "h": 110,
+        "vertices": [
+          {
+            "a": {
+              "numerator": "1",
+              "denominator": "1"
+            },
+            "c": {
+              "numerator": "0",
+              "denominator": "1"
+            }
+          }
+        ],
+        "a": {
+          "numerator": "1",
+          "denominator": "1"
+        },
+        "b": {
+          "numerator": "100",
+          "denominator": "1"
+        },
+        "fit_sequences": [
+          1,
+          2,
+          3,
+          5,
+          6,
+          7,
+          8,
+          10
+        ],
+        "validation_sequences": [
+          4,
+          9
+        ],
+        "valid_G": [
+          10,
+          100
+        ],
+        "validation_pass": [
+          true,
+          true
+        ],
+        "rate_ppm": {
+          "numerator": "0",
+          "denominator": "1"
+        },
+        "mappings": [
+          {
+            "G": 10,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "110",
+              "denominator": "1"
+            },
+            "lower_exact": {
+              "numerator": "110",
+              "denominator": "1"
+            },
+            "upper_exact": {
+              "numerator": "110",
+              "denominator": "1"
+            },
+            "estimate_ns": 110,
+            "lower_ns": 110,
+            "upper_ns": 110,
+            "assumption": "segment_affine_bracketing"
+          },
+          {
+            "G": 55,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "155",
+              "denominator": "1"
+            },
+            "lower_exact": {
+              "numerator": "155",
+              "denominator": "1"
+            },
+            "upper_exact": {
+              "numerator": "155",
+              "denominator": "1"
+            },
+            "estimate_ns": 155,
+            "lower_ns": 155,
+            "upper_ns": 155,
+            "assumption": "segment_affine_bracketing"
+          },
+          {
+            "G": 100,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "200",
+              "denominator": "1"
+            },
+            "lower_exact": {
+              "numerator": "200",
+              "denominator": "1"
+            },
+            "upper_exact": {
+              "numerator": "200",
+              "denominator": "1"
+            },
+            "estimate_ns": 200,
+            "lower_ns": 200,
+            "upper_ns": 200,
+            "assumption": "segment_affine_bracketing"
+          },
+          {
+            "G": 101,
+            "status": "outside_support",
+            "estimate_ns": null,
+            "lower_ns": null,
+            "upper_ns": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "known_rate",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 70,
+            "G": 10,
+            "H_after": 70,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 90,
+            "G": 20,
+            "H_after": 90,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 110,
+            "G": 30,
+            "H_after": 110,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 130,
+            "G": 40,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 150,
+            "G": 50,
+            "H_after": 150,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 170,
+            "G": 60,
+            "H_after": 170,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 190,
+            "G": 70,
+            "H_after": 190,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 210,
+            "G": 80,
+            "H_after": 210,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 230,
+            "G": 90,
+            "H_after": 230,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 250,
+            "G": 100,
+            "H_after": 250,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          10,
+          55,
+          100
+        ]
+      },
+      "expected": {
+        "status": "valid",
+        "model_id": {
+          "sampler": [
+            "11111111-1111-4111-8111-111111111111",
+            1,
+            2
+          ],
+          "block_index": 0
+        },
+        "algorithm_version": 1,
+        "G0": 10,
+        "h": 70,
+        "vertices": [
+          {
+            "a": {
+              "numerator": "2",
+              "denominator": "1"
+            },
+            "c": {
+              "numerator": "0",
+              "denominator": "1"
+            }
+          }
+        ],
+        "a": {
+          "numerator": "2",
+          "denominator": "1"
+        },
+        "b": {
+          "numerator": "50",
+          "denominator": "1"
+        },
+        "fit_sequences": [
+          1,
+          2,
+          3,
+          5,
+          6,
+          7,
+          8,
+          10
+        ],
+        "validation_sequences": [
+          4,
+          9
+        ],
+        "valid_G": [
+          10,
+          100
+        ],
+        "validation_pass": [
+          true,
+          true
+        ],
+        "rate_ppm": {
+          "numerator": "1000000",
+          "denominator": "1"
+        },
+        "mappings": [
+          {
+            "G": 10,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "70",
+              "denominator": "1"
+            },
+            "lower_exact": {
+              "numerator": "70",
+              "denominator": "1"
+            },
+            "upper_exact": {
+              "numerator": "70",
+              "denominator": "1"
+            },
+            "estimate_ns": 70,
+            "lower_ns": 70,
+            "upper_ns": 70,
+            "assumption": "segment_affine_bracketing"
+          },
+          {
+            "G": 55,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "160",
+              "denominator": "1"
+            },
+            "lower_exact": {
+              "numerator": "160",
+              "denominator": "1"
+            },
+            "upper_exact": {
+              "numerator": "160",
+              "denominator": "1"
+            },
+            "estimate_ns": 160,
+            "lower_ns": 160,
+            "upper_ns": 160,
+            "assumption": "segment_affine_bracketing"
+          },
+          {
+            "G": 100,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "250",
+              "denominator": "1"
+            },
+            "lower_exact": {
+              "numerator": "250",
+              "denominator": "1"
+            },
+            "upper_exact": {
+              "numerator": "250",
+              "denominator": "1"
+            },
+            "estimate_ns": 250,
+            "lower_ns": 250,
+            "upper_ns": 250,
+            "assumption": "segment_affine_bracketing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "asymmetric_windows",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 120,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 120,
+            "G": 20,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 130,
+            "G": 30,
+            "H_after": 140,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 140,
+            "G": 40,
+            "H_after": 150,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 150,
+            "G": 50,
+            "H_after": 160,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 160,
+            "G": 60,
+            "H_after": 170,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 170,
+            "G": 70,
+            "H_after": 180,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 180,
+            "G": 80,
+            "H_after": 190,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 190,
+            "G": 90,
+            "H_after": 200,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 200,
+            "G": 100,
+            "H_after": 210,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          10,
+          55,
+          100
+        ]
+      },
+      "expected": {
+        "status": "valid",
+        "model_id": {
+          "sampler": [
+            "11111111-1111-4111-8111-111111111111",
+            1,
+            2
+          ],
+          "block_index": 0
+        },
+        "algorithm_version": 1,
+        "G0": 10,
+        "h": 110,
+        "vertices": [
+          {
+            "a": {
+              "numerator": "8",
+              "denominator": "9"
+            },
+            "c": {
+              "numerator": "10",
+              "denominator": "1"
+            }
+          },
+          {
+            "a": {
+              "numerator": "1",
+              "denominator": "1"
+            },
+            "c": {
+              "numerator": "0",
+              "denominator": "1"
+            }
+          },
+          {
+            "a": {
+              "numerator": "1",
+              "denominator": "1"
+            },
+            "c": {
+              "numerator": "10",
+              "denominator": "1"
+            }
+          },
+          {
+            "a": {
+              "numerator": "10",
+              "denominator": "9"
+            },
+            "c": {
+              "numerator": "0",
+              "denominator": "1"
+            }
+          }
+        ],
+        "a": {
+          "numerator": "1",
+          "denominator": "1"
+        },
+        "b": {
+          "numerator": "105",
+          "denominator": "1"
+        },
+        "fit_sequences": [
+          1,
+          2,
+          3,
+          5,
+          6,
+          7,
+          8,
+          10
+        ],
+        "validation_sequences": [
+          4,
+          9
+        ],
+        "valid_G": [
+          10,
+          100
+        ],
+        "validation_pass": [
+          true,
+          true
+        ],
+        "rate_ppm": {
+          "numerator": "0",
+          "denominator": "1"
+        },
+        "mappings": [
+          {
+            "G": 10,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "115",
+              "denominator": "1"
+            },
+            "lower_exact": {
+              "numerator": "110",
+              "denominator": "1"
+            },
+            "upper_exact": {
+              "numerator": "120",
+              "denominator": "1"
+            },
+            "estimate_ns": 115,
+            "lower_ns": 110,
+            "upper_ns": 120,
+            "assumption": "segment_affine_bracketing"
+          },
+          {
+            "G": 55,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "160",
+              "denominator": "1"
+            },
+            "lower_exact": {
+              "numerator": "155",
+              "denominator": "1"
+            },
+            "upper_exact": {
+              "numerator": "165",
+              "denominator": "1"
+            },
+            "estimate_ns": 160,
+            "lower_ns": 155,
+            "upper_ns": 165,
+            "assumption": "segment_affine_bracketing"
+          },
+          {
+            "G": 100,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "205",
+              "denominator": "1"
+            },
+            "lower_exact": {
+              "numerator": "200",
+              "denominator": "1"
+            },
+            "upper_exact": {
+              "numerator": "210",
+              "denominator": "1"
+            },
+            "estimate_ns": 205,
+            "lower_ns": 200,
+            "upper_ns": 210,
+            "assumption": "segment_affine_bracketing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ties_to_even",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 101,
+            "G": 2,
+            "H_after": 101,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 102,
+            "G": 4,
+            "H_after": 102,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 103,
+            "G": 6,
+            "H_after": 103,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 104,
+            "G": 8,
+            "H_after": 104,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 105,
+            "G": 10,
+            "H_after": 105,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 106,
+            "G": 12,
+            "H_after": 106,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 107,
+            "G": 14,
+            "H_after": 107,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 108,
+            "G": 16,
+            "H_after": 108,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 109,
+            "G": 18,
+            "H_after": 109,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 110,
+            "G": 20,
+            "H_after": 110,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          3,
+          5
+        ]
+      },
+      "expected": {
+        "status": "valid",
+        "model_id": {
+          "sampler": [
+            "11111111-1111-4111-8111-111111111111",
+            1,
+            2
+          ],
+          "block_index": 0
+        },
+        "algorithm_version": 1,
+        "G0": 2,
+        "h": 101,
+        "vertices": [
+          {
+            "a": {
+              "numerator": "1",
+              "denominator": "2"
+            },
+            "c": {
+              "numerator": "0",
+              "denominator": "1"
+            }
+          }
+        ],
+        "a": {
+          "numerator": "1",
+          "denominator": "2"
+        },
+        "b": {
+          "numerator": "100",
+          "denominator": "1"
+        },
+        "fit_sequences": [
+          1,
+          2,
+          3,
+          5,
+          6,
+          7,
+          8,
+          10
+        ],
+        "validation_sequences": [
+          4,
+          9
+        ],
+        "valid_G": [
+          2,
+          20
+        ],
+        "validation_pass": [
+          true,
+          true
+        ],
+        "rate_ppm": {
+          "numerator": "-500000",
+          "denominator": "1"
+        },
+        "mappings": [
+          {
+            "G": 3,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "203",
+              "denominator": "2"
+            },
+            "lower_exact": {
+              "numerator": "203",
+              "denominator": "2"
+            },
+            "upper_exact": {
+              "numerator": "203",
+              "denominator": "2"
+            },
+            "estimate_ns": 102,
+            "lower_ns": 101,
+            "upper_ns": 102,
+            "assumption": "segment_affine_bracketing"
+          },
+          {
+            "G": 5,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "205",
+              "denominator": "2"
+            },
+            "lower_exact": {
+              "numerator": "205",
+              "denominator": "2"
+            },
+            "upper_exact": {
+              "numerator": "205",
+              "denominator": "2"
+            },
+            "estimate_ns": 102,
+            "lower_ns": 102,
+            "upper_ns": 103,
+            "assumption": "segment_affine_bracketing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "held_out_failure",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 110,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 120,
+            "G": 20,
+            "H_after": 120,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 130,
+            "G": 30,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 141,
+            "G": 40,
+            "H_after": 141,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 150,
+            "G": 50,
+            "H_after": 150,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 160,
+            "G": 60,
+            "H_after": 160,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 170,
+            "G": 70,
+            "H_after": 170,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 180,
+            "G": 80,
+            "H_after": 180,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 190,
+            "G": 90,
+            "H_after": 190,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 200,
+            "G": 100,
+            "H_after": 200,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          55
+        ]
+      },
+      "expected": {
+        "status": "validation_failed",
+        "validation_pass": [
+          false,
+          true
+        ]
+      }
+    },
+    {
+      "id": "model_conflict",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 110,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 120,
+            "G": 20,
+            "H_after": 120,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 130,
+            "G": 30,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 140,
+            "G": 40,
+            "H_after": 140,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 250,
+            "G": 50,
+            "H_after": 250,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 160,
+            "G": 60,
+            "H_after": 160,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 170,
+            "G": 70,
+            "H_after": 170,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 180,
+            "G": 80,
+            "H_after": 180,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 190,
+            "G": 90,
+            "H_after": 190,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 200,
+            "G": 100,
+            "H_after": 200,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          55
+        ]
+      },
+      "expected": {
+        "status": "model_conflict"
+      }
+    },
+    {
+      "id": "clock_jump",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 110,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 120,
+            "G": 20,
+            "H_after": 120,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 130,
+            "G": 30,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 140,
+            "G": 40,
+            "H_after": 140,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 150,
+            "G": 50,
+            "H_after": 150,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 160,
+            "G": 60,
+            "H_after": 160,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 170,
+            "G": 1,
+            "H_after": 170,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 180,
+            "G": 80,
+            "H_after": 180,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 190,
+            "G": 90,
+            "H_after": 190,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 200,
+            "G": 100,
+            "H_after": 200,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          55
+        ]
+      },
+      "expected": {
+        "status": "clock_jump"
+      }
+    },
+    {
+      "id": "sampling_gap",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 110,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 120,
+            "G": 20,
+            "H_after": 120,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 130,
+            "G": 30,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 140,
+            "G": 40,
+            "H_after": 140,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 150,
+            "G": 50,
+            "H_after": 150,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 170,
+            "G": 70,
+            "H_after": 170,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 180,
+            "G": 80,
+            "H_after": 180,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 190,
+            "G": 90,
+            "H_after": 190,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 200,
+            "G": 100,
+            "H_after": 200,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          55
+        ]
+      },
+      "expected": {
+        "status": "sampling_gap"
+      }
+    },
+    {
+      "id": "sample_failed",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 110,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 120,
+            "G": 20,
+            "H_after": 120,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 130,
+            "G": 30,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 140,
+            "G": 40,
+            "H_after": 140,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 150,
+            "G": 50,
+            "H_after": 150,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 160,
+            "G": null,
+            "H_after": null,
+            "outcome": "failed",
+            "failure_code": "timed_out"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 170,
+            "G": 70,
+            "H_after": 170,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 180,
+            "G": 80,
+            "H_after": 180,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 190,
+            "G": 90,
+            "H_after": 190,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 200,
+            "G": 100,
+            "H_after": 200,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          55
+        ]
+      },
+      "expected": {
+        "status": "sample_failed"
+      }
+    },
+    {
+      "id": "incomplete_tail",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          6
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 110,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 120,
+            "G": 20,
+            "H_after": 120,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 130,
+            "G": 30,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 140,
+            "G": 40,
+            "H_after": 140,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 150,
+            "G": 50,
+            "H_after": 150,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 160,
+            "G": 60,
+            "H_after": 160,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          55
+        ]
+      },
+      "expected": {
+        "status": "incomplete_block"
+      }
+    },
+    {
+      "id": "insufficient_span",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 110,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 120,
+            "G": 10,
+            "H_after": 120,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 130,
+            "G": 10,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 140,
+            "G": 10,
+            "H_after": 140,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 150,
+            "G": 10,
+            "H_after": 150,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 160,
+            "G": 10,
+            "H_after": 160,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 170,
+            "G": 10,
+            "H_after": 170,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 180,
+            "G": 10,
+            "H_after": 180,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 190,
+            "G": 10,
+            "H_after": 190,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 200,
+            "G": 10,
+            "H_after": 200,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          10
+        ]
+      },
+      "expected": {
+        "status": "insufficient_span"
+      }
+    },
+    {
+      "id": "zero_slope",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 100,
+            "G": 10,
+            "H_after": 100,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 100,
+            "G": 20,
+            "H_after": 100,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 100,
+            "G": 30,
+            "H_after": 100,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 100,
+            "G": 40,
+            "H_after": 100,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 100,
+            "G": 50,
+            "H_after": 100,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 100,
+            "G": 60,
+            "H_after": 100,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 100,
+            "G": 70,
+            "H_after": 100,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 100,
+            "G": 80,
+            "H_after": 100,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 100,
+            "G": 90,
+            "H_after": 100,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 100,
+            "G": 100,
+            "H_after": 100,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          55
+        ]
+      },
+      "expected": {
+        "status": "model_conflict"
+      }
+    },
+    {
+      "id": "negative_slope",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 990,
+            "G": 10,
+            "H_after": 990,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 980,
+            "G": 20,
+            "H_after": 980,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 970,
+            "G": 30,
+            "H_after": 970,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 960,
+            "G": 40,
+            "H_after": 960,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 950,
+            "G": 50,
+            "H_after": 950,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 940,
+            "G": 60,
+            "H_after": 940,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 930,
+            "G": 70,
+            "H_after": 930,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 920,
+            "G": 80,
+            "H_after": 920,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 910,
+            "G": 90,
+            "H_after": 910,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 900,
+            "G": 100,
+            "H_after": 900,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          55
+        ]
+      },
+      "expected": {
+        "status": "model_conflict"
+      }
+    },
+    {
+      "id": "duplicate_sample",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 110,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 120,
+            "G": 20,
+            "H_after": 120,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 130,
+            "G": 30,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 140,
+            "G": 40,
+            "H_after": 140,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 150,
+            "G": 50,
+            "H_after": 150,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 160,
+            "G": 60,
+            "H_after": 160,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 170,
+            "G": 70,
+            "H_after": 170,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 180,
+            "G": 80,
+            "H_after": 180,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 190,
+            "G": 90,
+            "H_after": 190,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 200,
+            "G": 100,
+            "H_after": 200,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 110,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          10,
+          55,
+          100,
+          101
+        ]
+      },
+      "expected": {
+        "status": "valid",
+        "model_id": {
+          "sampler": [
+            "11111111-1111-4111-8111-111111111111",
+            1,
+            2
+          ],
+          "block_index": 0
+        },
+        "algorithm_version": 1,
+        "G0": 10,
+        "h": 110,
+        "vertices": [
+          {
+            "a": {
+              "numerator": "1",
+              "denominator": "1"
+            },
+            "c": {
+              "numerator": "0",
+              "denominator": "1"
+            }
+          }
+        ],
+        "a": {
+          "numerator": "1",
+          "denominator": "1"
+        },
+        "b": {
+          "numerator": "100",
+          "denominator": "1"
+        },
+        "fit_sequences": [
+          1,
+          2,
+          3,
+          5,
+          6,
+          7,
+          8,
+          10
+        ],
+        "validation_sequences": [
+          4,
+          9
+        ],
+        "valid_G": [
+          10,
+          100
+        ],
+        "validation_pass": [
+          true,
+          true
+        ],
+        "rate_ppm": {
+          "numerator": "0",
+          "denominator": "1"
+        },
+        "mappings": [
+          {
+            "G": 10,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "110",
+              "denominator": "1"
+            },
+            "lower_exact": {
+              "numerator": "110",
+              "denominator": "1"
+            },
+            "upper_exact": {
+              "numerator": "110",
+              "denominator": "1"
+            },
+            "estimate_ns": 110,
+            "lower_ns": 110,
+            "upper_ns": 110,
+            "assumption": "segment_affine_bracketing"
+          },
+          {
+            "G": 55,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "155",
+              "denominator": "1"
+            },
+            "lower_exact": {
+              "numerator": "155",
+              "denominator": "1"
+            },
+            "upper_exact": {
+              "numerator": "155",
+              "denominator": "1"
+            },
+            "estimate_ns": 155,
+            "lower_ns": 155,
+            "upper_ns": 155,
+            "assumption": "segment_affine_bracketing"
+          },
+          {
+            "G": 100,
+            "status": "mapped",
+            "estimate_exact": {
+              "numerator": "200",
+              "denominator": "1"
+            },
+            "lower_exact": {
+              "numerator": "200",
+              "denominator": "1"
+            },
+            "upper_exact": {
+              "numerator": "200",
+              "denominator": "1"
+            },
+            "estimate_ns": 200,
+            "lower_ns": 200,
+            "upper_ns": 200,
+            "assumption": "segment_affine_bracketing"
+          },
+          {
+            "G": 101,
+            "status": "outside_support",
+            "estimate_ns": null,
+            "lower_ns": null,
+            "upper_ns": null
+          }
+        ],
+        "duplicate_sample_count": 1
+      }
+    },
+    {
+      "id": "conflicting_sample",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 110,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 120,
+            "G": 20,
+            "H_after": 120,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 130,
+            "G": 30,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 140,
+            "G": 40,
+            "H_after": 140,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 150,
+            "G": 50,
+            "H_after": 150,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 160,
+            "G": 60,
+            "H_after": 160,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 170,
+            "G": 70,
+            "H_after": 170,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 180,
+            "G": 80,
+            "H_after": 180,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 190,
+            "G": 90,
+            "H_after": 190,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 200,
+            "G": 100,
+            "H_after": 200,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 111,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          10,
+          55,
+          100,
+          101
+        ]
+      },
+      "expected": {
+        "error": "sample_conflict",
+        "attempt_sequence": 1
+      }
+    },
+    {
+      "id": "invalid_bracket",
+      "input": {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "host_producer": 1,
+        "device_clock_domain_id": 2,
+        "raw_epoch": 1,
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "load_phase": "synthetic",
+        "samples": [
+          {
+            "attempt_sequence": 1,
+            "H_before": 110,
+            "G": 10,
+            "H_after": 109,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 2,
+            "H_before": 120,
+            "G": 20,
+            "H_after": 120,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 3,
+            "H_before": 130,
+            "G": 30,
+            "H_after": 130,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 4,
+            "H_before": 140,
+            "G": 40,
+            "H_after": 140,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 5,
+            "H_before": 150,
+            "G": 50,
+            "H_after": 150,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 6,
+            "H_before": 160,
+            "G": 60,
+            "H_after": 160,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 7,
+            "H_before": 170,
+            "G": 70,
+            "H_after": 170,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 8,
+            "H_before": 180,
+            "G": 80,
+            "H_after": 180,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 9,
+            "H_before": 190,
+            "G": 90,
+            "H_after": 190,
+            "outcome": "succeeded"
+          },
+          {
+            "attempt_sequence": 10,
+            "H_before": 200,
+            "G": 100,
+            "H_after": 200,
+            "outcome": "succeeded"
+          }
+        ],
+        "query_G": [
+          10,
+          55,
+          100,
+          101
+        ]
+      },
+      "expected": {
+        "error": "invalid_sample",
+        "attempt_sequence": 1
+      }
+    }
+  ],
+  "duration_cases": [
+    {
+      "id": "indeterminate_order",
+      "input": {
+        "start": {
+          "estimate_exact": {
+            "numerator": "100",
+            "denominator": "1"
+          },
+          "lower_exact": {
+            "numerator": "90",
+            "denominator": "1"
+          },
+          "upper_exact": {
+            "numerator": "110",
+            "denominator": "1"
+          }
+        },
+        "end": {
+          "estimate_exact": {
+            "numerator": "105",
+            "denominator": "1"
+          },
+          "lower_exact": {
+            "numerator": "95",
+            "denominator": "1"
+          },
+          "upper_exact": {
+            "numerator": "115",
+            "denominator": "1"
+          }
+        },
+        "protocol_edge": true
+      },
+      "expected": {
+        "estimate_ns": 5,
+        "lower_ns": -15,
+        "upper_ns": 25,
+        "ordering": "indeterminate",
+        "protocol_edge_retained": true
+      }
+    },
+    {
+      "id": "negative_duration",
+      "input": {
+        "start": {
+          "estimate_exact": {
+            "numerator": "110",
+            "denominator": "1"
+          },
+          "lower_exact": {
+            "numerator": "110",
+            "denominator": "1"
+          },
+          "upper_exact": {
+            "numerator": "110",
+            "denominator": "1"
+          }
+        },
+        "end": {
+          "estimate_exact": {
+            "numerator": "100",
+            "denominator": "1"
+          },
+          "lower_exact": {
+            "numerator": "100",
+            "denominator": "1"
+          },
+          "upper_exact": {
+            "numerator": "100",
+            "denominator": "1"
+          }
+        }
+      },
+      "expected": {
+        "estimate_ns": -10,
+        "lower_ns": -10,
+        "upper_ns": -10,
+        "ordering": "before"
+      }
+    },
+    {
+      "id": "unavailable_endpoint",
+      "input": {
+        "start": {
+          "status": "outside_support"
+        },
+        "end": {
+          "status": "mapped"
+        }
+      },
+      "expected": {
+        "status": "unavailable",
+        "estimate_ns": null,
+        "lower_ns": null,
+        "upper_ns": null
+      }
+    }
+  ],
+  "series_cases": [
+    {
+      "id": "drift",
+      "input": {
+        "blocks": [
+          [
+            {
+              "attempt_sequence": 1,
+              "H_before": 200,
+              "G": 100,
+              "H_after": 200,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 2,
+              "H_before": 300,
+              "G": 200,
+              "H_after": 300,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 3,
+              "H_before": 400,
+              "G": 300,
+              "H_after": 400,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 4,
+              "H_before": 500,
+              "G": 400,
+              "H_after": 500,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 5,
+              "H_before": 600,
+              "G": 500,
+              "H_after": 600,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 6,
+              "H_before": 700,
+              "G": 600,
+              "H_after": 700,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 7,
+              "H_before": 800,
+              "G": 700,
+              "H_after": 800,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 8,
+              "H_before": 900,
+              "G": 800,
+              "H_after": 900,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 9,
+              "H_before": 1000,
+              "G": 900,
+              "H_after": 1000,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 10,
+              "H_before": 1100,
+              "G": 1000,
+              "H_after": 1100,
+              "outcome": "succeeded"
+            }
+          ],
+          [
+            {
+              "attempt_sequence": 11,
+              "G": 1100,
+              "H_before": 1211,
+              "H_after": 1211,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 12,
+              "G": 1200,
+              "H_before": 1312,
+              "H_after": 1312,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 13,
+              "G": 1300,
+              "H_before": 1413,
+              "H_after": 1413,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 14,
+              "G": 1400,
+              "H_before": 1514,
+              "H_after": 1514,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 15,
+              "G": 1500,
+              "H_before": 1615,
+              "H_after": 1615,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 16,
+              "G": 1600,
+              "H_before": 1716,
+              "H_after": 1716,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 17,
+              "G": 1700,
+              "H_before": 1817,
+              "H_after": 1817,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 18,
+              "G": 1800,
+              "H_before": 1918,
+              "H_after": 1918,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 19,
+              "G": 1900,
+              "H_before": 2019,
+              "H_after": 2019,
+              "outcome": "succeeded"
+            },
+            {
+              "attempt_sequence": 20,
+              "G": 2000,
+              "H_before": 2120,
+              "H_after": 2120,
+              "outcome": "succeeded"
+            }
+          ]
+        ],
+        "new_epoch": false
+      },
+      "expected": {
+        "slopes": [
+          {
+            "numerator": "1",
+            "denominator": "1"
+          },
+          {
+            "numerator": "101",
+            "denominator": "100"
+          }
+        ],
+        "delta_rate_ppm": {
+          "numerator": "10000",
+          "denominator": "1"
+        },
+        "drift_resolved": true
+      }
+    },
+    {
+      "id": "epoch_offset_change",
+      "input": {
+        "epochs": [
+          {
+            "raw_epoch": 1,
+            "samples": [
+              {
+                "attempt_sequence": 1,
+                "H_before": 110,
+                "G": 10,
+                "H_after": 110,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 2,
+                "H_before": 120,
+                "G": 20,
+                "H_after": 120,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 3,
+                "H_before": 130,
+                "G": 30,
+                "H_after": 130,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 4,
+                "H_before": 140,
+                "G": 40,
+                "H_after": 140,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 5,
+                "H_before": 150,
+                "G": 50,
+                "H_after": 150,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 6,
+                "H_before": 160,
+                "G": 60,
+                "H_after": 160,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 7,
+                "H_before": 170,
+                "G": 70,
+                "H_after": 170,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 8,
+                "H_before": 180,
+                "G": 80,
+                "H_after": 180,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 9,
+                "H_before": 190,
+                "G": 90,
+                "H_after": 190,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 10,
+                "H_before": 200,
+                "G": 100,
+                "H_after": 200,
+                "outcome": "succeeded"
+              }
+            ]
+          },
+          {
+            "raw_epoch": 2,
+            "samples": [
+              {
+                "attempt_sequence": 1,
+                "H_before": 1010,
+                "G": 10,
+                "H_after": 1010,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 2,
+                "H_before": 1020,
+                "G": 20,
+                "H_after": 1020,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 3,
+                "H_before": 1030,
+                "G": 30,
+                "H_after": 1030,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 4,
+                "H_before": 1040,
+                "G": 40,
+                "H_after": 1040,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 5,
+                "H_before": 1050,
+                "G": 50,
+                "H_after": 1050,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 6,
+                "H_before": 1060,
+                "G": 60,
+                "H_after": 1060,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 7,
+                "H_before": 1070,
+                "G": 70,
+                "H_after": 1070,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 8,
+                "H_before": 1080,
+                "G": 80,
+                "H_after": 1080,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 9,
+                "H_before": 1090,
+                "G": 90,
+                "H_after": 1090,
+                "outcome": "succeeded"
+              },
+              {
+                "attempt_sequence": 10,
+                "H_before": 1100,
+                "G": 100,
+                "H_after": 1100,
+                "outcome": "succeeded"
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "model_count": 2,
+        "cross_epoch_fitting": false,
+        "intercepts": [
+          {
+            "numerator": "100",
+            "denominator": "1"
+          },
+          {
+            "numerator": "1000",
+            "denominator": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "between_blocks",
+      "input": {
+        "valid_intervals": [
+          [
+            10,
+            100
+          ],
+          [
+            110,
+            200
+          ]
+        ],
+        "query_G": 105
+      },
+      "expected": {
+        "status": "outside_support",
+        "extrapolated": false
+      }
+    },
+    {
+      "id": "overlapping_models",
+      "input": {
+        "valid_intervals": [
+          [
+            10,
+            100
+          ],
+          [
+            90,
+            200
+          ]
+        ],
+        "query_G": 95
+      },
+      "expected": {
+        "status": "ambiguous_model",
+        "estimate_ns": null
+      }
+    },
+    {
+      "id": "unresolved_drift",
+      "input": {
+        "slope_intervals": [
+          [
+            {
+              "numerator": "8",
+              "denominator": "9"
+            },
+            {
+              "numerator": "10",
+              "denominator": "9"
+            }
+          ],
+          [
+            {
+              "numerator": "8",
+              "denominator": "9"
+            },
+            {
+              "numerator": "10",
+              "denominator": "9"
+            }
+          ]
+        ]
+      },
+      "expected": {
+        "difference_interval": [
+          {
+            "numerator": "-2",
+            "denominator": "9"
+          },
+          {
+            "numerator": "2",
+            "denominator": "9"
+          }
+        ],
+        "drift_resolved": false
+      }
+    }
+  ],
+  "wire_sample_cases": [
+    {
+      "id": "sample_success_wire",
+      "input": {
+        "event": {
+          "producer": 1,
+          "record": {
+            "event_sequence": 1,
+            "raw_time_ns": 110,
+            "clock_domain_id": 1,
+            "kind": 600,
+            "presence": 0,
+            "generation": 0,
+            "endpoint_owner": 0,
+            "endpoint_sequence": 0,
+            "operation_sequence": 0,
+            "graph_owner": 0,
+            "graph_template": 0,
+            "graph_execution": 0,
+            "instance_index": 0,
+            "invocation_sequence": 0,
+            "lane_index": 0,
+            "lease_sequence": 0,
+            "attachment_owner": 0,
+            "attachment_sequence": 0,
+            "local_trace_id": 0,
+            "layer_ordinal": 0,
+            "payload_rows": 0,
+            "dp_rank_payload_rows": 0,
+            "payload_row_capacity": 0,
+            "ready_ticket": 0,
+            "forward_mode": 0,
+            "output_requirement": 0,
+            "dp_row_layout": 0,
+            "delivery": 0,
+            "result_code": 0,
+            "role": 5,
+            "instance_rank": 0,
+            "pe": 0,
+            "data0": 110,
+            "data1": 10,
+            "data2": 110,
+            "data3": 2,
+            "data4": 1
+          }
+        },
+        "raw_epoch": 1
+      },
+      "expected": {
+        "attempt_sequence": 1,
+        "H_before": 110,
+        "G": 10,
+        "H_after": 110,
+        "outcome": "succeeded",
+        "sampler": [
+          "11111111-1111-4111-8111-111111111111",
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "id": "sample_timeout_wire",
+      "input": {
+        "event": {
+          "producer": 1,
+          "record": {
+            "event_sequence": 2,
+            "raw_time_ns": 130,
+            "clock_domain_id": 1,
+            "kind": 601,
+            "presence": 0,
+            "generation": 0,
+            "endpoint_owner": 0,
+            "endpoint_sequence": 0,
+            "operation_sequence": 0,
+            "graph_owner": 0,
+            "graph_template": 0,
+            "graph_execution": 0,
+            "instance_index": 0,
+            "invocation_sequence": 0,
+            "lane_index": 0,
+            "lease_sequence": 0,
+            "attachment_owner": 0,
+            "attachment_sequence": 0,
+            "local_trace_id": 0,
+            "layer_ordinal": 0,
+            "payload_rows": 0,
+            "dp_rank_payload_rows": 0,
+            "payload_row_capacity": 0,
+            "ready_ticket": 0,
+            "forward_mode": 0,
+            "output_requirement": 0,
+            "dp_row_layout": 0,
+            "delivery": 0,
+            "result_code": 0,
+            "role": 5,
+            "instance_rank": 0,
+            "pe": 0,
+            "data0": 120,
+            "data1": 0,
+            "data2": 3,
+            "data3": 2,
+            "data4": 2
+          }
+        },
+        "raw_epoch": 1
+      },
+      "expected": {
+        "attempt_sequence": 2,
+        "H_before": 120,
+        "G": null,
+        "H_after": null,
+        "outcome": "failed",
+        "failure_code": "timed_out",
+        "sampler": [
+          "11111111-1111-4111-8111-111111111111",
+          1,
+          2
+        ],
+        "release_inflight_resources": false
+      }
+    }
+  ]
+}

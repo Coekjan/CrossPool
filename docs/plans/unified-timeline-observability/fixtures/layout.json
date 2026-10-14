@@ -1,0 +1,555 @@
+{
+  "contract_version": 1,
+  "event_bytes": 256,
+  "header_bytes": 128,
+  "byte_order": "little",
+  "fields": [
+    {
+      "name": "event_sequence",
+      "offset": 0,
+      "type": "u64"
+    },
+    {
+      "name": "raw_time_ns",
+      "offset": 8,
+      "type": "u64"
+    },
+    {
+      "name": "clock_domain_id",
+      "offset": 16,
+      "type": "u64"
+    },
+    {
+      "name": "kind",
+      "offset": 24,
+      "type": "u32"
+    },
+    {
+      "name": "presence",
+      "offset": 28,
+      "type": "u32"
+    },
+    {
+      "name": "generation",
+      "offset": 32,
+      "type": "u64"
+    },
+    {
+      "name": "endpoint_owner",
+      "offset": 40,
+      "type": "u64"
+    },
+    {
+      "name": "endpoint_sequence",
+      "offset": 48,
+      "type": "u64"
+    },
+    {
+      "name": "operation_sequence",
+      "offset": 56,
+      "type": "u64"
+    },
+    {
+      "name": "graph_owner",
+      "offset": 64,
+      "type": "u64"
+    },
+    {
+      "name": "graph_template",
+      "offset": 72,
+      "type": "u64"
+    },
+    {
+      "name": "graph_execution",
+      "offset": 80,
+      "type": "u64"
+    },
+    {
+      "name": "instance_index",
+      "offset": 88,
+      "type": "u64"
+    },
+    {
+      "name": "invocation_sequence",
+      "offset": 96,
+      "type": "u64"
+    },
+    {
+      "name": "lane_index",
+      "offset": 104,
+      "type": "u64"
+    },
+    {
+      "name": "lease_sequence",
+      "offset": 112,
+      "type": "u64"
+    },
+    {
+      "name": "attachment_owner",
+      "offset": 120,
+      "type": "u64"
+    },
+    {
+      "name": "attachment_sequence",
+      "offset": 128,
+      "type": "u64"
+    },
+    {
+      "name": "local_trace_id",
+      "offset": 136,
+      "type": "u64"
+    },
+    {
+      "name": "layer_ordinal",
+      "offset": 144,
+      "type": "u64"
+    },
+    {
+      "name": "payload_rows",
+      "offset": 152,
+      "type": "u64"
+    },
+    {
+      "name": "dp_rank_payload_rows",
+      "offset": 160,
+      "type": "u64"
+    },
+    {
+      "name": "payload_row_capacity",
+      "offset": 168,
+      "type": "u64"
+    },
+    {
+      "name": "ready_ticket",
+      "offset": 176,
+      "type": "u64"
+    },
+    {
+      "name": "forward_mode",
+      "offset": 184,
+      "type": "u32"
+    },
+    {
+      "name": "output_requirement",
+      "offset": 188,
+      "type": "u32"
+    },
+    {
+      "name": "dp_row_layout",
+      "offset": 192,
+      "type": "u32"
+    },
+    {
+      "name": "delivery",
+      "offset": 196,
+      "type": "u32"
+    },
+    {
+      "name": "result_code",
+      "offset": 200,
+      "type": "u32"
+    },
+    {
+      "name": "role",
+      "offset": 204,
+      "type": "u32"
+    },
+    {
+      "name": "instance_rank",
+      "offset": 208,
+      "type": "u32"
+    },
+    {
+      "name": "pe",
+      "offset": 212,
+      "type": "i32"
+    },
+    {
+      "name": "data0",
+      "offset": 216,
+      "type": "u64"
+    },
+    {
+      "name": "data1",
+      "offset": 224,
+      "type": "u64"
+    },
+    {
+      "name": "data2",
+      "offset": 232,
+      "type": "u64"
+    },
+    {
+      "name": "data3",
+      "offset": 240,
+      "type": "u64"
+    },
+    {
+      "name": "data4",
+      "offset": 248,
+      "type": "u64"
+    }
+  ],
+  "presence_groups": [
+    {
+      "bit": 0,
+      "fields": [
+        "generation"
+      ]
+    },
+    {
+      "bit": 1,
+      "fields": [
+        "endpoint_owner",
+        "endpoint_sequence"
+      ]
+    },
+    {
+      "bit": 2,
+      "fields": [
+        "operation_sequence"
+      ]
+    },
+    {
+      "bit": 3,
+      "fields": [
+        "graph_owner",
+        "graph_template"
+      ]
+    },
+    {
+      "bit": 4,
+      "fields": [
+        "graph_owner",
+        "graph_execution"
+      ]
+    },
+    {
+      "bit": 5,
+      "fields": [
+        "instance_index",
+        "invocation_sequence"
+      ]
+    },
+    {
+      "bit": 6,
+      "fields": [
+        "lane_index",
+        "lease_sequence"
+      ]
+    },
+    {
+      "bit": 7,
+      "fields": [
+        "attachment_owner",
+        "attachment_sequence"
+      ]
+    },
+    {
+      "bit": 8,
+      "fields": [
+        "local_trace_id"
+      ]
+    },
+    {
+      "bit": 9,
+      "fields": [
+        "layer_ordinal",
+        "payload_rows",
+        "forward_mode",
+        "output_requirement",
+        "dp_row_layout"
+      ]
+    },
+    {
+      "bit": 10,
+      "fields": [
+        "layer_ordinal",
+        "payload_rows",
+        "output_requirement"
+      ]
+    },
+    {
+      "bit": 11,
+      "fields": [
+        "dp_rank_payload_rows"
+      ]
+    },
+    {
+      "bit": 12,
+      "fields": [
+        "payload_row_capacity"
+      ]
+    },
+    {
+      "bit": 13,
+      "fields": [
+        "ready_ticket"
+      ]
+    },
+    {
+      "bit": 14,
+      "fields": [
+        "delivery"
+      ]
+    },
+    {
+      "bit": 15,
+      "fields": [
+        "result_code"
+      ]
+    },
+    {
+      "bit": 16,
+      "fields": [
+        "instance_rank"
+      ]
+    },
+    {
+      "bit": 17,
+      "fields": [
+        "pe"
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": 100,
+      "name": "RequestStagingStarted"
+    },
+    {
+      "id": 101,
+      "name": "RequestStagingCompleted"
+    },
+    {
+      "id": 102,
+      "name": "RequestPublished"
+    },
+    {
+      "id": 103,
+      "name": "RequestObserved"
+    },
+    {
+      "id": 104,
+      "name": "ExecutionStarted"
+    },
+    {
+      "id": 105,
+      "name": "ExecutionCompleted"
+    },
+    {
+      "id": 106,
+      "name": "ResultPublished"
+    },
+    {
+      "id": 107,
+      "name": "ResultObserved"
+    },
+    {
+      "id": 108,
+      "name": "OutputCopied"
+    },
+    {
+      "id": 109,
+      "name": "ResultAcknowledged"
+    },
+    {
+      "id": 110,
+      "name": "Closed"
+    },
+    {
+      "id": 200,
+      "name": "SubmissionPrepared"
+    },
+    {
+      "id": 201,
+      "name": "SubmissionPublished"
+    },
+    {
+      "id": 202,
+      "name": "AdmissionObserved"
+    },
+    {
+      "id": 203,
+      "name": "InputReadyPublished"
+    },
+    {
+      "id": 204,
+      "name": "OutputCommitObserved"
+    },
+    {
+      "id": 205,
+      "name": "OutputAcknowledgementPublished"
+    },
+    {
+      "id": 300,
+      "name": "Enqueued"
+    },
+    {
+      "id": 301,
+      "name": "Scheduled"
+    },
+    {
+      "id": 302,
+      "name": "AdmissionPublished"
+    },
+    {
+      "id": 303,
+      "name": "LaneExecutionPublished"
+    },
+    {
+      "id": 304,
+      "name": "FfnAgentCompletionsObserved"
+    },
+    {
+      "id": 305,
+      "name": "OutputCommitPublished"
+    },
+    {
+      "id": 306,
+      "name": "OutputAcknowledgementsObserved"
+    },
+    {
+      "id": 307,
+      "name": "LaneReleased"
+    },
+    {
+      "id": 400,
+      "name": "LaneExecutionObserved"
+    },
+    {
+      "id": 401,
+      "name": "InputReadyObserved"
+    },
+    {
+      "id": 402,
+      "name": "RoutingMetadataPublished"
+    },
+    {
+      "id": 403,
+      "name": "RoutingMetadataObserved"
+    },
+    {
+      "id": 404,
+      "name": "ComputeStarted"
+    },
+    {
+      "id": 405,
+      "name": "ComputeCompleted"
+    },
+    {
+      "id": 406,
+      "name": "PartialReadyPublished"
+    },
+    {
+      "id": 407,
+      "name": "PeerPartialsReadyObserved"
+    },
+    {
+      "id": 408,
+      "name": "CompletionPublished"
+    },
+    {
+      "id": 450,
+      "name": "TransportFabricAssociated"
+    },
+    {
+      "id": 500,
+      "name": "GraphCaptureBegin"
+    },
+    {
+      "id": 501,
+      "name": "GraphCaptureEnd"
+    },
+    {
+      "id": 502,
+      "name": "GraphCaptureError"
+    },
+    {
+      "id": 503,
+      "name": "GraphTemplateInstalled"
+    },
+    {
+      "id": 504,
+      "name": "GraphHostCallBegin"
+    },
+    {
+      "id": 505,
+      "name": "GraphHostCallEnd"
+    },
+    {
+      "id": 506,
+      "name": "GraphHostCallError"
+    },
+    {
+      "id": 507,
+      "name": "GraphDeviceActivityBegin"
+    },
+    {
+      "id": 508,
+      "name": "GraphDeviceActivityEnd"
+    },
+    {
+      "id": 509,
+      "name": "GraphTemplateRetired"
+    },
+    {
+      "id": 510,
+      "name": "GraphInstallBegin"
+    },
+    {
+      "id": 511,
+      "name": "GraphInstallEnd"
+    },
+    {
+      "id": 512,
+      "name": "GraphInstallError"
+    },
+    {
+      "id": 550,
+      "name": "RoutingPublished"
+    },
+    {
+      "id": 600,
+      "name": "CalibrationSampleSucceeded"
+    },
+    {
+      "id": 601,
+      "name": "CalibrationSampleFailed"
+    }
+  ],
+  "enums": {
+    "role": {
+      "instance": 1,
+      "atnagent": 2,
+      "coordinator": 3,
+      "ffnagent": 4,
+      "collector": 5
+    },
+    "forward_mode": {
+      "prefill": 1,
+      "decode": 2,
+      "idle": 4
+    },
+    "output_requirement": {
+      "per_rank_complete": 1,
+      "group_sum_complete": 2
+    },
+    "dp_row_layout": {
+      "none": 0,
+      "uniform_by_rank": 1,
+      "packed_by_rank": 2
+    },
+    "delivery": {
+      "direct_partial": 1,
+      "single_complete": 2,
+      "replicated_complete": 3
+    },
+    "result_code": {
+      "ok": 0,
+      "shutdown": 1,
+      "protocol_mismatch": 2,
+      "timeout": 3
+    }
+  }
+}

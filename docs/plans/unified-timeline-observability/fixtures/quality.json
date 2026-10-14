@@ -1,0 +1,163 @@
+{
+  "contract_version": 1,
+  "cases": [
+    {
+      "id": "active_checkpoint",
+      "input": {
+        "counters": {
+          "attempted": 5,
+          "committed": 3,
+          "dropped_full": 1,
+          "abandoned": 0,
+          "copied": 2,
+          "exported": 1,
+          "post_commit_lost": 0
+        },
+        "pending": 1,
+        "tail": "pending",
+        "collection_state": "active",
+        "export_state": "active"
+      },
+      "expected": {
+        "conservation_valid": true,
+        "unpublished_committed": 2,
+        "normal_completion": false
+      }
+    },
+    {
+      "id": "closed_checkpoint",
+      "input": {
+        "counters": {
+          "attempted": 5,
+          "committed": 3,
+          "dropped_full": 1,
+          "abandoned": 1,
+          "copied": 3,
+          "exported": 3,
+          "post_commit_lost": 0
+        },
+        "pending": 0,
+        "tail": "complete",
+        "collection_state": "closed",
+        "export_state": "closed"
+      },
+      "expected": {
+        "conservation_valid": true,
+        "normal_completion": true
+      }
+    },
+    {
+      "id": "failed_export",
+      "input": {
+        "counters": {
+          "attempted": 4,
+          "committed": 4,
+          "dropped_full": 0,
+          "abandoned": 0,
+          "copied": 4,
+          "exported": 2,
+          "post_commit_lost": 2
+        },
+        "pending": 0,
+        "tail": "complete",
+        "collection_state": "stopped",
+        "export_state": "failed",
+        "stop_reason": "io_error"
+      },
+      "expected": {
+        "conservation_valid": true,
+        "normal_completion": false,
+        "published_prefix_events": 2,
+        "post_commit_loss": 2
+      }
+    },
+    {
+      "id": "unknown_tail",
+      "input": {
+        "last_checkpoint": {
+          "attempted": 5,
+          "committed": 3
+        },
+        "pending": null,
+        "tail": "unknown",
+        "final_checkpoint_available": false
+      },
+      "expected": {
+        "final_attempted": null,
+        "final_committed": null,
+        "pending": null,
+        "normal_completion": false
+      }
+    },
+    {
+      "id": "counter_saturation",
+      "input": {
+        "attempted": 18446744073709551615,
+        "next_attempt": true
+      },
+      "expected": {
+        "counter_value": 18446744073709551615,
+        "counter_exhausted": true,
+        "exact_totals_available": false,
+        "wrapped": false
+      }
+    },
+    {
+      "id": "cumulative_checkpoints",
+      "input": {
+        "checkpoints": [
+          {
+            "attempted": 3,
+            "exported": 2
+          },
+          {
+            "attempted": 5,
+            "exported": 4
+          }
+        ]
+      },
+      "expected": {
+        "attempted": 5,
+        "exported": 4,
+        "sum_checkpoints": false
+      }
+    }
+  ],
+  "checkpoint": {
+    "contract_version": 1,
+    "run_id": "11111111-1111-4111-8111-111111111111",
+    "producer_id": 3,
+    "revision": 1,
+    "host_time_ns": 400,
+    "collection_state": "closed",
+    "export_state": "closed",
+    "stop_reason": null,
+    "last_attempted_sequence": 5,
+    "counters": {
+      "attempted": 5,
+      "committed": 3,
+      "dropped_full": 1,
+      "abandoned": 1,
+      "stale_token": 0,
+      "duplicate_commit": 0,
+      "copied": 3,
+      "exported": 3,
+      "post_commit_lost": 0,
+      "snapshot_operations_attempted": 0,
+      "snapshot_operations_dropped": 0,
+      "attachment_attempted": 0,
+      "attachment_capacity_exhausted": 0,
+      "attachment_payload_oversize": 0,
+      "attachment_not_collected": 0,
+      "attachment_publish_failed": 0,
+      "sample_attempted": 0,
+      "sample_failed": 0,
+      "sample_skipped_busy": 0,
+      "context_unavailable": 0
+    },
+    "pending": 0,
+    "tail": "complete",
+    "counter_exhausted": false,
+    "exact_totals": true
+  }
+}
