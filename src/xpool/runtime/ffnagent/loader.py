@@ -7,6 +7,7 @@ import math
 import queue
 import threading
 from collections import defaultdict
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -17,6 +18,7 @@ from safetensors import safe_open
 from xpool import ffn
 from xpool.config import get_global_config
 from xpool.fabric import FabricPlan, FabricRole, MoeFfnLayerPlan
+from xpool.quantization import MXFP4_DECODE_BLOCK_LIMIT, Mxfp4TensorSource, decode_mxfp4_blocks
 from xpool.runtime.ffnagent import architecture, checkpoint, weights
 
 
@@ -80,10 +82,45 @@ class TensorReadDescriptor:
 
 
 @dataclass(frozen=True, slots=True)
+class Mxfp4TensorReadDescriptor:
+    """Preflighted encoded matrix view and its final floating destination."""
+
+    source: Mxfp4TensorSource
+    blocks_shard_path: Path
+    scales_shard_path: Path
+    narrow_dimension: int | None
+    narrow_start: int
+    narrow_length: int
+    staged_shape: tuple[int, ...]
+    destination: torch.Tensor
+    tp_rank: int
+
+    @property
+    def staged_bytes(self) -> int:
+        """Return exact decoded local-TP staging bytes."""
+
+        return math.prod(self.staged_shape) * self.destination.element_size()
+
+
+type WeightReadDescriptor = TensorReadDescriptor | Mxfp4TensorReadDescriptor
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionRead:
+    """Allocation-independent semantic projection and logical TP selection."""
+
+    source: str | Mxfp4TensorSource
+    source_shape: tuple[int, int]
+    narrow_dimension: int
+    narrow_start: int
+    narrow_length: int
+
+
+@dataclass(frozen=True, slots=True)
 class StagedTensor:
     """One completed reader value retaining its acquired pinned slot."""
 
-    descriptor: TensorReadDescriptor
+    descriptor: WeightReadDescriptor
     slot: torch.Tensor
 
 
@@ -96,7 +133,7 @@ class ReaderFailure:
 
 @dataclass(frozen=True, slots=True)
 class ReaderFinished:
-    """One shard task's completion marker."""
+    """One source-group task's completion marker."""
 
 
 type ReaderMessage = StagedTensor | ReaderFailure | ReaderFinished
@@ -212,11 +249,15 @@ def materialize_local_layer_weights(
     if not requests:
         return ()
     try:
-        device = torch.cuda.current_device()
         model_paths = tuple(dict.fromkeys(request.model_path for request in requests))
         key_views = {model_path: checkpoint.read_checkpoint_key_view(model_path) for model_path in model_paths}
+        # Phase A: All encoded metadata and local geometry precede any final
+        # CUDA owner, including floating owners earlier in the request batch.
+        preflight_local_sources(requests, key_views=key_views)
+        # Phase B: Preserve the existing exact CUDA allocations and packing.
+        device = torch.cuda.current_device()
         layer_weights: list[weights.FfnLayerWeights] = []
-        descriptors: list[TensorReadDescriptor] = []
+        descriptors: list[WeightReadDescriptor] = []
         for request in requests:
             materialized, layer_descriptors = prepare_layer_weight_request(
                 request,
@@ -232,17 +273,154 @@ def materialize_local_layer_weights(
         for _ in range(parallelism):
             slots.put(torch.empty(slot_bytes, dtype=torch.uint8, pin_memory=True))
 
-        descriptors_by_shard: dict[Path, list[TensorReadDescriptor]] = defaultdict(list)
+        # Phase C: Each worker owns all files needed by its paired reads.
+        descriptor_groups: dict[tuple[Path, ...], list[WeightReadDescriptor]] = defaultdict(list)
         for descriptor in descriptors:
-            descriptors_by_shard[descriptor.shard_path].append(descriptor)
+            paths = (
+                (descriptor.shard_path,)
+                if isinstance(descriptor, TensorReadDescriptor)
+                else (descriptor.blocks_shard_path, descriptor.scales_shard_path)
+            )
+            descriptor_groups[tuple(sorted(set(paths)))].append(descriptor)
         copy_staged_tensors(
-            descriptors_by_shard=descriptors_by_shard,
+            descriptor_groups=descriptor_groups,
             slots=slots,
             parallelism=parallelism,
         )
         return tuple(layer_weights)
     except Exception as error:
-        raise RuntimeError(f"failed to materialize local FFN weights: {error}") from error
+        notes = "; ".join(getattr(error, "__notes__", ()))
+        detail = f"; {notes}" if notes else ""
+        raise RuntimeError(f"failed to materialize local FFN weights: {error}{detail}") from error
+
+
+def gated_projection_reads(
+    checkpoints: ffn.GatedFfnCheckpoint,
+    *,
+    source_intermediate_size: int,
+    source_start: int,
+    local_intermediate_size: int,
+    hidden_size: int,
+) -> tuple[ProjectionRead, ...]:
+    """Describe the shared Dense/Expert projection geometry without allocating."""
+
+    if isinstance(checkpoints, ffn.GatedFfnCheckpointKeys):
+        sources: tuple[str | Mxfp4TensorSource, ...] = (
+            checkpoints.gate_weight_key,
+            checkpoints.up_weight_key,
+            checkpoints.down_weight_key,
+        )
+    else:
+        sources = (checkpoints.gate, checkpoints.up, checkpoints.down)
+    return tuple(
+        ProjectionRead(source, shape, dimension, source_start, local_intermediate_size)
+        for source, shape, dimension in zip(
+            sources,
+            (
+                (source_intermediate_size, hidden_size),
+                (source_intermediate_size, hidden_size),
+                (hidden_size, source_intermediate_size),
+            ),
+            (0, 0, 1),
+            strict=True,
+        )
+    )
+
+
+def request_projection_reads(request: LocalLayerWeightRequest) -> tuple[ProjectionRead, ...]:
+    """Derive every requested logical projection, including wide shared Experts."""
+
+    layer = request.layer
+    width = layer.intermediate_size if isinstance(layer, ffn.DenseFfnSpec) else layer.expert_intermediate_size
+    if width % request.tp_size:
+        raise ValueError(f"layer {layer.layer_id} intermediate size {width} is not divisible by TP {request.tp_size}")
+    local_width = width // request.tp_size
+    local_start = request.tp_rank * local_width
+    if isinstance(layer, ffn.DenseFfnSpec):
+        triplets = ((layer.checkpoint, width, local_start),)
+    else:
+        triplets = tuple((expert, width, local_start) for expert in layer.checkpoint.routed_experts)
+        if layer.checkpoint.shared_expert is not None:
+            triplets += tuple(
+                (layer.checkpoint.shared_expert, width * layer.shared_expert_count, ordinal * width + local_start)
+                for ordinal in range(layer.shared_expert_count)
+            )
+    return tuple(
+        read
+        for triplet, source_width, start in triplets
+        for read in gated_projection_reads(
+            triplet,
+            source_intermediate_size=source_width,
+            source_start=start,
+            local_intermediate_size=local_width,
+            hidden_size=request.hidden_size,
+        )
+    )
+
+
+def preflight_local_sources(
+    requests: tuple[LocalLayerWeightRequest, ...],
+    *,
+    key_views: dict[Path, dict[str, Path]],
+) -> None:
+    """Check all encoded headers, aliases and TP geometry on the Host only.
+
+    Reads safetensors metadata without retrieving tensor data. No final weight
+    allocation or CUDA operation occurs in this phase.
+    """
+
+    layers_by_model: dict[Path, dict[int, ffn.FfnLayerSpec]] = defaultdict(dict)
+    encoded_models: set[Path] = set()
+    checked_headers: set[tuple[Path, str, tuple[int, ...]]] = set()
+    with ExitStack() as stack:
+        handles: dict[Path, safe_open] = {}
+        for request in requests:
+            previous = layers_by_model[request.model_path].setdefault(request.layer.layer_id, request.layer)
+            if previous != request.layer:
+                raise ValueError("local requests disagree on the same model layer")
+            for read in request_projection_reads(request):
+                source = read.source
+                if isinstance(source, str):
+                    continue
+                encoded_models.add(request.model_path)
+                paths = []
+                try:
+                    if source.logical_shape != read.source_shape:
+                        raise ValueError(f"MXFP4 logical shape {source.logical_shape} expected {read.source_shape}")
+                    if not 0 <= read.narrow_start < read.source_shape[read.narrow_dimension]:
+                        raise ValueError("MXFP4 local TP slice starts outside its projection")
+                    if read.narrow_start + read.narrow_length > read.source_shape[read.narrow_dimension]:
+                        raise ValueError("MXFP4 local TP slice ends outside its projection")
+                    for key, expected in (
+                        (source.blocks_key, source.blocks_shape),
+                        (source.scales_key, source.scales_shape),
+                    ):
+                        path = key_views[request.model_path].get(key)
+                        if path is None:
+                            raise ValueError(f"checkpoint key {key!r} is absent from its authoritative key view")
+                        paths.append(path)
+                        identity = (path, key, expected)
+                        if identity in checked_headers:
+                            continue
+                        if path not in handles:
+                            handles[path] = stack.enter_context(safe_open(str(path), framework="pt", device="cpu"))
+                        header = handles[path].get_slice(key)
+                        if header.get_dtype() != "U8" or tuple(header.get_shape()) != expected:
+                            raise ValueError(
+                                f"MXFP4 tensor {key!r} expected U8 {expected}, "
+                                f"found {header.get_dtype()} {tuple(header.get_shape())}"
+                            )
+                        checked_headers.add(identity)
+                except Exception as error:
+                    error.add_note(
+                        f"MXFP4 pair {(source.blocks_key, source.scales_key)!r}, files={paths}, "
+                        f"Expert={source.expert_index}, rows={source.row_part}, "
+                        f"TP rank={request.tp_rank}, dimension={read.narrow_dimension}, "
+                        f"slice=[{read.narrow_start},{read.narrow_start + read.narrow_length})"
+                    )
+                    raise
+        for model_path in encoded_models:
+            ffn.validate_checkpoint_references(tuple(layers_by_model[model_path].values()))
 
 
 def prepare_layer_weight_request(
@@ -250,7 +428,7 @@ def prepare_layer_weight_request(
     *,
     key_view: dict[str, Path],
     device: int,
-) -> tuple[weights.FfnLayerWeights, tuple[TensorReadDescriptor, ...]]:
+) -> tuple[weights.FfnLayerWeights, tuple[WeightReadDescriptor, ...]]:
     """Allocate one canonical destination and resolve all exact-key reads."""
 
     layer = request.layer
@@ -277,35 +455,19 @@ def prepare_layer_weight_request(
             device=torch_device,
         )
         materialized = weights.DenseFfnWeights(gate_up_weight=gate_up_weight, down_weight=down_weight)
-        checkpoints = layer.checkpoint
-        descriptors = (
-            projected_descriptor(
-                key_view,
-                weight_key=checkpoints.gate_weight_key,
-                source_shape=(intermediate_size, request.hidden_size),
-                narrow_dimension=0,
-                narrow_start=local_start,
-                narrow_length=local_intermediate_size,
-                destination=gate_up_weight[:local_intermediate_size],
+        descriptors = gated_descriptors(
+            key_view,
+            checkpoints=layer.checkpoint,
+            source_intermediate_size=intermediate_size,
+            source_start=local_start,
+            local_intermediate_size=local_intermediate_size,
+            hidden_size=request.hidden_size,
+            destinations=(
+                gate_up_weight[:local_intermediate_size],
+                gate_up_weight[local_intermediate_size:],
+                down_weight,
             ),
-            projected_descriptor(
-                key_view,
-                weight_key=checkpoints.up_weight_key,
-                source_shape=(intermediate_size, request.hidden_size),
-                narrow_dimension=0,
-                narrow_start=local_start,
-                narrow_length=local_intermediate_size,
-                destination=gate_up_weight[local_intermediate_size:],
-            ),
-            projected_descriptor(
-                key_view,
-                weight_key=checkpoints.down_weight_key,
-                source_shape=(request.hidden_size, intermediate_size),
-                narrow_dimension=1,
-                narrow_start=local_start,
-                narrow_length=local_intermediate_size,
-                destination=down_weight,
-            ),
+            tp_rank=request.tp_rank,
         )
         return materialized, descriptors
 
@@ -334,6 +496,7 @@ def prepare_layer_weight_request(
                 hidden_size=request.hidden_size,
                 expert_gate_up_weight=expert_gate_up_weight,
                 expert_down_weight=expert_down_weight,
+                tp_rank=request.tp_rank,
             )
         )
     if layer.checkpoint.shared_expert is not None:
@@ -349,6 +512,7 @@ def prepare_layer_weight_request(
                     hidden_size=request.hidden_size,
                     expert_gate_up_weight=expert_gate_up_weight,
                     expert_down_weight=expert_down_weight,
+                    tp_rank=request.tp_rank,
                 )
             )
 
@@ -396,7 +560,7 @@ def prepare_layer_weight_request(
 def expert_descriptors(
     key_view: dict[str, Path],
     *,
-    checkpoints: ffn.GatedFfnCheckpointKeys,
+    checkpoints: ffn.GatedFfnCheckpoint,
     expert_id: int,
     source_intermediate_size: int,
     source_start: int,
@@ -404,38 +568,75 @@ def expert_descriptors(
     hidden_size: int,
     expert_gate_up_weight: torch.Tensor,
     expert_down_weight: torch.Tensor,
-) -> tuple[TensorReadDescriptor, ...]:
+    tp_rank: int,
+) -> tuple[WeightReadDescriptor, ...]:
     """Resolve one routed or logical shared Expert's three local projections."""
 
-    return (
-        projected_descriptor(
-            key_view,
-            weight_key=checkpoints.gate_weight_key,
-            source_shape=(source_intermediate_size, hidden_size),
-            narrow_dimension=0,
-            narrow_start=source_start,
-            narrow_length=local_intermediate_size,
-            destination=expert_gate_up_weight[expert_id, :local_intermediate_size],
+    return gated_descriptors(
+        key_view,
+        checkpoints=checkpoints,
+        source_intermediate_size=source_intermediate_size,
+        source_start=source_start,
+        local_intermediate_size=local_intermediate_size,
+        hidden_size=hidden_size,
+        destinations=(
+            expert_gate_up_weight[expert_id, :local_intermediate_size],
+            expert_gate_up_weight[expert_id, local_intermediate_size:],
+            expert_down_weight[expert_id],
         ),
-        projected_descriptor(
-            key_view,
-            weight_key=checkpoints.up_weight_key,
-            source_shape=(source_intermediate_size, hidden_size),
-            narrow_dimension=0,
-            narrow_start=source_start,
-            narrow_length=local_intermediate_size,
-            destination=expert_gate_up_weight[expert_id, local_intermediate_size:],
-        ),
-        projected_descriptor(
-            key_view,
-            weight_key=checkpoints.down_weight_key,
-            source_shape=(hidden_size, source_intermediate_size),
-            narrow_dimension=1,
-            narrow_start=source_start,
-            narrow_length=local_intermediate_size,
-            destination=expert_down_weight[expert_id],
-        ),
+        tp_rank=tp_rank,
     )
+
+
+def gated_descriptors(
+    key_view: dict[str, Path],
+    *,
+    checkpoints: ffn.GatedFfnCheckpoint,
+    source_intermediate_size: int,
+    source_start: int,
+    local_intermediate_size: int,
+    hidden_size: int,
+    destinations: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    tp_rank: int,
+) -> tuple[WeightReadDescriptor, ...]:
+    """Bind the shared projection geometry to existing final destination views."""
+
+    descriptors: list[WeightReadDescriptor] = []
+    reads = gated_projection_reads(
+        checkpoints,
+        source_intermediate_size=source_intermediate_size,
+        source_start=source_start,
+        local_intermediate_size=local_intermediate_size,
+        hidden_size=hidden_size,
+    )
+    for read, destination in zip(reads, destinations, strict=True):
+        if isinstance(read.source, str):
+            descriptors.append(
+                projected_descriptor(
+                    key_view,
+                    weight_key=read.source,
+                    source_shape=read.source_shape,
+                    narrow_dimension=read.narrow_dimension,
+                    narrow_start=read.narrow_start,
+                    narrow_length=read.narrow_length,
+                    destination=destination,
+                )
+            )
+        else:
+            descriptors.append(
+                Mxfp4TensorReadDescriptor(
+                    source=read.source,
+                    blocks_shard_path=key_view[read.source.blocks_key],
+                    scales_shard_path=key_view[read.source.scales_key],
+                    narrow_dimension=read.narrow_dimension,
+                    narrow_start=read.narrow_start,
+                    narrow_length=read.narrow_length,
+                    staged_shape=tuple(destination.shape),
+                    destination=destination,
+                    tp_rank=tp_rank,
+                )
+            )
+    return tuple(descriptors)
 
 
 def projected_descriptor(
@@ -467,25 +668,25 @@ def projected_descriptor(
 
 def copy_staged_tensors(
     *,
-    descriptors_by_shard: dict[Path, list[TensorReadDescriptor]],
+    descriptor_groups: dict[tuple[Path, ...], list[WeightReadDescriptor]],
     slots: queue.Queue[torch.Tensor],
     parallelism: int,
 ) -> None:
-    """Run shard readers and synchronously install completed values."""
+    """Run paired-source readers and synchronously install completed values."""
 
     messages: queue.Queue[ReaderMessage] = queue.Queue()
     cancelled = threading.Event()
     with concurrent.futures.ThreadPoolExecutor(max_workers=parallelism) as executor:
         futures = tuple(
             executor.submit(
-                stage_shard,
-                shard_path=shard_path,
+                stage_source_group,
+                shard_paths=shard_paths,
                 descriptors=tuple(descriptors),
                 slots=slots,
                 messages=messages,
                 cancelled=cancelled,
             )
-            for shard_path, descriptors in descriptors_by_shard.items()
+            for shard_paths, descriptors in descriptor_groups.items()
         )
         finished_readers = 0
         first_error: Exception | None = None
@@ -505,6 +706,16 @@ def copy_staged_tensors(
                     message.descriptor.destination.copy_(staged_view, non_blocking=False)
             except Exception as error:
                 if first_error is None:
+                    if isinstance(message.descriptor, Mxfp4TensorReadDescriptor):
+                        descriptor = message.descriptor
+                        error.add_note(
+                            "MXFP4 destination copy, "
+                            f"pair={(descriptor.source.blocks_key, descriptor.source.scales_key)!r}, "
+                            f"files={(descriptor.blocks_shard_path, descriptor.scales_shard_path)}, "
+                            f"Expert={descriptor.source.expert_index}, rows={descriptor.source.row_part}, "
+                            f"TP rank={descriptor.tp_rank}, dimension={descriptor.narrow_dimension}, "
+                            f"slice=[{descriptor.narrow_start},{descriptor.narrow_start + descriptor.narrow_length})"
+                        )
                     first_error = error
                     cancelled.set()
             finally:
@@ -515,18 +726,21 @@ def copy_staged_tensors(
         raise first_error
 
 
-def stage_shard(
+def stage_source_group(
     *,
-    shard_path: Path,
-    descriptors: tuple[TensorReadDescriptor, ...],
+    shard_paths: tuple[Path, ...],
+    descriptors: tuple[WeightReadDescriptor, ...],
     slots: queue.Queue[torch.Tensor],
     messages: queue.Queue[ReaderMessage],
     cancelled: threading.Event,
 ) -> None:
-    """Read and locally project selected keys from one shard without CUDA."""
+    """Read paired sources without CUDA, publishing one terminal group marker."""
 
     try:
-        with safe_open(str(shard_path), framework="pt", device="cpu") as checkpoint:
+        with ExitStack() as stack:
+            handles = {
+                path: stack.enter_context(safe_open(str(path), framework="pt", device="cpu")) for path in shard_paths
+            }
             for descriptor in descriptors:
                 if cancelled.is_set():
                     break
@@ -534,27 +748,43 @@ def stage_shard(
                 if slot is None:
                     break
                 try:
-                    source = checkpoint.get_tensor(descriptor.weight_key)
-                    if not source.is_floating_point() or tuple(source.shape) != descriptor.source_shape:
-                        raise ValueError(
-                            f"checkpoint tensor {descriptor.weight_key!r} expected "
-                            f"floating-point {descriptor.source_shape}, found {source.dtype} {tuple(source.shape)}"
+                    if isinstance(descriptor, Mxfp4TensorReadDescriptor):
+                        stage_mxfp4_tensor(
+                            descriptor, handles=handles, out=slot_view(slot, descriptor), cancelled=cancelled
                         )
-                    projected = source
-                    if descriptor.narrow_dimension is not None:
-                        projected = source.narrow(
-                            descriptor.narrow_dimension,
-                            descriptor.narrow_start,
-                            descriptor.narrow_length,
+                    else:
+                        source = handles[descriptor.shard_path].get_tensor(descriptor.weight_key)
+                        if not source.is_floating_point() or tuple(source.shape) != descriptor.source_shape:
+                            raise ValueError(
+                                f"checkpoint tensor {descriptor.weight_key!r} expected "
+                                f"floating-point {descriptor.source_shape}, found {source.dtype} {tuple(source.shape)}"
+                            )
+                        projected = source
+                        if descriptor.narrow_dimension is not None:
+                            projected = source.narrow(
+                                descriptor.narrow_dimension,
+                                descriptor.narrow_start,
+                                descriptor.narrow_length,
+                            )
+                        if tuple(projected.shape) != descriptor.staged_shape:
+                            raise ValueError(f"checkpoint tensor {descriptor.weight_key!r} local TP shape is invalid")
+                        slot_view(slot, descriptor).copy_(projected)
+                except Exception as error:
+                    if isinstance(descriptor, Mxfp4TensorReadDescriptor):
+                        error.add_note(
+                            f"MXFP4 pair {(descriptor.source.blocks_key, descriptor.source.scales_key)!r}, "
+                            f"Expert={descriptor.source.expert_index}, rows={descriptor.source.row_part}, "
+                            f"TP rank={descriptor.tp_rank}, dimension={descriptor.narrow_dimension}, "
+                            f"slice=[{descriptor.narrow_start},{descriptor.narrow_start + descriptor.narrow_length})"
                         )
-                    if tuple(projected.shape) != descriptor.staged_shape:
-                        raise ValueError(f"checkpoint tensor {descriptor.weight_key!r} local TP shape is invalid")
-                    slot_view(slot, descriptor).copy_(projected)
-                except Exception:
                     slots.put(slot)
                     raise
+                if cancelled.is_set():
+                    slots.put(slot)
+                    break
                 messages.put(StagedTensor(descriptor=descriptor, slot=slot))
     except Exception as error:
+        error.add_note(f"checkpoint source group files={shard_paths}")
         messages.put(ReaderFailure(error=error))
         cancelled.set()
     finally:
@@ -575,7 +805,91 @@ def acquire_slot(
     return None
 
 
-def slot_view(slot: torch.Tensor, descriptor: TensorReadDescriptor) -> torch.Tensor:
+def slot_view(slot: torch.Tensor, descriptor: WeightReadDescriptor) -> torch.Tensor:
     """Return the typed prefix of one byte-addressable pinned slot."""
 
     return slot[: descriptor.staged_bytes].view(descriptor.destination.dtype).view(descriptor.staged_shape)
+
+
+def stage_mxfp4_tensor(
+    descriptor: Mxfp4TensorReadDescriptor,
+    *,
+    handles: dict[Path, safe_open],
+    out: torch.Tensor,
+    cancelled: threading.Event,
+) -> None:
+    """Fill one slot using bounded contiguous physical row/group rectangles.
+
+    Complementary gate/up views use separate bounded reads: coalescing them
+    would couple two slot lifetimes. Each descriptor owns exactly one slot.
+    Physical rectangles, including unselected parity rows, fit the block limit.
+    """
+
+    source = descriptor.source
+    rows, columns = source.logical_shape
+    row_start, column_start = 0, 0
+    if descriptor.narrow_dimension == 0:
+        row_start, rows = descriptor.narrow_start, descriptor.narrow_length
+    elif descriptor.narrow_dimension == 1:
+        column_start, columns = descriptor.narrow_start, descriptor.narrow_length
+    group_start = column_start // 32
+    group_end = (column_start + columns + 31) // 32
+    row_stride = 1 if source.row_part == "all" else 2
+    group_tile_limit = MXFP4_DECODE_BLOCK_LIMIT // row_stride
+    for group0 in range(group_start, group_end, group_tile_limit):
+        group1 = min(group0 + group_tile_limit, group_end)
+        row_tile_limit = MXFP4_DECODE_BLOCK_LIMIT // ((group1 - group0) * row_stride)
+        for row0 in range(row_start, row_start + rows, row_tile_limit):
+            if cancelled.is_set():
+                return
+            row1 = min(row0 + row_tile_limit, row_start + rows)
+            stage_mxfp4_rectangle(
+                descriptor,
+                handles=handles,
+                out=out,
+                row0=row0,
+                row1=row1,
+                group0=group0,
+                group1=group1,
+                row_start=row_start,
+                column_start=column_start,
+                columns=columns,
+            )
+
+
+def stage_mxfp4_rectangle(
+    descriptor: Mxfp4TensorReadDescriptor,
+    *,
+    handles: dict[Path, safe_open],
+    out: torch.Tensor,
+    row0: int,
+    row1: int,
+    group0: int,
+    group1: int,
+    row_start: int,
+    column_start: int,
+    columns: int,
+) -> None:
+    """Read, decode and retire one tile before allocating the next rectangle."""
+
+    source = descriptor.source
+    stride = 1 if source.row_part == "all" else 2
+    prefix = () if source.expert_index is None else (source.expert_index,)
+    selection = (*prefix, slice(row0 * stride, row1 * stride), slice(group0, group1))
+    packed = handles[descriptor.blocks_shard_path].get_slice(source.blocks_key)[(*selection, slice(None))]
+    scales = handles[descriptor.scales_shard_path].get_slice(source.scales_key)[selection]
+    if stride == 2:
+        parity = int(source.row_part == "odd")
+        packed = packed[parity::2]
+        scales = scales[parity::2]
+    packed = packed.contiguous()
+    scales = scales.contiguous()
+    group_count = (row1 - row0) * (group1 - group0)
+    decoded = torch.empty((group_count, 32), dtype=out.dtype, device="cpu")
+    decode_mxfp4_blocks(packed.reshape(group_count, 16), scales.reshape(group_count), out=decoded)
+    values = decoded.view(row1 - row0, (group1 - group0) * 32)
+    first_column = max(column_start, group0 * 32)
+    last_column = min(column_start + columns, group1 * 32)
+    out[row0 - row_start : row1 - row_start, first_column - column_start : last_column - column_start].copy_(
+        values[:, first_column - group0 * 32 : last_column - group0 * 32]
+    )

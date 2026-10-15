@@ -17,8 +17,9 @@ from xpool.fabric import (
     InstanceFfnProfile,
     InstanceRankTopology,
 )
-from xpool.ffn import FfnModelSpec
+from xpool.ffn import DenseFfnSpec, FfnModelSpec, Mxfp4GatedFfnCheckpoint
 from xpool.memory import MIB, SIGNED_INT64_MAX, FfnMemoryCalibrationCoefficients
+from xpool.quantization import Mxfp4TensorSource
 from xpool.runtime.ffnagent import device_memory, execution
 from xpool.runtime.ffnagent.memory_profile import corpus
 from xpool.service.daemon.ffn_placement import place_ffn_models
@@ -98,6 +99,66 @@ def test_glm_router_memory_keeps_fp32_weights_and_input_workspace() -> None:
         assert signature.router is not None
         assert signature.router.router_weight_dtype is torch.float32
         assert signature.router.router_workspace_bytes == 4 * signature.payload_row_capacity * (spec.hidden_size + 64)
+
+
+@pytest.mark.parametrize("dtype", (torch.bfloat16, torch.float16))
+def test_encoded_source_does_not_change_resident_weight_estimate(dtype: torch.dtype) -> None:
+    original, _ = estimator_and_plan()
+    spec = original.model_specs[0]
+    floating_layers = []
+    encoded_layers = []
+    for layer in spec.layers:
+        assert isinstance(layer, DenseFfnSpec)
+        floating_layers.append(
+            DenseFfnSpec(
+                kind=layer.kind,
+                layer_id=layer.layer_id,
+                intermediate_size=96,
+                checkpoint=layer.checkpoint,
+            )
+        )
+        prefix = f"model.layers.{layer.layer_id}.mlp"
+        encoded_layers.append(
+            DenseFfnSpec(
+                kind=layer.kind,
+                layer_id=layer.layer_id,
+                intermediate_size=96,
+                checkpoint=Mxfp4GatedFfnCheckpoint(
+                    kind="mxfp4",
+                    gate=Mxfp4TensorSource(
+                        blocks_key=f"{prefix}.gate.blocks",
+                        scales_key=f"{prefix}.gate.scales",
+                        decoded_shape=(96, 64),
+                        expert_index=None,
+                        row_part="all",
+                    ),
+                    up=Mxfp4TensorSource(
+                        blocks_key=f"{prefix}.up.blocks",
+                        scales_key=f"{prefix}.up.scales",
+                        decoded_shape=(96, 64),
+                        expert_index=None,
+                        row_part="all",
+                    ),
+                    down=Mxfp4TensorSource(
+                        blocks_key=f"{prefix}.down.blocks",
+                        scales_key=f"{prefix}.down.scales",
+                        decoded_shape=(64, 96),
+                        expert_index=None,
+                        row_part="all",
+                    ),
+                ),
+            )
+        )
+    floating = FfnModelSpec.model_validate({**spec.model_dump(), "hidden_size": 64, "layers": tuple(floating_layers)})
+    encoded = FfnModelSpec.model_validate({**spec.model_dump(), "hidden_size": 64, "layers": tuple(encoded_layers)})
+    profile = original.instance_profiles[0].model_copy(update={"hidden_size": 64, "payload_dtype": dtype})
+    plain_estimator = device_memory.DeviceMemoryEstimator(model_specs=(floating,), instance_profiles=(profile,))
+    encoded_estimator = device_memory.DeviceMemoryEstimator(model_specs=(encoded,), instance_profiles=(profile,))
+    for rank in (0, 1):
+        for ordinal in range(len(spec.layers)):
+            plain_bytes = plain_estimator.packed_weight_storage_bytes(0, ordinal, rank)
+            assert encoded_estimator.packed_weight_storage_bytes(0, ordinal, rank) == plain_bytes
+            assert sum(plain_bytes) == 3 * 64 * 48 * dtype.itemsize
 
 
 def test_exact_dense_allocation_ledger_and_feature_rows() -> None:

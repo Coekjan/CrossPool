@@ -12,15 +12,18 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 import xpool.native
 from xpool.model import ModelId
+from xpool.quantization import Mxfp4TensorSource
 
 __all__ = [
     "ActivationKind",
     "DenseFfnSpec",
     "FfnLayerSpec",
     "FfnModelSpec",
+    "GatedFfnCheckpoint",
     "GatedFfnCheckpointKeys",
     "MoeFfnCheckpointKeys",
     "MoeFfnSpec",
+    "Mxfp4GatedFfnCheckpoint",
 ]
 
 
@@ -44,6 +47,18 @@ class GatedFfnCheckpointKeys(FfnModel):
     down_weight_key: str = Field(strict=True, min_length=1, description="Safetensors key for the down projection.")
 
 
+class Mxfp4GatedFfnCheckpoint(FfnModel):
+    """Explicit encoded sources for all three gated projections."""
+
+    kind: Literal["mxfp4"] = Field(description="MXFP4 checkpoint representation discriminator.")
+    gate: Mxfp4TensorSource = Field(description="Logical gate matrix source.")
+    up: Mxfp4TensorSource = Field(description="Logical up matrix source.")
+    down: Mxfp4TensorSource = Field(description="Logical down matrix source.")
+
+
+type GatedFfnCheckpoint = GatedFfnCheckpointKeys | Mxfp4GatedFfnCheckpoint
+
+
 class MoeFfnCheckpointKeys(FfnModel):
     """Checkpoint keys for one MoE layer and its ordered Experts."""
 
@@ -55,11 +70,11 @@ class MoeFfnCheckpointKeys(FfnModel):
         ]
         | None
     )
-    routed_experts: tuple[GatedFfnCheckpointKeys, ...] = Field(
+    routed_experts: tuple[GatedFfnCheckpoint, ...] = Field(
         min_length=1,
         description="Routed Expert projection keys in Expert-id order.",
     )
-    shared_expert: GatedFfnCheckpointKeys | None = Field(
+    shared_expert: GatedFfnCheckpoint | None = Field(
         description="Optional wide shared-Expert projection keys.",
     )
 
@@ -72,7 +87,7 @@ class DenseFfnSpec(FfnModel):
     )
     layer_id: int = Field(strict=True, ge=0, description="Model-local decoder layer identity.")
     intermediate_size: int = Field(strict=True, ge=1, description="Full Dense intermediate width.")
-    checkpoint: GatedFfnCheckpointKeys = Field(description="Checkpoint projections consumed by this layer.")
+    checkpoint: GatedFfnCheckpoint = Field(description="Checkpoint projections consumed by this layer.")
 
 
 class MoeFfnSpec(FfnModel):
@@ -138,14 +153,12 @@ class FfnModelSpec(FfnModel):
 
     @model_validator(mode="after")
     def validate_model_semantics(self) -> FfnModelSpec:
-        """Require unique layer identities and checkpoint keys."""
+        """Require unique layers and disjoint, consistent source references."""
 
         layer_ids = tuple(layer.layer_id for layer in self.layers)
         if len(set(layer_ids)) != len(layer_ids):
             raise ValueError("FFN Model Spec layer ids must be unique")
-        keys = tuple(key for layer in self.layers for key in checkpoint_keys_for_layer(layer))
-        if len(set(keys)) != len(keys):
-            raise ValueError("FFN Model Spec checkpoint keys must be globally unique")
+        validate_checkpoint_references(self.layers)
         return self
 
     def digest(self) -> str:
@@ -160,21 +173,65 @@ class FfnModelSpec(FfnModel):
 
 
 def checkpoint_keys_for_layer(layer: FfnLayerSpec) -> tuple[str, ...]:
-    """Return one layer's checkpoint keys in canonical semantic order."""
+    """Return distinct physical keys in first-use semantic order."""
 
+    keys = []
+    for source in checkpoint_sources_for_layer(layer):
+        if isinstance(source, str):
+            keys.append(source)
+        else:
+            keys.extend((source.blocks_key, source.scales_key))
+    return tuple(dict.fromkeys(keys))
+
+
+def checkpoint_sources_for_layer(layer: FfnLayerSpec) -> tuple[str | Mxfp4TensorSource, ...]:
+    """Enumerate raw logical references before physical-key deduplication."""
+
+    sources: list[str | Mxfp4TensorSource] = []
     if isinstance(layer, DenseFfnSpec):
-        return (
-            layer.checkpoint.gate_weight_key,
-            layer.checkpoint.up_weight_key,
-            layer.checkpoint.down_weight_key,
-        )
-
-    keys = [layer.checkpoint.router_weight_key]
-    if layer.checkpoint.router_correction_bias_key is not None:
-        keys.append(layer.checkpoint.router_correction_bias_key)
-    experts = list(layer.checkpoint.routed_experts)
-    if layer.checkpoint.shared_expert is not None:
-        experts.append(layer.checkpoint.shared_expert)
+        experts = [layer.checkpoint]
+    else:
+        sources.append(layer.checkpoint.router_weight_key)
+        if layer.checkpoint.router_correction_bias_key is not None:
+            sources.append(layer.checkpoint.router_correction_bias_key)
+        experts = list(layer.checkpoint.routed_experts)
+        if layer.checkpoint.shared_expert is not None:
+            experts.append(layer.checkpoint.shared_expert)
     for expert in experts:
-        keys.extend((expert.gate_weight_key, expert.up_weight_key, expert.down_weight_key))
-    return tuple(keys)
+        if isinstance(expert, GatedFfnCheckpointKeys):
+            sources.extend((expert.gate_weight_key, expert.up_weight_key, expert.down_weight_key))
+        else:
+            sources.extend((expert.gate, expert.up, expert.down))
+    return tuple(sources)
+
+
+def validate_checkpoint_references(layers: tuple[FfnLayerSpec, ...]) -> None:
+    """Validate raw aliases within one model before enumerating physical keys.
+
+    Floating keys are globally unique. Encoded pairs can be shared within a
+    layer only with identical physical geometry and disjoint logical views.
+    """
+
+    roles: dict[str, tuple[str, int, tuple[str, str] | None]] = {}
+    shapes: dict[tuple[str, str], tuple[int, ...]] = {}
+    views: dict[tuple[str, str], dict[int | None, set[str]]] = {}
+    for layer in layers:
+        for source in checkpoint_sources_for_layer(layer):
+            if isinstance(source, str):
+                if source in roles:
+                    raise ValueError("FFN Model Spec checkpoint keys must be globally unique for floating resources")
+                roles[source] = ("floating", layer.layer_id, None)
+                continue
+            pair = (source.blocks_key, source.scales_key)
+            for key, role in zip(pair, ("blocks", "scales"), strict=True):
+                identity = (role, layer.layer_id, pair)
+                if key in roles and roles[key] != identity:
+                    raise ValueError(f"MXFP4 key {key!r} has inconsistent role, partner, or layer ownership")
+                roles[key] = identity
+            if pair in shapes and shapes[pair] != source.decoded_shape:
+                raise ValueError(f"MXFP4 pair {pair!r} has inconsistent physical shape")
+            shapes[pair] = source.decoded_shape
+            selected = views.setdefault(pair, {}).setdefault(source.expert_index, set())
+            if source.row_part in selected or "all" in selected or (source.row_part == "all" and selected):
+                raise ValueError(f"MXFP4 pair {pair!r} has overlapping logical views for Expert {source.expert_index}")
+            selected.add(source.row_part)
