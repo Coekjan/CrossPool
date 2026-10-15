@@ -132,8 +132,8 @@ detach and in-flight work.
 
 ### Private control storage: recommended default layout
 
-The bytes after offset 40 are private and not wire-versioned, but both
-implementers must agree on one default layout so B1 and B2 interoperate
+The bytes after offset 40 are private and not wire-versioned, but collection
+and protocol instrumentation must share one default layout to interoperate
 without a second interpretation. The recommended default holds only a small
 per-Endpoint *relay* scratch area for Graph-association handoff; it is not the
 canonical Dynamic Context store (see "Dynamic Context storage" below for why

@@ -1,7 +1,7 @@
 # Deterministic Calibration v1
 
 The [shared contract](shared-contract.md) preserves the original clock domains.
-This document fixes the A2 numerical algorithm, not merely a set of acceptable
+This document fixes the numerical clock calibration algorithm, not merely a set of acceptable
 outputs. Implementations must reproduce [the calibration fixtures](fixtures/calibration.json).
 
 ## Input and Sampling
