@@ -21,8 +21,8 @@ starts from a fresh Run state; identical IDs across scenarios never join them.
 | [calibration.json](calibration.json) | Exact blocks, feasible vertices, mappings, held-out failures, drift, gaps, Epochs, and durations |
 | [checksums.json](checksums.json) | Byte lengths and SHA-256 for the data files; excludes this README and itself |
 
-No generator or runtime parser is installed by C0. Downstream implementations
-consume these files directly; they must not regenerate their own expected
+These fixtures are independent of generators, runtime collectors, and offline readers.
+Implementations consume these files directly; they must not regenerate their own expected
 outputs using the implementation under test. An intentional contract change
 updates version, bytes, semantic expectations, and checksums together.
 

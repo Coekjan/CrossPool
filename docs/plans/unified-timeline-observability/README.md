@@ -2,7 +2,7 @@
 
 ## Goal
 
-Freeze the C0 contract that allows bounded runtime collection and offline
+Define the versioned artifact contract that allows bounded runtime collection and offline
 reconstruction to be implemented independently. The target is one single-Host
 Transport/Fabric/Graph/Routing timeline with protocol-derived causality,
 paired Host/Device clock sampling, and explicit uncertainty and data quality.
@@ -136,7 +136,7 @@ accuracy or performance threshold. Fixtures cannot substitute for these runs.
 
 ## Out of Scope
 
-This C0 delivery contains documents and fixed machine-readable data.
+This contract specification contains documents and fixed machine-readable data.
 It adds no runtime implementation, parser, generator, or persistent test code.
 Full user Request/Batch/Step context, KV causal chains, exact per-participant
 observations derived from aggregate conditions, per-CUDA-node profiling,
