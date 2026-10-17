@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import partial
 from pathlib import Path
 
+import torch
 from tests import TEST_CATALOG_PATH
 
 import xtest
@@ -26,7 +27,7 @@ NUMERICAL_CASES: tuple[E2eFfnNumericalCase, ...] = (
         deployment=DEPLOYMENT,
         model_id=MODEL,
         layer_ids=(0, 31),
-        input_matrix=E2eFfnInputMatrix(seed=17, row_counts=(1, 32, 4096), payload_dtype="float16"),
+        input_matrix=E2eFfnInputMatrix(seed=17, row_counts=(1, 32, 4096), payload_dtype=torch.float16),
         estimated_duration_seconds=600,
         timeout_seconds=1800,
     ),

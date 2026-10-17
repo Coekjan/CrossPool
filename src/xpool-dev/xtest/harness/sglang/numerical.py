@@ -38,7 +38,6 @@ from xtest.harness.support.ffn import (
     compare_ffn_routing,
     generate_ffn_hidden_states,
     read_ffn_routing_records,
-    resolve_ffn_payload_dtype,
 )
 from xtest.harness.support.wait import remaining_seconds
 
@@ -98,7 +97,7 @@ def run_numerical_case(
     model_spec = architecture.load(model_id=case.model_id, model_path=model_path)
     assert representative_layer_ids(model_spec.layers) == case.layer_ids
 
-    payload_dtype = resolve_ffn_payload_dtype(case.input_matrix.payload_dtype)
+    payload_dtype = case.input_matrix.payload_dtype
     hidden_states = generate_ffn_hidden_states(
         hidden_size=model_spec.hidden_size,
         seed=case.input_matrix.seed,

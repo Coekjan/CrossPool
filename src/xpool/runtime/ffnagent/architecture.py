@@ -102,8 +102,8 @@ class FfnSourceConfig:
             raise ValueError(f"model_type must equal {model_type!r}")
         if self.get("hidden_act", str) != "silu":
             raise ValueError("hidden_act must equal 'silu'")
-        if self.get(dtype_field, str) != "bfloat16":
-            raise ValueError(f"{dtype_field} must equal 'bfloat16'")
+        if self.get(dtype_field, str) not in ("bfloat16", "float16"):
+            raise ValueError(f"{dtype_field} must be 'bfloat16' or 'float16'")
 
 
 class FfnModelAdapter(ABC):

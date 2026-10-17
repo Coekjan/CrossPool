@@ -60,9 +60,11 @@ def test_llama_decoder_preserves_fp16_attention_and_norm_order() -> None:
     events: list[str] = []
     positions = torch.tensor([0])
     hidden_states = torch.tensor([[1.0]], dtype=torch.float16)
-    forward_batch = cast(ForwardBatch, object())
+    forward_batch = object()
 
-    def input_norm(states: torch.Tensor, residual: torch.Tensor | None = None, *, quant_linear: object) -> object:
+    def input_norm(
+        states: torch.Tensor, residual: torch.Tensor | None = None, *, quant_linear: object
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         events.append("input_norm")
         return states if residual is None else (states, residual)
 
@@ -70,7 +72,9 @@ def test_llama_decoder_preserves_fp16_attention_and_norm_order() -> None:
         events.append("attention")
         return hidden_states + 1
 
-    def post_norm(states: torch.Tensor, residual: torch.Tensor, *, quant_linear: object | None = None) -> object:
+    def post_norm(
+        states: torch.Tensor, residual: torch.Tensor, *, quant_linear: object | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         events.append("post_norm")
         return states + 1, residual
 
@@ -88,29 +92,27 @@ def test_llama_decoder_preserves_fp16_attention_and_norm_order() -> None:
     original_attention.qkv_proj = object()
     original_ffn = Mock(side_effect=original_mlp)
     original_ffn.gate_up_proj = object()
-    original = cast(
-        LlamaDecoderLayer,
-        SimpleNamespace(
-            input_layernorm=input_norm,
-            self_attn=original_attention,
-            post_attention_layernorm=post_norm,
-            mlp=original_ffn,
-        ),
+    original = SimpleNamespace(
+        input_layernorm=input_norm,
+        self_attn=original_attention,
+        post_attention_layernorm=post_norm,
+        mlp=original_ffn,
     )
-    replacement = cast(
-        LlamaDecoderLayer,
-        SimpleNamespace(
-            input_layernorm=input_norm,
-            self_attn=original.self_attn,
-            post_attention_layernorm=post_norm,
-            mlp=shim_mlp,
-        ),
+    replacement = SimpleNamespace(
+        input_layernorm=input_norm,
+        self_attn=original.self_attn,
+        post_attention_layernorm=post_norm,
+        mlp=shim_mlp,
     )
 
-    original_result = LlamaDecoderLayer.forward(original, positions, hidden_states, forward_batch, None)
+    original_result = LlamaDecoderLayer.forward(
+        cast(LlamaDecoderLayer, original), positions, hidden_states, cast(ForwardBatch, forward_batch), None
+    )
     original_events = tuple(events)
     events.clear()
-    replacement_result = llama_decoder_forward(replacement, positions, hidden_states, forward_batch, None)
+    replacement_result = llama_decoder_forward(
+        cast(LlamaDecoderLayer, replacement), positions, hidden_states, cast(ForwardBatch, forward_batch), None
+    )
 
     assert all(torch.equal(left, right) for left, right in zip(original_result, replacement_result, strict=True))
     assert tuple(events) == original_events == ("input_norm", "attention", "post_norm", "mlp")

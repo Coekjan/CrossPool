@@ -20,11 +20,19 @@ unsharded reference. These evidence surfaces are orthogonal: model suites own
 model semantics while shared topology suites own delivery cardinalities.
 
 Model numerical cases explicitly declare a BF16 or FP16 payload dtype; BF16
-is the default. That declaration controls deterministic hidden-state inputs
-and the production Instance profile, and is retained in numerical evidence.
-Reference and production outputs must have matching admitted dtypes. Both
-dtypes use the same numerical metrics and tolerances. Checkpoint metadata
-does not implicitly select the qualification payload dtype.
+is the default. Declarations and retained evidence use `torch.dtype` in Python
+and reuse the [shared canonical JSON codec](control-plane.md#generation-planning).
+Qualification validates the BF16/FP16 restriction separately from that codec's
+general dtype round-trip contract.
+
+Each checkpoint retains its own dtype during qualification: BF16 checkpoints
+use BF16 and FP16 checkpoints explicitly declare FP16. Family admission of both
+dtypes does not require additional forced-FP16 qualification of BF16 checkpoints.
+The declaration flows unchanged through deterministic hidden-state inputs,
+the independent SGLang reference, the production Instance profile, saved inputs
+and numerical evidence. Reference and production outputs must have matching
+admitted dtypes. Both dtypes use the same numerical metrics and tolerances.
+Checkpoint metadata does not implicitly select the qualification payload dtype.
 
 Serving graph qualification has two verdicts. Decode compares Eager and Decode
 Full token IDs with eager prefill in both runs. Prefill compares Eager and the

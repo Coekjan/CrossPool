@@ -90,11 +90,14 @@ def test_fabric_uid_and_plan_round_trip() -> None:
         FabricUid(value="ab")
 
 
-def test_profile_round_trips_any_canonical_torch_dtype() -> None:
-    value = profile(torch.float32)
+@pytest.mark.parametrize(
+    "dtype", (torch.bfloat16, torch.float16, torch.float32, torch.float64, torch.int64, torch.bool)
+)
+def test_profile_round_trips_any_canonical_torch_dtype(dtype: torch.dtype) -> None:
+    value = profile(dtype)
 
-    assert value.model_dump(mode="python")["payload_dtype"] is torch.float32
-    assert value.model_dump(mode="json")["payload_dtype"] == "float32"
+    assert value.model_dump(mode="python")["payload_dtype"] is dtype
+    assert value.model_dump(mode="json")["payload_dtype"] == str(dtype).removeprefix("torch.")
     assert InstanceFfnProfile.model_validate_json(value.model_dump_json()) == value
 
 

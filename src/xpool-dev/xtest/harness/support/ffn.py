@@ -5,14 +5,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Self, cast
+from typing import Annotated, Self, cast
 
 import safetensors
 import torch
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from xpool.fabric import FabricGenerationId
 from xpool.model import ModelId
+from xpool.utils.dtype import TorchDtype
 
 NORMALIZED_RMSE_DENOMINATOR_FLOOR = 1e-12
 FFN_NUMERICAL_ARTIFACT_FILENAME = "ffn-numerical.json"
@@ -24,19 +25,16 @@ FFN_OUTPUT_MAXIMUM_SCALED_ERROR_LIMIT = 0.10
 FFN_ROUTING_ATOL = 0.0001
 FFN_ROUTING_RTOL = 0.001
 
-type FfnPayloadDtypeName = Literal["bfloat16", "float16"]
+
+def validate_qualification_dtype(dtype: torch.dtype) -> torch.dtype:
+    """Restrict numerical qualification to the admitted BF16 and FP16 payloads."""
+
+    if dtype not in (torch.bfloat16, torch.float16):
+        raise ValueError("qualification payload dtype must be BF16 or FP16")
+    return dtype
 
 
-def resolve_ffn_payload_dtype(name: FfnPayloadDtypeName) -> torch.dtype:
-    """Resolve one closed qualification payload dtype name."""
-
-    match name:
-        case "bfloat16":
-            return torch.bfloat16
-        case "float16":
-            return torch.float16
-        case _:
-            raise ValueError(f"unsupported FFN payload dtype name: {name!r}")
+type QualificationDtype = Annotated[TorchDtype, AfterValidator(validate_qualification_dtype)]
 
 
 def generate_ffn_hidden_states(
@@ -177,7 +175,7 @@ class FfnNumericalEvidence(BaseModel):
     model_id: ModelId
     model_spec_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     generation: FabricGenerationId
-    payload_dtype: FfnPayloadDtypeName
+    payload_dtype: QualificationDtype
     samples: tuple[FfnNumericalSampleEvidence, ...]
 
     @model_validator(mode="after")

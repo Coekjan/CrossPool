@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Literal
 
-import torch
-from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_serializer, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 import xpool.native
 from xpool.config import FfnSchedulingPolicy
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
+from xpool.utils.dtype import TorchDtype
 
 __all__ = [
     "FABRIC_UID_HEX_LENGTH",
@@ -181,9 +181,7 @@ class InstanceFfnProfile(FabricModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    payload_dtype: Annotated[torch.dtype, WithJsonSchema({"type": "string"})] = Field(
-        description="Hidden-state dtype exchanged through the Fabric."
-    )
+    payload_dtype: TorchDtype = Field(description="Hidden-state dtype exchanged through the Fabric.")
     hidden_size: int = Field(ge=1, description="Hidden-state width in elements.")
     layers: tuple[InstanceFfnLayerProfile, ...] = Field(
         min_length=1,
@@ -200,25 +198,6 @@ class InstanceFfnProfile(FabricModel):
     group_sum_complete_admitted: bool = Field(
         description="Whether the instance accepts group-summed complete FFN output.",
     )
-
-    @field_validator("payload_dtype", mode="before")
-    @classmethod
-    def validate_payload_dtype(cls, value: object) -> torch.dtype:
-        """Restore one Torch dtype from its canonical control-plane name."""
-
-        if isinstance(value, torch.dtype):
-            return value
-        if isinstance(value, str):
-            payload_dtype = getattr(torch, value, None)
-            if isinstance(payload_dtype, torch.dtype) and str(payload_dtype) == f"torch.{value}":
-                return payload_dtype
-        raise ValueError("payload dtype must be a torch.dtype or its canonical unqualified Torch name")
-
-    @field_serializer("payload_dtype", when_used="json")
-    def serialize_payload_dtype(self, value: torch.dtype) -> str:
-        """Encode one Torch dtype with its canonical control-plane name."""
-
-        return str(value).removeprefix("torch.")
 
     @model_validator(mode="after")
     def validate_layers(self) -> InstanceFfnProfile:

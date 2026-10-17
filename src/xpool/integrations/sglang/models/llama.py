@@ -131,10 +131,10 @@ def llama_decoder_forward(
 
 
 def around_load_weights(
-    original_fn: Callable[[LlamaForCausalLM, Iterable[tuple[str, torch.Tensor]]], object],
+    original_fn: Callable[[LlamaForCausalLM, Iterable[tuple[str, torch.Tensor]]], set[str] | None],
     model: LlamaForCausalLM,
     checkpoint_weights: Iterable[tuple[str, torch.Tensor]],
-) -> object:
+) -> set[str] | None:
     """Remove decoder FFN tensors before invoking Llama's original loader."""
 
     return original_fn(model, filter_decoder_ffn_weights(checkpoint_weights))

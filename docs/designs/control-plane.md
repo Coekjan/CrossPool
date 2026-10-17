@@ -215,11 +215,15 @@ runtime payload dtype, hidden size, ordered layer projection, and decode and
 prefill row capacities observed at the shim boundary. Python represents the
 payload element type with `torch.dtype`. Its control-plane JSON field uses the
 canonical unqualified Torch dtype name and restores any dtype exposed by the
-installed Torch build. `InstanceFfnProfile` alone owns this lossless wire
-mapping. Serving integration preparation and native execution boundaries
-decide whether the current FFN implementation can execute the dtype. In-process
-consumers see only `torch.dtype`; dtype-name conversion remains local to the
-profile boundary.
+installed Torch build. The shared codec in `xpool.utils.dtype` owns this
+lossless mapping and is reused by Instance profiles, qualification declarations
+and numerical evidence. It rejects aliases and noncanonical names while
+preserving general Torch dtype round trips. Serving integration preparation
+and native execution boundaries decide whether the current FFN implementation
+can execute the dtype; qualification applies its own
+[BF16/FP16 admission policy](qualification.md#numerical-and-graph-evidence).
+In-process consumers see `torch.dtype`; canonical names belong to JSON
+boundaries.
 
 `FfnModelPlan` is the generation-static FFN realization. It assigns one
 execution group to every layer and retains only semantics needed to materialize

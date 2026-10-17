@@ -11,6 +11,12 @@ CrossPool-owned model specs. Adapter discovery is automatic. Each supported mode
 family lives in its own module and directly selects its activation, Router, and
 checkpoint mapping functions.
 
+Shared family-profile validation admits BF16 and FP16 checkpoint declarations
+alongside the expected model type and SiLU activation. The Llama adapter reuses
+this validation rather than restricting the family to one checkpoint's dtype.
+Family admission is distinct from
+[qualification of a concrete checkpoint](qualification.md#numerical-and-graph-evidence).
+
 Weights are read from safetensors through explicit checkpoint keys. Loading
 verifies tensor presence, logical shape, dtype, and TP divisibility. Each
 FfnAgent retains only its planned shard; no complete weight replica is retained

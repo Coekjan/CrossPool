@@ -8,6 +8,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import ClassVar, Literal, Self
 
+import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from xkit.case import CaseFamily, CaseId, Catalog
@@ -16,7 +17,7 @@ from xkit.deployment import resolve_deployment_path
 from xkit.serving.sglang.graph import SglangGraphMode
 from xpool.config import ConfigError
 from xpool.model import ModelId
-from xtest.harness.support.ffn import FfnPayloadDtypeName
+from xtest.harness.support.ffn import QualificationDtype
 
 
 class E2eElasticKvWorkload(BaseModel):
@@ -93,7 +94,7 @@ class E2eFfnInputMatrix(BaseModel):
 
     seed: int = Field(ge=0)
     row_counts: tuple[int, ...]
-    payload_dtype: FfnPayloadDtypeName = "bfloat16"
+    payload_dtype: QualificationDtype = torch.bfloat16
 
     @model_validator(mode="after")
     def validate_rows(self) -> Self:

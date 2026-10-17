@@ -22,12 +22,7 @@ class LlamaAdapter(architecture.FfnModelAdapter):
     ) -> ffn.FfnModelSpec:
         """Compile all main Llama decoder layers as gated Dense FFNs."""
 
-        if model_config.get("model_type", str) != "llama":
-            raise ValueError("model_type must equal 'llama'")
-        if model_config.get("hidden_act", str) != "silu":
-            raise ValueError("hidden_act must equal 'silu'")
-        if model_config.get("torch_dtype", str) != "float16":
-            raise ValueError("torch_dtype must equal 'float16'")
+        model_config.validate_family_profile(model_type="llama", dtype_field="torch_dtype")
         hidden_size = model_config.get("hidden_size", int, ge=1)
         layer_count = model_config.get("num_hidden_layers", int, ge=1)
         intermediate_size = model_config.get("intermediate_size", int, ge=1)

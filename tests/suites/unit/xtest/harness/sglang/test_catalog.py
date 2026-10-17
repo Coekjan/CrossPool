@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import torch
 from pydantic import ValidationError
 from tests import TEST_CATALOG_PATH
 
@@ -59,11 +60,25 @@ def test_ffn_input_matrix_rejects_unordered_rows() -> None:
 
 
 def test_ffn_input_matrix_defaults_to_bf16_and_accepts_fp16() -> None:
-    assert E2eFfnInputMatrix(seed=17, row_counts=(1,)).payload_dtype == "bfloat16"
-    assert E2eFfnInputMatrix(seed=17, row_counts=(1,), payload_dtype="float16").payload_dtype == "float16"
+    assert E2eFfnInputMatrix(seed=17, row_counts=(1,)).payload_dtype is torch.bfloat16
+    assert E2eFfnInputMatrix(seed=17, row_counts=(1,), payload_dtype=torch.float16).payload_dtype is torch.float16
 
     with pytest.raises(ValidationError, match="payload_dtype"):
-        E2eFfnInputMatrix(seed=17, row_counts=(1,), payload_dtype="float32")  # ty: ignore[invalid-argument-type]
+        E2eFfnInputMatrix(seed=17, row_counts=(1,), payload_dtype=torch.float32)
+
+
+@pytest.mark.parametrize("dtype", (torch.bfloat16, torch.float16))
+def test_ffn_input_matrix_round_trips_dtype(dtype: torch.dtype) -> None:
+    value = E2eFfnInputMatrix(seed=17, row_counts=(1,), payload_dtype=dtype)
+    assert value.model_dump()["payload_dtype"] is dtype
+    assert value.model_dump(mode="json")["payload_dtype"] == str(dtype).removeprefix("torch.")
+    assert E2eFfnInputMatrix.model_validate_json(value.model_dump_json()) == value
+
+
+@pytest.mark.parametrize("dtype", ("float32", "int64", "half", "torch.float16", "unknown"))
+def test_ffn_input_matrix_rejects_invalid_json_dtype(dtype: str) -> None:
+    with pytest.raises(ValidationError, match="payload_dtype"):
+        E2eFfnInputMatrix.model_validate({"seed": 17, "row_counts": (1,), "payload_dtype": dtype})
 
 
 def test_serving_case_graph_modes_belong_to_the_matching_test_path() -> None:
