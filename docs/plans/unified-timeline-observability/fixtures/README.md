@@ -1,4 +1,4 @@
-# Reference Fixtures v1
+# Reference Fixtures v2
 
 These immutable inputs and expected outputs implement the
 [shared contract](../shared-contract.md) and [calibration algorithm](../calibration.md).
@@ -12,6 +12,7 @@ starts from a fresh Run state; identical IDs across scenarios never join them.
 | --- | --- |
 | [layout.json](layout.json) | Complete 256-byte field table, presence groups, event IDs, and FFN enums |
 | [metadata.json](metadata.json) | Immutable metadata revision used by valid raw encoding; SHA-256 is over its exact bytes |
+| [identity-lifecycle.json](identity-lifecycle.json) | Independent-mode allocation matrix, policy failures, and diagnostic read preconditions |
 | [encoding.json](encoding.json) | Full one-event chunk hex and malformed variants with exact structured errors |
 | [causality.json](causality.json) | Complete/partial events, explicit associations, Replay/Eager, identity isolation, Context, tokens, quota, and tail cases |
 | [snapshots.json](snapshots.json) | Complete Transport/Fabric JSON projections, exact phase pairs, and retention/missing-fact cases |
@@ -28,7 +29,7 @@ updates version, bytes, semantic expectations, and checksums together.
 
 ## Case Interpretation
 
-JSON top-level contract_version is 1. Each `cases` entry has a unique `id`,
+JSON top-level contract_version is 2. Each `cases` entry has a unique `id`,
 `input`, and `expected`. Expected dictionaries are assertions on the named
 properties, not a license to discard other quality evidence. The complete
 `normal_dense` case and snapshot projections specify full ordinary behavior.
@@ -50,8 +51,8 @@ context; `metadata` references a fixture-relative file. `metadata_overrides`
 defines a fresh scenario's metadata revision: endpoints_add appends Endpoint
 definitions, and model_topologies replaces the Generation's topology. IDs in
 these lists are composite keys, not tensor-slot indices or array positions.
-producers_add and clock_domains_add append registered definitions, and
-generations_replace replaces the matching Generation by ID. Scenario capability
+producers_add, clock_domains_add, and graph_templates_add append registered
+definitions; generations_replace replaces the matching Generation by ID. Scenario capability
 overrides replace the named capabilities for that scenario.
 Independent scenario IDs are not serialized into the production format.
 
@@ -82,7 +83,19 @@ The event's artifact_id is zero because runtime file publication occurs later;
 the exact attachment identity resolves the final index. Not-collected, pool
 capacity, payload oversize, I/O failure, missing file, and unknown crashed tail
 are different expected outcomes. Safetensors metadata records preserves its
-baseline Invocation fields and adds the association fields defined by v1.
+baseline Invocation fields and adds the association fields defined by v2.
+
+The identity-lifecycle cases describe preparation and diagnostic interfaces:
+allocation is required by Unified Timeline, Transport Observer, or an explicitly
+identity-dependent consumer, rather than by Graph/Routing enablement alone.
+Diagnostic availability is a precondition result; equal Context generations do
+not validate live mutable storage. The stale graph field in the live-peek case
+is deliberately invalid diagnostic input, not part of the version 2 IPC layout.
+The causal cases execution_never_returns and execution_returns_failure retain
+the entry edge without inventing FFN completion. invocation_multiple_graph_owners
+preserves separate FfnAgent executions under one Invocation. Attributed SGLang
+edges originate in Instance evidence; AtnAgent Transport events carry no Graph
+identity obtained from another process.
 
 ## Numerical Oracles
 

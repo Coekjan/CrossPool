@@ -57,9 +57,11 @@ authoritative only when implemented.
 - Add fresh Graph execution identities and bounded, Stream-ordered dynamic
   Context. Separate Host calls, Device activity, templates, and long-lived Lane
   service Graphs. Attach Routing evidence by exact attachment identity.
-  Dynamic Context storage is process-wide per Graph owner; the IPC
-  `observation_region` carries only a short-lived per-Endpoint relay for the
-  association write, never the canonical Context array.
+  Dynamic Context storage is process-wide in the actual Graph owner:
+  Instance Rank for SGLang, FfnAgent for native FFN. The IPC region carries only
+  Operation identity and is allocated whenever an enabled consumer needs it,
+  including independent Transport observation. Diagnostics consume committed
+  events; direct mutable-storage reads require quiescence or synchronization.
 - Provide one bounded Collector/Writer per process, shared by independently
   enabled observers and unified mode. A process-local background collection
   thread periodically drives asynchronous Device-to-Host event transfer and
@@ -114,9 +116,16 @@ Both Native and offline implementations must independently read and write the
 valid binary vector, reject the invalid vectors by structured code, reconstruct
 the same legacy projections, and produce the exact calibration expectations.
 Fixture changes require a coordinated contract version update; never support
-two conflicting interpretations of v1.
+two conflicting interpretations of v2.
 
-Focused tests must cover concurrent reservation/commit/reclamation, multiple
+Contract and fixture version 2 supersedes version 1 without a compatibility
+mode. Update the raw vectors, metadata hashes and fixture checksums together.
+The Event record remains 256 bytes and calibration mathematics is unchanged.
+
+Focused tests must cover independent-observer IPC allocation and policy mismatch,
+actual Graph-owner isolation, entry association retained after failure or absent
+return, rejection before Submission preparation, diagnostic read preconditions,
+and concurrent reservation/commit/reclamation, multiple
 CTAs/Streams, IPC identity lifetime, repeated Replay and Context isolation,
 partial events, periodic background transfer during serving, Device slot
 reclamation before file publication, slow Writer isolation, bounded Host

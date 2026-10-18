@@ -1,0 +1,222 @@
+{
+  "contract_version": 2,
+  "cases": [
+    {
+      "id": "allocation_000",
+      "input": {
+        "timeline_enabled": false,
+        "transport_observer_enabled": false,
+        "other_consumer_requires_transport_identity": false,
+        "graph_observer_enabled": true,
+        "routing_observer_enabled": true,
+        "participant_policy_agrees": true
+      },
+      "expected": {
+        "transport_identity_required": false,
+        "observation_region": null,
+        "public_prefix_bytes": 0
+      }
+    },
+    {
+      "id": "allocation_001",
+      "input": {
+        "timeline_enabled": false,
+        "transport_observer_enabled": false,
+        "other_consumer_requires_transport_identity": true,
+        "graph_observer_enabled": true,
+        "routing_observer_enabled": true,
+        "participant_policy_agrees": true
+      },
+      "expected": {
+        "transport_identity_required": true,
+        "observation_region": "allocated",
+        "public_prefix_bytes": 8
+      }
+    },
+    {
+      "id": "allocation_010",
+      "input": {
+        "timeline_enabled": false,
+        "transport_observer_enabled": true,
+        "other_consumer_requires_transport_identity": false,
+        "graph_observer_enabled": true,
+        "routing_observer_enabled": true,
+        "participant_policy_agrees": true
+      },
+      "expected": {
+        "transport_identity_required": true,
+        "observation_region": "allocated",
+        "public_prefix_bytes": 8
+      }
+    },
+    {
+      "id": "allocation_011",
+      "input": {
+        "timeline_enabled": false,
+        "transport_observer_enabled": true,
+        "other_consumer_requires_transport_identity": true,
+        "graph_observer_enabled": true,
+        "routing_observer_enabled": true,
+        "participant_policy_agrees": true
+      },
+      "expected": {
+        "transport_identity_required": true,
+        "observation_region": "allocated",
+        "public_prefix_bytes": 8
+      }
+    },
+    {
+      "id": "allocation_100",
+      "input": {
+        "timeline_enabled": true,
+        "transport_observer_enabled": false,
+        "other_consumer_requires_transport_identity": false,
+        "graph_observer_enabled": true,
+        "routing_observer_enabled": true,
+        "participant_policy_agrees": true
+      },
+      "expected": {
+        "transport_identity_required": true,
+        "observation_region": "allocated",
+        "public_prefix_bytes": 8
+      }
+    },
+    {
+      "id": "allocation_101",
+      "input": {
+        "timeline_enabled": true,
+        "transport_observer_enabled": false,
+        "other_consumer_requires_transport_identity": true,
+        "graph_observer_enabled": true,
+        "routing_observer_enabled": true,
+        "participant_policy_agrees": true
+      },
+      "expected": {
+        "transport_identity_required": true,
+        "observation_region": "allocated",
+        "public_prefix_bytes": 8
+      }
+    },
+    {
+      "id": "allocation_110",
+      "input": {
+        "timeline_enabled": true,
+        "transport_observer_enabled": true,
+        "other_consumer_requires_transport_identity": false,
+        "graph_observer_enabled": true,
+        "routing_observer_enabled": true,
+        "participant_policy_agrees": true
+      },
+      "expected": {
+        "transport_identity_required": true,
+        "observation_region": "allocated",
+        "public_prefix_bytes": 8
+      }
+    },
+    {
+      "id": "allocation_111",
+      "input": {
+        "timeline_enabled": true,
+        "transport_observer_enabled": true,
+        "other_consumer_requires_transport_identity": true,
+        "graph_observer_enabled": true,
+        "routing_observer_enabled": true,
+        "participant_policy_agrees": true
+      },
+      "expected": {
+        "transport_identity_required": true,
+        "observation_region": "allocated",
+        "public_prefix_bytes": 8
+      }
+    },
+    {
+      "id": "policy_mismatch",
+      "input": {
+        "instance_requires_region": true,
+        "atnagent_requires_region": false
+      },
+      "expected": {
+        "startup_error": "preparation_policy_mismatch"
+      }
+    },
+    {
+      "id": "required_region_missing",
+      "input": {
+        "transport_identity_required": true,
+        "descriptor_region": null
+      },
+      "expected": {
+        "startup_error": "required_observation_region_missing"
+      }
+    },
+    {
+      "id": "live_peek_equal_generation",
+      "input": {
+        "source": "mutable_ipc",
+        "writers_quiesced_or_synchronized": false,
+        "generation_before": 7,
+        "generation_after": 7,
+        "sampled_operation_sequence": 2,
+        "sampled_graph_execution": 1
+      },
+      "expected": {
+        "status": "unavailable",
+        "sample_accepted": false
+      }
+    },
+    {
+      "id": "live_context_peek",
+      "input": {
+        "source": "dynamic_context",
+        "writers_quiesced_or_synchronized": false,
+        "generation_before": 7,
+        "generation_after": 7
+      },
+      "expected": {
+        "status": "unavailable",
+        "sample_accepted": false
+      }
+    },
+    {
+      "id": "quiesced_operation_read",
+      "input": {
+        "source": "mutable_ipc",
+        "writers_quiesced_or_synchronized": true,
+        "operation_sequence": 2
+      },
+      "expected": {
+        "status": "available",
+        "operation_sequence": 2
+      }
+    },
+    {
+      "id": "committed_event_during_serving",
+      "input": {
+        "source": "committed_event",
+        "writers_quiesced_or_synchronized": false,
+        "event_committed": true,
+        "copy_completed": true,
+        "operation_sequence": 1
+      },
+      "expected": {
+        "status": "available",
+        "operation_sequence": 1
+      }
+    },
+    {
+      "id": "stuck_execution_diagnostic",
+      "input": {
+        "source": "mutable_ipc",
+        "writers_quiesced_or_synchronized": false,
+        "synchronization_completed": false,
+        "previously_collected_events": true
+      },
+      "expected": {
+        "status": "unavailable",
+        "current_snapshot": null,
+        "previously_collected_evidence_available": true,
+        "tail": "unknown"
+      }
+    }
+  ]
+}
