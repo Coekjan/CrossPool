@@ -60,6 +60,13 @@ Mapping and unmapping operate only on complete tail bundles, so Tensor addresses
 remain stable and the mapped region is always a contiguous prefix. The pool
 drops its Tensor views before releasing the backing at shutdown.
 
+GPT-OSS uses this ordinary MHA/GQA backing with upstream hybrid SWA memory
+optimization disabled. Attention sinks and alternating full/sliding-window
+masks retain their original SGLang semantics. The integration requires Triton
+attention and validates the storage policy before weight loading. Full and
+sliding layers occupy the same compound backing geometry; independently sized
+full/SWA physical pools require a different integration seam.
+
 Concrete ordinary and paged allocator subclasses retain SGLang's allocation
 behavior while withholding free suffix IDs above the active token capacity.
 Growth returns newly admitted free IDs to SGLang. Shrink first withdraws suffix

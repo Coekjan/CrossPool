@@ -145,6 +145,13 @@ class DeviceMemoryEstimator:
             2 * payload_bytes * expert_count * spec.hidden_size * local_width,
             payload_bytes * expert_count * spec.hidden_size * local_width,
         ]
+        if isinstance(layer.checkpoint, ffn.Mxfp4MoeCheckpointKeys):
+            if spec.hidden_size % 32 or local_width % 32:
+                raise ValueError("MXFP4 TP shards require complete scale blocks")
+            e, h, i = expert_count, spec.hidden_size, local_width
+            result = [e * i * h, e * 2 * i * (h // 32), e * h * (i // 2), e * h * (i // 32), e * 2 * i * 2]
+            if tp_rank == 0:
+                result.append(e * h * 2)
         if tp_rank == 0:
             model_adapter = architecture.adapter_for(spec)
             if not issubclass(model_adapter, architecture.MoeFfnModelAdapter):
@@ -153,6 +160,8 @@ class DeviceMemoryEstimator:
                 payload_dtype=self.instance_profiles[model_plan_index].payload_dtype
             )
             result.append(router_dtype.itemsize * layer.routed_expert_count * spec.hidden_size)
+            if isinstance(layer.checkpoint, ffn.Mxfp4MoeCheckpointKeys):
+                result.append(router_dtype.itemsize * layer.routed_expert_count)
             if layer.checkpoint.router_correction_bias_key is not None:
                 result.append(4 * layer.routed_expert_count)
         return tuple(result)

@@ -27,7 +27,7 @@ from xpool.runtime.ffnagent import architecture, weights
 
 DECODE_PAYLOAD_ROW_CAPACITY = 2048
 PREFILL_PAYLOAD_ROW_CAPACITY = 4096
-FIT_COORDINATES = ("C0a", "C1", "C2", "C3", "D-T")
+FIT_COORDINATES = ("C0a", "C1", "C2", "C3", "C-Q4", "D-T")
 HELD_OUT_COORDINATE = "H0"
 
 
@@ -79,6 +79,25 @@ def calibration_moe_layer(
 def calibration_corpus_spec(member: str) -> ffn.FfnModelSpec:
     """Build one fixed implementation-domain Corpus member without checkpoint I/O."""
 
+    if member == "mxfp4-moe32":
+        from xpool.runtime.ffnagent.models.gpt_oss import GptOssAdapter
+
+        return GptOssAdapter.compile(
+            model_id=ModelId(f"calibration/{member}"),
+            model_config=architecture.FfnSourceConfig(
+                {
+                    "model_type": "gpt_oss",
+                    "torch_dtype": "bfloat16",
+                    "hidden_size": 1024,
+                    "intermediate_size": 512,
+                    "num_hidden_layers": 1,
+                    "num_local_experts": 32,
+                    "num_experts_per_tok": 4,
+                    "swiglu_limit": 7,
+                    "quantization_config": {"quant_method": "mxfp4"},
+                }
+            ),
+        )
     if member == "gated-dense":
         hidden_size = 5120
         layers: tuple[ffn.FfnLayerSpec, ...] = (
@@ -179,12 +198,15 @@ def coordinate_members(
         return (("corrected-shared-moe64", min(ffnagent_count, 2), 1, True),)
     if coordinate == "C3":
         return (("softmax-moe128", min(ffnagent_count, 2), 1, True),)
+    if coordinate == "C-Q4":
+        return (("mxfp4-moe32", min(ffnagent_count, 2), 1, True),)
     if coordinate == "D-T" and ffnagent_count >= 2:
         return (("gated-dense", 2, 1, True),)
     if coordinate == HELD_OUT_COORDINATE:
         return (
             ("softmax-moe128", min(ffnagent_count, 4), min(atnagent_count, 2), True),
             ("gated-dense", min(ffnagent_count, 2), min(atnagent_count, 2), False),
+            ("mxfp4-moe32", min(ffnagent_count, 2), min(atnagent_count, 2), True),
         )
     raise ValueError(f"coordinate {coordinate!r} is unreachable for F={ffnagent_count}")
 
@@ -325,7 +347,26 @@ def materialize_calibration_weights(
                         if layer_spec.checkpoint.router_correction_bias_key is not None
                         else None
                     ),
+                    bias=(
+                        torch.zeros(layer_spec.routed_expert_count, dtype=torch.bfloat16, device="cuda")
+                        if isinstance(layer_spec.checkpoint, ffn.Mxfp4MoeCheckpointKeys)
+                        else None
+                    ),
                 )
+            if isinstance(layer_spec.checkpoint, ffn.Mxfp4MoeCheckpointKeys):
+                e, h, i = expert_count, model_spec.hidden_size, layer_plan.local_intermediate_size
+                model_weights.append(
+                    weights.Mxfp4MoeFfnWeights(
+                        gate_up_packed=torch.zeros((e, 2 * i, h // 2), dtype=torch.uint8, device="cuda"),
+                        gate_up_scales=torch.full((e, 2 * i, h // 32), 127, dtype=torch.uint8, device="cuda"),
+                        down_packed=torch.zeros((e, h, i // 2), dtype=torch.uint8, device="cuda"),
+                        down_scales=torch.full((e, h, i // 32), 127, dtype=torch.uint8, device="cuda"),
+                        gate_up_bias=torch.zeros((e, 2 * i), dtype=torch.bfloat16, device="cuda"),
+                        down_bias=torch.zeros((e, h), dtype=torch.bfloat16, device="cuda") if tp_rank == 0 else None,
+                        router=router,
+                    )
+                )
+                continue
             model_weights.append(
                 weights.MoeFfnWeights(
                     expert_gate_up_weight=torch.empty(

@@ -30,8 +30,8 @@ wrappers. Model ID links point to the checkpoint configuration.
 | [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
 | [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
 | [Qwen/Qwen3.5-27B](https://huggingface.co/Qwen/Qwen3.5-27B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
-| [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b/blob/main/config.json) | `GptOssForCausalLM` | ❌ Not supported |
-| [openai/gpt-oss-120b](https://huggingface.co/openai/gpt-oss-120b/blob/main/config.json) | `GptOssForCausalLM` | ❌ Not supported |
+| [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b/blob/main/config.json) | `GptOssForCausalLM` | ✅ Supported |
+| [openai/gpt-oss-120b](https://huggingface.co/openai/gpt-oss-120b/blob/main/config.json) | `GptOssForCausalLM` | ✅ Supported |
 | [google/gemma-4-E2B-it](https://huggingface.co/google/gemma-4-E2B-it/blob/main/config.json) | `Gemma4ForConditionalGeneration` | ❌ Not supported |
 | [google/gemma-4-E4B-it](https://huggingface.co/google/gemma-4-E4B-it/blob/main/config.json) | `Gemma4ForConditionalGeneration` | ❌ Not supported |
 | [google/gemma-4-26B-A4B-it](https://huggingface.co/google/gemma-4-26B-A4B-it/blob/main/config.json) | `Gemma4ForConditionalGeneration` | ❌ Not supported |
@@ -67,6 +67,14 @@ wrappers. Model ID links point to the checkpoint configuration.
 
 Falcon-180B's family remains provisional until its gated checkpoint configuration
 is verified. DeepSeek-V3 is deferred from the current adaptation scope.
+
+GPT-OSS support covers original MXFP4 checkpoints, BF16 payloads and SM80
+Expert execution. Each model is qualified separately with attention TP2/DP1,
+FFN TP1, an 8192-token serving context, Triton attention and ordinary Elastic
+KV storage with hybrid SWA memory optimization disabled. Sliding-window masks
+remain active. These cases do not qualify full advertised context or concurrent
+20b/120b serving. See [FFN Execution](designs/ffn-execution.md) and
+[Elastic KV Cache Pooling](designs/elastic-kv-cache.md) for their runtime contracts.
 
 Run the relevant `xtest run --suite <model-id> --strict-requirements` suite
 when changes invalidate that model's qualification evidence. The complete

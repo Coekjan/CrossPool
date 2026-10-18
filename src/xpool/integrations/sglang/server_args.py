@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from sglang.srt.environ import envs
 from sglang.srt.model_executor.cuda_graph_config import Backend
@@ -49,6 +51,28 @@ def validate_sglang_server_args() -> None:
         raise RuntimeError(f"xpool SGLang plugin does not support these SGLang features: {joined}")
 
 
+def quantization_supported() -> bool:
+    """Admit serialized GPT-OSS MXFP4 alongside existing unquantized models."""
+
+    model = get_model()
+    if model.quantization is None:
+        return True
+    if model.quantization != "mxfp4":
+        return False
+    try:
+        config = json.loads((Path(model.model_path) / "config.json").read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(config, dict):
+        return False
+    quantization = config.get("quantization_config")
+    return (
+        config.get("architectures") == ["GptOssForCausalLM"]
+        and isinstance(quantization, dict)
+        and quantization.get("quant_method") == "mxfp4"
+    )
+
+
 SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (
     ServerArgRule("Pipeline Parallelism", lambda: get_parallel().pp_size == 1),
     ServerArgRule("gRPC-only Serving", lambda: not get_serving().grpc_mode and not get_serving().smg_grpc_mode),
@@ -65,7 +89,7 @@ SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (
     ServerArgRule("Attention Context Parallelism", lambda: get_parallel().attn_cp_size == 1),
     ServerArgRule("Speculative Decoding", lambda: get_spec().speculative_algorithm is None),
     ServerArgRule("LoRA", lambda: not get_lora().enable_lora and not get_lora().lora_paths),
-    ServerArgRule("Quantization", lambda: get_model().quantization is None),
+    ServerArgRule("Quantization", quantization_supported),
     ServerArgRule("Expert Parallelism", lambda: get_parallel().ep_size == 1),
     ServerArgRule("MoE Dense TP", lambda: get_parallel().moe_dense_tp_size in (None, 1)),
     ServerArgRule("MoE A2A Backend", lambda: get_exec().moe.moe_a2a_backend == "none"),

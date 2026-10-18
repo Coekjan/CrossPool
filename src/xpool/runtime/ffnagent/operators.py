@@ -13,7 +13,7 @@ import triton
 from triton import language
 
 from xpool.ffn import ActivationKind
-from xpool.runtime.ffnagent import execution, weights
+from xpool.runtime.ffnagent import execution, mxfp4, weights
 
 ROUTING_FINALIZATION_BLOCK_SIZE = 256
 
@@ -459,6 +459,93 @@ def compute_moe_partial(
     )
     sgl_kernel.moe_sum_reduce(route_outputs, output, routed_scaling_factor)
     return output
+
+
+def compute_mxfp4_partial(
+    *,
+    hidden_states: torch.Tensor,
+    layer_weights: weights.Mxfp4MoeFfnWeights,
+    topk_ids: torch.Tensor,
+    topk_weights: torch.Tensor,
+    sorted_token_ids: torch.Tensor,
+    expert_ids: torch.Tensor,
+    num_tokens_post_padded: torch.Tensor,
+    cumsum_buffer: torch.Tensor,
+    gate_up: torch.Tensor,
+    activated: torch.Tensor,
+    route_outputs: torch.Tensor,
+    output: torch.Tensor,
+    config: execution.Mxfp4ExecutionConfig,
+) -> None:
+    """Compute canonical MXFP4 Experts using only caller-owned scratch/output.
+
+    Matrix tiles are decoded in registers into BF16 operands and accumulated
+    in FP32. The retained weights/scales remain packed uint8 on SM80.
+    """
+
+    import sgl_kernel
+
+    c, h = hidden_states.shape
+    e, twice_i, _ = layer_weights.gate_up_packed.shape
+    i = twice_i // 2
+    topk = topk_ids.shape[1]
+    routes = c * topk
+    sgl_kernel.moe_align_block_size(
+        topk_ids, e + 1, 16, sorted_token_ids, expert_ids, num_tokens_post_padded, cumsum_buffer, True
+    )
+    mxfp4.mxfp4_gemm_kernel[(expert_ids.numel(), triton.cdiv(2 * i, 64))](
+        hidden_states,
+        layer_weights.gate_up_packed,
+        layer_weights.gate_up_scales,
+        layer_weights.gate_up_bias,
+        gate_up,
+        sorted_token_ids,
+        expert_ids,
+        num_tokens_post_padded,
+        topk_weights,
+        R=typing.cast(language.constexpr, routes),
+        N=typing.cast(language.constexpr, 2 * i),
+        K=typing.cast(language.constexpr, h),
+        E=typing.cast(language.constexpr, e),
+        TOPK=typing.cast(language.constexpr, topk),
+        DOWN=typing.cast(language.constexpr, False),
+        HAS_BIAS=typing.cast(language.constexpr, True),
+    )
+    mxfp4.oai_activation_kernel[(routes, triton.cdiv(i, 256))](
+        gate_up,
+        activated,
+        topk_ids,
+        R=typing.cast(language.constexpr, routes),
+        WIDTH=typing.cast(language.constexpr, i),
+        ALPHA=typing.cast(language.constexpr, config.alpha),
+        LIMIT=typing.cast(language.constexpr, config.limit),
+    )
+    mxfp4.mxfp4_gemm_kernel[(expert_ids.numel(), triton.cdiv(h, 64))](
+        activated,
+        layer_weights.down_packed,
+        layer_weights.down_scales,
+        layer_weights.down_bias,
+        route_outputs,
+        sorted_token_ids,
+        expert_ids,
+        num_tokens_post_padded,
+        topk_weights,
+        R=typing.cast(language.constexpr, routes),
+        N=typing.cast(language.constexpr, h),
+        K=typing.cast(language.constexpr, i),
+        E=typing.cast(language.constexpr, e),
+        TOPK=typing.cast(language.constexpr, topk),
+        DOWN=typing.cast(language.constexpr, True),
+        HAS_BIAS=typing.cast(language.constexpr, config.down_bias_present),
+    )
+    mxfp4.combine_routes_kernel[(c, triton.cdiv(h, 256))](
+        route_outputs,
+        topk_ids,
+        output,
+        C=typing.cast(language.constexpr, c),
+        H=typing.cast(language.constexpr, h),
+        TOPK=typing.cast(language.constexpr, topk),
+    )
 
 
 def compute_dense_partial(

@@ -77,6 +77,14 @@ def assert_fabric_observer_snapshots(
     ffnagent_records: list[tuple[int, FabricFfnAgentRecordJson]] = []
     for snapshot in snapshots:
         records = snapshot["records"]
+        pe = snapshot["pe"]
+
+        # An unassigned FFN participant may have no execution records.
+        if pe >= atnagent_count and snapshot["sequence"] == 0:
+            assert snapshot["dropped"] == 0
+            assert not records
+            continue
+
         assert snapshot["sequence"] > 0
         assert snapshot["dropped"] == 0
         assert records

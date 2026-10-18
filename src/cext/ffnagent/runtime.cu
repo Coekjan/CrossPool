@@ -69,6 +69,11 @@ LayerBindingValues materialize_binding_values(const BindingResourceProjection &r
               .down_weight_address = value.down_weight_address,
               .router_weight_address = 0,
               .router_correction_bias_address = 0,
+              .router_bias_address = 0,
+              .gate_up_scales_address = 0,
+              .down_scales_address = 0,
+              .gate_up_bias_address = 0,
+              .down_bias_address = 0,
           };
         } else {
           return LayerBindingValues{
@@ -79,6 +84,11 @@ LayerBindingValues materialize_binding_values(const BindingResourceProjection &r
                   value.router.has_value() && value.router->correction_bias_address.has_value()
                       ? *value.router->correction_bias_address
                       : 0,
+              .router_bias_address = value.router && value.router->bias_address ? *value.router->bias_address : 0,
+              .gate_up_scales_address = value.mxfp4 ? value.mxfp4->gate_up_scales_address : 0,
+              .down_scales_address = value.mxfp4 ? value.mxfp4->down_scales_address : 0,
+              .gate_up_bias_address = value.mxfp4 ? value.mxfp4->gate_up_bias_address : 0,
+              .down_bias_address = value.mxfp4 && value.mxfp4->down_bias_address ? *value.mxfp4->down_bias_address : 0,
           };
         }
       },
@@ -112,6 +122,24 @@ std::vector<ResourceReplacement> make_resource_replacements(const ExecutionSigna
                                   value.primary_capture_resources.expert_down_weight_address,
                                   offsetof(LayerBindingValues, down_weight_address)},
           };
+          if (value.primary_capture_resources.mxfp4.has_value()) {
+            const auto &primary = *value.primary_capture_resources.mxfp4;
+            const auto &control = *value.control_capture_resources.mxfp4;
+            result.push_back(ResourceReplacement{primary.gate_up_scales_address, control.gate_up_scales_address,
+                                                 primary.gate_up_scales_address,
+                                                 offsetof(LayerBindingValues, gate_up_scales_address)});
+            result.push_back(ResourceReplacement{primary.down_scales_address, control.down_scales_address,
+                                                 primary.down_scales_address,
+                                                 offsetof(LayerBindingValues, down_scales_address)});
+            result.push_back(ResourceReplacement{primary.gate_up_bias_address, control.gate_up_bias_address,
+                                                 primary.gate_up_bias_address,
+                                                 offsetof(LayerBindingValues, gate_up_bias_address)});
+            if (primary.down_bias_address.has_value()) {
+              result.push_back(ResourceReplacement{*primary.down_bias_address, *control.down_bias_address,
+                                                   *primary.down_bias_address,
+                                                   offsetof(LayerBindingValues, down_bias_address)});
+            }
+          }
           if (value.primary_capture_resources.router.has_value()) {
             result.push_back(ResourceReplacement{
                 value.primary_capture_resources.router->weight_address,
@@ -125,6 +153,14 @@ std::vector<ResourceReplacement> make_resource_replacements(const ExecutionSigna
                   *value.control_capture_resources.router->correction_bias_address,
                   *value.primary_capture_resources.router->correction_bias_address,
                   offsetof(LayerBindingValues, router_correction_bias_address),
+              });
+            }
+            if (value.primary_capture_resources.router->bias_address.has_value()) {
+              result.push_back(ResourceReplacement{
+                  *value.primary_capture_resources.router->bias_address,
+                  *value.control_capture_resources.router->bias_address,
+                  *value.primary_capture_resources.router->bias_address,
+                  offsetof(LayerBindingValues, router_bias_address),
               });
             }
           }
@@ -147,10 +183,21 @@ void validate_layer_resource_targets(const ExecutionProjection &projection, int 
     } else {
       validate_cuda_address(resources.expert_gate_up_weight_address, device, "MoE Expert gate/up weights");
       validate_cuda_address(resources.expert_down_weight_address, device, "MoE Expert down weights");
+      if (resources.mxfp4.has_value()) {
+        validate_cuda_address(resources.mxfp4->gate_up_scales_address, device, "MXFP4 gate/up scales");
+        validate_cuda_address(resources.mxfp4->down_scales_address, device, "MXFP4 down scales");
+        validate_cuda_address(resources.mxfp4->gate_up_bias_address, device, "MXFP4 gate/up bias");
+        if (resources.mxfp4->down_bias_address.has_value()) {
+          validate_cuda_address(*resources.mxfp4->down_bias_address, device, "MXFP4 down bias");
+        }
+      }
       if (resources.router.has_value()) {
         validate_cuda_address(resources.router->weight_address, device, "MoE Router weight");
         if (resources.router->correction_bias_address.has_value()) {
           validate_cuda_address(*resources.router->correction_bias_address, device, "MoE Router correction bias");
+        }
+        if (resources.router->bias_address.has_value()) {
+          validate_cuda_address(*resources.router->bias_address, device, "MoE Router bias");
         }
       }
     }

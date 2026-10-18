@@ -64,6 +64,7 @@ class MoeRouterExecutionSignature:
     router_workspace_bytes: int
     correction_bias_present: bool
     renormalize: bool
+    bias_present: bool = False
 
     def __post_init__(self) -> None:
         """Reject invalid Router semantics and resource geometry."""
@@ -72,6 +73,21 @@ class MoeRouterExecutionSignature:
             raise ValueError("MoE Router execution requires one callable implementation")
         if self.routed_expert_count <= 0 or self.router_workspace_bytes < 0:
             raise ValueError("MoE Router execution geometry is inconsistent")
+
+
+@dataclass(frozen=True, slots=True)
+class Mxfp4ExecutionConfig:
+    """Canonical SM80 W4A16 arithmetic and rank-local bias specialization."""
+
+    alpha: float
+    limit: float
+    down_bias_present: bool
+
+    def __post_init__(self) -> None:
+        """Reject non-finite activation parameters before capture."""
+
+        if not all(math.isfinite(v) and v > 0 for v in (self.alpha, self.limit)):
+            raise ValueError("MXFP4 activation parameters must be finite and positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +103,7 @@ class MoeFfnExecutionSignature:
     activation: ffn.ActivationKind
     routed_scaling_factor: float
     router: MoeRouterExecutionSignature | None
+    mxfp4: Mxfp4ExecutionConfig | None = None
 
     def __post_init__(self) -> None:
         """Reject unsupported or empty MoE execution geometry."""
@@ -106,8 +123,16 @@ class MoeFfnExecutionSignature:
             raise ValueError("MoE FFN execution dimensions must be positive")
         if self.effective_topk > self.expert_count:
             raise ValueError("MoE effective TopK exceeds Expert count")
-        if self.activation is not ffn.ActivationKind.SILU:
-            raise ValueError("MoE FFN execution supports only SiLU activation")
+        if self.mxfp4 is None:
+            if self.activation is not ffn.ActivationKind.SILU:
+                raise ValueError("Unquantized MoE execution supports only SiLU")
+        elif (
+            self.activation is not ffn.ActivationKind.SWIGLU_OAI
+            or self.payload_dtype is not torch.bfloat16
+            or self.hidden_size % 32
+            or self.local_intermediate_size % 32
+        ):
+            raise ValueError("MXFP4 requires BF16, OpenAI SwiGLU and 32-value blocks")
         if not math.isfinite(self.routed_scaling_factor) or self.routed_scaling_factor <= 0:
             raise ValueError("MoE routed scaling factor must be finite and positive")
 
@@ -236,6 +261,8 @@ def compute_workspace_bytes(signature: ExecutionSignature) -> int:
             row_capacity=signature.payload_row_capacity,
             local_intermediate_size=signature.local_intermediate_size,
         )
+    if signature.mxfp4 is not None:
+        return moe_workspace_layout(signature, block_size_m=16)[2]
     return max(moe_workspace_layout(signature, block_size_m=value)[2] for value in QUALIFIED_MOE_BLOCK_SIZE_M_VALUES)
 
 
@@ -247,12 +274,19 @@ def control_capture_probe_storage_bytes(signature: ExecutionSignature) -> tuple[
     if isinstance(signature, DenseFfnExecutionSignature):
         return gate_up_bytes, down_bytes
     result = [signature.expert_count * gate_up_bytes, signature.expert_count * down_bytes]
+    if signature.mxfp4 is not None:
+        e, h, i = signature.expert_count, signature.hidden_size, signature.local_intermediate_size
+        result = [e * i * h, e * 2 * i * (h // 32), e * h * (i // 2), e * h * (i // 32), e * 2 * i * 2]
+        if signature.mxfp4.down_bias_present:
+            result.append(e * h * 2)
     if signature.router is not None:
         result.append(
             signature.router.router_weight_dtype.itemsize * signature.router.routed_expert_count * signature.hidden_size
         )
         if signature.router.correction_bias_present:
             result.append(4 * signature.router.routed_expert_count)
+        if signature.router.bias_present:
+            result.append(signature.router.router_weight_dtype.itemsize * signature.router.routed_expert_count)
     return tuple(result)
 
 
@@ -319,6 +353,15 @@ def required_execution_signatures(
             effective_topk=layer.routed_topk + layer.shared_expert_count,
             activation=model_spec.activation,
             routed_scaling_factor=layer.routed_scaling_factor,
+            mxfp4=(
+                Mxfp4ExecutionConfig(
+                    alpha=model_spec.activation_alpha,
+                    limit=model_spec.activation_limit or 7.0,
+                    down_bias_present=tp_rank == 0,
+                )
+                if isinstance(layer.checkpoint, ffn.Mxfp4MoeCheckpointKeys)
+                else None
+            ),
             router=(
                 MoeRouterExecutionSignature(
                     compute_routed_topk=model_adapter.compute_routed_topk,
@@ -333,6 +376,7 @@ def required_execution_signatures(
                     ),
                     correction_bias_present=(layer.checkpoint.router_correction_bias_key is not None),
                     renormalize=layer.renormalize,
+                    bias_present=isinstance(layer.checkpoint, ffn.Mxfp4MoeCheckpointKeys),
                 )
                 if tp_rank == 0
                 else None

@@ -195,6 +195,27 @@ TEST(FfnExecutionProjectionTest, RejectsCrossCapacityWeightGeometryMismatch) {
   EXPECT_THROW(projection.validate(), c10::Error);
 }
 
+TEST(FfnExecutionProjectionTest, ValidatesMxfp4ScaleAndBiasSchema) {
+  auto projection = moe_execution_projection(true, 7);
+  auto &signature = std::get<xpool::ffnagent::MoeExecutionSignatureProjection>(projection.signatures.front());
+  signature.hidden_size = 96;
+  signature.local_intermediate_size = 64;
+  signature.primary_capture_resources.mxfp4 = xpool::ffnagent::Mxfp4ExpertBindingResourceProjection{21, 22, 23, 24};
+  signature.control_capture_resources.mxfp4 = xpool::ffnagent::Mxfp4ExpertBindingResourceProjection{31, 32, 33, 34};
+  signature.primary_capture_resources.router->bias_address = 15;
+  signature.control_capture_resources.router->bias_address = 18;
+  auto &target =
+      std::get<xpool::ffnagent::MoeBindingResourceProjection>(projection.layers.front().layer_resource_targets);
+  target.mxfp4 = xpool::ffnagent::Mxfp4ExpertBindingResourceProjection{41, 42, 43, 44};
+  target.router->bias_address = 19;
+  EXPECT_NO_THROW(projection.validate());
+  signature.control_capture_resources.mxfp4->gate_up_scales_address = 21;
+  EXPECT_THROW(projection.validate(), c10::Error);
+  signature.control_capture_resources.mxfp4->gate_up_scales_address = 31;
+  target.mxfp4->down_bias_address = std::nullopt;
+  EXPECT_THROW(projection.validate(), c10::Error);
+}
+
 TEST(FabricArenaProjectionTest, RejectsInvalidSemanticInputs) {
   auto projection = valid_projection();
   projection.generation_high = 0;

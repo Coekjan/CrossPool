@@ -85,6 +85,7 @@ class MoeRouterWeights:
 
     weight: torch.Tensor
     correction_bias: torch.Tensor | None
+    bias: torch.Tensor | None = None
 
     def __post_init__(self) -> None:
         """Validate Router weight and optional correction bias."""
@@ -93,6 +94,10 @@ class MoeRouterWeights:
         if router_dtype not in (torch.bfloat16, torch.float16, torch.float32):
             raise ValueError("Router weights require BF16, FP16, or FP32")
         validate_weight_tensor(self.weight, name="router weight", dtype=router_dtype, dimensions=2)
+        if self.bias is not None:
+            validate_weight_tensor(self.bias, name="router bias", dtype=router_dtype, dimensions=1)
+            if self.bias.shape != (self.weight.shape[0],) or self.bias.device != self.weight.device:
+                raise ValueError("Router bias dimensions or device disagree with weight")
         if self.correction_bias is None:
             return
         validate_weight_tensor(
@@ -156,4 +161,53 @@ class MoeFfnWeights:
                 raise ValueError("MoE Router dimensions disagree with Expert weights")
 
 
-type FfnLayerWeights = DenseFfnWeights | MoeFfnWeights
+@dataclass(frozen=True, slots=True)
+class Mxfp4MoeFfnWeights:
+    """Canonical CUDA MXFP4 shard; matrices stay packed, with 32-value scales.
+
+    Gate/up rows remain interleaved. Only TP rank zero retains down bias and
+    Router resources. Each tensor owns its exact independent Device storage.
+    """
+
+    gate_up_packed: torch.Tensor
+    gate_up_scales: torch.Tensor
+    down_packed: torch.Tensor
+    down_scales: torch.Tensor
+    gate_up_bias: torch.Tensor
+    down_bias: torch.Tensor | None
+    router: MoeRouterWeights | None
+
+    def __post_init__(self) -> None:
+        """Validate packed layout and block alignment before capture."""
+
+        for name in ("gate_up_packed", "gate_up_scales", "down_packed", "down_scales"):
+            validate_weight_tensor(getattr(self, name), name=name, dtype=torch.uint8, dimensions=3)
+        e, twice_i, half_h = self.gate_up_packed.shape
+        h, i = half_h * 2, twice_i // 2
+        if twice_i % 2 or h % 32 or i % 32:
+            raise ValueError("MXFP4 dimensions must contain complete 32-value blocks")
+        if (
+            self.gate_up_scales.shape != (e, 2 * i, h // 32)
+            or self.down_packed.shape != (e, h, i // 2)
+            or self.down_scales.shape != (e, h, i // 32)
+        ):
+            raise ValueError("MXFP4 packed weights and scales disagree")
+        validate_weight_tensor(self.gate_up_bias, name="gate/up bias", dtype=torch.bfloat16, dimensions=2)
+        if self.gate_up_bias.shape != (e, 2 * i):
+            raise ValueError("MXFP4 gate/up bias dimensions disagree")
+        if self.down_bias is not None:
+            validate_weight_tensor(self.down_bias, name="down bias", dtype=torch.bfloat16, dimensions=2)
+            if self.down_bias.shape != (e, h):
+                raise ValueError("MXFP4 down bias dimensions disagree")
+        tensors = [self.gate_up_scales, self.down_packed, self.down_scales, self.gate_up_bias]
+        if self.down_bias is not None:
+            tensors.append(self.down_bias)
+        if self.router is not None:
+            if self.router.weight.shape != (e, h) or self.router.bias is None:
+                raise ValueError("MXFP4 Router dimensions or additive bias disagree")
+            tensors.append(self.router.weight)
+        if any(t.device != self.gate_up_packed.device for t in tensors):
+            raise ValueError("MXFP4 resources must share one Device")
+
+
+type FfnLayerWeights = DenseFfnWeights | MoeFfnWeights | Mxfp4MoeFfnWeights

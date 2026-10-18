@@ -24,6 +24,21 @@ find_library(XPOOL_TORCH_PYTHON_LIBRARY
   REQUIRED
 )
 find_package(CUDAToolkit 13.2 REQUIRED)
+# Router cuBLASLt handles come from Torch, so link its pinned wheel library.
+# Keep Toolkit headers paired with NVCC and CCCL rather than importing the
+# wheel's older CUDA runtime headers into every native compilation unit.
+set(XPOOL_CUBLAS_ROOT "${Python3_SITELIB}/nvidia/cu13")
+find_library(XPOOL_CUBLASLT_LIBRARY
+  NAMES cublasLt libcublasLt.so.13
+  HINTS "${XPOOL_CUBLAS_ROOT}/lib"
+  NO_DEFAULT_PATH
+  REQUIRED
+)
+add_library(CUBLAS::Lt UNKNOWN IMPORTED GLOBAL)
+set_target_properties(CUBLAS::Lt PROPERTIES
+  IMPORTED_LOCATION "${XPOOL_CUBLASLT_LIBRARY}"
+  SYSTEM TRUE
+)
 find_package(CCCL 3.2 CONFIG REQUIRED COMPONENTS libcudacxx
   PATHS
     "${CUDAToolkit_LIBRARY_DIR}/cmake/cccl"

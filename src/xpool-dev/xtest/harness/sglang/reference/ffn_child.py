@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import typing
@@ -17,6 +18,7 @@ SUPPORTED_MODEL_CLASSES = frozenset(
         "DeepseekV2ForCausalLM",
         "Glm4MoeLiteForCausalLM",
         "LlamaForCausalLM",
+        "GptOssForCausalLM",
         "Qwen2ForCausalLM",
         "Qwen3ForCausalLM",
         "Qwen3MoeForCausalLM",
@@ -77,12 +79,15 @@ def run_ffn_reference_rank(
     import sglang.srt.layers.moe.utils
     import sglang.srt.layers.utils
     import sglang.srt.model_loader
+    import sglang.srt.model_loader.utils
     import sglang.srt.runtime_context
     import sglang.srt.server_args
     import torch
     import torch.distributed
 
     torch.cuda.set_device(tensor_parallel_rank)
+    source_config = json.loads((job.model_path / "config.json").read_text())
+    is_gpt_oss = source_config.get("architectures") == ["GptOssForCausalLM"]
     server_args = typing.cast(typing.Any, sglang.srt.server_args.ServerArgs)(
         model_path=str(job.model_path),
         skip_tokenizer_init=True,
@@ -99,7 +104,7 @@ def run_ffn_reference_rank(
         enable_dp_attention=True,
         enable_dp_lm_head=True,
         moe_a2a_backend="none",
-        moe_runner_backend="auto",
+        moe_runner_backend="triton" if is_gpt_oss else "auto",
         cuda_graph_backend_decode="disabled",
         cuda_graph_backend_prefill="disabled",
         disable_custom_all_reduce=True,
@@ -155,6 +160,23 @@ def run_ffn_reference_rank(
         )
         sglang.srt.distributed.parallel_state.monkey_patch_vllm_parallel_state()
         vllm_parallel_state_patched = True
+        if model_config.hf_config.architectures == ["GptOssForCausalLM"]:
+            for case in job.cases:
+                # Match the dtype context used by SGLang's full model loader.
+                with sglang.srt.model_loader.utils.set_default_torch_dtype(model_config.dtype):
+                    mlp = load_gpt_oss_reference_layer(model_config.hf_config, job.model_path, case.layer_id)
+                execute_ffn_reference_case(
+                    hidden_size=model_config.hidden_size,
+                    model_dtype=model_config.dtype,
+                    mlp=mlp,
+                    case=case,
+                    persist_result=tensor_parallel_rank == 0,
+                )
+                torch.distributed.barrier()
+                del mlp
+                gc.collect()
+                torch.cuda.empty_cache()
+            return
         model = sglang.srt.model_loader.get_model(
             model_config=model_config,
             load_config=load_config,
@@ -199,6 +221,60 @@ def run_ffn_reference_rank(
             failure.add_note(f"FFN reference cleanup also failed: {cleanup_error!r}")
     if failure is not None:
         raise failure
+
+
+def load_gpt_oss_reference_layer(config: object, model_path: object, layer_id: int) -> torch.nn.Module:
+    """Load one original SGLang layer with upstream MXFP4 decoding on A100.
+
+    The temporary model shell supplies the exact checkpoint namespace to the
+    original loader. It contains no attention or unrelated Expert layers and
+    imports no CrossPool production materialization or decoding code.
+    """
+
+    from pathlib import Path
+
+    from safetensors import safe_open
+    from sglang.srt.layers.quantization.mxfp4 import Mxfp4Config
+    from sglang.srt.models.gpt_oss import GptOssForCausalLM, GptOssSparseMoeBlock
+
+    cfg = typing.cast(typing.Any, config)
+    path = Path(typing.cast(str, model_path))
+    quantization = Mxfp4Config.from_config(cfg.quantization_config)
+    with torch.device("cuda"):
+        mlp = GptOssSparseMoeBlock(
+            config=cfg, layer_id=layer_id, quant_config=quantization, prefix=f"model.layers.{layer_id}.mlp"
+        )
+    shell = GptOssForCausalLM.__new__(GptOssForCausalLM)
+    torch.nn.Module.__init__(shell)
+    shell.config = cfg
+    shell.quant_config = quantization
+    shell.model = torch.nn.Module()
+    layer = torch.nn.Module()
+    layer.add_module("mlp", mlp)
+    shell.model.add_module("layers", torch.nn.ModuleDict({str(layer_id): layer}))
+    index_path = path / "model.safetensors.index.json"
+    if index_path.is_file():
+        import json
+
+        mapping = json.loads(index_path.read_text())["weight_map"]
+    else:
+        with safe_open(str(path / "model.safetensors"), framework="pt", device="cpu") as f:
+            mapping = dict.fromkeys(f.keys(), "model.safetensors")
+    prefix = f"model.layers.{layer_id}.mlp."
+
+    def expert_tensors():
+        for key, filename in mapping.items():
+            if key.startswith(prefix + "experts."):
+                with safe_open(str(path / filename), framework="pt", device="cpu") as f:
+                    yield key, f.get_tensor(key)
+
+    shell._load_mxfp4_experts_weights(expert_tensors())
+    for suffix, destination in (("weight", mlp.router.weight), ("bias", mlp.router.bias)):
+        key = prefix + "router." + suffix
+        with safe_open(str(path / mapping[key]), framework="pt", device="cpu") as f:
+            typing.cast(torch.Tensor, destination).data.copy_(f.get_tensor(key))
+    mlp.experts.quant_method.process_weights_after_loading(mlp.experts)
+    return mlp.eval()
 
 
 def execute_ffn_reference_case(

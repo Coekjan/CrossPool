@@ -58,7 +58,7 @@ def binding_resource_projection(
 
 @overload
 def binding_resource_projection(
-    layer_weights: weights.MoeFfnWeights,
+    layer_weights: weights.MoeFfnWeights | weights.Mxfp4MoeFfnWeights,
 ) -> xpool.native.ffnagent.MoeBindingResourceProjection: ...
 
 
@@ -74,14 +74,33 @@ def binding_resource_projection(
         )
     router = layer_weights.router
     return xpool.native.ffnagent.MoeBindingResourceProjection(
-        expert_gate_up_weight=layer_weights.expert_gate_up_weight,
-        expert_down_weight=layer_weights.expert_down_weight,
+        expert_gate_up_weight=(
+            layer_weights.gate_up_packed
+            if isinstance(layer_weights, weights.Mxfp4MoeFfnWeights)
+            else layer_weights.expert_gate_up_weight
+        ),
+        expert_down_weight=(
+            layer_weights.down_packed
+            if isinstance(layer_weights, weights.Mxfp4MoeFfnWeights)
+            else layer_weights.expert_down_weight
+        ),
+        mxfp4=(
+            xpool.native.ffnagent.Mxfp4ExpertBindingResourceProjection(
+                gate_up_scales=layer_weights.gate_up_scales,
+                down_scales=layer_weights.down_scales,
+                gate_up_bias=layer_weights.gate_up_bias,
+                down_bias=layer_weights.down_bias,
+            )
+            if isinstance(layer_weights, weights.Mxfp4MoeFfnWeights)
+            else None
+        ),
         router=(
             None
             if router is None
             else xpool.native.ffnagent.MoeRouterBindingResourceProjection(
                 weight=router.weight,
                 correction_bias=router.correction_bias,
+                bias=router.bias,
             )
         ),
     )
@@ -96,6 +115,22 @@ def create_control_capture_probe(layer_weights: weights.FfnLayerWeights) -> weig
             down_weight=torch.zeros_like(layer_weights.down_weight),
         )
     router = layer_weights.router
+    if isinstance(layer_weights, weights.Mxfp4MoeFfnWeights):
+        return weights.Mxfp4MoeFfnWeights(
+            gate_up_packed=torch.zeros_like(layer_weights.gate_up_packed),
+            gate_up_scales=torch.full_like(layer_weights.gate_up_scales, 127),
+            down_packed=torch.zeros_like(layer_weights.down_packed),
+            down_scales=torch.full_like(layer_weights.down_scales, 127),
+            gate_up_bias=torch.zeros_like(layer_weights.gate_up_bias),
+            down_bias=None if layer_weights.down_bias is None else torch.zeros_like(layer_weights.down_bias),
+            router=None
+            if router is None
+            else weights.MoeRouterWeights(
+                weight=torch.zeros_like(router.weight),
+                correction_bias=None,
+                bias=None if router.bias is None else torch.zeros_like(router.bias),
+            ),
+        )
     return weights.MoeFfnWeights(
         expert_gate_up_weight=torch.zeros_like(layer_weights.expert_gate_up_weight),
         expert_down_weight=torch.zeros_like(layer_weights.expert_down_weight),
@@ -134,23 +169,47 @@ def validate_layer_weights_against_plan(
         if layer_weights.gate_up_weight.dtype is not payload_dtype:
             raise ValueError("Dense weights disagree with the Instance payload dtype")
     else:
-        if not isinstance(layer_spec, ffn.MoeFfnSpec) or not isinstance(layer_weights, weights.MoeFfnWeights):
+        if not isinstance(layer_spec, ffn.MoeFfnSpec) or not isinstance(
+            layer_weights, (weights.MoeFfnWeights, weights.Mxfp4MoeFfnWeights)
+        ):
             raise ValueError("MoE Layer Plan requires MoE Model Spec and weights")
         expert_count = layer_spec.routed_expert_count + layer_spec.shared_expert_count
         if layer_plan.effective_topk != layer_spec.routed_topk + layer_spec.shared_expert_count:
             raise ValueError("MoE Layer Plan routing width disagrees with the Model Spec")
         expected_gate_up = (expert_count, 2 * layer_plan.local_intermediate_size, hidden_size)
         expected_down = (expert_count, hidden_size, layer_plan.local_intermediate_size)
-        if layer_weights.expert_gate_up_weight.shape != expected_gate_up:
-            raise ValueError("MoE gate/up weights disagree with the Layer Plan")
-        if layer_weights.expert_down_weight.shape != expected_down:
-            raise ValueError("MoE down weights disagree with the Layer Plan")
+        quantized = isinstance(layer_weights, weights.Mxfp4MoeFfnWeights)
+        if quantized != isinstance(layer_spec.checkpoint, ffn.Mxfp4MoeCheckpointKeys):
+            raise ValueError("MoE weight storage and checkpoint format disagree")
+        if isinstance(layer_weights, weights.Mxfp4MoeFfnWeights):
+            if (
+                layer_weights.gate_up_packed.shape != (expert_count, expected_gate_up[1], hidden_size // 2)
+                or layer_weights.down_packed.shape
+                != (expert_count, hidden_size, layer_plan.local_intermediate_size // 2)
+                or payload_dtype is not torch.bfloat16
+                or (layer_weights.down_bias is not None) != (tp_rank == 0)
+            ):
+                raise ValueError("MXFP4 shard or bias ownership disagrees with the Layer Plan")
+            tensors = (
+                layer_weights.gate_up_packed,
+                layer_weights.gate_up_scales,
+                layer_weights.down_packed,
+                layer_weights.down_scales,
+                layer_weights.gate_up_bias,
+            )
+            if layer_weights.down_bias is not None:
+                tensors += (layer_weights.down_bias,)
+        else:
+            if layer_weights.expert_gate_up_weight.shape != expected_gate_up:
+                raise ValueError("MoE gate/up weights disagree with the Layer Plan")
+            if layer_weights.expert_down_weight.shape != expected_down:
+                raise ValueError("MoE down weights disagree with the Layer Plan")
+            tensors = (layer_weights.expert_gate_up_weight, layer_weights.expert_down_weight)
+            if layer_weights.expert_gate_up_weight.dtype is not payload_dtype:
+                raise ValueError("MoE weights disagree with the Instance payload dtype")
         router = layer_weights.router
         if (tp_rank == 0) != (router is not None):
             raise ValueError("MoE Router ownership does not match TP rank zero")
-        tensors = (layer_weights.expert_gate_up_weight, layer_weights.expert_down_weight)
-        if layer_weights.expert_gate_up_weight.dtype is not payload_dtype:
-            raise ValueError("MoE weights disagree with the Instance payload dtype")
         if router is not None:
             if router.weight.dtype is not router_weight_dtype:
                 raise ValueError("MoE Router weight dtype disagrees with its Model Adapter")
@@ -160,6 +219,10 @@ def validate_layer_weights_against_plan(
             if correction_required != (router.correction_bias is not None):
                 raise ValueError("MoE correction-bias ownership disagrees with the routing formula")
             tensors += (router.weight,)
+            if (router.bias is not None) != quantized:
+                raise ValueError("MoE Router additive bias disagrees with the checkpoint")
+            if router.bias is not None:
+                tensors += (router.bias,)
             if router.correction_bias is not None:
                 tensors += (router.correction_bias,)
 
@@ -287,15 +350,19 @@ def capture_dense_signature(
 
 def capture_moe_signature(
     signature: execution.MoeFfnExecutionSignature,
-    primary_weights: weights.MoeFfnWeights,
-    control_probe: weights.MoeFfnWeights,
+    primary_weights: weights.MoeFfnWeights | weights.Mxfp4MoeFfnWeights,
+    control_probe: weights.MoeFfnWeights | weights.Mxfp4MoeFfnWeights,
 ) -> CapturedExecutionSignature:
     """Capture primary/control MoE bodies sharing lane placeholders."""
 
-    w13_config, w2_config = operators.select_moe_kernel_configs(
-        layer_weights=primary_weights,
-        row_capacity=signature.payload_row_capacity,
-        effective_topk=signature.effective_topk,
+    w13_config, w2_config = (
+        ({"BLOCK_SIZE_M": 16}, None)
+        if signature.mxfp4 is not None
+        else operators.select_moe_kernel_configs(
+            layer_weights=cast(weights.MoeFfnWeights, primary_weights),
+            row_capacity=signature.payload_row_capacity,
+            effective_topk=signature.effective_topk,
+        )
     )
     hidden_states = torch.zeros(
         (signature.payload_row_capacity, signature.hidden_size),
@@ -332,7 +399,7 @@ def capture_moe_signature(
     topk_weights.fill_(1.0 / signature.effective_topk)
     workspace = allocate_moe_graph_capture_workspace(signature=signature, w13_config=w13_config)
 
-    def launch(layer_weights: weights.MoeFfnWeights) -> None:
+    def launch(layer_weights: weights.MoeFfnWeights | weights.Mxfp4MoeFfnWeights) -> None:
         router_signature = signature.router
         if router_signature is not None:
             router_weights = layer_weights.router
@@ -362,6 +429,25 @@ def capture_moe_signature(
                 shared_expert_count=signature.expert_count - router_signature.routed_expert_count,
                 routed_scaling_factor=signature.routed_scaling_factor,
             )
+        if isinstance(layer_weights, weights.Mxfp4MoeFfnWeights):
+            if signature.mxfp4 is None:
+                raise AssertionError("MXFP4 capture lacks its arithmetic specialization")
+            operators.compute_mxfp4_partial(
+                hidden_states=hidden_states,
+                layer_weights=layer_weights,
+                topk_ids=topk_ids,
+                topk_weights=topk_weights,
+                sorted_token_ids=workspace.sorted_token_ids,
+                expert_ids=workspace.expert_ids,
+                num_tokens_post_padded=workspace.num_tokens_post_padded,
+                cumsum_buffer=workspace.cumsum_buffer,
+                gate_up=workspace.gate_up,
+                activated=workspace.activated,
+                route_outputs=workspace.route_outputs,
+                output=partial,
+                config=signature.mxfp4,
+            )
+            return
         operators.compute_moe_partial(
             hidden_states=hidden_states,
             layer_weights=layer_weights,
@@ -529,6 +615,7 @@ class FfnExecutionRegistry:
                                 ),
                                 correction_bias_present=(moe_spec.checkpoint.router_correction_bias_key is not None),
                                 renormalize=moe_spec.renormalize,
+                                bias_present=isinstance(moe_spec.checkpoint, ffn.Mxfp4MoeCheckpointKeys),
                             )
                         signature = execution.MoeFfnExecutionSignature(
                             payload_dtype=profile.payload_dtype,
@@ -540,6 +627,15 @@ class FfnExecutionRegistry:
                             activation=model_spec.activation,
                             routed_scaling_factor=moe_spec.routed_scaling_factor,
                             router=router,
+                            mxfp4=(
+                                execution.Mxfp4ExecutionConfig(
+                                    alpha=model_spec.activation_alpha,
+                                    limit=model_spec.activation_limit or 7.0,
+                                    down_bias_present=tp_rank == 0,
+                                )
+                                if isinstance(moe_spec.checkpoint, ffn.Mxfp4MoeCheckpointKeys)
+                                else None
+                            ),
                         )
                     signature_index = signature_indices.get(signature)
                     if signature_index is None:
@@ -578,7 +674,13 @@ class FfnExecutionRegistry:
                 )
                 captures.append(capture_dense_signature(signature, dense_weights, dense_probe))
             else:
-                moe_weights, moe_probe = cast(tuple[weights.MoeFfnWeights, weights.MoeFfnWeights], capture_weight_pair)
+                moe_weights, moe_probe = cast(
+                    tuple[
+                        weights.MoeFfnWeights | weights.Mxfp4MoeFfnWeights,
+                        weights.MoeFfnWeights | weights.Mxfp4MoeFfnWeights,
+                    ],
+                    capture_weight_pair,
+                )
                 captures.append(capture_moe_signature(signature, moe_weights, moe_probe))
         logger.info(
             "graph templates captured device=%s signature_count=%s dense_count=%s moe_count=%s "

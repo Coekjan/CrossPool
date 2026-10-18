@@ -12,6 +12,15 @@ namespace xpool::ffnagent {
 
 namespace {
 
+bool same_moe_schema(const MoeBindingResourceProjection &left, const MoeBindingResourceProjection &right) {
+  return left.router.has_value() == right.router.has_value() &&
+         (!left.router ||
+          (left.router->correction_bias_address.has_value() == right.router->correction_bias_address.has_value() &&
+           left.router->bias_address.has_value() == right.router->bias_address.has_value())) &&
+         left.mxfp4.has_value() == right.mxfp4.has_value() &&
+         (!left.mxfp4 || left.mxfp4->down_bias_address.has_value() == right.mxfp4->down_bias_address.has_value());
+}
+
 void validate_common(c10::ScalarType payload_dtype, std::size_t payload_row_capacity, std::size_t hidden_size,
                      std::size_t local_intermediate_size, std::uintptr_t primary_graph_address,
                      std::uintptr_t control_graph_address, std::size_t compute_workspace_bytes) {
@@ -47,9 +56,28 @@ void validate_signature(const MoeExecutionSignatureProjection &signature) {
   const auto router_owner = signature.routed_expert_count.has_value();
   const auto &primary = signature.primary_capture_resources;
   const auto &control = signature.control_capture_resources;
+  TORCH_CHECK(same_moe_schema(primary, control), "xpool Primary and Control MoE resource schemas disagree");
+  if (primary.mxfp4) {
+    TORCH_CHECK(signature.payload_dtype == c10::ScalarType::BFloat16 && signature.hidden_size % 32 == 0 &&
+                    signature.local_intermediate_size % 32 == 0,
+                "xpool MXFP4 requires BF16 payloads and complete scale blocks");
+    const auto &a = *primary.mxfp4;
+    const auto &b = *control.mxfp4;
+    TORCH_CHECK(a.gate_up_scales_address != b.gate_up_scales_address &&
+                    a.down_scales_address != b.down_scales_address &&
+                    a.gate_up_bias_address != b.gate_up_bias_address &&
+                    (!a.down_bias_address || a.down_bias_address != b.down_bias_address),
+                "xpool Primary and Control MXFP4 resources must use distinct corresponding addresses");
+  }
   TORCH_CHECK(signature.capture_payload_rows_address.has_value() == router_owner &&
                   primary.router.has_value() == router_owner && control.router.has_value() == router_owner,
               "xpool FFN Execution Projection MoE Router ownership and Capture resources disagree");
+  if (primary.mxfp4) {
+    TORCH_CHECK(primary.mxfp4->down_bias_address.has_value() == router_owner &&
+                    (!primary.router || (primary.router->bias_address.has_value() &&
+                                         !primary.router->correction_bias_address.has_value())),
+                "xpool MXFP4 bias ownership or Router bias schema disagrees");
+  }
   TORCH_CHECK(primary.expert_gate_up_weight_address != control.expert_gate_up_weight_address &&
                   primary.expert_down_weight_address != control.expert_down_weight_address,
               "xpool FFN Execution Projection Primary and Control MoE Expert resources must use distinct "
@@ -68,6 +96,8 @@ void validate_signature(const MoeExecutionSignatureProjection &signature) {
                    primary_router.correction_bias_address != control_router.correction_bias_address),
               "xpool FFN Execution Projection Primary and Control Router resources must use distinct corresponding "
               "addresses");
+  TORCH_CHECK(!primary_router.bias_address || primary_router.bias_address != control_router.bias_address,
+              "xpool Primary and Control Router biases must use distinct addresses");
 }
 
 bool binding_schema_matches(const ExecutionSignatureProjection &signature, const BindingResourceProjection &target) {
@@ -79,9 +109,7 @@ bool binding_schema_matches(const ExecutionSignatureProjection &signature, const
     return false;
   }
   const auto &captured = std::get<MoeExecutionSignatureProjection>(signature).primary_capture_resources;
-  return captured.router.has_value() == resources->router.has_value() &&
-         (!captured.router.has_value() || captured.router->correction_bias_address.has_value() ==
-                                              resources->router->correction_bias_address.has_value());
+  return same_moe_schema(captured, *resources);
 }
 
 bool weight_geometry_matches(const ExecutionSignatureProjection &left, const ExecutionSignatureProjection &right) {
@@ -102,7 +130,8 @@ bool weight_geometry_matches(const ExecutionSignatureProjection &left, const Exe
   return left_moe->hidden_size == right_moe->hidden_size &&
          left_moe->local_intermediate_size == right_moe->local_intermediate_size &&
          left_moe->expert_count == right_moe->expert_count &&
-         left_moe->routed_expert_count == right_moe->routed_expert_count && left_bias == right_bias;
+         left_moe->routed_expert_count == right_moe->routed_expert_count && left_bias == right_bias &&
+         same_moe_schema(left_moe->primary_capture_resources, right_moe->primary_capture_resources);
 }
 
 } // namespace
