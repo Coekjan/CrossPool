@@ -1,5 +1,5 @@
 {
-  "contract_version": 1,
+  "contract_version": 2,
   "case_identity_notation": {
     "operation": [
       "endpoint_owner",
@@ -449,14 +449,14 @@
               "raw_time_ns": 130,
               "clock_domain_id": 3,
               "kind": 103,
-              "presence": 67359,
+              "presence": 67335,
               "generation": 1,
               "endpoint_owner": 2,
               "endpoint_sequence": 1,
               "operation_sequence": 1,
-              "graph_owner": 1,
-              "graph_template": 1,
-              "graph_execution": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
               "instance_index": 0,
               "invocation_sequence": 0,
               "lane_index": 0,
@@ -491,14 +491,14 @@
               "raw_time_ns": 140,
               "clock_domain_id": 3,
               "kind": 104,
-              "presence": 67359,
+              "presence": 67335,
               "generation": 1,
               "endpoint_owner": 2,
               "endpoint_sequence": 1,
               "operation_sequence": 1,
-              "graph_owner": 1,
-              "graph_template": 1,
-              "graph_execution": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
               "instance_index": 0,
               "invocation_sequence": 0,
               "lane_index": 0,
@@ -533,14 +533,14 @@
               "raw_time_ns": 290,
               "clock_domain_id": 3,
               "kind": 105,
-              "presence": 67359,
+              "presence": 67335,
               "generation": 1,
               "endpoint_owner": 2,
               "endpoint_sequence": 1,
               "operation_sequence": 1,
-              "graph_owner": 1,
-              "graph_template": 1,
-              "graph_execution": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
               "instance_index": 0,
               "invocation_sequence": 0,
               "lane_index": 0,
@@ -575,14 +575,14 @@
               "raw_time_ns": 300,
               "clock_domain_id": 3,
               "kind": 106,
-              "presence": 100127,
+              "presence": 100103,
               "generation": 1,
               "endpoint_owner": 2,
               "endpoint_sequence": 1,
               "operation_sequence": 1,
-              "graph_owner": 1,
-              "graph_template": 1,
-              "graph_execution": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
               "instance_index": 0,
               "invocation_sequence": 0,
               "lane_index": 0,
@@ -3773,14 +3773,14 @@
               "raw_time_ns": 130,
               "clock_domain_id": 3,
               "kind": 103,
-              "presence": 67351,
+              "presence": 67335,
               "generation": 1,
               "endpoint_owner": 2,
               "endpoint_sequence": 1,
               "operation_sequence": 1,
-              "graph_owner": 1,
+              "graph_owner": 0,
               "graph_template": 0,
-              "graph_execution": 1,
+              "graph_execution": 0,
               "instance_index": 0,
               "invocation_sequence": 0,
               "lane_index": 0,
@@ -3815,14 +3815,14 @@
               "raw_time_ns": 140,
               "clock_domain_id": 3,
               "kind": 104,
-              "presence": 67351,
+              "presence": 67335,
               "generation": 1,
               "endpoint_owner": 2,
               "endpoint_sequence": 1,
               "operation_sequence": 1,
-              "graph_owner": 1,
+              "graph_owner": 0,
               "graph_template": 0,
-              "graph_execution": 1,
+              "graph_execution": 0,
               "instance_index": 0,
               "invocation_sequence": 0,
               "lane_index": 0,
@@ -3857,14 +3857,14 @@
               "raw_time_ns": 290,
               "clock_domain_id": 3,
               "kind": 105,
-              "presence": 67351,
+              "presence": 67335,
               "generation": 1,
               "endpoint_owner": 2,
               "endpoint_sequence": 1,
               "operation_sequence": 1,
-              "graph_owner": 1,
+              "graph_owner": 0,
               "graph_template": 0,
-              "graph_execution": 1,
+              "graph_execution": 0,
               "instance_index": 0,
               "invocation_sequence": 0,
               "lane_index": 0,
@@ -3899,14 +3899,14 @@
               "raw_time_ns": 300,
               "clock_domain_id": 3,
               "kind": 106,
-              "presence": 100119,
+              "presence": 100103,
               "generation": 1,
               "endpoint_owner": 2,
               "endpoint_sequence": 1,
               "operation_sequence": 1,
-              "graph_owner": 1,
+              "graph_owner": 0,
               "graph_template": 0,
-              "graph_execution": 1,
+              "graph_execution": 0,
               "instance_index": 0,
               "invocation_sequence": 0,
               "lane_index": 0,
@@ -4651,6 +4651,482 @@
         "quality": [
           "event_missing"
         ]
+      }
+    },
+    {
+      "id": "execution_never_returns",
+      "input": {
+        "base_case": "normal_dense",
+        "remove_events": [
+          [
+            1,
+            5
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            2,
+            4
+          ],
+          [
+            2,
+            10
+          ],
+          [
+            2,
+            11
+          ],
+          [
+            2,
+            16
+          ],
+          [
+            2,
+            17
+          ],
+          [
+            2,
+            18
+          ],
+          [
+            2,
+            19
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            3,
+            5
+          ],
+          [
+            3,
+            6
+          ],
+          [
+            5,
+            4
+          ],
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            5,
+            7
+          ],
+          [
+            5,
+            9
+          ]
+        ]
+      },
+      "expected": {
+        "status": "partial",
+        "operation_to_invocation": [
+          [
+            [
+              2,
+              1,
+              1
+            ],
+            [
+              1,
+              0,
+              1
+            ]
+          ]
+        ],
+        "fabric_entry_proven": true,
+        "execution_completion": "unknown",
+        "instance_result": null,
+        "quality": [
+          "event_missing",
+          "unknown_result"
+        ]
+      }
+    },
+    {
+      "id": "execution_returns_failure",
+      "input": {
+        "base_case": "normal_dense",
+        "remove_events": [
+          [
+            1,
+            5
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            2,
+            4
+          ],
+          [
+            2,
+            10
+          ],
+          [
+            2,
+            11
+          ],
+          [
+            2,
+            16
+          ],
+          [
+            2,
+            17
+          ],
+          [
+            2,
+            18
+          ],
+          [
+            2,
+            19
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            3,
+            5
+          ],
+          [
+            3,
+            6
+          ],
+          [
+            5,
+            4
+          ],
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            5,
+            7
+          ],
+          [
+            5,
+            9
+          ]
+        ],
+        "append_events": [
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 3,
+              "raw_time_ns": 290,
+              "clock_domain_id": 3,
+              "kind": 105,
+              "presence": 67335,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 4,
+              "raw_time_ns": 300,
+              "clock_domain_id": 3,
+              "kind": 106,
+              "presence": 100103,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 3,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "status": "partial",
+        "operation_to_invocation": [
+          [
+            [
+              2,
+              1,
+              1
+            ],
+            [
+              1,
+              0,
+              1
+            ]
+          ]
+        ],
+        "fabric_entry_proven": true,
+        "atnagent_result": "timeout",
+        "ffn_compute_completion": "unknown",
+        "quality": [
+          "event_missing"
+        ]
+      }
+    },
+    {
+      "id": "invocation_multiple_graph_owners",
+      "input": {
+        "base_case": "normal_dense",
+        "append_events": [
+          {
+            "producer": 7,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 220,
+              "clock_domain_id": 5,
+              "kind": 507,
+              "presence": 132473,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 6,
+              "graph_template": 1,
+              "graph_execution": 9223372036854775809,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 2,
+              "data0": 3,
+              "data1": 3,
+              "data2": 0,
+              "data3": 1,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 7,
+            "record": {
+              "event_sequence": 2,
+              "raw_time_ns": 240,
+              "clock_domain_id": 5,
+              "kind": 508,
+              "presence": 132473,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 6,
+              "graph_template": 1,
+              "graph_execution": 9223372036854775809,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 2,
+              "data0": 3,
+              "data1": 3,
+              "data2": 0,
+              "data3": 1,
+              "data4": 0
+            }
+          }
+        ],
+        "metadata_overrides": {
+          "producers_add": [
+            {
+              "id": 6,
+              "source": "host",
+              "process": {
+                "creation_id": "66666666-6666-4666-8666-666666666666",
+                "pid": 104,
+                "runtime_role": "ffnagent"
+              },
+              "process_creation_id": "66666666-6666-4666-8666-666666666666",
+              "clock_domain_id": 1
+            },
+            {
+              "id": 7,
+              "source": "device",
+              "process": {
+                "creation_id": "66666666-6666-4666-8666-666666666666",
+                "pid": 104,
+                "runtime_role": "ffnagent"
+              },
+              "process_creation_id": "66666666-6666-4666-8666-666666666666",
+              "clock_domain_id": 5
+            }
+          ],
+          "clock_domains_add": [
+            {
+              "id": 5,
+              "kind": "device_globaltimer",
+              "process_creation_id": "66666666-6666-4666-8666-666666666666",
+              "physical_device_uuid": "GPU-fixture-ffn-peer",
+              "logical_device": 0,
+              "raw_epoch": 1,
+              "unit": "ns"
+            }
+          ],
+          "graph_templates_add": [
+            {
+              "owner_producer": 6,
+              "template_sequence": 1,
+              "kind": "primary",
+              "signature_index": 0
+            }
+          ],
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 2,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1,
+                  "ffn_tp_size": 2
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "invocation_to_graph_activity": [
+          [
+            [
+              1,
+              0,
+              1
+            ],
+            [
+              4,
+              9223372036854775809
+            ]
+          ],
+          [
+            [
+              1,
+              0,
+              1
+            ],
+            [
+              6,
+              9223372036854775809
+            ]
+          ]
+        ],
+        "graph_owners": [
+          4,
+          6
+        ],
+        "merged_graph_executions": false,
+        "device_completion_from_host_return": false
       }
     }
   ]

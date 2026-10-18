@@ -1,7 +1,11 @@
-# Shared Observability Contract v1
+# Shared Observability Contract v2
 
-This is the target contract linked from the [task plan](README.md). All integers
-on disk are little-endian except opaque UUID bytes. Native struct padding,
+This is the target contract linked from the [task plan](README.md). Version 2
+supersedes version 1 as one coordinated specification/fixture revision. Readers
+and participants accept only version 2; no compatibility interpretation is
+provided. The 256-byte Event layout and calibration mathematics are unchanged;
+IPC layout, allocation policy, ownership and observation timing follow this
+revision. All integers on disk are little-endian except opaque UUID bytes. Native struct padding,
 `size_t`, pointers, CUDA handles, and enum ordinals inferred from C++ layout are
 never wire representations. Fixture JSON uses exact integer tokens; consumers
 must not round them through IEEE-754 doubles.
@@ -34,7 +38,7 @@ capabilities, and artifact references live in metadata.
 
 The launcher distributes one Run and the registered Producer/Generation/clock
 IDs through the existing preparation/bootstrap path. IPC exports add optional
-`observation_region` with exactly version:u32=1, owner_producer:u64,
+`observation_region` with exactly version:u32=2, owner_producer:u64,
 endpoint_sequence:u64, generation:u64, allocation_bytes:u64, and handle.
 Handle uses the existing canonical hexadecimal CUDA IPC handle representation;
 it is never persisted in raw timeline metadata. Disabled related observation
@@ -56,10 +60,16 @@ published to the Daemon broker as additional sibling fields on the same
 descriptor record already used for the Arena handle (the existing
 `TransportBroker.publish()` path); no new RPC is introduced. The Instance
 fetches and attaches it with `cudaIpcOpenMemHandle` at the same call site
-where it already attaches the Transport Arena handle. When
-`debug.timeline.enable` is false, the descriptor's `observation_region` field
-is null and no CUDA allocation is made; this is the only condition under
-which the Instance must tolerate a missing region.
+where it already attaches the Transport Arena handle. Preparation derives one
+immutable `transport_identity_required` policy for
+both participants: it is true when Unified Timeline or Transport Observer is
+enabled, or another enabled observation consumer explicitly requires shared
+Endpoint/Operation identity. Only when it is false is `observation_region` null
+and no region allocated. A required region missing from a descriptor, or a
+participant policy/version mismatch, fails startup. Graph-only and Routing-only
+observation do not require this region merely because they are enabled;
+process-local Context and sampler storage are separate resources. Independent
+mode accounts for the region in its observation allocation budget as well.
 
 ### Endpoint recreation
 
@@ -76,88 +86,58 @@ The hot descriptor itself carries no "superseded" field; Endpoint lineage
 across recreation is a metadata concern (see Metadata revision below), not a
 per-export wire concern.
 
-### Leading-word layout and write/read timing
+### Operation word and write/read timing
 
-The region's leading-word layout is: `operation_sequence:u64`,
-`graph_owner:u64`, `graph_execution:u64`, `graph_template:u64`,
-`context_generation:u64`. The first five words occupy 40 bytes; each is
-naturally eight-byte aligned. The descriptor advertises the allocation size,
-not its private control layout; everything after byte 40 is the allocation
-owner's private storage and is never part of the versioned wire format.
+The versioned public prefix contains only `operation_sequence:u64` at offset
+zero, naturally eight-byte aligned. Its size is eight bytes; allocation-alignment
+rounding is accounted separately. There is no Graph identity or Graph relay in
+this region. Graph relationships are immutable events recorded by the actual
+execution owners, not a last-resolved Graph tuple on an Endpoint.
 
-Field ownership and write/read timing:
+The Instance writes the fresh positive sequence after successful Claim
+(`try_begin_staging()` returns true), before `publish_request()`. The AtnAgent
+reads it after `observe()` returns `Published`. Visibility reuses the Mailbox's
+existing release-acquire pair, which already protects `payload_rows` and
+`request`. No new atomic primitive is required for this protocol-owned access.
+A subsequent Claim can overwrite the word only after the previous cycle's
+`acknowledge()` changes Evaluated to Idle. The AtnAgent must copy the identity
+into every event that needs it before `publish_result()` permits reuse; the
+background Collector never rereads this mutable word to complete an event.
 
-| Word | Writer | Written | Read by | Read after |
-| --- | --- | --- | --- | --- |
-| `operation_sequence` | Instance | After successful Claim (`try_begin_staging()` returns true), before `publish_request()` | AtnAgent | After `observe()` returns `Published` |
-| `graph_owner`, `graph_execution`, `graph_template`, `context_generation` | AtnAgent | After `fabric::atnagent::execute(fabric_arena, transport_arena)` returns and the triggered Graph execution mode (Replay/Eager/none) is known, before `publish_result()` | AtnAgent's own Collector, committing the `TransportFabricAssociated`/Graph events | Synchronously within the same critical section, before `publish_result()`; never deferred to a later decoupled pass |
+The successful claimant increments the operation counter independently of
+event reservations. Exhaustion follows the identity-exhaustion policy below;
+it must not wrap or abort production. Endpoint recreation creates a new region
+and sequence. Observation state stays out of production RequestMetadata and
+the production Arena allocation. Mappings retire after IPC detach and in-flight
+work.
 
-No new atomic primitive is introduced. `operation_sequence` visibility reuses
-the Mailbox's existing release-acquire pair: `publish_request()`'s
-release-store and `observe()`'s acquire-load already order the Instance's
-write before the AtnAgent's read, the same ordering that already protects
-`payload_rows` and `request`. `graph_*` visibility to AtnAgent's own Collector
-is plain program order inside the same thread and never crosses a process
-boundary, because the writer and the only production-critical reader are the
-same AtnAgent thread executing `execute_request()`.
+### Diagnostic reads
 
-A subsequent successful Claim may update `operation_sequence` only after
-`acknowledge()` (Evaluated to Idle) has executed. This follows from the
-existing Mailbox state machine: the Instance only calls `try_begin_staging()`
-again after observing `Evaluated` and calling `acknowledge()`, and `Evaluated`
-is only reachable through AtnAgent's `publish_result()`, which by construction
-happens strictly after AtnAgent has already written and consumed this cycle's
-`graph_*` words (see the table above). Consequently, by the time the Instance's
-next Claim is eligible to overwrite `operation_sequence`, AtnAgent has already
-finished every read of this cycle's `graph_*` words, and no additional fence
-is required to prevent the next Claim from racing a stale `graph_*` read.
+Online diagnostics consume immutable committed events through the Collector.
+Direct inspection of `observation_region` or Dynamic Context storage is valid
+only after the relevant writers and readers are quiesced or explicitly
+synchronized. A diagnostic request without that precondition reports
+`unavailable`; it must not accept a live raw-memory sample as a consistent
+snapshot. If execution is stuck and synchronization cannot complete, diagnostics
+can show already collected evidence and unknown tails, not a fabricated current
+snapshot.
 
-This ordering guarantee holds only for readers inside the critical section
-described above (synchronous, same-thread, before `publish_result()`). Any
-out-of-band reader that samples `observation_region` outside that window (for
-example, an offline diagnostic peek) MUST treat `context_generation` as a
-seqlock: read it, read `operation_sequence`/`graph_*`, then re-read
-`context_generation`, and discard the sample if the two reads differ.
-Production collection never needs this fallback because it never reads
-outside the critical section; the rule exists only to make misuse detectable
-rather than silently wrong.
-
-Endpoint recreation allocates a new region and sequence. The operation word is
-monotonically incremented by the successful claimant using the existing
-read-check-increment pattern (`abort_if(prev == UINT64_MAX)` then `+1`, as
-already used for `invocation_sequence` and `executor_lease_sequence`); no
-collector reservation controls it. No observation state enters production
-RequestMetadata or the production Arena allocation. Mappings retire after IPC
-detach and in-flight work.
-
-### Private control storage: recommended default layout
-
-The bytes after offset 40 are private and not wire-versioned, but collection
-and protocol instrumentation must share one default layout to interoperate
-without a second interpretation. The recommended default holds only a small
-per-Endpoint *relay* scratch area for Graph-association handoff; it is not the
-canonical Dynamic Context store (see "Dynamic Context storage" below for why
-that store is process-wide, not per-Endpoint).
-
-| Offset (from byte 40) | Field | Type | Purpose |
-| --- | --- | --- | --- |
-| 0, 8, 16 | `slot_generation`, `resolved_execution_sequence`, `resolved_template_sequence` | u64 each | One relay slot: the Graph identity AtnAgent most recently resolved for this Endpoint's current cycle, before copying it into the public prefix |
-| 24 | `resolved_context_generation` | u64 | Matches the Context slot generation this relay entry refers to |
-| 32 | `state` | u32 | `Free=0`, `Resolving=1`, `Copied=2` |
-| 36 | (padding) | u32 | Zero, keeps the slot eight-byte aligned |
-
-Slot size is 40 bytes. Default relay slot capacity
-(`timeline_relay_slot_capacity`) is **2**, allowing one Mailbox cycle's relay
-write to overlap the previous cycle's acknowledgement without blocking.
-Per-Endpoint private bytes are `2 * 40 = 80`, so one `observation_region`'s
-total size is `40 + 80 = 120` bytes before allocation-alignment rounding.
+`context_generation` identifies Context slot reuse; it is not a seqlock or a
+snapshot version. Equal reads do not exclude an Operation update, an unfinished
+Context write, or a mixed-field sample. This version defines no live IPC
+snapshot API. Adding one requires a separately specified publication protocol
+covering all writers, atomic access and memory ordering, cross-process
+visibility, bounded retries, and slot lifetime during reads. A version check or
+double buffer alone is insufficient.
 
 ### Dynamic Context storage: process-wide, not per-Endpoint
 
 Context identity `(graph_owner, execution_sequence, template_sequence,
-context_generation)` is scoped to the AtnAgent process's Host Producer
-(`graph_owner`), not to any single Endpoint: a `lane_service` execution can
-serve multiple Endpoints concurrently, and TP/DP activity under one
+context_generation)` is scoped to the actual Graph-owning process's Host Producer
+(`graph_owner`): the Instance Rank for SGLang execution, and the FfnAgent for
+native FFN execution. AtnAgent does not own either Graph family. This scope is
+independent of any single Endpoint: a `lane_service` execution can
+serve multiple Invocations over its lifetime, and TP/DP activity under one
 Invocation is not attributable to exactly one Endpoint. The canonical bounded
 Context slot array is therefore a separate, process-wide Device allocation
 owned by the Graph Observer, sized once per `graph_owner`, independent of how
@@ -175,18 +155,17 @@ layout:
 
 Slot size is 40 bytes. Default capacity (`context_slot_capacity`) is **64**
 per process, sized for the worst-case concurrent-Stream count across all
-Lanes/Eager paths in one AtnAgent process; `context_slots_bytes =
-64 * 40 = 2560` bytes. Concurrent Streams use distinct live slots; slot reuse
+observed execution paths in the owning Instance Rank or FfnAgent process.
+`context_slots_bytes = 64 * 40 = 2560` bytes. Concurrent Streams use distinct live slots; slot reuse
 follows the existing completion-boundary rule. Context overflow increments
 `context_unavailable` and leaves association unavailable; it never overwrites
-an in-flight slot.
+an in-flight slot. Disabled Graph observation allocates no Context array.
 
 An alternative of folding this array into each `observation_region` (one full
 Context array per Endpoint) was evaluated and rejected: it requires either
 duplicating `lane_service` Context across every Endpoint it serves or picking
 one arbitrary "owning" Endpoint for it, both of which conflict with the
-Context identity's process-wide scope. This record is kept only so a future
-reviewer does not re-propose it without seeing why it was declined.
+Context identity's process-wide scope. FfnAgents have no Transport Endpoint in which to store such Context.
 
 ### Calibration sampler storage: per-process Device Producer, not inside observation_region
 
@@ -215,33 +194,40 @@ existing Host collection budget, not the Device budget.
 process/Device:
 
 ```text
-device_bytes_required =
-    device_event_slot_capacity * (256 + 16)                        # event ring payload + control
-  + endpoint_capacity * (40 + timeline_relay_slot_capacity * 40)    # observation_region(s)
-  + context_slot_capacity * 40                                     # process-wide Dynamic Context
-  + sampler_slot_capacity * 8                                      # calibration raw-G buffers
-  + 256                                                            # fixed Collector head/tail/epoch control
+logical_device_bytes =
+    device_event_slot_capacity * (256 + 16)  # event ring payload + control
+  + endpoint_capacity * 8                   # Operation IPC region(s)
+  + context_slot_capacity * 40              # process-wide Dynamic Context
+  + sampler_slot_capacity * 8               # calibration raw-G buffers
+  + 256                                    # fixed Collector control
+
+device_bytes_required = logical_device_bytes + allocation_alignment_bytes
 ```
 
-Recommended defaults: `device_event_slot_capacity=16384`,
-`endpoint_capacity=8`, `timeline_relay_slot_capacity=2`,
+Recommended defaults: `device_event_slot_capacity=16384`, `endpoint_capacity=8`,
 `context_slot_capacity=64`, `sampler_slot_capacity=1`. Substituting these
 values:
 
 ```text
 16384 * 272 = 4,456,448
-   8 * 120  =       960
+     8 * 8  =        64
       2,560 =     2,560
           8 =         8
         256 =       256
-total        = 4,460,232 bytes
+total        = 4,459,336 bytes
 ```
 
-This total is comfortably under the 8,388,608-byte default, leaving headroom
-for configuration overrides. Startup computes `device_bytes_required` from the
-active configuration and rejects the process if it exceeds `device_bytes`,
+This logical byte total is below the 8,388,608-byte default. Startup includes
+per-allocation alignment rounding in addition to these logical sizes before
+comparing the complete requirement with the budget. It computes
+`device_bytes_required` from the active configuration and rejects the process if it exceeds `device_bytes`,
 per the existing rule that startup rejects a configuration whose minimum
-allocations exceed its budget.
+allocations exceed its budget. The example includes all listed resources;
+actual per-process admission includes only active categories and counts each
+physical allocation once. FfnAgents have no Endpoint IPC regions. Context is
+charged to its actual Graph owner, while sampler storage exists only when
+calibration is enabled. Independent observers include their required identity
+allocations even when Unified Timeline is disabled.
 
 Every identity/counter exhaustion is explicit: stop observation in the affected
 identity domain, set `identity_exhausted`, and preserve production results.
@@ -303,6 +289,20 @@ or nearby timestamps never repairs it. A retained association proves entry;
 a missing publication event makes publication unknown. TP/DP contribution
 operations remain separate and can share one Invocation.
 
+`TransportFabricAssociated` is committed at actual Submission preparation:
+after production validation succeeds and the real InvocationKey and Submission
+facts are available, before Submission publication or any Admission/output
+wait. The existing SubmissionPrepared Hook is the concrete boundary. Constructing
+a candidate key or calling the outer Fabric function alone does not prove entry.
+The association contains no guessed Graph identity. SubmissionPublished separately
+proves local publication. After `fabric::atnagent::execute()` returns, Transport
+records ExecutionCompleted and its result publication; these are completion
+facts, not a second association or the first opportunity to establish one.
+A failed or non-returning execution can therefore retain its entry association
+without a completion event. Early event commit does not guarantee recovery
+from Device/process failure: capacity losses and untransferred tails remain
+explicitly missing or unknown.
+
 Graph Host events have execution mode `replay=1`, `eager=2`, or
 `lane_service=3`, and phase `decode=1`, `prefill=2`, or `native_ffn=3`.
 Capture events have a template identity; calls and Device activities have a
@@ -311,7 +311,18 @@ parameterization maps to GraphTemplateInstalled; Lane build registers a
 separate `lane_service` template referencing its selectable compute templates.
 Existing installation lifecycle Hooks map to GraphInstallBegin/End and retirement.
 New dynamic boundaries are installed by their production execution owners.
-The registered Graph owner has disjoint execution-sequence ranges: Host-issued
+`graph_owner` is the registered Host Producer of the process that owns the
+Graph lifecycle, including Device-issued activities. The recording `Producer`
+and its clock domain still identify the actual Host/Device event source;
+Device Graph events must resolve to a Host owner in the same process creation.
+Instance events associate SGLang execution with each Operation at its actual
+Transport execution boundary. AtnAgent associates that Operation with Invocation
+at Submission preparation. FfnAgent events associate the actual selected Graph
+activity with Invocation/Lease at Compute Branch selection. No owner infers
+another process's Graph mode or selected template from Fabric return.
+These explicit edges preserve one Graph execution to many Operations and one
+Invocation to multiple participating Graph activities. The registered Graph
+owner has disjoint execution-sequence ranges: Host-issued
 sequences are 1 through 2^63-1; Device-issued activities use 2^63 plus a local
 counter in 1 through 2^63-1. Both local counters stop before overflow. This
 permits native activity allocation on Device while templates remain Host-owned.
@@ -518,8 +529,8 @@ is represented by metadata/quality only. Chunk sequences start at one.
 
 | Offset | Header field | Type/value |
 | --- | --- | --- |
-| 0 | magic | Eight bytes `XPOOLC01` |
-| 8, 10, 12, 14 | version, header_bytes, event_bytes, flags | u16: 1, 128, 256, 0 |
+| 0 | magic | Eight bytes `XPOOLC02` |
+| 8, 10, 12, 14 | version, header_bytes, event_bytes, flags | u16: 2, 128, 256, 0 |
 | 16, 24, 32, 40 | producer, chunk_sequence, metadata_revision, event_count | u64 each |
 | 48, 56 | first_event_sequence, last_event_sequence | u64, minimum/maximum |
 | 64, 72 | host_window_begin_ns, host_window_end_ns | u64 CLOCK_MONOTONIC collection window |
@@ -546,7 +557,7 @@ outputs go to an explicit separate directory and quota.
 Strict parsing rejects the first failing stage in this order: header length;
 magic/version/layout/flags; header CRC; declared sizes and file length; metadata
 identity/hash; payload CRC; event widths/presence/enums/references/order.
-Unknown event kinds fail v1; unsupported versions fail rather than falling back.
+Unknown event kinds fail v2; unsupported versions fail rather than falling back.
 Errors use codes `header_truncated`, `bad_magic`, `unsupported_version`,
 `invalid_layout`, `header_checksum`, `invalid_length`, `metadata_unavailable`,
 `metadata_checksum`, `payload_checksum`, `invalid_event`, `unknown_kind`,
@@ -613,13 +624,11 @@ and add template references through the artifact index.
 host_bytes=33554432, chunk_bytes=1048576, collection_interval_ms=100,
 disk_bytes=1073741824, metadata_reserve_bytes=8388608, shutdown_wait_ms=5000,
 calibration_block_attempts=10, device_event_slot_capacity=16384,
-endpoint_capacity=8, timeline_relay_slot_capacity=2, context_slot_capacity=64,
-and sampler_slot_capacity=1. Enable and outdir must be set together.
-Block attempts is fixed to ten in v1. `device_event_slot_capacity`,
-`endpoint_capacity`, `timeline_relay_slot_capacity`, `context_slot_capacity`,
-and `sampler_slot_capacity` are positive; startup first evaluates the device
+endpoint_capacity=8, context_slot_capacity=64, and sampler_slot_capacity=1. Enable and outdir must be set together.
+Block attempts is fixed to ten in v2. `device_event_slot_capacity`,
+`endpoint_capacity`, `context_slot_capacity`, and `sampler_slot_capacity` are positive; startup first evaluates the device
 collection budget composition formula against `device_bytes` using these
-five values, then validates each remaining positive resource value against
+four values, then validates each remaining positive resource value against
 the minimum required allocations and chunk layout; chunk_bytes
 cannot exceed 1 MiB and shutdown_wait_ms cannot exceed 5000. Run-wide policy
 is installed before workers start. Configuration uses the existing environment

@@ -1,5 +1,5 @@
 {
-  "contract_version": 1,
+  "contract_version": 2,
   "cases": [
     {
       "id": "routing_published",
@@ -58,7 +58,7 @@
             "sequence": 1,
             "status": "published",
             "path": "routing.safetensors",
-            "sha256": "02ef712dbfbf550ac0a7fa0deaabc0203d21f99f78be306f6ad7f458969d34e2",
+            "sha256": "50b77f546304145c8dcc5a2f8d534009a7fefa8c13389308758b74b8b870dc1f",
             "tensor_keys": [
               "records.0.topk_ids",
               "records.0.topk_weights"
@@ -591,7 +591,7 @@
             "sequence": 1,
             "status": "published",
             "path": "routing.safetensors",
-            "sha256": "02ef712dbfbf550ac0a7fa0deaabc0203d21f99f78be306f6ad7f458969d34e2",
+            "sha256": "50b77f546304145c8dcc5a2f8d534009a7fefa8c13389308758b74b8b870dc1f",
             "tensor_keys": [
               "records.0.topk_ids",
               "records.0.topk_weights"
