@@ -55,6 +55,11 @@ and readiness contracts.
 - **Layer-wise FFN execution:** FfnAgents retain model-specific weight shards
   and execute model-defined FFN layers through GraphTemplates based on layer
   signatures.
+- **Resident MXFP4 Experts:** GPT-OSS 20b and 120b keep packed Expert weights
+  on SM80 devices and decode matrix tiles for BF16 Tensor Core computation.
+  Hidden-state transport remains BF16. See
+  [FFN Execution](docs/designs/ffn-execution.md) for storage, routing and graph
+  ownership.
 
 ## Requirements
 
@@ -71,9 +76,10 @@ and readiness contracts.
 The native extension is built through uv and scikit-build-core, which obtains
 suitable CMake and Ninja versions when needed. The system CUDA Toolkit provides
 the native compiler and CCCL. CUDA bindings, Torch, SGLang, and the NVIDIA
-NVSHMEM runtime are direct project dependencies. uv uses the interpreter pinned
-in `.python-version` with managed Python downloads enabled. NVSHMEM runs through
-the native C++/CUDA implementation; Python NVSHMEM bindings are not required.
+cuBLASLt and NVSHMEM runtimes are direct project dependencies. uv uses the
+interpreter pinned in `.python-version` with managed Python downloads enabled.
+NVSHMEM runs through the native C++/CUDA implementation; Python NVSHMEM
+bindings are not required.
 
 ## Quick Start
 

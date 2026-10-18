@@ -296,6 +296,17 @@ The scalar type of hidden-state payload elements, distinct from wider types used
 for algorithm state or accumulation.
 _Avoid_: PayloadDType, dtype code
 
+**MXFP4**:
+A microscaled floating-point weight representation with E2M1 four-bit values
+and one E8M0 scale per 32 values. Its packed weight storage is independent of
+hidden-state Payload Element Type and of the arithmetic used by an execution
+kernel. It is distinct from integer INT4 and NVFP4.
+
+**Quantized Expert Execution**:
+Expert computation that interprets packed weights together with their scales,
+using either in-kernel decoding or supported native scaled arithmetic.
+Quantized weight residency does not imply quantized activation payloads.
+
 **Native ABI Version**:
 The stopped-world compatibility identity shared by one native extension and its
 Python caller.

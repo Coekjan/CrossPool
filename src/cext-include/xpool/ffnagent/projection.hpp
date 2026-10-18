@@ -29,8 +29,24 @@ struct MoeRouterBindingResourceProjection {
   std::uintptr_t weight_address;
   /// Optional device address of the model-specific router correction bias.
   std::optional<std::uintptr_t> correction_bias_address;
+  /// Optional additive bias included in Router logits before TopK.
+  std::optional<std::uintptr_t> bias_address = std::nullopt;
 
   constexpr bool operator==(const MoeRouterBindingResourceProjection &other) const = default;
+};
+
+/// Additional resources for canonical packed MXFP4 Expert execution.
+struct Mxfp4ExpertBindingResourceProjection {
+  /// UE8M0 scales for the interleaved gate/up projection.
+  std::uintptr_t gate_up_scales_address;
+  /// UE8M0 scales for the down projection.
+  std::uintptr_t down_scales_address;
+  /// Interleaved gate/up additive bias.
+  std::uintptr_t gate_up_bias_address;
+  /// Down additive bias retained only by the designated TP rank.
+  std::optional<std::uintptr_t> down_bias_address;
+
+  constexpr bool operator==(const Mxfp4ExpertBindingResourceProjection &other) const = default;
 };
 
 /// Canonical local MoE weight addresses used during capture or service.
@@ -41,6 +57,8 @@ struct MoeBindingResourceProjection {
   std::uintptr_t expert_down_weight_address;
   /// Router resources when this FfnAgent owns routing for the layer.
   std::optional<MoeRouterBindingResourceProjection> router;
+  /// Packed MXFP4 scale/bias schema, absent for ordinary payload-typed Experts.
+  std::optional<Mxfp4ExpertBindingResourceProjection> mxfp4 = std::nullopt;
 
   constexpr bool operator==(const MoeBindingResourceProjection &other) const = default;
 };

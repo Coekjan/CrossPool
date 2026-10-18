@@ -1,0 +1,15 @@
+[atn]
+devices = [0, 1]
+
+[ffn]
+devices = [2, 3, 4, 5]
+
+[scheduler]
+ffn_concurrency = 1
+slo = { ttft_ms = 1000, tbt_ms = 50 }
+
+[[models]]
+id = "openai/gpt-oss-120b"
+atn_tp_size = 2
+atn_dp_size = 1
+ffn_tp_size = 1

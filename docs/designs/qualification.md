@@ -53,6 +53,16 @@ model suites own their explicit qualification whenever an adapter or numerical
 contract changes. The [test architecture](../../tests/README.md) owns suite
 selection commands and case placement.
 
+GPT-OSS MXFP4 qualification uses BF16 payloads on SM80 and keeps production
+Expert weights packed. Its independent original SGLang reference expands one
+isolated layer at a time outside production and preserves the loader's scoped
+runtime dtype. Component evidence covers packed TP sharding, scale/bias
+binding, original Router rounding, allocation-free replay and repeated native
+layer rebinding. Each concrete model separately qualifies all serving graph
+modes and a repeated prefix crossing its sliding-window boundary through the
+ordinary Elastic KV pool. These verdicts do not establish full advertised
+context or a simultaneous deployment of both GPT-OSS models.
+
 ## Topology evidence
 
 Native topology qualification covers representative AtnAgent/FfnAgent

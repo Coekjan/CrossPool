@@ -33,6 +33,16 @@ struct LayerBindingValues {
   std::uintptr_t router_weight_address;
   /// Device address of router correction bias, or zero when absent.
   std::uintptr_t router_correction_bias_address;
+  /// Additive Router bias, or zero when absent.
+  std::uintptr_t router_bias_address;
+  /// Packed gate/up UE8M0 scales, or zero for unquantized execution.
+  std::uintptr_t gate_up_scales_address;
+  /// Packed down UE8M0 scales, or zero for unquantized execution.
+  std::uintptr_t down_scales_address;
+  /// Interleaved Expert gate/up bias, or zero when absent.
+  std::uintptr_t gate_up_bias_address;
+  /// Expert down bias, or zero on non-owning TP ranks.
+  std::uintptr_t down_bias_address;
 };
 
 /// One lane/signature slice in the lane-owned Binding Site table.

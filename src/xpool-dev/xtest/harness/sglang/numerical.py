@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
 
@@ -68,7 +69,7 @@ def run_numerical_case(
     tmp_path: Path,
     task_artifact_dir: Path | None,
 ) -> None:
-    """Compare installed true-TP2 FFN outputs with isolated original SGLang."""
+    """Compare installed FFN outputs with isolated original SGLang."""
 
     if case.timeout_seconds <= FFN_NUMERICAL_HARNESS_RESERVE_SECONDS:
         raise ValueError("FFN numerical timeout must exceed its exceptional cleanup reserve")
@@ -164,29 +165,42 @@ def run_numerical_case(
         prefill_payload_row_capacity=case.input_matrix.row_counts[-1],
         group_sum_complete_admitted=False,
     )
-    instance_spec = FfnInstanceSpec(
-        environment=dict(launch.environment),
-        model_id=case.model_id,
-        rank=0,
-        ffn_tp_size=ffn_tp_size,
-        ffn_profile=ffn_profile,
-        transport=InstanceRankTransportProfile(
-            hidden_size=model_spec.hidden_size,
-            payload_row_capacity=case.input_matrix.row_counts[-1],
-            atn_tp_rank=0,
-            atn_tp_size=config.atn_tp_size_of(case.model_id),
-            atn_dp_rank=0,
-            atn_dp_size=model.atn_dp_size,
-        ),
-        invocations=tuple(invocations),
+    atn_tp_size = config.atn_tp_size_of(case.model_id)
+    # Every rank participates in readiness and the collective FFN invocation.
+    instance_specs = tuple(
+        FfnInstanceSpec(
+            environment=dict(launch.environment),
+            model_id=case.model_id,
+            rank=rank,
+            ffn_tp_size=ffn_tp_size,
+            ffn_profile=ffn_profile,
+            transport=InstanceRankTransportProfile(
+                hidden_size=model_spec.hidden_size,
+                payload_row_capacity=case.input_matrix.row_counts[-1],
+                atn_tp_rank=rank % atn_tp_size,
+                atn_tp_size=atn_tp_size,
+                atn_dp_rank=rank // atn_tp_size,
+                atn_dp_size=model.atn_dp_size,
+            ),
+            invocations=tuple(
+                invocation
+                if rank == 0
+                else replace(
+                    invocation,
+                    output_path=invocation.output_path.with_name(f"rank-{rank}-{invocation.output_path.name}"),
+                )
+                for invocation in invocations
+            ),
+        )
+        for rank in range(config.atn_world_size)
     )
-    (ready,) = run_ffn_topology(
+    ready = run_ffn_topology(
         launch=launch,
         endpoint=endpoint,
-        instance_specs=(instance_spec,),
+        instance_specs=instance_specs,
         workdir=production_workdir,
         timeout_seconds=remaining_seconds(deadline, "FFN numerical Production"),
-    )
+    )[0]
 
     observed_routing = read_ffn_routing_records(production_workdir / "observers", ready.generation)
     samples: list[FfnNumericalSampleEvidence] = []

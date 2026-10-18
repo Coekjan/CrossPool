@@ -38,7 +38,7 @@ set_target_properties(xpool_cext PROPERTIES
   OUTPUT_NAME native
   BUILD_RPATH_USE_ORIGIN ON
   INSTALL_RPATH_USE_LINK_PATH FALSE
-  INSTALL_RPATH "$ORIGIN;$ORIGIN/../torch/lib;$ORIGIN/../nvidia/nvshmem/lib"
+  INSTALL_RPATH "$ORIGIN;$ORIGIN/../torch/lib;$ORIGIN/../nvidia/nvshmem/lib;$ORIGIN/../nvidia/cu13/lib"
 )
 
 set(XPOOL_NATIVE_STUB_DIR "${CMAKE_CURRENT_BINARY_DIR}/stubs")

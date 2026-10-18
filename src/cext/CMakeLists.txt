@@ -42,6 +42,7 @@ target_link_libraries(
     ${TORCH_LIBRARIES}
     CUDA::cuda_driver
     CUDA::cudart
+    CUBLAS::Lt
     "${XPOOL_CUDADEVRT_LIBRARY}"
 )
 target_compile_features(xpool_cext_core PRIVATE cxx_std_20)

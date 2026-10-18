@@ -295,6 +295,7 @@ def server_launch(tmp_path: Path, *, dp_size: int = 1) -> XpoolClusterLaunch:
     model_id = str(TEST_MODEL_ID)
     model_path = model_root / model_id
     model_path.mkdir(parents=True)
+    (model_path / "config.json").write_text('{"architectures":["Qwen3ForCausalLM"]}')
     config = XpoolConfig.from_mapping(
         {
             "daemon": {"host": "127.0.0.1", "port": 19000},

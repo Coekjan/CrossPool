@@ -155,6 +155,15 @@ binding for that family. The resulting `FfnModelSpec.digest()` identifies the
 compiled FFN semantics; the source JSON bytes are not carried as a separate
 contract field.
 
+GPT-OSS admission requires a serialized MXFP4 checkpoint and BF16 activations.
+Its shim replaces Router and Experts together and filters the entire FFN
+namespace before upstream loading, so Instance workers retain no FFN
+parameters or Expert post-load expansion. The model adapter validates ordinary
+Elastic KV storage and Triton attention before loading. The FFN-side packed
+representation, arithmetic and hardware requirements belong to
+[FFN Execution](ffn-execution.md); the attention/cache contract belongs to
+[Elastic KV Cache Pooling](elastic-kv-cache.md).
+
 Outer graph mode is an attention-side concept. Eager, Decode Full, and combined
 Decode Full plus Prefill Breakable modes all invoke the same FFN data-plane
 protocol.
@@ -310,6 +319,14 @@ quantum belongs to the fitting procedure; it is separate from Profile fields
 and the operator margin. A Profile records allocation behavior and remains
 model-neutral. The profiler owns its local attention MPS scope and participants;
 FFN allocation measurements use the same direct execution environment as serving.
+
+The model-neutral corpus includes packed MXFP4 MoE allocation and capture in
+its fit coordinates and mixed held-out world. Its exact ledger accounts for
+packed values, scales, bias ownership, Control Probes and caller-owned Router
+and Expert workspace. Quantized residency changes neither the estimate's
+stage ordering nor the separation between the calibrated envelope and operator
+margin. Native ABI changes invalidate profiles through the same compatibility
+checks as other allocation-contract changes.
 
 Checkpoint files may be read concurrently. Host buffers may use pinned memory,
 and independent tensor copies may use multiple CUDA streams. Device-side

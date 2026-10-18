@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import signal
 import threading
@@ -175,6 +176,7 @@ def server_command(
 
     model_config = launch.config.model_by_id[model.model_id]
     graph_settings = model.graph_mode.settings()
+    source_config = json.loads((launch.config.model_path_of(model.model_id) / "config.json").read_text())
     command = [
         "xpool",
         "exec",
@@ -209,6 +211,18 @@ def server_command(
     ]
     if model_config.atn_dp_size > 1:
         command.append("--enable-dp-attention")
+    if source_config.get("architectures") == ["GptOssForCausalLM"]:
+        command.extend(
+            (
+                "--disable-hybrid-swa-memory",
+                "--attention-backend",
+                "triton",
+                "--context-length",
+                "8192",
+                "--max-running-requests",
+                "4",
+            )
+        )
     command.extend(
         (
             "--cuda-graph-backend-decode",

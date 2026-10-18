@@ -33,10 +33,23 @@ Router weights, expert tensors, top-k and group-routing parameters, and any
 model-defined correction bias. Activation is parameterized. The admitted
 execution model implements gated formulas.
 
+GPT-OSS retains canonical MXFP4 Expert values and E8M0 block scales as byte
+Tensors, independently of its BF16 payloads. Loading selects the planned local
+TP shard before device transfer and preserves complete 32-value scale blocks.
+Gate/up rows retain their interleaved checkpoint order. Each rank owns its
+gate/up bias shard; only rank zero owns the down-projection bias and Router
+weight/additive bias. Additive Router bias participates in logits and
+probabilities and is distinct from selection-only correction bias.
+
+The selected GPT-OSS realization requires SM80 and BF16 payloads, checked
+before packed weight allocation. It retains neither a complete BF16 Expert
+replica nor an alternate resident layout. Control Probes preserve the same
+packed geometry, scales, and bias ownership as their execution weights.
+
 ## Operators, routing, and delivery
 
-The FFN path uses the pinned low-level Expert implementation from the supported
-SGLang environment for admitted BF16 and FP16 devices. Only
+The unquantized FFN path uses the pinned low-level Expert implementation from
+the supported SGLang environment for admitted BF16 and FP16 devices. Only
 `xpool.runtime.ffnagent.operators` may import reusable low-level Expert and
 TopK operations, including the fused-MoE Triton configuration and Kernel
 implementation. Model adapters retain model-specific geometry, validation, and
@@ -64,6 +77,25 @@ normalizes selected weights with an explicit zero guard, and regenerates logits
 through the preceding gate GEMM on every execution. Shared-Expert finalization
 remains separate, and temporary storage stays outside Graph ownership.
 
+GPT-OSS uses a local SM80 W4A16 Expert implementation. Its fixed Triton kernels
+decode packed E2M1 values with their E8M0 scales inside matrix tiles, form BF16
+dot operands and accumulate in FP32. Intermediate gate/up, activation and
+route-output storage belongs to the caller. Replay performs neither a whole
+weight expansion nor a service-time implementation switch. The activation
+preserves asymmetric gate clipping, symmetric up clipping, configured alpha,
+and the `up + 1` term; down bias contributes once before route weighting.
+
+GPT-OSS Router logits follow original SGLang's biased BF16 CUDA Linear
+rounding, including library-selected BF16 Split-K partial reduction. A native
+cuBLASLt operation uses an explicit 1-MiB scratch region within the existing
+per-Lane Router workspace, with accounted alignment padding and BF16 logits.
+Ordinary Torch GEMMs keep the FfnAgent zero-workspace policy. Preparation warms
+each device/geometry/alignment combination and retains only its host algorithm
+value; capture requires that warmed combination and freezes its launches.
+The cache owns no device storage or layer address. Each Lane owns independent
+scratch, and graph workspace-range binding relocates its captured pointers.
+There is no alternate Router implementation on a library failure.
+
 GLM converts Router inputs into caller-owned FP32 workspace before its FP32
 matrix multiplication. Only this conversion uses local `torch.compile` during
 pre-capture warmup, producing a kernel compatible with declared-address Graph
@@ -79,10 +111,12 @@ before using their copies. Routing publication is required protocol behavior;
 the FFN Routing Observer records optional evidence from the same immutable data.
 Readiness and Lane Graph topology remain production responsibilities.
 
-Dense, MoE, Router workspace, captured input and output, and resident weights
-use the effective BF16 or FP16 dtype except where model mathematics requires
-FP32 Router or accumulation state. TP1 delivers its complete local result
-directly. Wider TP groups combine each output element by a fixed PE-order FP32
+Unquantized Dense/MoE operands and captured input/output use the effective
+BF16 or FP16 dtype except where model mathematics requires FP32 Router or
+accumulation state. Packed Expert values and scales retain byte storage;
+Router workspace follows its adapter's accounted byte geometry and arithmetic.
+TP1 delivers its complete local result directly. Wider TP groups combine each
+output element by a fixed PE-order FP32
 fold, cast once to payload dtype, synchronize the CTA, and then publish the
 result. Completion publication owns the remote-completion ordering for all
 nonblocking delivery writes. Fast math requires separate numerical and
@@ -94,6 +128,13 @@ A GraphTemplate is one reusable captured compute structure. Its Execution
 Signature contains compute-function identity, tensor geometry, Capacity, TP
 realization, and delivery behavior. It omits model IDs and layer ordinals when
 multiple layers can safely reuse the same structure.
+
+An MXFP4 Signature additionally fixes the canonical packed layout, activation
+alpha/limit, and down-bias presence. Native resource projection includes packed
+matrices, both scale tensors, Expert biases and optional Router weight/additive
+bias. Primary/Control comparison discovers every varying address through the
+same strict parameterization and cross-Capacity geometry validation used by
+unquantized execution.
 
 Each request selects the smallest installed Capacity that contains its live row
 count. Capacity tails are storage only and carry no semantic payload. Capacity

@@ -96,6 +96,7 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     dense = dense_spec()
     correction_bias_key = "model.layers.1.mlp.gate.e_score_correction_bias"
     moe = moe_spec(correction_bias_key)
+    assert isinstance(moe.checkpoint, MoeFfnCheckpointKeys)
     dense_tensors = {
         dense.checkpoint.gate_weight_key: tensor_values((6, hidden_size), 0),
         dense.checkpoint.up_weight_key: tensor_values((6, hidden_size), 100),
@@ -173,6 +174,7 @@ def test_materialize_non_router_rank_and_shape_failure(tmp_path: Path) -> None:
     install_loader_config()
     correction_bias_key = "model.layers.1.mlp.gate.e_score_correction_bias"
     layer = moe_spec(correction_bias_key)
+    assert isinstance(layer.checkpoint, MoeFfnCheckpointKeys)
     hidden_size = 4
     tensors: dict[str, torch.Tensor] = {}
     for expert_id, expert in enumerate(layer.checkpoint.routed_experts):

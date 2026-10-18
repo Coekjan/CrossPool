@@ -197,6 +197,8 @@ class SglangModelMetadata(BaseModel):
         num_experts = optional_int(raw, "num_experts")
         if num_experts is None:
             num_experts = optional_int(raw, "n_routed_experts")
+        if num_experts is None:
+            num_experts = optional_int(raw, "num_local_experts")
         return cls(
             model_id=model_id,
             family=sglang.family,

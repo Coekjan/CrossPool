@@ -24,7 +24,8 @@ The supported production boundary is:
 - one identical resolved CrossPool configuration in every process;
 - SGLang as the only serving-engine integration;
 - BF16 or FP16 hidden-state payloads, with the current qualification models
-  retaining BF16; and
+  retaining BF16;
+- resident MXFP4 GPT-OSS Expert weights with BF16 arithmetic on SM80; and
 - gated Dense and MoE decoder FFN layers.
 
 Concrete model IDs with qualification suites are listed in
@@ -158,6 +159,14 @@ build selects NVSHMEM headers from the same Python distribution as the linked
 NVSHMEM host and device libraries, ahead of unrelated Toolkit NVSHMEM headers;
 the CMake/scikit-build package boundary owns this module identity and header
 selection rather than a duplicate handwritten typing module.
+
+The biased BF16 Router links cuBLASLt from the pinned NVIDIA wheel used by
+Torch. The installed extension searches that sibling library directory so
+native-first import and Torch-owned cuBLASLt handles resolve one library.
+CUDA compilation retains the Toolkit headers paired with NVCC and CCCL;
+wheel CUDA runtime headers do not override those compilation units. The
+arithmetic and explicit scratch contract belongs to
+[FFN Execution](ffn-execution.md#operators-routing-and-delivery).
 
 Installed test and benchmark commands share resource/serving mechanisms in
 `xkit`, with their distinct policies in `xtest.harness` and `xbench.harness`.

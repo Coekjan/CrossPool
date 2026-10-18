@@ -71,6 +71,7 @@ class TensorReadDescriptor:
     narrow_length: int
     staged_shape: tuple[int, ...]
     destination: torch.Tensor
+    source_dtype: torch.dtype | None = None
 
     @property
     def staged_bytes(self) -> int:
@@ -265,6 +266,9 @@ def prepare_layer_weight_request(
     local_start = request.tp_rank * local_intermediate_size
     torch_device = torch.device("cuda", device)
 
+    if isinstance(layer, ffn.MoeFfnSpec) and isinstance(layer.checkpoint, ffn.Mxfp4MoeCheckpointKeys):
+        return prepare_mxfp4_weights(request, key_view=key_view, device=torch_device)
+
     if isinstance(layer, ffn.DenseFfnSpec):
         gate_up_weight = torch.empty(
             (2 * local_intermediate_size, request.hidden_size),
@@ -310,6 +314,8 @@ def prepare_layer_weight_request(
         return materialized, descriptors
 
     routed_expert_count = layer.routed_expert_count
+    if not isinstance(layer.checkpoint, ffn.MoeFfnCheckpointKeys):
+        raise AssertionError("ordinary MoE loading requires per-Expert checkpoint keys")
     total_expert_count = routed_expert_count + layer.shared_expert_count
     expert_gate_up_weight = torch.empty(
         (total_expert_count, 2 * local_intermediate_size, request.hidden_size),
@@ -391,6 +397,87 @@ def prepare_layer_weight_request(
         router=router,
     )
     return materialized, tuple(descriptors)
+
+
+def prepare_mxfp4_weights(
+    request: LocalLayerWeightRequest,
+    *,
+    key_view: dict[str, Path],
+    device: torch.device,
+) -> tuple[weights.Mxfp4MoeFfnWeights, tuple[TensorReadDescriptor, ...]]:
+    """Allocate only the selected packed TP shard and its block scales."""
+
+    if torch.cuda.get_device_capability(device) != (8, 0):
+        raise ValueError("GPT-OSS MXFP4 execution is qualified for SM80 only")
+    layer = request.layer
+    if not isinstance(layer, ffn.MoeFfnSpec) or not isinstance(layer.checkpoint, ffn.Mxfp4MoeCheckpointKeys):
+        raise ValueError("MXFP4 loading requires fused checkpoint keys")
+    if request.payload_dtype is not torch.bfloat16:
+        raise ValueError("GPT-OSS requires BF16 payloads")
+    keys = layer.checkpoint
+    e, h, full_i = layer.routed_expert_count, request.hidden_size, layer.expert_intermediate_size
+    i = full_i // request.tp_size
+    start = request.tp_rank * i
+    if h % 32 or i % 32:
+        raise ValueError("MXFP4 TP shards must align to 32-value blocks")
+    descriptors = []
+
+    def allocate(
+        key: str,
+        source_shape: tuple[int, ...],
+        shape: tuple[int, ...],
+        dtype: torch.dtype,
+        dimension: int | None = None,
+        narrow_start: int = 0,
+        narrow_length: int = 0,
+    ) -> torch.Tensor:
+        tensor = torch.empty(shape, dtype=dtype, device=device)
+        descriptors.append(
+            TensorReadDescriptor(
+                shard_path=key_view[key],
+                weight_key=key,
+                source_shape=source_shape,
+                narrow_dimension=dimension,
+                narrow_start=narrow_start,
+                narrow_length=narrow_length,
+                staged_shape=shape,
+                destination=tensor,
+                source_dtype=dtype,
+            )
+        )
+        return tensor
+
+    gate_up = allocate(
+        keys.gate_up_blocks_key, (e, 2 * full_i, h // 32, 16), (e, 2 * i, h // 32, 16), torch.uint8, 1, 2 * start, 2 * i
+    )
+    gate_scale = allocate(
+        keys.gate_up_scales_key, (e, 2 * full_i, h // 32), (e, 2 * i, h // 32), torch.uint8, 1, 2 * start, 2 * i
+    )
+    down = allocate(
+        keys.down_blocks_key, (e, h, full_i // 32, 16), (e, h, i // 32, 16), torch.uint8, 2, start // 32, i // 32
+    )
+    down_scale = allocate(
+        keys.down_scales_key, (e, h, full_i // 32), (e, h, i // 32), torch.uint8, 2, start // 32, i // 32
+    )
+    gate_bias = allocate(keys.gate_up_bias_key, (e, 2 * full_i), (e, 2 * i), torch.bfloat16, 1, 2 * start, 2 * i)
+    down_bias = None
+    router = None
+    if request.tp_rank == 0:
+        down_bias = allocate(keys.down_bias_key, (e, h), (e, h), torch.bfloat16)
+        router = weights.MoeRouterWeights(
+            weight=allocate(keys.router_weight_key, (e, h), (e, h), torch.bfloat16),
+            correction_bias=None,
+            bias=allocate(keys.router_bias_key, (e,), (e,), torch.bfloat16),
+        )
+    return weights.Mxfp4MoeFfnWeights(
+        gate_up_packed=gate_up.view(e, 2 * i, h // 2),
+        gate_up_scales=gate_scale,
+        down_packed=down.view(e, h, i // 2),
+        down_scales=down_scale,
+        gate_up_bias=gate_bias,
+        down_bias=down_bias,
+        router=router,
+    ), tuple(descriptors)
 
 
 def expert_descriptors(
@@ -535,10 +622,16 @@ def stage_shard(
                     break
                 try:
                     source = checkpoint.get_tensor(descriptor.weight_key)
-                    if not source.is_floating_point() or tuple(source.shape) != descriptor.source_shape:
+                    dtype_valid = (
+                        source.is_floating_point()
+                        if descriptor.source_dtype is None
+                        else source.dtype is descriptor.source_dtype
+                    )
+                    if not dtype_valid or tuple(source.shape) != descriptor.source_shape:
                         raise ValueError(
                             f"checkpoint tensor {descriptor.weight_key!r} expected "
-                            f"floating-point {descriptor.source_shape}, found {source.dtype} {tuple(source.shape)}"
+                            f"{descriptor.source_dtype or 'floating-point'} {descriptor.source_shape}, "
+                            f"found {source.dtype} {tuple(source.shape)}"
                         )
                     projected = source
                     if descriptor.narrow_dimension is not None:
@@ -549,6 +642,9 @@ def stage_shard(
                         )
                     if tuple(projected.shape) != descriptor.staged_shape:
                         raise ValueError(f"checkpoint tensor {descriptor.weight_key!r} local TP shape is invalid")
+                    if descriptor.weight_key.endswith("_scales") and descriptor.source_dtype is torch.uint8:
+                        if torch.any(projected == 255):
+                            raise ValueError(f"checkpoint scale {descriptor.weight_key!r} contains UE8M0 NaN")
                     slot_view(slot, descriptor).copy_(projected)
                 except Exception:
                     slots.put(slot)
