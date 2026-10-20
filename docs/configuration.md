@@ -174,4 +174,5 @@ publication order, and partial-publication failure behavior.
 
 At startup, an explicitly configured profile must exist and match the
 deployment environment; startup reports missing, malformed, or incompatible
-profiles.
+profiles. Regenerate calibration after allocation, estimation, or qualified
+environment changes even if an earlier file remains schema-compatible.

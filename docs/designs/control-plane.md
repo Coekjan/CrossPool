@@ -300,6 +300,13 @@ Calibrated Overhead Envelope. The peak across those stages is the predicted
 peak. An explicit operator device-memory margin is added once after that peak;
 it is not part of the estimator and cannot repair estimator underprediction.
 
+The ledger counts logical Tensor storage and native device allocations. The
+allocator allowance bounds physical reservation under the pinned default native
+PyTorch allocator. Known consecutive construction groups share a segment bound;
+independent groups receive no assumed credit for cached blocks. Graph
+construction includes known transient initialization requests as well as
+retained placeholders. Placement and local startup admission use the same costs.
+
 The analytic estimator works with no prior profiling. An optional calibration
 file supplies a device-local correction learned from a synthetic, model-neutral
 corpus. With no `ffn.device_memory_calibration` path configured, admission uses

@@ -62,15 +62,48 @@ def ensure_supported_cuda_allocator() -> None:
         raise RuntimeError(f"unsupported PyTorch CUDA allocator backend {backend!r}; expected 'native'")
 
 
-def allocator_block_allowance_bytes(storage_bytes: tuple[int, ...]) -> int:
-    """Bound active-block excess for known Tensor storage requests."""
+def allocator_reservation_bytes(storage_bytes: tuple[int, ...]) -> int:
+    """Bound new reserved bytes for one consecutive same-stream allocation group.
 
-    if any(value <= 0 for value in storage_bytes):
-        raise ValueError("allocator allowance requires positive Tensor storage byte counts")
-    result = 0
-    for value in storage_bytes:
-        rounded = align_up(max(value, 512), 512)
-        result += rounded - value + (MIB if rounded > MIB else 0)
+    Requests use the pinned default native allocator. A group in one pool
+    fitting a single small or medium segment needs at most one new segment;
+    mixed or larger groups charge each request its entire fresh segment.
+    Existing cached blocks can reduce this charge, but are never assumed.
+    """
+
+    ensure_nonnegative_int64(*storage_bytes)
+    if not storage_bytes:
+        return 0
+    if any(value == 0 for value in storage_bytes):
+        raise ValueError("allocator reservation requires positive Tensor storage byte counts")
+    rounded = tuple(align_up(max(value, 512), 512) for value in storage_bytes)
+    if max(rounded) <= MIB and sum(rounded) <= 2 * MIB:
+        result = 2 * MIB
+    elif min(rounded) > MIB and max(rounded) < 10 * MIB and sum(rounded) <= 20 * MIB:
+        result = 20 * MIB
+    else:
+        result = sum(
+            2 * MIB if value <= MIB else 20 * MIB if value < 10 * MIB else align_up(value, 2 * MIB) for value in rounded
+        )
+    ensure_nonnegative_int64(result)
+    return result
+
+
+def graph_capture_allocator_allowance_bytes(signature: execution.ExecutionSignature) -> int:
+    """Bound reservation beyond retained placeholders during signature construction.
+
+    Dense placeholders form one consecutive group. MoE initialization interleaves
+    temporary route-ID tensors, so every known request is charged independently.
+    Transient reservations include their logical bytes, absent from the ledger.
+    """
+
+    storage_bytes = execution.graph_capture_capacity_storage_bytes(signature)
+    if isinstance(signature, execution.DenseFfnExecutionSignature):
+        reserved = allocator_reservation_bytes(storage_bytes)
+    else:
+        requests = storage_bytes + execution.graph_capture_initialization_storage_bytes(signature)
+        reserved = sum(allocator_reservation_bytes((value,)) for value in requests)
+    result = reserved - sum(storage_bytes)
     ensure_nonnegative_int64(result)
     return result
 
@@ -252,6 +285,7 @@ class DeviceMemoryEstimator:
             raise ValueError("device-memory Model Plans are not co-indexed with Model Specs")
         signatures: set[execution.ExecutionSignature] = set()
         packed_weight_storage_bytes: list[int] = []
+        packed_weight_allowance = 0
         local_layer_count = 0
         local_layer_capacity_count = 0
         for model_index, (spec, profile, model_plan) in enumerate(
@@ -271,9 +305,9 @@ class DeviceMemoryEstimator:
                 signatures.update(local_signatures)
                 local_layer_count += 1
                 local_layer_capacity_count += len(local_signatures)
-                packed_weight_storage_bytes.extend(
-                    self.packed_weight_storage_bytes(model_index, layer_ordinal, tp_rank)
-                )
+                storage_bytes = self.packed_weight_storage_bytes(model_index, layer_ordinal, tp_rank)
+                packed_weight_storage_bytes.extend(storage_bytes)
+                packed_weight_allowance += allocator_reservation_bytes(storage_bytes) - sum(storage_bytes)
 
         capture_weight_pair_keys = {execution.capture_weight_pair_key(signature) for signature in signatures}
         graph_capture_storage_bytes = tuple(
@@ -286,10 +320,12 @@ class DeviceMemoryEstimator:
         packed_weight_storage_bytes_tuple = tuple(packed_weight_storage_bytes)
         packed_weight_bytes = sum(packed_weight_storage_bytes_tuple)
         packed_weight_allocations = len(packed_weight_storage_bytes_tuple)
-        packed_weight_allowance = allocator_block_allowance_bytes(packed_weight_storage_bytes_tuple)
         graph_capture_bytes = sum(graph_capture_storage_bytes)
         graph_capture_allocations = len(graph_capture_storage_bytes)
-        graph_capture_allowance = allocator_block_allowance_bytes(graph_capture_storage_bytes)
+        graph_capture_allowance = sum(graph_capture_allocator_allowance_bytes(signature) for signature in signatures)
+        for signature in capture_weight_pair_keys:
+            storage_bytes = execution.control_capture_probe_storage_bytes(signature)
+            graph_capture_allowance += allocator_reservation_bytes(storage_bytes) - sum(storage_bytes)
         dense_graph_capture_count = sum(
             isinstance(signature, execution.DenseFfnExecutionSignature) for signature in signatures
         )

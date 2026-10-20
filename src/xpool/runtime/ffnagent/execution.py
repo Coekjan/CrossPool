@@ -284,6 +284,14 @@ def graph_capture_capacity_storage_bytes(signature: ExecutionSignature) -> tuple
     return tuple(result)
 
 
+def graph_capture_initialization_storage_bytes(signature: ExecutionSignature) -> tuple[int, ...]:
+    """Return transient route-ID arange and remainder requests during construction."""
+
+    if isinstance(signature, DenseFfnExecutionSignature):
+        return ()
+    return (4 * signature.effective_topk,) * 2
+
+
 def required_execution_signatures(
     *,
     model_spec: ffn.FfnModelSpec,

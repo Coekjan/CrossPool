@@ -17,7 +17,8 @@ from xpool.memory import MIB, ensure_nonnegative_int64
 from xpool.runtime.ffnagent import execution
 from xpool.runtime.ffnagent.device_memory import (
     DeviceMemoryEstimator,
-    allocator_block_allowance_bytes,
+    allocator_reservation_bytes,
+    graph_capture_allocator_allowance_bytes,
 )
 from xpool.service.errors import XpoolDaemonError
 from xpool.utils import align_up
@@ -232,7 +233,7 @@ class PlacementSolver:
                             (
                                 sum(storage_bytes),
                                 len(storage_bytes),
-                                allocator_block_allowance_bytes(storage_bytes),
+                                allocator_reservation_bytes(storage_bytes) - sum(storage_bytes),
                                 execution.required_execution_signatures(
                                     model_spec=spec,
                                     profile=instance_plan.ffn_profile,
@@ -274,11 +275,10 @@ class PlacementSolver:
             for weight_pair_key in capture_weight_pair_keys
         }
         signature_allocator_allowance_bytes = {
-            signature: allocator_block_allowance_bytes(storage_bytes)
-            for signature, storage_bytes in signature_storage_bytes.items()
+            signature: graph_capture_allocator_allowance_bytes(signature) for signature in all_signatures
         }
         capture_weight_pair_allocator_allowance_bytes = {
-            weight_pair_key: allocator_block_allowance_bytes(storage_bytes)
+            weight_pair_key: allocator_reservation_bytes(storage_bytes) - sum(storage_bytes)
             for weight_pair_key, storage_bytes in capture_weight_pair_storage_bytes.items()
         }
         remaining_placement_seconds(deadline, "resource calculation")

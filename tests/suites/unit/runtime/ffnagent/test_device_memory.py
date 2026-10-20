@@ -135,7 +135,15 @@ def test_exact_dense_allocation_ledger_and_feature_rows() -> None:
         "retained",
     )
     assert tuple(point.exact_resource_ledger_bytes for point in points) == (96, 3424, 4120, 4752, 4056)
-    assert tuple(point.allocator_allowance_bytes for point in points) == (928, 928, 7400, 7400, 928)
+    weight_allowance = 2 * MIB - 96
+    capture_allowance = 10 * MIB - 696
+    assert tuple(point.allocator_allowance_bytes for point in points) == (
+        weight_allowance,
+        weight_allowance,
+        weight_allowance + capture_allowance,
+        weight_allowance + capture_allowance,
+        weight_allowance,
+    )
     assert points[2].features.tensor_storage_bytes == 792
     assert points[2].features.tensor_storage_allocation_count == 16
     assert points[2].features.dense_graph_capture_count == 4
@@ -144,8 +152,8 @@ def test_exact_dense_allocation_ledger_and_feature_rows() -> None:
     assert points[4].features.tensor_storage_bytes == 96
     assert points[4].features.dense_graph_capture_count == 0
 
-    assert estimator.estimate(fabric_plan=plan, ffnagent_index=0).retained_bytes == 4984
-    assert estimator.estimate(fabric_plan=plan, ffnagent_index=0).peak_bytes == 12152
+    assert estimator.estimate(fabric_plan=plan, ffnagent_index=0).retained_bytes == 2 * MIB + 3960
+    assert estimator.estimate(fabric_plan=plan, ffnagent_index=0).peak_bytes == 12 * MIB + 3960
 
     estimator.coefficients = FfnMemoryCalibrationCoefficients(
         base_bytes=10,
@@ -159,8 +167,8 @@ def test_exact_dense_allocation_ledger_and_feature_rows() -> None:
         moe_implementation_bytes=0,
         joined_ffnagent_bytes=0,
     )
-    assert estimator.estimate(fabric_plan=plan, ffnagent_index=0).retained_bytes == 4994
-    assert estimator.estimate(fabric_plan=plan, ffnagent_index=0).peak_bytes == 12162
+    assert estimator.estimate(fabric_plan=plan, ffnagent_index=0).retained_bytes == 2 * MIB + 3970
+    assert estimator.estimate(fabric_plan=plan, ffnagent_index=0).peak_bytes == 12 * MIB + 3970
 
     estimator.coefficients = FfnMemoryCalibrationCoefficients(
         base_bytes=8000,
@@ -174,8 +182,8 @@ def test_exact_dense_allocation_ledger_and_feature_rows() -> None:
         moe_implementation_bytes=0,
         joined_ffnagent_bytes=0,
     )
-    assert estimator.estimate(fabric_plan=plan, ffnagent_index=0).retained_bytes == 12984
-    assert estimator.estimate(fabric_plan=plan, ffnagent_index=0).peak_bytes == 20152
+    assert estimator.estimate(fabric_plan=plan, ffnagent_index=0).retained_bytes == 2 * MIB + 11960
+    assert estimator.estimate(fabric_plan=plan, ffnagent_index=0).peak_bytes == 12 * MIB + 11960
 
 
 def test_fabric_observer_allocation_begins_at_fabric_join(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,12 +198,49 @@ def test_fabric_observer_allocation_begins_at_fabric_join(monkeypatch: pytest.Mo
     ) == (0, 128, 128, 128, 128)
 
 
-def test_allocator_allowance_is_conservative_at_pool_boundaries() -> None:
-    assert device_memory.allocator_block_allowance_bytes(()) == 0
-    assert device_memory.allocator_block_allowance_bytes((1, 512, MIB - 1, MIB)) == 512
-    assert device_memory.allocator_block_allowance_bytes((MIB + 1,)) == MIB + 511
-    with pytest.raises(ValueError, match="positive"):
-        device_memory.allocator_block_allowance_bytes((0,))
+@pytest.mark.parametrize(
+    ("requests", "reserved"),
+    (
+        ((), 0),
+        ((1, 512), 2 * MIB),
+        ((MIB, MIB), 2 * MIB),
+        ((MIB, MIB, 512), 6 * MIB),
+        ((MIB + 1,), 20 * MIB),
+        ((8_716_288, 4_358_144), 20 * MIB),
+        ((10 * MIB - 512, 10 * MIB - 512), 20 * MIB),
+        ((10 * MIB,), 10 * MIB),
+        ((10 * MIB + 1,), 12 * MIB),
+        ((MIB, MIB + 1), 22 * MIB),
+        ((2 * MIB, 10 * MIB, 9 * MIB), 50 * MIB),
+    ),
+)
+def test_allocator_reservation_bounds_segments_without_assuming_cached_reuse(
+    requests: tuple[int, ...], reserved: int
+) -> None:
+    assert device_memory.allocator_reservation_bytes(requests) == reserved
+
+
+@pytest.mark.parametrize("requests", ((0,), (-1,), (True,), (SIGNED_INT64_MAX,)))
+def test_allocator_reservation_rejects_invalid_or_overflowing_byte_counts(requests: tuple[int, ...]) -> None:
+    with pytest.raises(ValueError):
+        device_memory.allocator_reservation_bytes(requests)
+
+
+def test_moe_capture_budget_includes_transient_initialization_reservations() -> None:
+    _, experiment = corpus.calibration_experiments(synthetic_config(ffn_devices=(1, 2)))
+    model = experiment.models[0]
+    spec = model.spec
+    profile = model.instance_plan().ffn_profile
+    signature = execution.required_execution_signatures(
+        model_spec=spec, profile=profile, layer_ordinal=0, tp_rank=0, tp_size=2
+    )[0]
+    retained = execution.graph_capture_capacity_storage_bytes(signature)
+    temporary = execution.graph_capture_initialization_storage_bytes(signature)
+
+    assert temporary == (32, 32)
+    assert device_memory.graph_capture_allocator_allowance_bytes(signature) + sum(retained) == sum(
+        device_memory.allocator_reservation_bytes((value,)) for value in retained + temporary
+    )
 
 
 @pytest.mark.parametrize(
