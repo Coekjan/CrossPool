@@ -2,90 +2,16 @@
 
 from __future__ import annotations
 
-import torch
-
 from xpool import ffn
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
-from xpool.runtime.ffnagent import architecture, operators, weights
+from xpool.runtime.ffnagent import architecture
 
 
-class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
+class DeepseekV2Adapter(architecture.FfnModelAdapter):
     """Compile the strict mixed Dense/MoE DeepSeek-V2 FFN profile."""
 
     architecture_name = "DeepseekV2ForCausalLM"
-
-    @staticmethod
-    def router_weight_dtype(*, payload_dtype: torch.dtype) -> torch.dtype:
-        return payload_dtype
-
-    @staticmethod
-    def router_workspace_bytes(
-        *,
-        payload_dtype: torch.dtype,
-        payload_row_capacity: int,
-        hidden_size: int,
-        routed_expert_count: int,
-        routed_topk: int,
-    ) -> int:
-        """Return the caller-owned FP32 Router-logit extent."""
-
-        if payload_dtype not in (torch.bfloat16, torch.float16):
-            raise ValueError("DeepSeek Router requires BF16 or FP16 payloads")
-        if min(payload_row_capacity, routed_expert_count, routed_topk) <= 0 or routed_topk > routed_expert_count:
-            raise ValueError("DeepSeek Router dimensions are inconsistent")
-        return payload_row_capacity * routed_expert_count * torch.float32.itemsize
-
-    @staticmethod
-    def compute_routed_topk(
-        *,
-        hidden_states: torch.Tensor,
-        router_weights: weights.MoeRouterWeights,
-        workspace: torch.Tensor,
-        routed_ids: torch.Tensor,
-        routed_weights: torch.Tensor,
-        renormalize: bool,
-    ) -> None:
-        """Run the admitted DeepSeek grouped-Softmax replica."""
-
-        payload_dtype = hidden_states.dtype
-        if payload_dtype not in (torch.bfloat16, torch.float16):
-            raise ValueError("DeepSeek Router requires BF16 or FP16 payloads")
-        weights.validate_tensor(hidden_states, name="hidden_states", dtype=payload_dtype, dimensions=2)
-        weights.validate_tensor(workspace, name="Router workspace", dtype=torch.uint8, dimensions=1)
-        weights.validate_tensor(routed_ids, name="routed Expert ids", dtype=torch.int32, dimensions=2)
-        weights.validate_tensor(routed_weights, name="routed Expert weights", dtype=torch.float32, dimensions=2)
-        row_capacity, hidden_size = hidden_states.shape
-        routed_expert_count, router_hidden_size = router_weights.weight.shape
-        if (
-            router_hidden_size != hidden_size
-            or router_weights.weight.dtype is not payload_dtype
-            or routed_ids.shape != routed_weights.shape
-        ):
-            raise ValueError("DeepSeek Router tensor geometry disagrees")
-        routed_topk = routed_ids.shape[1]
-        if routed_ids.shape[0] != row_capacity or router_weights.correction_bias is not None:
-            raise ValueError("DeepSeek Router resources disagree with the admitted profile")
-        expected_bytes = DeepseekV2Adapter.router_workspace_bytes(
-            payload_dtype=payload_dtype,
-            payload_row_capacity=row_capacity,
-            hidden_size=hidden_size,
-            routed_expert_count=routed_expert_count,
-            routed_topk=routed_topk,
-        )
-        if workspace.numel() != expected_bytes:
-            raise ValueError(f"DeepSeek Router workspace must contain exactly {expected_bytes} bytes")
-        tensors = (router_weights.weight, workspace, routed_ids, routed_weights)
-        if any(tensor.device != hidden_states.device for tensor in tensors):
-            raise ValueError("DeepSeek Router tensors must share one device")
-        logits = workspace.view(torch.float32).view(row_capacity, routed_expert_count)
-        torch.mm(hidden_states, router_weights.weight.t(), out=logits, out_dtype=torch.float32)
-        operators.compute_softmax_topk(
-            logits=logits,
-            routed_ids=routed_ids,
-            routed_weights=routed_weights,
-            renormalize=renormalize,
-        )
 
     @classmethod
     def compile(
@@ -132,6 +58,8 @@ class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
             layers.append(
                 ffn.MoeFfnSpec(
                     kind=LayerKind.MOE,
+                    router_algorithm=ffn.RouterAlgorithm.SOFTMAX,
+                    router_precision=ffn.RouterPrecision.FP32_LOGITS,
                     layer_id=layer_id,
                     expert_intermediate_size=expert_intermediate_size,
                     shared_expert_count=shared_expert_count,
@@ -155,7 +83,6 @@ class DeepseekV2Adapter(architecture.MoeFfnModelAdapter):
             )
         return ffn.FfnModelSpec(
             model_id=model_id,
-            architecture_name=cls.architecture_name,
             hidden_size=hidden_size,
             activation=ffn.ActivationKind.SILU,
             layers=tuple(layers),

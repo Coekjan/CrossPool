@@ -17,7 +17,7 @@ from safetensors import safe_open
 from xpool import ffn
 from xpool.config import get_global_config
 from xpool.fabric import FabricPlan, FabricRole, MoeFfnLayerPlan
-from xpool.runtime.ffnagent import architecture, checkpoint, weights
+from xpool.runtime.ffnagent import checkpoint, weights
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +71,39 @@ class TensorReadDescriptor:
     narrow_length: int
     staged_shape: tuple[int, ...]
     destination: torch.Tensor
+
+    @classmethod
+    def from_key_view(
+        cls,
+        key_view: dict[str, Path],
+        *,
+        weight_key: str,
+        source_shape: tuple[int, ...],
+        narrow_dimension: int | None,
+        narrow_start: int,
+        narrow_length: int,
+        destination: torch.Tensor,
+    ) -> TensorReadDescriptor:
+        """Resolve one selected key to a stable preallocated destination."""
+
+        shard_path = key_view.get(weight_key)
+        if shard_path is None:
+            raise ValueError(f"checkpoint key {weight_key!r} is absent from its authoritative key view")
+        return cls(
+            shard_path=shard_path,
+            weight_key=weight_key,
+            source_shape=source_shape,
+            narrow_dimension=narrow_dimension,
+            narrow_start=narrow_start,
+            narrow_length=narrow_length,
+            staged_shape=tuple(destination.shape),
+            destination=destination,
+        )
+
+    def slot_view(self, slot: torch.Tensor) -> torch.Tensor:
+        """Interpret the typed prefix of one byte-addressable pinned slot."""
+
+        return slot[: self.staged_bytes].view(self.destination.dtype).view(self.staged_shape)
 
     @property
     def staged_bytes(self) -> int:
@@ -145,12 +178,6 @@ def materialize_layer_weights(
         model_weights: list[weights.FfnLayerWeights | None] = [None] * len(spec.layers)
         materialized.append(model_weights)
         model_path = config.model_path_of(spec.model_id)
-        model_adapter = architecture.adapter_for(spec)
-        router_weight_dtype = (
-            model_adapter.router_weight_dtype(payload_dtype=instance_plan.ffn_profile.payload_dtype)
-            if issubclass(model_adapter, architecture.MoeFfnModelAdapter)
-            else None
-        )
         for layer_ordinal, (layer, layer_plan) in enumerate(zip(spec.layers, model_plan.layers, strict=True)):
             if layer.kind is not layer_plan.kind:
                 raise ValueError(f"Model Spec {model_index} layer {layer_ordinal} disagrees with its Layer Plan")
@@ -162,7 +189,11 @@ def materialize_layer_weights(
                     model_path=model_path,
                     hidden_size=spec.hidden_size,
                     payload_dtype=instance_plan.ffn_profile.payload_dtype,
-                    router_weight_dtype=router_weight_dtype if isinstance(layer, ffn.MoeFfnSpec) else None,
+                    router_weight_dtype=(
+                        layer.router_precision.weight_dtype(payload_dtype=instance_plan.ffn_profile.payload_dtype)
+                        if isinstance(layer, ffn.MoeFfnSpec)
+                        else None
+                    ),
                     layer=layer,
                     tp_rank=tp_rank,
                     tp_size=model_plan.tp_size,
@@ -266,20 +297,17 @@ def prepare_layer_weight_request(
     torch_device = torch.device("cuda", device)
 
     if isinstance(layer, ffn.DenseFfnSpec):
-        gate_up_weight = torch.empty(
-            (2 * local_intermediate_size, request.hidden_size),
-            dtype=request.payload_dtype,
+        materialized = weights.DenseFfnWeights.allocate(
+            hidden_size=request.hidden_size,
+            local_intermediate_size=local_intermediate_size,
+            payload_dtype=request.payload_dtype,
             device=torch_device,
         )
-        down_weight = torch.empty(
-            (request.hidden_size, local_intermediate_size),
-            dtype=request.payload_dtype,
-            device=torch_device,
-        )
-        materialized = weights.DenseFfnWeights(gate_up_weight=gate_up_weight, down_weight=down_weight)
+        gate_up_weight = materialized.gate_up_weight
+        down_weight = materialized.down_weight
         checkpoints = layer.checkpoint
         descriptors = (
-            projected_descriptor(
+            TensorReadDescriptor.from_key_view(
                 key_view,
                 weight_key=checkpoints.gate_weight_key,
                 source_shape=(intermediate_size, request.hidden_size),
@@ -288,7 +316,7 @@ def prepare_layer_weight_request(
                 narrow_length=local_intermediate_size,
                 destination=gate_up_weight[:local_intermediate_size],
             ),
-            projected_descriptor(
+            TensorReadDescriptor.from_key_view(
                 key_view,
                 weight_key=checkpoints.up_weight_key,
                 source_shape=(intermediate_size, request.hidden_size),
@@ -297,7 +325,7 @@ def prepare_layer_weight_request(
                 narrow_length=local_intermediate_size,
                 destination=gate_up_weight[local_intermediate_size:],
             ),
-            projected_descriptor(
+            TensorReadDescriptor.from_key_view(
                 key_view,
                 weight_key=checkpoints.down_weight_key,
                 source_shape=(request.hidden_size, intermediate_size),
@@ -310,17 +338,16 @@ def prepare_layer_weight_request(
         return materialized, descriptors
 
     routed_expert_count = layer.routed_expert_count
-    total_expert_count = routed_expert_count + layer.shared_expert_count
-    expert_gate_up_weight = torch.empty(
-        (total_expert_count, 2 * local_intermediate_size, request.hidden_size),
-        dtype=request.payload_dtype,
+    materialized = weights.MoeFfnWeights.allocate(
+        layer,
+        hidden_size=request.hidden_size,
+        local_intermediate_size=local_intermediate_size,
+        payload_dtype=request.payload_dtype,
+        router_weight_dtype=request.router_weight_dtype if request.tp_rank == 0 else None,
         device=torch_device,
     )
-    expert_down_weight = torch.empty(
-        (total_expert_count, request.hidden_size, local_intermediate_size),
-        dtype=request.payload_dtype,
-        device=torch_device,
-    )
+    expert_gate_up_weight = materialized.expert_gate_up_weight
+    expert_down_weight = materialized.expert_down_weight
     descriptors = []
     for expert_id, checkpoints in enumerate(layer.checkpoint.routed_experts):
         descriptors.extend(
@@ -352,16 +379,11 @@ def prepare_layer_weight_request(
                 )
             )
 
-    router = None
-    if request.tp_rank == 0:
-        router_weight = torch.empty(
-            (routed_expert_count, request.hidden_size),
-            dtype=request.router_weight_dtype,
-            device=torch_device,
-        )
-        correction_bias = None
+    router = materialized.router
+    if router is not None:
+        router_weight = router.weight
         descriptors.append(
-            projected_descriptor(
+            TensorReadDescriptor.from_key_view(
                 key_view,
                 weight_key=layer.checkpoint.router_weight_key,
                 source_shape=(routed_expert_count, request.hidden_size),
@@ -372,9 +394,11 @@ def prepare_layer_weight_request(
             )
         )
         if layer.checkpoint.router_correction_bias_key is not None:
-            correction_bias = torch.empty((routed_expert_count,), dtype=torch.float32, device=torch_device)
+            correction_bias = router.correction_bias
+            if correction_bias is None:
+                raise AssertionError("allocated Router lacks its correction bias")
             descriptors.append(
-                projected_descriptor(
+                TensorReadDescriptor.from_key_view(
                     key_view,
                     weight_key=layer.checkpoint.router_correction_bias_key,
                     source_shape=(routed_expert_count,),
@@ -384,12 +408,6 @@ def prepare_layer_weight_request(
                     destination=correction_bias,
                 )
             )
-        router = weights.MoeRouterWeights(weight=router_weight, correction_bias=correction_bias)
-    materialized = weights.MoeFfnWeights(
-        expert_gate_up_weight=expert_gate_up_weight,
-        expert_down_weight=expert_down_weight,
-        router=router,
-    )
     return materialized, tuple(descriptors)
 
 
@@ -408,7 +426,7 @@ def expert_descriptors(
     """Resolve one routed or logical shared Expert's three local projections."""
 
     return (
-        projected_descriptor(
+        TensorReadDescriptor.from_key_view(
             key_view,
             weight_key=checkpoints.gate_weight_key,
             source_shape=(source_intermediate_size, hidden_size),
@@ -417,7 +435,7 @@ def expert_descriptors(
             narrow_length=local_intermediate_size,
             destination=expert_gate_up_weight[expert_id, :local_intermediate_size],
         ),
-        projected_descriptor(
+        TensorReadDescriptor.from_key_view(
             key_view,
             weight_key=checkpoints.up_weight_key,
             source_shape=(source_intermediate_size, hidden_size),
@@ -426,7 +444,7 @@ def expert_descriptors(
             narrow_length=local_intermediate_size,
             destination=expert_gate_up_weight[expert_id, local_intermediate_size:],
         ),
-        projected_descriptor(
+        TensorReadDescriptor.from_key_view(
             key_view,
             weight_key=checkpoints.down_weight_key,
             source_shape=(hidden_size, source_intermediate_size),
@@ -435,33 +453,6 @@ def expert_descriptors(
             narrow_length=local_intermediate_size,
             destination=expert_down_weight[expert_id],
         ),
-    )
-
-
-def projected_descriptor(
-    key_view: dict[str, Path],
-    *,
-    weight_key: str,
-    source_shape: tuple[int, ...],
-    narrow_dimension: int | None,
-    narrow_start: int,
-    narrow_length: int,
-    destination: torch.Tensor,
-) -> TensorReadDescriptor:
-    """Resolve one selected key to a stable preallocated destination."""
-
-    shard_path = key_view.get(weight_key)
-    if shard_path is None:
-        raise ValueError(f"checkpoint key {weight_key!r} is absent from its authoritative key view")
-    return TensorReadDescriptor(
-        shard_path=shard_path,
-        weight_key=weight_key,
-        source_shape=source_shape,
-        narrow_dimension=narrow_dimension,
-        narrow_start=narrow_start,
-        narrow_length=narrow_length,
-        staged_shape=tuple(destination.shape),
-        destination=destination,
     )
 
 
@@ -501,7 +492,7 @@ def copy_staged_tensors(
                 continue
             try:
                 if first_error is None:
-                    staged_view = slot_view(message.slot, message.descriptor)
+                    staged_view = message.descriptor.slot_view(message.slot)
                     message.descriptor.destination.copy_(staged_view, non_blocking=False)
             except Exception as error:
                 if first_error is None:
@@ -549,7 +540,7 @@ def stage_shard(
                         )
                     if tuple(projected.shape) != descriptor.staged_shape:
                         raise ValueError(f"checkpoint tensor {descriptor.weight_key!r} local TP shape is invalid")
-                    slot_view(slot, descriptor).copy_(projected)
+                    descriptor.slot_view(slot).copy_(projected)
                 except Exception:
                     slots.put(slot)
                     raise
@@ -573,9 +564,3 @@ def acquire_slot(
         except queue.Empty:
             continue
     return None
-
-
-def slot_view(slot: torch.Tensor, descriptor: TensorReadDescriptor) -> torch.Tensor:
-    """Return the typed prefix of one byte-addressable pinned slot."""
-
-    return slot[: descriptor.staged_bytes].view(descriptor.destination.dtype).view(descriptor.staged_shape)

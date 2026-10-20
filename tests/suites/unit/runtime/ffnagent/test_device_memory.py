@@ -22,7 +22,7 @@ from xpool.memory import MIB, SIGNED_INT64_MAX, FfnMemoryCalibrationCoefficients
 from xpool.runtime.ffnagent import device_memory, execution
 from xpool.runtime.ffnagent.memory_profile import corpus
 from xpool.service.daemon.ffn_placement import place_ffn_models
-from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config, synthetic_config
 from xtest.harness.support.native.sizing import install_native_allocation_sizing
 from xtest.harness.support.service.daemon import ffn_model_spec, ffn_profile
 
@@ -74,9 +74,11 @@ def estimator_and_plan() -> tuple[device_memory.DeviceMemoryEstimator, FabricPla
     return device_memory.DeviceMemoryEstimator(model_specs=(spec,), instance_profiles=(profile,)), plan
 
 
-def test_glm_router_memory_keeps_fp32_weights_and_input_workspace() -> None:
-    spec = corpus.calibration_corpus_spec("corrected-shared-moe64")
-    profile = corpus.build_instance_profile(spec, group_sum_complete=False)
+def test_fp32_router_keeps_fp32_weights_and_input_workspace() -> None:
+    experiments, _ = corpus.calibration_experiments(synthetic_config(ffn_devices=(1, 2)))
+    model = experiments[2].models[0]
+    spec = model.spec
+    profile = model.instance_plan().ffn_profile
     install_test_config(
         XpoolConfig.from_mapping(
             {

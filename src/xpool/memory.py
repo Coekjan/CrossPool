@@ -166,7 +166,7 @@ class FfnMemoryCalibration(BaseModel):
     minimum_held_out_headroom_bytes: int = Field(
         ge=0,
         le=SIGNED_INT64_MAX,
-        description="Minimum nonnegative H0 prediction headroom retained for diagnostics.",
+        description="Minimum nonnegative held-out prediction headroom retained for diagnostics.",
     )
     coefficients: FfnMemoryCalibrationCoefficients = Field(description="Qualified FFN opaque-overhead envelope.")
 

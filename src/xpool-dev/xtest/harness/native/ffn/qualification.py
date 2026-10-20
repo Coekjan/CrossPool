@@ -65,6 +65,8 @@ def execution_model_specs(
                 layers.append(
                     ffn.MoeFfnSpec(
                         kind=execution_kind,
+                        router_algorithm=ffn.RouterAlgorithm.SOFTMAX,
+                        router_precision=ffn.RouterPrecision.PAYLOAD,
                         layer_id=layer_ordinal,
                         expert_intermediate_size=MOE_INTERMEDIATE_SIZE,
                         shared_expert_count=0,
@@ -85,7 +87,6 @@ def execution_model_specs(
         result.append(
             ffn.FfnModelSpec(
                 model_id=ModelId(f"qualification/{execution_kind.name.lower()}-{instance_index}"),
-                architecture_name=("Qwen3ForCausalLM" if execution_kind is LayerKind.DENSE else "Qwen3MoeForCausalLM"),
                 hidden_size=EXECUTION_HIDDEN_SIZE,
                 activation=ffn.ActivationKind.SILU,
                 layers=tuple(layers),

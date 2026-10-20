@@ -7,14 +7,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from math import prod
 from time import monotonic
-from typing import cast, overload
+from typing import cast
 
 import torch
 
 import xpool.native
 from xpool import ffn
-from xpool.fabric import DenseFfnLayerPlan, FabricPlan, FabricRole, MoeFfnLayerPlan
-from xpool.runtime.ffnagent import architecture, execution, operators, weights
+from xpool.fabric import DenseFfnLayerPlan, FabricPlan, FabricRole, MoeFfnLayerPlan, place_ffn_layer
+from xpool.runtime.ffnagent import execution, operators, routing, weights
 
 logger = logging.getLogger(__name__)
 
@@ -49,65 +49,60 @@ class MoeGraphCaptureWorkspace:
     routed_ids: torch.Tensor | None
     routed_weights: torch.Tensor | None
 
+    @classmethod
+    def allocate(
+        cls,
+        *,
+        signature: execution.MoeFfnExecutionSignature,
+        w13_config: dict[str, int],
+    ) -> MoeGraphCaptureWorkspace:
+        """Allocate exact typed views in one contiguous MoE Graph Capture workspace."""
 
-@overload
-def binding_resource_projection(
-    layer_weights: weights.DenseFfnWeights,
-) -> xpool.native.ffnagent.DenseBindingResourceProjection: ...
-
-
-@overload
-def binding_resource_projection(
-    layer_weights: weights.MoeFfnWeights,
-) -> xpool.native.ffnagent.MoeBindingResourceProjection: ...
-
-
-def binding_resource_projection(
-    layer_weights: weights.FfnLayerWeights,
-) -> xpool.native.ffnagent.DenseBindingResourceProjection | xpool.native.ffnagent.MoeBindingResourceProjection:
-    """Project retained weight addresses into the closed native resource union."""
-
-    if isinstance(layer_weights, weights.DenseFfnWeights):
-        return xpool.native.ffnagent.DenseBindingResourceProjection(
-            gate_up_weight=layer_weights.gate_up_weight,
-            down_weight=layer_weights.down_weight,
+        route_count = signature.payload_row_capacity * signature.effective_topk
+        region_specs, offsets, selected_extent = execution.moe_workspace_layout(
+            signature,
+            block_size_m=w13_config["BLOCK_SIZE_M"],
         )
-    router = layer_weights.router
-    return xpool.native.ffnagent.MoeBindingResourceProjection(
-        expert_gate_up_weight=layer_weights.expert_gate_up_weight,
-        expert_down_weight=layer_weights.expert_down_weight,
-        router=(
-            None
-            if router is None
-            else xpool.native.ffnagent.MoeRouterBindingResourceProjection(
-                weight=router.weight,
-                correction_bias=router.correction_bias,
-            )
-        ),
-    )
+        allocation_extent = execution.compute_workspace_bytes(signature)
+        if selected_extent > allocation_extent:
+            raise AssertionError("selected MoE workspace layout exceeds its fixed allocation")
+        allocation = torch.empty(allocation_extent, dtype=torch.uint8, device="cuda")
 
-
-def create_control_capture_probe(layer_weights: weights.FfnLayerWeights) -> weights.FfnLayerWeights:
-    """Allocate one zero-valued shape-equivalent Control Capture Probe."""
-
-    if isinstance(layer_weights, weights.DenseFfnWeights):
-        return weights.DenseFfnWeights(
-            gate_up_weight=torch.zeros_like(layer_weights.gate_up_weight),
-            down_weight=torch.zeros_like(layer_weights.down_weight),
+        views = tuple(
+            allocation[offset : offset + prod(shape) * dtype.itemsize].view(dtype).view(shape)
+            for offset, (dtype, shape) in zip(offsets, region_specs, strict=True)
         )
-    router = layer_weights.router
-    return weights.MoeFfnWeights(
-        expert_gate_up_weight=torch.zeros_like(layer_weights.expert_gate_up_weight),
-        expert_down_weight=torch.zeros_like(layer_weights.expert_down_weight),
-        router=(
-            None
-            if router is None
-            else weights.MoeRouterWeights(
-                weight=torch.zeros_like(router.weight),
-                correction_bias=(None if router.correction_bias is None else torch.zeros_like(router.correction_bias)),
+        overlap = views[5]
+        gate_up_elements = route_count * 2 * signature.local_intermediate_size
+        route_output_elements = route_count * signature.hidden_size
+        gate_up = (
+            overlap[: gate_up_elements * signature.payload_dtype.itemsize]
+            .view(signature.payload_dtype)
+            .view(route_count, 2 * signature.local_intermediate_size)
+        )
+        route_outputs = (
+            overlap[: route_output_elements * signature.payload_dtype.itemsize]
+            .view(signature.payload_dtype)
+            .view(
+                signature.payload_row_capacity,
+                signature.effective_topk,
+                signature.hidden_size,
             )
-        ),
-    )
+        )
+        router_views = views[6:]
+        return cls(
+            allocation=allocation,
+            sorted_token_ids=views[0],
+            expert_ids=views[1],
+            num_tokens_post_padded=views[2],
+            cumsum_buffer=views[3],
+            activated=views[4],
+            gate_up=gate_up,
+            route_outputs=route_outputs,
+            router_workspace=None if not router_views else router_views[0],
+            routed_ids=None if not router_views else router_views[1],
+            routed_weights=None if not router_views else router_views[2],
+        )
 
 
 def validate_layer_weights_against_plan(
@@ -153,7 +148,7 @@ def validate_layer_weights_against_plan(
             raise ValueError("MoE weights disagree with the Instance payload dtype")
         if router is not None:
             if router.weight.dtype is not router_weight_dtype:
-                raise ValueError("MoE Router weight dtype disagrees with its Model Adapter")
+                raise ValueError("MoE Router weight dtype disagrees with its declared precision")
             if router.weight.shape != (layer_spec.routed_expert_count, hidden_size):
                 raise ValueError("MoE Router weights disagree with the Layer Plan")
             correction_required = layer_spec.checkpoint.router_correction_bias_key is not None
@@ -177,60 +172,6 @@ def capture_graph(launch: Callable[[], None]) -> torch.cuda.CUDAGraph:
         launch()
     torch.cuda.synchronize()
     return graph
-
-
-def allocate_moe_graph_capture_workspace(
-    *,
-    signature: execution.MoeFfnExecutionSignature,
-    w13_config: dict[str, int],
-) -> MoeGraphCaptureWorkspace:
-    """Allocate exact typed views in one contiguous MoE Graph Capture workspace."""
-
-    route_count = signature.payload_row_capacity * signature.effective_topk
-    region_specs, offsets, selected_extent = execution.moe_workspace_layout(
-        signature,
-        block_size_m=w13_config["BLOCK_SIZE_M"],
-    )
-    allocation_extent = execution.compute_workspace_bytes(signature)
-    if selected_extent > allocation_extent:
-        raise AssertionError("selected MoE workspace layout exceeds its fixed allocation")
-    allocation = torch.empty(allocation_extent, dtype=torch.uint8, device="cuda")
-
-    views = tuple(
-        allocation[offset : offset + prod(shape) * dtype.itemsize].view(dtype).view(shape)
-        for offset, (dtype, shape) in zip(offsets, region_specs, strict=True)
-    )
-    overlap = views[5]
-    gate_up_elements = route_count * 2 * signature.local_intermediate_size
-    route_output_elements = route_count * signature.hidden_size
-    gate_up = (
-        overlap[: gate_up_elements * signature.payload_dtype.itemsize]
-        .view(signature.payload_dtype)
-        .view(route_count, 2 * signature.local_intermediate_size)
-    )
-    route_outputs = (
-        overlap[: route_output_elements * signature.payload_dtype.itemsize]
-        .view(signature.payload_dtype)
-        .view(
-            signature.payload_row_capacity,
-            signature.effective_topk,
-            signature.hidden_size,
-        )
-    )
-    router_views = views[6:]
-    return MoeGraphCaptureWorkspace(
-        allocation=allocation,
-        sorted_token_ids=views[0],
-        expert_ids=views[1],
-        num_tokens_post_padded=views[2],
-        cumsum_buffer=views[3],
-        activated=views[4],
-        gate_up=gate_up,
-        route_outputs=route_outputs,
-        router_workspace=None if not router_views else router_views[0],
-        routed_ids=None if not router_views else router_views[1],
-        routed_weights=None if not router_views else router_views[2],
-    )
 
 
 def capture_dense_signature(
@@ -259,8 +200,8 @@ def capture_dense_signature(
 
     primary_graph = capture_graph(lambda: launch(primary_weights))
     control_graph = capture_graph(lambda: launch(control_probe))
-    primary_resources = binding_resource_projection(primary_weights)
-    control_resources = binding_resource_projection(control_probe)
+    primary_resources = primary_weights.binding_projection()
+    control_resources = control_probe.binding_projection()
     projection = xpool.native.ffnagent.DenseExecutionSignatureProjection(
         payload_dtype=signature.payload_dtype,
         payload_row_capacity=signature.payload_row_capacity,
@@ -330,7 +271,7 @@ def capture_moe_signature(
         .expand_as(topk_ids)
     )
     topk_weights.fill_(1.0 / signature.effective_topk)
-    workspace = allocate_moe_graph_capture_workspace(signature=signature, w13_config=w13_config)
+    workspace = MoeGraphCaptureWorkspace.allocate(signature=signature, w13_config=w13_config)
 
     def launch(layer_weights: weights.MoeFfnWeights) -> None:
         router_signature = signature.router
@@ -344,7 +285,9 @@ def capture_moe_signature(
                 or workspace.routed_weights is None
             ):
                 raise AssertionError("Router-owner capture lacks Router resources")
-            router_signature.compute_routed_topk(
+            routing.compute_routed_topk(
+                router_signature.algorithm,
+                router_signature.precision,
                 hidden_states=hidden_states,
                 router_weights=router_weights,
                 workspace=workspace.router_workspace,
@@ -352,7 +295,7 @@ def capture_moe_signature(
                 routed_weights=workspace.routed_weights,
                 renormalize=router_signature.renormalize,
             )
-            operators.finalize_moe_routing(
+            routing.finalize_moe_routing(
                 routed_ids=workspace.routed_ids,
                 routed_weights=workspace.routed_weights,
                 final_ids=topk_ids,
@@ -383,8 +326,8 @@ def capture_moe_signature(
 
     primary_graph = capture_graph(lambda: launch(primary_weights))
     control_graph = capture_graph(lambda: launch(control_probe))
-    primary_resources = binding_resource_projection(primary_weights)
-    control_resources = binding_resource_projection(control_probe)
+    primary_resources = primary_weights.binding_projection()
+    control_resources = control_probe.binding_projection()
     projection = xpool.native.ffnagent.MoeExecutionSignatureProjection(
         payload_dtype=signature.payload_dtype,
         payload_row_capacity=signature.payload_row_capacity,
@@ -470,15 +413,6 @@ class FfnExecutionRegistry:
                 (layer.layer_id, layer.kind) for layer in profile.layers
             ) != tuple((layer.layer_id, layer.kind) for layer in model_spec.layers):
                 raise ValueError("Instance Profile disagrees with the co-indexed Model Spec")
-            capacities = execution.derive_payload_row_capacities(
-                max(profile.decode_payload_row_capacity, profile.prefill_payload_row_capacity)
-            )
-            model_adapter = architecture.adapter_for(model_spec)
-            router_weight_dtype = (
-                model_adapter.router_weight_dtype(payload_dtype=profile.payload_dtype)
-                if issubclass(model_adapter, architecture.MoeFfnModelAdapter)
-                else None
-            )
             for layer_ordinal, (layer_plan, layer_spec, layer_weights_value) in enumerate(
                 zip(model_plan.layers, model_spec.layers, model_weights, strict=True)
             ):
@@ -488,59 +422,30 @@ class FfnExecutionRegistry:
                 if not local or layer_weights_value is None:
                     continue
                 tp_rank = layer_plan.ffnagent_indices.index(ffnagent_index)
+                if layer_plan != place_ffn_layer(layer_spec, layer_plan.ffnagent_indices):
+                    raise ValueError("Layer Plan geometry disagrees with the Model Spec")
                 validate_layer_weights_against_plan(
                     layer_weights=layer_weights_value,
                     layer_plan=layer_plan,
                     layer_spec=layer_spec,
                     hidden_size=profile.hidden_size,
                     payload_dtype=profile.payload_dtype,
-                    router_weight_dtype=router_weight_dtype,
+                    router_weight_dtype=(
+                        layer_spec.router_precision.weight_dtype(payload_dtype=profile.payload_dtype)
+                        if isinstance(layer_spec, ffn.MoeFfnSpec)
+                        else None
+                    ),
                     tp_rank=tp_rank,
                     device=torch.cuda.current_device(),
                 )
                 layer_signature_indices = []
-                for capacity in capacities:
-                    if isinstance(layer_plan, DenseFfnLayerPlan):
-                        signature: execution.ExecutionSignature = execution.DenseFfnExecutionSignature(
-                            payload_dtype=profile.payload_dtype,
-                            payload_row_capacity=capacity,
-                            hidden_size=profile.hidden_size,
-                            local_intermediate_size=layer_plan.local_intermediate_size,
-                            activation=model_spec.activation,
-                        )
-                    else:
-                        moe_spec = cast(ffn.MoeFfnSpec, layer_spec)
-                        if not issubclass(model_adapter, architecture.MoeFfnModelAdapter):
-                            raise ValueError("MoE Model Spec requires a MoE FFN Model Adapter")
-                        router = None
-                        if tp_rank == 0:
-                            router = execution.MoeRouterExecutionSignature(
-                                compute_routed_topk=model_adapter.compute_routed_topk,
-                                router_weight_dtype=model_adapter.router_weight_dtype(
-                                    payload_dtype=profile.payload_dtype
-                                ),
-                                routed_expert_count=moe_spec.routed_expert_count,
-                                router_workspace_bytes=model_adapter.router_workspace_bytes(
-                                    payload_dtype=profile.payload_dtype,
-                                    payload_row_capacity=capacity,
-                                    hidden_size=profile.hidden_size,
-                                    routed_expert_count=moe_spec.routed_expert_count,
-                                    routed_topk=moe_spec.routed_topk,
-                                ),
-                                correction_bias_present=(moe_spec.checkpoint.router_correction_bias_key is not None),
-                                renormalize=moe_spec.renormalize,
-                            )
-                        signature = execution.MoeFfnExecutionSignature(
-                            payload_dtype=profile.payload_dtype,
-                            payload_row_capacity=capacity,
-                            hidden_size=profile.hidden_size,
-                            local_intermediate_size=layer_plan.local_intermediate_size,
-                            expert_count=moe_spec.routed_expert_count + moe_spec.shared_expert_count,
-                            effective_topk=layer_plan.effective_topk,
-                            activation=model_spec.activation,
-                            routed_scaling_factor=moe_spec.routed_scaling_factor,
-                            router=router,
-                        )
+                for signature in execution.required_execution_signatures(
+                    model_spec=model_spec,
+                    profile=profile,
+                    layer_ordinal=layer_ordinal,
+                    tp_size=len(layer_plan.ffnagent_indices),
+                    tp_rank=tp_rank,
+                ):
                     signature_index = signature_indices.get(signature)
                     if signature_index is None:
                         signature_index = len(signatures)
@@ -553,7 +458,7 @@ class FfnExecutionRegistry:
                         instance_index=instance_index,
                         layer_ordinal=layer_ordinal,
                         execution_signature_indices=tuple(layer_signature_indices),
-                        layer_resource_targets=binding_resource_projection(layer_weights_value),
+                        layer_resource_targets=layer_weights_value.binding_projection(),
                     )
                 )
 
@@ -569,7 +474,7 @@ class FfnExecutionRegistry:
             key = execution.capture_weight_pair_key(signature)
             capture_weight_pair = capture_weight_pairs.get(key)
             if capture_weight_pair is None:
-                capture_weight_pair = (representative, create_control_capture_probe(representative))
+                capture_weight_pair = (representative, representative.zeros_like())
                 capture_weight_pairs[key] = capture_weight_pair
             # Admission and the signature-keyed cache preserve the weight kind.
             if isinstance(signature, execution.DenseFfnExecutionSignature):

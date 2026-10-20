@@ -6,29 +6,11 @@ import torch
 
 from xpool import ffn
 from xpool.config import XpoolConfig
-from xpool.fabric import (
-    DenseFfnLayerPlan,
-    FabricGenerationId,
-    FabricInstancePlan,
-    FabricPePlacement,
-    FabricPlan,
-    FabricRole,
-    FabricUid,
-    FfnModelPlan,
-    FifoSchedulerPolicy,
-    InstanceFfnLayerProfile,
-    InstanceFfnProfile,
-    InstanceRankTopology,
-    MoeFfnLayerPlan,
-)
+from xpool.fabric import FabricPlan, InstanceRankTopology
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
-from xpool.runtime.ffnagent import architecture, weights
-
-DECODE_PAYLOAD_ROW_CAPACITY = 2048
-PREFILL_PAYLOAD_ROW_CAPACITY = 4096
-FIT_COORDINATES = ("C0a", "C1", "C2", "C3", "D-T")
-HELD_OUT_COORDINATE = "H0"
+from xpool.runtime.ffnagent import weights
+from xpool.runtime.ffnagent.memory_profile.experiment import CalibrationExperiment, CalibrationModel
 
 
 def calibration_gated_keys(prefix: str) -> ffn.GatedFfnCheckpointKeys:
@@ -45,6 +27,8 @@ def calibration_moe_layer(
     *,
     member: str,
     layer_id: int,
+    router_algorithm: ffn.RouterAlgorithm,
+    router_precision: ffn.RouterPrecision,
     expert_intermediate_size: int,
     routed_expert_count: int,
     shared_expert_count: int,
@@ -59,6 +43,8 @@ def calibration_moe_layer(
     correction_bias_key = f"{prefix}.router.correction_bias" if correction_bias_present else None
     return ffn.MoeFfnSpec(
         kind=LayerKind.MOE,
+        router_algorithm=router_algorithm,
+        router_precision=router_precision,
         layer_id=layer_id,
         expert_intermediate_size=expert_intermediate_size,
         shared_expert_count=shared_expert_count,
@@ -76,31 +62,44 @@ def calibration_moe_layer(
     )
 
 
-def calibration_corpus_spec(member: str) -> ffn.FfnModelSpec:
-    """Build one fixed implementation-domain Corpus member without checkpoint I/O."""
+def calibration_experiments(
+    config: XpoolConfig,
+) -> tuple[tuple[CalibrationExperiment, ...], CalibrationExperiment]:
+    """Construct the ordered fitting matrix and its independent mixed experiment.
 
-    if member == "gated-dense":
-        hidden_size = 5120
-        layers: tuple[ffn.FfnLayerSpec, ...] = (
+    Specifications are immutable and shared across experiment definitions;
+    measurement worlds allocate their resources independently.
+    """
+
+    dense = ffn.FfnModelSpec(
+        model_id=ModelId("calibration/gated-dense"),
+        hidden_size=5120,
+        activation=ffn.ActivationKind.SILU,
+        layers=(
             ffn.DenseFfnSpec(
                 kind=LayerKind.DENSE,
                 layer_id=0,
                 intermediate_size=17408,
-                checkpoint=calibration_gated_keys(f"calibration.{member}.layers.0.mlp"),
+                checkpoint=calibration_gated_keys("calibration.gated-dense.layers.0.mlp"),
             ),
-        )
-    elif member == "softmax-shared-moe64":
-        hidden_size = 2048
-        layers = (
+        ),
+    )
+    softmax_shared = ffn.FfnModelSpec(
+        model_id=ModelId("calibration/softmax-shared-moe64"),
+        hidden_size=2048,
+        activation=ffn.ActivationKind.SILU,
+        layers=(
             ffn.DenseFfnSpec(
                 kind=LayerKind.DENSE,
                 layer_id=0,
                 intermediate_size=10944,
-                checkpoint=calibration_gated_keys(f"calibration.{member}.layers.0.mlp"),
+                checkpoint=calibration_gated_keys("calibration.softmax-shared-moe64.layers.0.mlp"),
             ),
             calibration_moe_layer(
-                member=member,
+                member="softmax-shared-moe64",
                 layer_id=1,
+                router_algorithm=ffn.RouterAlgorithm.SOFTMAX,
+                router_precision=ffn.RouterPrecision.FP32_LOGITS,
                 expert_intermediate_size=1408,
                 routed_expert_count=64,
                 shared_expert_count=2,
@@ -109,19 +108,24 @@ def calibration_corpus_spec(member: str) -> ffn.FfnModelSpec:
                 renormalize=False,
                 routed_scaling_factor=1.0,
             ),
-        )
-    elif member == "corrected-shared-moe64":
-        hidden_size = 2048
-        layers = (
+        ),
+    )
+    corrected_shared = ffn.FfnModelSpec(
+        model_id=ModelId("calibration/corrected-shared-moe64"),
+        hidden_size=2048,
+        activation=ffn.ActivationKind.SILU,
+        layers=(
             ffn.DenseFfnSpec(
                 kind=LayerKind.DENSE,
                 layer_id=0,
                 intermediate_size=10240,
-                checkpoint=calibration_gated_keys(f"calibration.{member}.layers.0.mlp"),
+                checkpoint=calibration_gated_keys("calibration.corrected-shared-moe64.layers.0.mlp"),
             ),
             calibration_moe_layer(
-                member=member,
+                member="corrected-shared-moe64",
                 layer_id=1,
+                router_algorithm=ffn.RouterAlgorithm.SIGMOID,
+                router_precision=ffn.RouterPrecision.FP32,
                 expert_intermediate_size=1536,
                 routed_expert_count=64,
                 shared_expert_count=1,
@@ -130,13 +134,18 @@ def calibration_corpus_spec(member: str) -> ffn.FfnModelSpec:
                 renormalize=True,
                 routed_scaling_factor=1.8,
             ),
-        )
-    elif member == "softmax-moe128":
-        hidden_size = 2048
-        layers = (
+        ),
+    )
+    softmax = ffn.FfnModelSpec(
+        model_id=ModelId("calibration/softmax-moe128"),
+        hidden_size=2048,
+        activation=ffn.ActivationKind.SILU,
+        layers=(
             calibration_moe_layer(
-                member=member,
+                member="softmax-moe128",
                 layer_id=0,
+                router_algorithm=ffn.RouterAlgorithm.SOFTMAX,
+                router_precision=ffn.RouterPrecision.PAYLOAD,
                 expert_intermediate_size=768,
                 routed_expert_count=128,
                 shared_expert_count=0,
@@ -145,130 +154,68 @@ def calibration_corpus_spec(member: str) -> ffn.FfnModelSpec:
                 renormalize=True,
                 routed_scaling_factor=1.0,
             ),
-        )
-    else:
-        raise ValueError(f"unsupported FFN Calibration Corpus member {member!r}")
-    architecture_names = {
-        "gated-dense": "Qwen3ForCausalLM",
-        "softmax-shared-moe64": "DeepseekV2ForCausalLM",
-        "corrected-shared-moe64": "Glm4MoeLiteForCausalLM",
-        "softmax-moe128": "Qwen3MoeForCausalLM",
-    }
-    return ffn.FfnModelSpec(
-        model_id=ModelId(f"calibration/{member}"),
-        architecture_name=architecture_names[member],
-        hidden_size=hidden_size,
-        activation=ffn.ActivationKind.SILU,
-        layers=layers,
+        ),
     )
-
-
-def coordinate_members(
-    coordinate: str,
-    *,
-    atnagent_count: int,
-    ffnagent_count: int,
-) -> tuple[tuple[str, int, int, bool], ...]:
-    """Return fixed Corpus members, TP widths, Output counts, and admission modes."""
-
-    if coordinate == "C0a":
-        return (("gated-dense", 1, 1, True),)
-    if coordinate == "C1":
-        return (("softmax-shared-moe64", 1, 1, True),)
-    if coordinate == "C2":
-        return (("corrected-shared-moe64", min(ffnagent_count, 2), 1, True),)
-    if coordinate == "C3":
-        return (("softmax-moe128", min(ffnagent_count, 2), 1, True),)
-    if coordinate == "D-T" and ffnagent_count >= 2:
-        return (("gated-dense", 2, 1, True),)
-    if coordinate == HELD_OUT_COORDINATE:
-        return (
-            ("softmax-moe128", min(ffnagent_count, 4), min(atnagent_count, 2), True),
-            ("gated-dense", min(ffnagent_count, 2), min(atnagent_count, 2), False),
-        )
-    raise ValueError(f"coordinate {coordinate!r} is unreachable for F={ffnagent_count}")
-
-
-def build_instance_profile(spec: ffn.FfnModelSpec, *, group_sum_complete: bool) -> InstanceFfnProfile:
-    """Project one Calibration Corpus Spec into the fixed 4K profiling Profile."""
-
-    return InstanceFfnProfile(
-        payload_dtype=torch.bfloat16,
-        hidden_size=spec.hidden_size,
-        layers=tuple(InstanceFfnLayerProfile(layer_id=layer.layer_id, kind=layer.kind) for layer in spec.layers),
-        decode_payload_row_capacity=DECODE_PAYLOAD_ROW_CAPACITY,
-        prefill_payload_row_capacity=PREFILL_PAYLOAD_ROW_CAPACITY,
-        group_sum_complete_admitted=group_sum_complete,
+    ffnagent_count = len(config.ffn.devices)
+    single_output = InstanceRankTopology(atn_tp_size=1, atn_dp_size=1, atnagent_indices=(0,))
+    fit_models = (
+        CalibrationModel(
+            spec=dense,
+            ffn_tp_size=1,
+            topology=single_output,
+            group_sum_complete_admitted=True,
+        ),
+        CalibrationModel(
+            spec=softmax_shared,
+            ffn_tp_size=1,
+            topology=single_output,
+            group_sum_complete_admitted=True,
+        ),
+        CalibrationModel(
+            spec=corrected_shared,
+            ffn_tp_size=min(ffnagent_count, 2),
+            topology=single_output,
+            group_sum_complete_admitted=True,
+        ),
+        CalibrationModel(
+            spec=softmax,
+            ffn_tp_size=min(ffnagent_count, 2),
+            topology=single_output,
+            group_sum_complete_admitted=True,
+        ),
     )
-
-
-def build_model_plan(spec: ffn.FfnModelSpec, *, tp_size: int) -> FfnModelPlan:
-    """Place every Corpus layer on one stable primary FFN TP group."""
-
-    group = tuple(range(tp_size))
-    layers = []
-    for layer in spec.layers:
-        if isinstance(layer, ffn.DenseFfnSpec):
-            if layer.intermediate_size % tp_size:
-                raise ValueError(f"Dense layer {layer.layer_id} is not divisible by TP={tp_size}")
-            layers.append(
-                DenseFfnLayerPlan(
-                    ffnagent_indices=group,
-                    local_intermediate_size=layer.intermediate_size // tp_size,
-                )
-            )
-            continue
-        if layer.expert_intermediate_size % tp_size:
-            raise ValueError(f"MoE layer {layer.layer_id} is not divisible by TP={tp_size}")
-        layers.append(
-            MoeFfnLayerPlan(
-                ffnagent_indices=group,
-                local_intermediate_size=layer.expert_intermediate_size // tp_size,
-                effective_topk=layer.routed_topk + layer.shared_expert_count,
-            )
-        )
-    return FfnModelPlan(model_spec_digest=spec.digest(), layers=tuple(layers))
-
-
-def build_fabric_plan(
-    *,
-    uid: str,
-    coordinate: str,
-    config: XpoolConfig,
-    model_specs: tuple[ffn.FfnModelSpec, ...],
-) -> FabricPlan:
-    """Construct one complete configured-fleet calibration Fabric Plan."""
-
-    members = coordinate_members(
-        coordinate,
-        atnagent_count=len(config.atn.devices),
-        ffnagent_count=len(config.ffn.devices),
-    )
-    model_plans = tuple(
-        build_model_plan(spec, tp_size=member[1]) for spec, member in zip(model_specs, members, strict=True)
-    )
-    instance_plans = tuple(
-        FabricInstancePlan(
-            model_id=spec.model_id,
-            ffn_profile=build_instance_profile(spec, group_sum_complete=member[3]),
-            instance_rank_topology=InstanceRankTopology(
-                atn_tp_size=member[2],
-                atn_dp_size=1,
-                atnagent_indices=tuple(range(member[2])),
+    if ffnagent_count >= 2:
+        fit_models += (
+            CalibrationModel(
+                spec=dense,
+                ffn_tp_size=2,
+                topology=single_output,
+                group_sum_complete_admitted=True,
             ),
         )
-        for spec, member in zip(model_specs, members, strict=True)
+    output_count = min(len(config.atn.devices), 2)
+    mixed_topology = InstanceRankTopology(
+        atn_tp_size=output_count,
+        atn_dp_size=1,
+        atnagent_indices=tuple(range(output_count)),
     )
-    return FabricPlan(
-        generation=FabricGenerationId.create(),
-        uid=FabricUid(uid),
-        pe_placements=tuple(FabricPePlacement(role=FabricRole.ATNAGENT, device=device) for device in config.atn.devices)
-        + tuple(FabricPePlacement(role=FabricRole.FFNAGENT, device=device) for device in config.ffn.devices),
-        executor_lane_count=config.scheduler.ffn_concurrency,
-        scheduler=FifoSchedulerPolicy(),
-        model_plans=model_plans,
-        instance_plans=instance_plans,
+    held_out = CalibrationExperiment(
+        models=(
+            CalibrationModel(
+                spec=softmax,
+                ffn_tp_size=min(ffnagent_count, 4),
+                topology=mixed_topology,
+                group_sum_complete_admitted=True,
+            ),
+            CalibrationModel(
+                spec=dense,
+                ffn_tp_size=min(ffnagent_count, 2),
+                topology=mixed_topology,
+                group_sum_complete_admitted=False,
+            ),
+        ),
     )
+    return tuple(CalibrationExperiment(models=(model,)) for model in fit_models), held_out
 
 
 def materialize_calibration_weights(
@@ -287,63 +234,30 @@ def materialize_calibration_weights(
                 model_weights.append(None)
                 continue
             tp_rank = layer_plan.ffnagent_indices.index(ffnagent_index)
-            if isinstance(layer_plan, DenseFfnLayerPlan):
-                model_weights.append(
-                    weights.DenseFfnWeights(
-                        gate_up_weight=torch.empty(
-                            2 * layer_plan.local_intermediate_size,
-                            model_spec.hidden_size,
-                            dtype=torch.bfloat16,
-                            device="cuda",
-                        ),
-                        down_weight=torch.empty(
-                            model_spec.hidden_size,
-                            layer_plan.local_intermediate_size,
-                            dtype=torch.bfloat16,
-                            device="cuda",
-                        ),
-                    )
+            device = torch.device("cuda")
+            if isinstance(layer_spec, ffn.DenseFfnSpec):
+                layer_weights = weights.DenseFfnWeights.allocate(
+                    hidden_size=model_spec.hidden_size,
+                    local_intermediate_size=layer_plan.local_intermediate_size,
+                    payload_dtype=torch.bfloat16,
+                    device=device,
                 )
-                continue
-            if not isinstance(layer_spec, ffn.MoeFfnSpec):
-                raise TypeError("calibration MoE Plan requires a MoE Model Spec")
-            expert_count = layer_spec.routed_expert_count + layer_spec.shared_expert_count
-            router = None
-            if tp_rank == 0:
-                model_adapter = architecture.adapter_for(model_spec)
-                if not issubclass(model_adapter, architecture.MoeFfnModelAdapter):
-                    raise ValueError("calibration MoE weights require a MoE FFN Model Adapter")
-                router = weights.MoeRouterWeights(
-                    weight=torch.zeros(
-                        layer_spec.routed_expert_count,
-                        model_spec.hidden_size,
-                        dtype=model_adapter.router_weight_dtype(payload_dtype=torch.bfloat16),
-                        device="cuda",
+            else:
+                layer_weights = weights.MoeFfnWeights.allocate(
+                    layer_spec,
+                    hidden_size=model_spec.hidden_size,
+                    local_intermediate_size=layer_plan.local_intermediate_size,
+                    payload_dtype=torch.bfloat16,
+                    router_weight_dtype=(
+                        layer_spec.router_precision.weight_dtype(payload_dtype=torch.bfloat16) if tp_rank == 0 else None
                     ),
-                    correction_bias=(
-                        torch.zeros(layer_spec.routed_expert_count, dtype=torch.float32, device="cuda")
-                        if layer_spec.checkpoint.router_correction_bias_key is not None
-                        else None
-                    ),
+                    device=device,
                 )
-            model_weights.append(
-                weights.MoeFfnWeights(
-                    expert_gate_up_weight=torch.empty(
-                        expert_count,
-                        2 * layer_plan.local_intermediate_size,
-                        model_spec.hidden_size,
-                        dtype=torch.bfloat16,
-                        device="cuda",
-                    ),
-                    expert_down_weight=torch.empty(
-                        expert_count,
-                        model_spec.hidden_size,
-                        layer_plan.local_intermediate_size,
-                        dtype=torch.bfloat16,
-                        device="cuda",
-                    ),
-                    router=router,
-                )
-            )
+                router = layer_weights.router
+                if router is not None:
+                    router.weight.zero_()
+                    if router.correction_bias is not None:
+                        router.correction_bias.zero_()
+            model_weights.append(layer_weights)
         materialized.append(tuple(model_weights))
     return tuple(materialized)

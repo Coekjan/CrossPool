@@ -28,7 +28,6 @@ class LlamaAdapter(architecture.FfnModelAdapter):
         intermediate_size = model_config.get("intermediate_size", int, ge=1)
         return ffn.FfnModelSpec(
             model_id=model_id,
-            architecture_name=cls.architecture_name,
             hidden_size=hidden_size,
             activation=ffn.ActivationKind.SILU,
             layers=tuple(

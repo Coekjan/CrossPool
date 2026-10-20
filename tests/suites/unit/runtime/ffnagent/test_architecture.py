@@ -7,8 +7,11 @@ from typing import cast
 
 import pytest
 
-from xpool.ffn import DenseFfnSpec
+from xpool.ffn import DenseFfnSpec, FfnModelSpec, MoeFfnSpec, RouterAlgorithm, RouterPrecision
 from xpool.runtime.ffnagent import architecture
+from xpool.runtime.ffnagent.models.deepseek_v2 import DeepseekV2Adapter
+from xpool.runtime.ffnagent.models.glm4_moe_lite import Glm4MoeLiteAdapter
+from xpool.runtime.ffnagent.models.qwen3_moe import Qwen3MoeAdapter
 from xtest.harness.support.config import TEST_MODEL_ID
 
 
@@ -76,7 +79,7 @@ def test_load_compiles_llama_dense_layers(tmp_path: Path, dtype: str) -> None:
 
     spec = architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
 
-    assert spec.architecture_name == "LlamaForCausalLM"
+    assert spec.model_id == TEST_MODEL_ID
     assert spec.hidden_size == 16
     assert len(spec.layers) == 3
     assert all(cast(DenseFfnSpec, layer).intermediate_size == 32 for layer in spec.layers)
@@ -117,3 +120,72 @@ def test_source_config_reads_strict_types_and_constraints() -> None:
         config.get("missing", int)
     with pytest.raises(ValueError, match="optional must be a JSON integer"):
         config.optional("optional", int)
+
+
+@pytest.mark.parametrize(
+    "adapter, algorithm, precision, source",
+    (
+        (
+            DeepseekV2Adapter,
+            RouterAlgorithm.SOFTMAX,
+            RouterPrecision.FP32_LOGITS,
+            {
+                "model_type": "deepseek_v2",
+                "torch_dtype": "bfloat16",
+                "scoring_func": "softmax",
+                "topk_method": "greedy",
+                "moe_layer_freq": 1,
+            },
+        ),
+        (
+            Glm4MoeLiteAdapter,
+            RouterAlgorithm.SIGMOID,
+            RouterPrecision.FP32,
+            {"model_type": "glm4_moe_lite", "dtype": "bfloat16", "topk_method": "noaux_tc"},
+        ),
+        (
+            Qwen3MoeAdapter,
+            RouterAlgorithm.SOFTMAX,
+            RouterPrecision.PAYLOAD,
+            {"model_type": "qwen3_moe", "torch_dtype": "bfloat16", "decoder_sparse_step": 1, "mlp_only_layers": []},
+        ),
+    ),
+)
+def test_compilers_select_serializable_router_semantics(
+    adapter: type[architecture.FfnModelAdapter],
+    algorithm: RouterAlgorithm,
+    precision: RouterPrecision,
+    source: dict[str, object],
+) -> None:
+    config = architecture.FfnSourceConfig(
+        {
+            "hidden_act": "silu",
+            "hidden_size": 16,
+            "num_hidden_layers": 1,
+            "intermediate_size": 32,
+            "moe_intermediate_size": 16,
+            "n_routed_experts": 4,
+            "num_experts": 4,
+            "n_shared_experts": 1,
+            "num_experts_per_tok": 2,
+            "first_k_dense_replace": 0,
+            "n_group": 1,
+            "topk_group": 1,
+            "norm_topk_prob": True,
+            "routed_scaling_factor": 1.8,
+            **source,
+        }
+    )
+    spec = adapter.compile(model_id=TEST_MODEL_ID, model_config=config)
+    assert isinstance(spec.layers[0], MoeFfnSpec)
+    assert spec.layers[0].router_algorithm is algorithm
+    assert spec.layers[0].router_precision is precision
+    assert (spec.layers[0].checkpoint.router_correction_bias_key is not None) == (algorithm is RouterAlgorithm.SIGMOID)
+    assert FfnModelSpec.model_validate(spec.model_dump(mode="json")) == spec
+
+    payload = spec.model_dump(mode="json")
+    payload["layers"][0]["checkpoint"]["router_correction_bias_key"] = (
+        None if algorithm is RouterAlgorithm.SIGMOID else "model.layers.0.mlp.gate.bias"
+    )
+    changed = FfnModelSpec.model_validate(payload)
+    assert changed.digest() != spec.digest()

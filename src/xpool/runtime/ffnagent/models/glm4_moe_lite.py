@@ -2,170 +2,16 @@
 
 from __future__ import annotations
 
-import typing
-
-import torch
-import triton
-from triton import language
-
 from xpool import ffn
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
-from xpool.runtime.ffnagent import architecture, weights
+from xpool.runtime.ffnagent import architecture
 
 
-@torch.compile(fullgraph=True)
-def copy_router_input(source: torch.Tensor, target: torch.Tensor) -> None:
-    """Convert into caller-owned FP32 storage before the Router GEMM.
-
-    Pre-capture warmup compiles this operation. Inductor avoids the opaque
-    empty-object parameters in ATen's copy kernel that conflict with the
-    declared-address-only Graph parameterization contract.
-    """
-
-    target.copy_(source)
-
-
-@triton.jit
-def biased_sigmoid_topk_kernel(
-    logits_pointer,
-    correction_bias_pointer,
-    routed_ids_pointer,
-    routed_weights_pointer,
-    EXPERT_COUNT: language.constexpr,
-    TOPK: language.constexpr,
-    EXPERT_BLOCK_SIZE: language.constexpr,
-    TOPK_BLOCK_SIZE: language.constexpr,
-):
-    """Select normalized GLM routes using caller-owned FP32 logits as scratch.
-
-    Equal biased scores prefer higher Expert IDs. The stored-score boundary
-    preserves the qualified scoring arithmetic; removing it can change routes
-    near a tied cutoff. Expert padding never participates in selection.
-    """
-
-    row = language.program_id(0)
-    experts = language.arange(0, EXPERT_BLOCK_SIZE)
-    valid = experts < EXPERT_COUNT
-    logits_offsets = row * EXPERT_COUNT + experts
-    correction_bias = language.load(correction_bias_pointer + experts, mask=valid, other=0.0)
-    selection = language.sigmoid(language.load(logits_pointer + logits_offsets, mask=valid, other=0.0))
-    selection += correction_bias
-    language.store(logits_pointer + logits_offsets, selection, mask=valid)
-    language.debug_barrier()
-    selection = language.load(logits_pointer + logits_offsets, mask=valid, other=-float("inf"))
-    scores = selection - correction_bias
-
-    normalizer = language.full((), 0.0, language.float32)
-    for slot in range(TOPK):
-        maximum = language.max(selection, axis=0)
-        expert = language.max(language.where(valid & (selection == maximum), experts, -1), axis=0)
-        weight = language.sum(language.where(experts == expert, scores, 0.0), axis=0)
-        language.store(routed_ids_pointer + row * TOPK + slot, expert)
-        language.store(routed_weights_pointer + row * TOPK + slot, weight)
-        normalizer += weight
-        selection = language.where(experts == expert, -float("inf"), selection)
-
-    # The selection loop and this vectorized load may assign slots to different
-    # threads. Complete their stores before normalizing the caller-owned output.
-    language.debug_barrier()
-    slots = language.arange(0, TOPK_BLOCK_SIZE)
-    output_offsets = row * TOPK + slots
-    selected_weights = language.load(routed_weights_pointer + output_offsets, mask=slots < TOPK, other=0.0)
-    denominator = language.where(normalizer > 0.0, normalizer, 1.0)
-    language.store(routed_weights_pointer + output_offsets, selected_weights / denominator, mask=slots < TOPK)
-
-
-class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
+class Glm4MoeLiteAdapter(architecture.FfnModelAdapter):
     """Compile the strict mixed Dense/MoE GLM-4 Lite FFN profile."""
 
     architecture_name = "Glm4MoeLiteForCausalLM"
-
-    @staticmethod
-    def router_weight_dtype(*, payload_dtype: torch.dtype) -> torch.dtype:
-        return torch.float32
-
-    @staticmethod
-    def router_workspace_bytes(
-        *,
-        payload_dtype: torch.dtype,
-        payload_row_capacity: int,
-        hidden_size: int,
-        routed_expert_count: int,
-        routed_topk: int,
-    ) -> int:
-        """Size caller-owned FP32 input conversion and Router-logit storage."""
-
-        if payload_dtype not in (torch.bfloat16, torch.float16):
-            raise ValueError("GLM Router requires BF16 or FP16 payloads")
-        if min(payload_row_capacity, routed_expert_count, routed_topk) <= 0 or routed_topk > routed_expert_count:
-            raise ValueError("GLM Router dimensions are inconsistent")
-        return payload_row_capacity * (hidden_size + routed_expert_count) * torch.float32.itemsize
-
-    @staticmethod
-    def compute_routed_topk(
-        *,
-        hidden_states: torch.Tensor,
-        router_weights: weights.MoeRouterWeights,
-        workspace: torch.Tensor,
-        routed_ids: torch.Tensor,
-        routed_weights: torch.Tensor,
-        renormalize: bool,
-    ) -> None:
-        """Run GLM projection and caller-owned biased-sigmoid TopK."""
-
-        payload_dtype = hidden_states.dtype
-        if payload_dtype not in (torch.bfloat16, torch.float16):
-            raise ValueError("GLM Router requires BF16 or FP16 payloads")
-        weights.validate_tensor(hidden_states, name="hidden_states", dtype=payload_dtype, dimensions=2)
-        weights.validate_tensor(workspace, name="Router workspace", dtype=torch.uint8, dimensions=1)
-        weights.validate_tensor(routed_ids, name="routed Expert ids", dtype=torch.int32, dimensions=2)
-        weights.validate_tensor(routed_weights, name="routed Expert weights", dtype=torch.float32, dimensions=2)
-        row_capacity, hidden_size = hidden_states.shape
-        routed_expert_count, router_hidden_size = router_weights.weight.shape
-        routed_topk = routed_ids.shape[1]
-        correction_bias = router_weights.correction_bias
-        if (
-            router_hidden_size != hidden_size
-            or router_weights.weight.dtype is not torch.float32
-            or routed_ids.shape != routed_weights.shape
-            or routed_ids.shape[0] != row_capacity
-            or correction_bias is None
-            or correction_bias.shape != (routed_expert_count,)
-            or not renormalize
-        ):
-            raise ValueError("GLM Router tensors or semantics disagree with the admitted profile")
-        expected_bytes = Glm4MoeLiteAdapter.router_workspace_bytes(
-            payload_dtype=payload_dtype,
-            payload_row_capacity=row_capacity,
-            hidden_size=hidden_size,
-            routed_expert_count=routed_expert_count,
-            routed_topk=routed_topk,
-        )
-        if workspace.numel() != expected_bytes:
-            raise ValueError(f"GLM Router workspace must contain exactly {expected_bytes} bytes")
-        tensors = (router_weights.weight, correction_bias, workspace, routed_ids, routed_weights)
-        if any(tensor.device != hidden_states.device for tensor in tensors):
-            raise ValueError("GLM Router tensors must share one device")
-        scratch = workspace.view(torch.float32)
-        input_elements = row_capacity * hidden_size
-        router_input = scratch[:input_elements].view(row_capacity, hidden_size)
-        logits = scratch[input_elements:].view(row_capacity, routed_expert_count)
-        # Retain FP32 operands like the pinned gate, without capture-time storage allocation.
-        copy_router_input(hidden_states, router_input)
-        torch.mm(router_input, router_weights.weight.t(), out=logits)
-        # Triton launch metadata exceeds the constexpr-annotated kernel signature.
-        typing.cast(typing.Callable[..., object], biased_sigmoid_topk_kernel[(row_capacity,)])(
-            logits,
-            correction_bias,
-            routed_ids,
-            routed_weights,
-            EXPERT_COUNT=routed_expert_count,
-            TOPK=routed_topk,
-            EXPERT_BLOCK_SIZE=triton.next_power_of_2(routed_expert_count),
-            TOPK_BLOCK_SIZE=triton.next_power_of_2(routed_topk),
-            num_warps=2,
-        )
 
     @classmethod
     def compile(
@@ -212,6 +58,8 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
             layers.append(
                 ffn.MoeFfnSpec(
                     kind=LayerKind.MOE,
+                    router_algorithm=ffn.RouterAlgorithm.SIGMOID,
+                    router_precision=ffn.RouterPrecision.FP32,
                     layer_id=layer_id,
                     expert_intermediate_size=expert_intermediate_size,
                     shared_expert_count=shared_expert_count,
@@ -235,7 +83,6 @@ class Glm4MoeLiteAdapter(architecture.MoeFfnModelAdapter):
             )
         return ffn.FfnModelSpec(
             model_id=model_id,
-            architecture_name=cls.architecture_name,
             hidden_size=hidden_size,
             activation=ffn.ActivationKind.SILU,
             layers=tuple(layers),

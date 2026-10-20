@@ -6,6 +6,9 @@ from dataclasses import dataclass
 
 import torch
 
+import xpool.native
+from xpool import ffn
+
 
 def validate_tensor(
     tensor: torch.Tensor,
@@ -54,6 +57,38 @@ class DenseFfnWeights:
 
     gate_up_weight: torch.Tensor
     down_weight: torch.Tensor
+
+    @classmethod
+    def allocate(
+        cls,
+        *,
+        hidden_size: int,
+        local_intermediate_size: int,
+        payload_dtype: torch.dtype,
+        device: torch.device,
+    ) -> DenseFfnWeights:
+        """Own empty canonical shards, ready for checkpoint or synthetic filling."""
+
+        return cls(
+            gate_up_weight=torch.empty((2 * local_intermediate_size, hidden_size), dtype=payload_dtype, device=device),
+            down_weight=torch.empty((hidden_size, local_intermediate_size), dtype=payload_dtype, device=device),
+        )
+
+    def binding_projection(self) -> xpool.native.ffnagent.DenseBindingResourceProjection:
+        """Expose retained addresses without transferring Tensor ownership."""
+
+        return xpool.native.ffnagent.DenseBindingResourceProjection(
+            gate_up_weight=self.gate_up_weight,
+            down_weight=self.down_weight,
+        )
+
+    def zeros_like(self) -> DenseFfnWeights:
+        """Allocate zero-valued weights with the same shape, dtype and device."""
+
+        return DenseFfnWeights(
+            gate_up_weight=torch.zeros_like(self.gate_up_weight),
+            down_weight=torch.zeros_like(self.down_weight),
+        )
 
     def __post_init__(self) -> None:
         """Validate canonical Dense ranks, dimensions, storage, and device."""
@@ -122,6 +157,83 @@ class MoeFfnWeights:
     expert_gate_up_weight: torch.Tensor
     expert_down_weight: torch.Tensor
     router: MoeRouterWeights | None
+
+    @classmethod
+    def allocate(
+        cls,
+        layer: ffn.MoeFfnSpec,
+        *,
+        hidden_size: int,
+        local_intermediate_size: int,
+        payload_dtype: torch.dtype,
+        router_weight_dtype: torch.dtype | None,
+        device: torch.device,
+    ) -> MoeFfnWeights:
+        """Own empty Expert shards and any Router tensors in production order.
+
+        A missing Router dtype selects a non-owner TP shard. The caller selects
+        precision from the declared execution policy and fills the empty tensors.
+        """
+
+        expert_count = layer.routed_expert_count + layer.shared_expert_count
+        expert_gate_up_weight = torch.empty(
+            (expert_count, 2 * local_intermediate_size, hidden_size), dtype=payload_dtype, device=device
+        )
+        expert_down_weight = torch.empty(
+            (expert_count, hidden_size, local_intermediate_size), dtype=payload_dtype, device=device
+        )
+        router = None
+        if router_weight_dtype is not None:
+            router_weight = torch.empty(
+                (layer.routed_expert_count, hidden_size), dtype=router_weight_dtype, device=device
+            )
+            correction_bias = (
+                torch.empty((layer.routed_expert_count,), dtype=torch.float32, device=device)
+                if layer.checkpoint.router_correction_bias_key is not None
+                else None
+            )
+            router = MoeRouterWeights(weight=router_weight, correction_bias=correction_bias)
+        return cls(
+            expert_gate_up_weight=expert_gate_up_weight,
+            expert_down_weight=expert_down_weight,
+            router=router,
+        )
+
+    def binding_projection(self) -> xpool.native.ffnagent.MoeBindingResourceProjection:
+        """Expose Expert and optional Router addresses, retaining their owners."""
+
+        router = self.router
+        return xpool.native.ffnagent.MoeBindingResourceProjection(
+            expert_gate_up_weight=self.expert_gate_up_weight,
+            expert_down_weight=self.expert_down_weight,
+            router=(
+                None
+                if router is None
+                else xpool.native.ffnagent.MoeRouterBindingResourceProjection(
+                    weight=router.weight,
+                    correction_bias=router.correction_bias,
+                )
+            ),
+        )
+
+    def zeros_like(self) -> MoeFfnWeights:
+        """Allocate zero-valued shape-equivalent weights with matching ownership."""
+
+        router = self.router
+        return MoeFfnWeights(
+            expert_gate_up_weight=torch.zeros_like(self.expert_gate_up_weight),
+            expert_down_weight=torch.zeros_like(self.expert_down_weight),
+            router=(
+                None
+                if router is None
+                else MoeRouterWeights(
+                    weight=torch.zeros_like(router.weight),
+                    correction_bias=None
+                    if router.correction_bias is None
+                    else torch.zeros_like(router.correction_bias),
+                )
+            ),
+        )
 
     def __post_init__(self) -> None:
         """Validate canonical Expert ranks, dimensions, storage, and device."""

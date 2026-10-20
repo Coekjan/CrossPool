@@ -231,6 +231,12 @@ The closed vocabulary shared across CrossPool for describing an FFN invocation,
 its layout, its required output, and its outcome.
 _Avoid_: ABI values, Transport FFN enums, Fabric FFN types
 
+**FFN Model Specification**:
+The generation-independent description of a model's FFN geometry, mathematical
+behavior and checkpoint identity, distinct from the source model architecture
+used to interpret its configuration.
+_Avoid_: Source architecture, Execution Signature, Fabric Plan
+
 **Execution Activation**:
 The startup transition that makes an installed FFN execution available to the
 generation.
@@ -265,6 +271,20 @@ _Avoid_: Batch size, Lane capacity
 The final per-row Expert identifiers and weights shared by the FFN participants
 for one MoE layer invocation.
 _Avoid_: Router output, TopK result
+
+**Router Algorithm**:
+The scoring rule used to select routed Experts and derive their weights,
+distinct from its numerical precision policy.
+
+**Router Precision**:
+The element-type policy for Router projection inputs, retained weights and
+logits, distinct from the Router Algorithm and payload element type.
+
+**Router Correction Bias**:
+A per-Expert adjustment applied to activated scores only for Expert selection.
+Selected Expert weights derive from the uncorrected scores under the model's
+normalization and scaling rules.
+_Avoid_: Router projection bias, logits bias
 
 **Hook Point**:
 A neutral extension seam named after the production event it exposes rather
@@ -310,6 +330,16 @@ _Avoid_: Exact allocation demand, safe estimate
 A history-independent upper bound for allocator overhead beyond the Exact
 Resource Ledger.
 _Avoid_: Allocation error tolerance, allocator simulator
+
+**Calibration Sample**:
+A synthetic FFN structure with fixed geometry and mathematical behavior, chosen
+to exercise resource construction independently of a real checkpoint.
+_Avoid_: Source model family
+
+**Calibration Experiment**:
+A controlled startup measurement setup combining one or more Calibration Samples
+with their placement and execution configuration.
+_Avoid_: Model family, FFN structure kind
 
 **Calibrated Overhead Envelope**:
 An environment-qualified empirical bound for device-memory overhead not covered

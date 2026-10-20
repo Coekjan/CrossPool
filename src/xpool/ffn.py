@@ -8,6 +8,7 @@ import math
 from enum import IntEnum
 from typing import Annotated, Literal
 
+import torch
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 import xpool.native
@@ -21,6 +22,8 @@ __all__ = [
     "GatedFfnCheckpointKeys",
     "MoeFfnCheckpointKeys",
     "MoeFfnSpec",
+    "RouterAlgorithm",
+    "RouterPrecision",
 ]
 
 
@@ -28,6 +31,28 @@ class ActivationKind(IntEnum):
     """Gated FFN activation semantics."""
 
     SILU = 1
+
+
+class RouterAlgorithm(IntEnum):
+    """Activated scoring rule, independent of projection precision."""
+
+    SOFTMAX = 1
+    SIGMOID = 2
+
+
+class RouterPrecision(IntEnum):
+    """Tensor dtypes used by Router projection inputs, weights and logits."""
+
+    PAYLOAD = 1
+    FP32 = 2
+    FP32_LOGITS = 3
+
+    def weight_dtype(self, *, payload_dtype: torch.dtype) -> torch.dtype:
+        """Resolve retained Router weights for an admitted payload dtype."""
+
+        if payload_dtype not in (torch.bfloat16, torch.float16):
+            raise ValueError("Router requires BF16 or FP16 payloads")
+        return torch.float32 if self is RouterPrecision.FP32 else payload_dtype
 
 
 class FfnModel(BaseModel):
@@ -42,6 +67,11 @@ class GatedFfnCheckpointKeys(FfnModel):
     gate_weight_key: str = Field(strict=True, min_length=1, description="Safetensors key for the gate projection.")
     up_weight_key: str = Field(strict=True, min_length=1, description="Safetensors key for the up projection.")
     down_weight_key: str = Field(strict=True, min_length=1, description="Safetensors key for the down projection.")
+
+    def tensor_keys(self) -> tuple[str, ...]:
+        """Return checkpoint keys in gate, up, down order."""
+
+        return self.gate_weight_key, self.up_weight_key, self.down_weight_key
 
 
 class MoeFfnCheckpointKeys(FfnModel):
@@ -63,6 +93,18 @@ class MoeFfnCheckpointKeys(FfnModel):
         description="Optional wide shared-Expert projection keys.",
     )
 
+    def tensor_keys(self) -> tuple[str, ...]:
+        """Return Router, optional bias and ordered routed/shared Expert keys."""
+
+        keys = [self.router_weight_key]
+        if self.router_correction_bias_key is not None:
+            keys.append(self.router_correction_bias_key)
+        for expert in self.routed_experts:
+            keys.extend(expert.tensor_keys())
+        if self.shared_expert is not None:
+            keys.extend(self.shared_expert.tensor_keys())
+        return tuple(keys)
+
 
 class DenseFfnSpec(FfnModel):
     """Intrinsic semantics and checkpoint identity of one gated Dense layer."""
@@ -82,6 +124,8 @@ class MoeFfnSpec(FfnModel):
         description="MoE layer discriminator."
     )
     layer_id: int = Field(strict=True, ge=0, description="Model-local decoder layer identity.")
+    router_algorithm: RouterAlgorithm = Field(description="Router activated scoring rule selected during compilation.")
+    router_precision: RouterPrecision = Field(description="Router projection precision selected during compilation.")
     expert_intermediate_size: int = Field(strict=True, ge=1, description="Intermediate width of one Expert.")
     shared_expert_count: int = Field(strict=True, ge=0, description="Logical always-selected shared Expert count.")
     routed_topk: int = Field(strict=True, ge=1, description="Routed Expert count selected per hidden-state row.")
@@ -109,6 +153,14 @@ class MoeFfnSpec(FfnModel):
             raise ValueError("routed_topk cannot exceed routed Expert count")
         if (self.shared_expert_count == 0) != (self.checkpoint.shared_expert is None):
             raise ValueError("shared Expert count and checkpoint triplet disagree")
+        match self.router_algorithm, self.router_precision:
+            case RouterAlgorithm.SOFTMAX, RouterPrecision.PAYLOAD | RouterPrecision.FP32_LOGITS:
+                pass
+            case RouterAlgorithm.SIGMOID, RouterPrecision.FP32:
+                if not self.renormalize:
+                    raise ValueError("Sigmoid routing requires normalization")
+            case _:
+                raise ValueError("unsupported Router algorithm and precision combination")
         return self
 
     @property
@@ -128,7 +180,6 @@ class FfnModelSpec(FfnModel):
     """Complete model-source-intrinsic FFN semantics."""
 
     model_id: ModelId = Field(description="Canonical configured model identity.")
-    architecture_name: str = Field(strict=True, min_length=1, description="Selected FFN Model Adapter identity.")
     hidden_size: int = Field(strict=True, ge=1, description="Model hidden-state width in elements.")
     activation: ActivationKind = Field(description="Gated activation shared by all model FFN layers.")
     layers: tuple[FfnLayerSpec, ...] = Field(
@@ -143,7 +194,7 @@ class FfnModelSpec(FfnModel):
         layer_ids = tuple(layer.layer_id for layer in self.layers)
         if len(set(layer_ids)) != len(layer_ids):
             raise ValueError("FFN Model Spec layer ids must be unique")
-        keys = tuple(key for layer in self.layers for key in checkpoint_keys_for_layer(layer))
+        keys = tuple(key for layer in self.layers for key in layer.checkpoint.tensor_keys())
         if len(set(keys)) != len(keys):
             raise ValueError("FFN Model Spec checkpoint keys must be globally unique")
         return self
@@ -157,24 +208,3 @@ class FfnModelSpec(FfnModel):
             separators=(",", ":"),
         ).encode()
         return hashlib.sha256(encoded).hexdigest()
-
-
-def checkpoint_keys_for_layer(layer: FfnLayerSpec) -> tuple[str, ...]:
-    """Return one layer's checkpoint keys in canonical semantic order."""
-
-    if isinstance(layer, DenseFfnSpec):
-        return (
-            layer.checkpoint.gate_weight_key,
-            layer.checkpoint.up_weight_key,
-            layer.checkpoint.down_weight_key,
-        )
-
-    keys = [layer.checkpoint.router_weight_key]
-    if layer.checkpoint.router_correction_bias_key is not None:
-        keys.append(layer.checkpoint.router_correction_bias_key)
-    experts = list(layer.checkpoint.routed_experts)
-    if layer.checkpoint.shared_expert is not None:
-        experts.append(layer.checkpoint.shared_expert)
-    for expert in experts:
-        keys.extend((expert.gate_weight_key, expert.up_weight_key, expert.down_weight_key))
-    return tuple(keys)

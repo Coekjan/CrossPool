@@ -8,6 +8,7 @@ from xpool.config import XpoolConfig
 from xpool.memory import write_memory_calibration_profile
 from xpool.runtime.agent import AgentError
 from xpool.runtime.ffnagent.memory_profile import profile_ffn_memory
+from xpool.runtime.ffnagent.memory_profile.evidence import write_memory_profile_evidence
 from xpool.utils.cli import RunnableCliCommand
 
 
@@ -22,8 +23,17 @@ class MemoryProfileCommand(RunnableCliCommand[XpoolConfig]):
         """Produce and atomically publish one complete calibration Profile."""
 
         try:
-            profile = profile_ffn_memory()
-            write_memory_calibration_profile(profile)
+            evidence = profile_ffn_memory()
+            evidence_path = write_memory_profile_evidence(evidence)
         except RuntimeError as error:
             raise AgentError(f"xpool memory-profile failed: {error}") from error
+        try:
+            write_memory_calibration_profile(evidence.profile)
+        except RuntimeError as error:
+            raise AgentError(
+                f"xpool memory-profile failed: candidate evidence published at {evidence_path}; "
+                f"runtime Profile publication failed at {config.ffn.device_memory_calibration}: {error}"
+            ) from error
+        print(f"calibration evidence: {evidence_path}")
+        print(f"calibration profile: {config.ffn.device_memory_calibration}")
         return 0

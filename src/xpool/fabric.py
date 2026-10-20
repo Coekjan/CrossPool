@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 import xpool.native
+from xpool import ffn
 from xpool.config import FfnSchedulingPolicy
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
@@ -35,6 +36,7 @@ __all__ = [
     "InstanceRankTopology",
     "MoeFfnLayerPlan",
     "RandomSchedulerPolicy",
+    "place_ffn_layer",
 ]
 
 FABRIC_UID_HEX_LENGTH = int(xpool.native.fabric.UID_HEX_LENGTH)
@@ -294,6 +296,32 @@ class FfnModelPlan(FabricModel):
         if any(len(layer.ffnagent_indices) != self.tp_size for layer in self.layers):
             raise ValueError("all FFN Model Plan layers must use one TP width")
         return self
+
+
+def place_ffn_layer(layer: ffn.FfnLayerSpec, execution_group: tuple[int, ...]) -> FfnLayerPlan:
+    """Project a layer onto an ordered TP group without choosing its members.
+
+    The returned Plan preserves the group order and exact local width. Empty
+    groups, invalid membership and non-divisible widths raise ValueError.
+    """
+
+    tp_size = len(execution_group)
+    if tp_size == 0:
+        raise ValueError("FFN execution group must not be empty")
+    if isinstance(layer, ffn.DenseFfnSpec):
+        if layer.intermediate_size % tp_size:
+            raise ValueError(f"Dense layer {layer.layer_id} intermediate size is not divisible by FFN TP")
+        return DenseFfnLayerPlan(
+            ffnagent_indices=execution_group,
+            local_intermediate_size=layer.intermediate_size // tp_size,
+        )
+    if layer.expert_intermediate_size % tp_size:
+        raise ValueError(f"MoE layer {layer.layer_id} intermediate size is not divisible by FFN TP")
+    return MoeFfnLayerPlan(
+        ffnagent_indices=execution_group,
+        local_intermediate_size=layer.expert_intermediate_size // tp_size,
+        effective_topk=layer.routed_topk + layer.shared_expert_count,
+    )
 
 
 class InstanceRankTopology(FabricModel):

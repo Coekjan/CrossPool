@@ -11,7 +11,7 @@ import torch
 
 import xtest
 from xpool.config import XpoolConfig
-from xpool.ffn import DenseFfnSpec, MoeFfnCheckpointKeys, MoeFfnSpec
+from xpool.ffn import DenseFfnSpec, MoeFfnCheckpointKeys, MoeFfnSpec, RouterAlgorithm, RouterPrecision
 from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent import architecture, loader, weights
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
@@ -66,6 +66,8 @@ def moe_spec(router_correction_bias_key: str) -> MoeFfnSpec:
     prefix = "model.layers.1.mlp"
     return MoeFfnSpec(
         kind=LayerKind.MOE,
+        router_algorithm=RouterAlgorithm.SIGMOID,
+        router_precision=RouterPrecision.FP32,
         layer_id=1,
         expert_intermediate_size=4,
         shared_expert_count=2,
@@ -167,6 +169,21 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     expected_shared_down = moe_tensors[shared.down_weight_key].reshape(hidden_size, 2, 4)[:, :, :2].permute(1, 0, 2)
     torch.testing.assert_close(moe_weights.expert_down_weight.cpu()[2:], expected_shared_down)
 
+    dense_probe = dense_weights.zeros_like()
+    moe_probe = moe_weights.zeros_like()
+    assert moe_probe.router is not None
+    assert moe_probe.router.correction_bias is not None
+    for source, probe in (
+        (dense_weights.gate_up_weight, dense_probe.gate_up_weight),
+        (dense_weights.down_weight, dense_probe.down_weight),
+        (moe_weights.expert_gate_up_weight, moe_probe.expert_gate_up_weight),
+        (moe_weights.expert_down_weight, moe_probe.expert_down_weight),
+        (moe_weights.router.weight, moe_probe.router.weight),
+        (moe_weights.router.correction_bias, moe_probe.router.correction_bias),
+    ):
+        assert probe.data_ptr() != source.data_ptr()
+        torch.testing.assert_close(probe, torch.zeros_like(source), rtol=0, atol=0)
+
 
 @xtest.requirements(device_count=1)
 def test_materialize_non_router_rank_and_shape_failure(tmp_path: Path) -> None:
@@ -201,6 +218,7 @@ def test_materialize_non_router_rank_and_shape_failure(tmp_path: Path) -> None:
     (materialized,) = loader.materialize_local_layer_weights(requests=(request,))
     assert isinstance(materialized, weights.MoeFfnWeights)
     assert materialized.router is None
+    assert materialized.zeros_like().router is None
 
     bad_request = loader.LocalLayerWeightRequest(
         model_path=model_path,

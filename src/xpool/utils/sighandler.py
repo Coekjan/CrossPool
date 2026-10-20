@@ -8,7 +8,35 @@ from collections.abc import Callable, Generator
 from contextlib import ExitStack, contextmanager
 from types import FrameType
 
-__all__ = ("defer_signal_exceptions", "sighandle")
+__all__ = ("block_signals", "defer_signal_exceptions", "initialize_child_signals", "sighandle")
+
+
+@contextmanager
+def block_signals(signals: set[signal.Signals]) -> Generator[set[int], None, None]:
+    """Block delivery while publishing a spawned owner, then restore the mask.
+
+    Yields the original thread mask. A spawned child inherits the blocked mask
+    and must install its signal dispositions before restoring this original mask.
+    """
+
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, signals)
+    try:
+        yield previous
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def initialize_child_signals(mask: set[int]) -> None:
+    """Ignore parent-owned cancellation before restoring the inherited mask.
+
+    Call at the entry of an internal spawned child whose parent blocked
+    SIGINT/SIGTERM during startup. Retirement is controlled by the parent's
+    protocol rather than direct cancellation of the child.
+    """
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, signal.SIG_IGN)
+    signal.pthread_sigmask(signal.SIG_SETMASK, mask)
 
 
 @contextmanager

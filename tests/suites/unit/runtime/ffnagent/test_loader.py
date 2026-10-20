@@ -37,7 +37,6 @@ def test_plan_materialization_selects_only_local_layers(
 ) -> None:
     spec = FfnModelSpec(
         model_id=TEST_MODEL_ID,
-        architecture_name="Qwen3ForCausalLM",
         hidden_size=4,
         activation=ActivationKind.SILU,
         layers=(

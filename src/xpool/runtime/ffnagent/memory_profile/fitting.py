@@ -1,9 +1,9 @@
-"""FFN memory observations and calibrated upper-envelope fitting."""
+"""Calibrated FFN upper-envelope fitting from attributed measurements."""
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, fields
+from dataclasses import fields
 
 from ortools.sat.python import cp_model
 
@@ -11,52 +11,11 @@ from xpool.memory import (
     MIB,
     SIGNED_INT64_MAX,
     FfnMemoryCalibrationCoefficients,
-    MemoryCalibrationDevice,
 )
-from xpool.runtime.ffnagent.device_memory import DeviceMemoryFeatures, DeviceMemoryPoint
+from xpool.runtime.ffnagent.device_memory import DeviceMemoryFeatures
+from xpool.runtime.ffnagent.memory_profile.evidence import MemoryProfileWorld
 
 COEFFICIENT_NAMES = tuple(field.name for field in fields(FfnMemoryCalibrationCoefficients))
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryObservation:
-    """One exact feature row and its observed baseline-relative device peak."""
-
-    point: DeviceMemoryPoint
-    observed_device_bytes: int
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryProfileSoftwareEnvironment:
-    """Software compatibility facts observed by every FfnAgent child."""
-
-    native_abi_version: int
-    cuda_driver_version: int
-    cuda_runtime_version: int
-    torch_version: str
-    triton_version: str
-    sglang_version: str
-    sglang_kernel_version: str
-    nvshmem_version: str
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryProfileWorld:
-    """Ephemeral evidence returned by one complete fresh calibration world."""
-
-    devices: tuple[MemoryCalibrationDevice, ...]
-    environment: MemoryProfileSoftwareEnvironment
-    observations: tuple[MemoryObservation, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryProfileParticipantEvidence:
-    """One FfnAgent child's complete ephemeral evidence."""
-
-    ffnagent_index: int
-    device: MemoryCalibrationDevice
-    environment: MemoryProfileSoftwareEnvironment
-    observations: tuple[MemoryObservation, ...]
 
 
 def feature_vector(features: DeviceMemoryFeatures) -> tuple[int, ...]:
@@ -141,7 +100,7 @@ def fit_worlds(
     fit_worlds: tuple[MemoryProfileWorld, ...],
     held_out_worlds: tuple[MemoryProfileWorld, ...],
 ) -> tuple[FfnMemoryCalibrationCoefficients, int]:
-    """Fit all repeated coordinates and prove the unchanged held-out world."""
+    """Fit repeated experiments and validate the independent held-out worlds."""
 
     targets: dict[tuple[int, ...], int] = {}
     positive_observations = []
@@ -168,8 +127,7 @@ def fit_worlds(
     targets = {vector: target + observation_quantum_bytes for vector, target in targets.items()}
     coefficients = solve_coefficients(targets, observation_quantum_bytes)
 
-    # The held-out matrix is never fitted. Its smallest positive prediction
-    # margin becomes the deployment headroom carried by the Profile.
+    # The held-out matrix is never fitted; retain its minimum headroom as a diagnostic.
     minimum_headroom = SIGNED_INT64_MAX
     for world in held_out_worlds:
         for observation in world.observations:
@@ -188,7 +146,9 @@ def fit_worlds(
             )
             if prediction < calibration_residual:
                 raise RuntimeError(
-                    f"memory-profile candidate underpredicts H0 by {calibration_residual - prediction} bytes"
+                    "memory-profile candidate underpredicts held-out experiment by "
+                    f"{calibration_residual - prediction} "
+                    f"bytes for models {tuple(str(model.spec.model_id) for model in world.experiment.models)}"
                 )
             minimum_headroom = min(
                 minimum_headroom,

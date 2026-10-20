@@ -23,8 +23,7 @@ The supported production boundary is:
   Fabric, including directly accessible peer memory for FFN partial reduction;
 - one identical resolved CrossPool configuration in every process;
 - SGLang as the only serving-engine integration;
-- BF16 or FP16 hidden-state payloads, with the current qualification models
-  retaining BF16; and
+- BF16 or FP16 hidden-state payloads; and
 - gated Dense and MoE decoder FFN layers.
 
 Concrete model IDs with qualification suites are listed in

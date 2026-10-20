@@ -165,6 +165,13 @@ stopped. The profiler owns its attention MPS scope and executes FFN participants
 directly. It uses a fixed model-independent corpus without loading the configured
 model weights.
 
+The command prints the runtime Profile path and its sibling evidence path:
+`memory.json`, for example, has `memory.evidence.json`. Only the runtime Profile
+is an input to admission. The evidence retains the candidate and its measurements,
+grouped into fitting and held-out worlds with their concrete experiment definitions. See
+[Memory admission](designs/control-plane.md#memory-admission) for fitting,
+publication order, and partial-publication failure behavior.
+
 At startup, an explicitly configured profile must exist and match the
 deployment environment; startup reports missing, malformed, or incompatible
 profiles.

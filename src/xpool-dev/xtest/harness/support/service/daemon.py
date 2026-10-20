@@ -206,7 +206,6 @@ def ffn_model_spec(*, model_id: str = str(TEST_MODEL_ID), hidden_size: int = 4) 
 
     return {
         "model_id": model_id,
-        "architecture_name": "Qwen3ForCausalLM",
         "hidden_size": hidden_size,
         "activation": 1,
         "layers": [

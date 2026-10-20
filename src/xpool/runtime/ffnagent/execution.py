@@ -4,33 +4,49 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from typing import Protocol
 
 import torch
 
 from xpool import ffn
 from xpool.fabric import InstanceFfnProfile
-from xpool.runtime.ffnagent import architecture, weights
 from xpool.utils import align_up
 
 OPERATOR_ALIGNMENT_BYTES = 16
 QUALIFIED_MOE_BLOCK_SIZE_M_VALUES = (16, 32, 64, 128)
 
 
-class MoeRoutingOperation(Protocol):
-    """Normalized model-owned routing operation used during Graph capture."""
+def dense_workspace_bytes(
+    *,
+    payload_dtype: torch.dtype,
+    row_capacity: int,
+    local_intermediate_size: int,
+) -> int:
+    """Return gate/up plus activated-up workspace bytes for one Dense branch."""
 
-    def __call__(
-        self,
-        *,
-        hidden_states: torch.Tensor,
-        router_weights: weights.MoeRouterWeights,
-        workspace: torch.Tensor,
-        routed_ids: torch.Tensor,
-        routed_weights: torch.Tensor,
-        renormalize: bool,
-    ) -> None:
-        """Populate routed Expert IDs and weights for one input payload."""
+    if payload_dtype not in (torch.bfloat16, torch.float16):
+        raise ValueError("Dense workspace requires BF16 or FP16 payloads")
+    if row_capacity <= 0 or local_intermediate_size <= 0:
+        raise ValueError("Dense workspace dimensions must be positive")
+    return row_capacity * 3 * local_intermediate_size * payload_dtype.itemsize
+
+
+def moe_alignment_workspace_shapes(
+    *,
+    row_capacity: int,
+    effective_topk: int,
+    expert_count: int,
+    block_size_m: int,
+) -> tuple[int, int, int]:
+    """Return exact sorted-id, block-id, and cumsum element counts."""
+
+    if row_capacity <= 0 or effective_topk <= 0 or expert_count <= 0:
+        raise ValueError("MoE alignment dimensions must be positive")
+    if block_size_m not in QUALIFIED_MOE_BLOCK_SIZE_M_VALUES:
+        raise ValueError(f"MoE BLOCK_SIZE_M {block_size_m} is outside the qualified domain")
+    route_count = row_capacity * effective_topk
+    maximum_padded = route_count + (expert_count + 1) * (block_size_m - 1)
+    expert_block_count = (maximum_padded + block_size_m - 1) // block_size_m
+    return maximum_padded, expert_block_count, expert_count + 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +74,8 @@ class DenseFfnExecutionSignature:
 class MoeRouterExecutionSignature:
     """Router-owner Graph implementation and resource identity."""
 
-    compute_routed_topk: MoeRoutingOperation
+    algorithm: ffn.RouterAlgorithm
+    precision: ffn.RouterPrecision
     router_weight_dtype: torch.dtype
     routed_expert_count: int
     router_workspace_bytes: int
@@ -68,8 +85,8 @@ class MoeRouterExecutionSignature:
     def __post_init__(self) -> None:
         """Reject invalid Router semantics and resource geometry."""
 
-        if not callable(self.compute_routed_topk):
-            raise ValueError("MoE Router execution requires one callable implementation")
+        if not isinstance(self.algorithm, ffn.RouterAlgorithm) or not isinstance(self.precision, ffn.RouterPrecision):
+            raise ValueError("MoE Router execution requires a supported algorithm and precision")
         if self.routed_expert_count <= 0 or self.router_workspace_bytes < 0:
             raise ValueError("MoE Router execution geometry is inconsistent")
 
@@ -141,38 +158,32 @@ def derive_payload_row_capacities(maximum_row_capacity: int) -> tuple[int, ...]:
     return tuple(capacities)
 
 
-def dense_workspace_bytes(
+def router_workspace_bytes(
+    precision: ffn.RouterPrecision,
     *,
     payload_dtype: torch.dtype,
-    row_capacity: int,
-    local_intermediate_size: int,
+    payload_row_capacity: int,
+    hidden_size: int,
+    routed_expert_count: int,
+    routed_topk: int,
 ) -> int:
-    """Return gate/up plus activated-up workspace bytes for one Dense branch."""
+    """Size caller-owned logits and any FP32 input conversion in bytes."""
 
     if payload_dtype not in (torch.bfloat16, torch.float16):
-        raise ValueError("Dense workspace requires BF16 or FP16 payloads")
-    if row_capacity <= 0 or local_intermediate_size <= 0:
-        raise ValueError("Dense workspace dimensions must be positive")
-    return row_capacity * 3 * local_intermediate_size * payload_dtype.itemsize
-
-
-def moe_alignment_workspace_shapes(
-    *,
-    row_capacity: int,
-    effective_topk: int,
-    expert_count: int,
-    block_size_m: int,
-) -> tuple[int, int, int]:
-    """Return exact sorted-id, block-id, and cumsum element counts."""
-
-    if row_capacity <= 0 or effective_topk <= 0 or expert_count <= 0:
-        raise ValueError("MoE alignment dimensions must be positive")
-    if block_size_m not in QUALIFIED_MOE_BLOCK_SIZE_M_VALUES:
-        raise ValueError(f"MoE BLOCK_SIZE_M {block_size_m} is outside the qualified domain")
-    route_count = row_capacity * effective_topk
-    maximum_padded = route_count + (expert_count + 1) * (block_size_m - 1)
-    expert_block_count = (maximum_padded + block_size_m - 1) // block_size_m
-    return maximum_padded, expert_block_count, expert_count + 2
+        raise ValueError("Router requires BF16 or FP16 payloads")
+    if (
+        min(payload_row_capacity, hidden_size, routed_expert_count, routed_topk) <= 0
+        or routed_topk > routed_expert_count
+    ):
+        raise ValueError("Router dimensions are inconsistent")
+    match precision:
+        case ffn.RouterPrecision.PAYLOAD:
+            return payload_row_capacity * routed_expert_count * payload_dtype.itemsize
+        case ffn.RouterPrecision.FP32_LOGITS:
+            return payload_row_capacity * routed_expert_count * torch.float32.itemsize
+        case ffn.RouterPrecision.FP32:
+            return payload_row_capacity * (hidden_size + routed_expert_count) * torch.float32.itemsize
+    raise ValueError(f"unsupported Router precision {precision!r}")
 
 
 def moe_workspace_layout(
@@ -306,9 +317,6 @@ def required_execution_signatures(
 
     if layer.expert_intermediate_size % tp_size:
         raise ValueError("MoE Expert intermediate size is not divisible by FFN TP")
-    model_adapter = architecture.adapter_for(model_spec)
-    if not issubclass(model_adapter, architecture.MoeFfnModelAdapter):
-        raise ValueError("MoE Model Spec requires a MoE FFN Model Adapter")
     return tuple(
         MoeFfnExecutionSignature(
             payload_dtype=profile.payload_dtype,
@@ -321,10 +329,12 @@ def required_execution_signatures(
             routed_scaling_factor=layer.routed_scaling_factor,
             router=(
                 MoeRouterExecutionSignature(
-                    compute_routed_topk=model_adapter.compute_routed_topk,
-                    router_weight_dtype=model_adapter.router_weight_dtype(payload_dtype=profile.payload_dtype),
+                    algorithm=layer.router_algorithm,
+                    precision=layer.router_precision,
+                    router_weight_dtype=layer.router_precision.weight_dtype(payload_dtype=profile.payload_dtype),
                     routed_expert_count=layer.routed_expert_count,
-                    router_workspace_bytes=model_adapter.router_workspace_bytes(
+                    router_workspace_bytes=router_workspace_bytes(
+                        layer.router_precision,
                         payload_dtype=profile.payload_dtype,
                         payload_row_capacity=capacity,
                         hidden_size=model_spec.hidden_size,

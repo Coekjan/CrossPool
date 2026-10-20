@@ -5,22 +5,8 @@ from __future__ import annotations
 import pytest
 import torch
 
-from xpool.ffn import ActivationKind
-from xpool.runtime.ffnagent import execution, weights
-
-
-def compute_test_routed_topk(
-    *,
-    hidden_states: torch.Tensor,
-    router_weights: weights.MoeRouterWeights,
-    workspace: torch.Tensor,
-    routed_ids: torch.Tensor,
-    routed_weights: torch.Tensor,
-    renormalize: bool,
-) -> None:
-    """Stand in for one Adapter-owned Router callable in pure formula tests."""
-
-    del hidden_states, router_weights, workspace, routed_ids, routed_weights, renormalize
+from xpool.ffn import ActivationKind, RouterAlgorithm, RouterPrecision
+from xpool.runtime.ffnagent import execution
 
 
 def test_payload_row_capacities_cover_power_of_two_buckets_and_exact_maximum() -> None:
@@ -119,15 +105,16 @@ def test_moe_workspace_formulas_preserve_cache_overlap() -> None:
         activation=ActivationKind.SILU,
         routed_scaling_factor=1.8,
         router=execution.MoeRouterExecutionSignature(
-            compute_routed_topk=compute_test_routed_topk,
+            algorithm=RouterAlgorithm.SIGMOID,
+            precision=RouterPrecision.FP32,
             router_weight_dtype=torch.float32,
             routed_expert_count=4,
-            router_workspace_bytes=32,
-            correction_bias_present=False,
+            router_workspace_bytes=320,
+            correction_bias_present=True,
             renormalize=True,
         ),
     )
-    assert execution.control_capture_probe_storage_bytes(router_owner) == (2048, 1024, 256)
+    assert execution.control_capture_probe_storage_bytes(router_owner) == (2048, 1024, 256, 16)
     assert execution.graph_capture_capacity_storage_bytes(router_owner) == (
         128,
         128,

@@ -9,12 +9,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TypeVar, cast
 
-import torch
-
 from xpool import ffn
 from xpool.model import ModelId
 from xpool.runtime.ffnagent import checkpoint
-from xpool.runtime.ffnagent.weights import MoeRouterWeights
 from xpool.utils.discovery import discover_concrete_subclasses
 
 MODELS_PACKAGE = "xpool.runtime.ffnagent.models"
@@ -122,40 +119,6 @@ class FfnModelAdapter(ABC):
         """Compile a parsed model configuration without filesystem access."""
 
 
-class MoeFfnModelAdapter(FfnModelAdapter):
-    """Add caller-owned Router operations for one admitted MoE family."""
-
-    @staticmethod
-    @abstractmethod
-    def router_weight_dtype(*, payload_dtype: torch.dtype) -> torch.dtype:
-        """Resolve retained Router precision independently of Expert weights."""
-
-    @staticmethod
-    @abstractmethod
-    def router_workspace_bytes(
-        *,
-        payload_dtype: torch.dtype,
-        payload_row_capacity: int,
-        hidden_size: int,
-        routed_expert_count: int,
-        routed_topk: int,
-    ) -> int:
-        """Return the exact caller-owned Router scratch extent."""
-
-    @staticmethod
-    @abstractmethod
-    def compute_routed_topk(
-        *,
-        hidden_states: torch.Tensor,
-        router_weights: MoeRouterWeights,
-        workspace: torch.Tensor,
-        routed_ids: torch.Tensor,
-        routed_weights: torch.Tensor,
-        renormalize: bool,
-    ) -> None:
-        """Write routed-only ids and weights without allocating Tensor storage."""
-
-
 def adapters_by_architecture() -> dict[str, type[FfnModelAdapter]]:
     """Discover the one concrete FFN Adapter for each admitted architecture."""
 
@@ -173,15 +136,6 @@ def adapters_by_architecture() -> dict[str, type[FfnModelAdapter]]:
                 f"{previous.__module__}.{previous.__name__} and {adapter.__module__}.{adapter.__name__}"
             )
     return result
-
-
-def adapter_for(spec: ffn.FfnModelSpec) -> type[FfnModelAdapter]:
-    """Return the fail-closed Adapter selected by one immutable Model Spec."""
-
-    adapter = adapters_by_architecture().get(spec.architecture_name)
-    if adapter is None:
-        raise ValueError(f"unsupported FFN architecture {spec.architecture_name!r}")
-    return adapter
 
 
 def load(*, model_id: ModelId, model_path: pathlib.Path) -> ffn.FfnModelSpec:
@@ -212,7 +166,7 @@ def load(*, model_id: ModelId, model_path: pathlib.Path) -> ffn.FfnModelSpec:
             model_id=model_id,
             model_config=model_config,
         )
-        if spec.model_id != model_id or spec.architecture_name != architecture_name:
+        if spec.model_id != model_id:
             raise ValueError("FFN Architecture Adapter returned inconsistent model identity")
 
         key_view = checkpoint.read_checkpoint_key_view(model_path)

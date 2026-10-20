@@ -8,8 +8,11 @@ for admission and distributed invocation lifecycle.
 
 FfnAgent adapters compile integration-provided architecture evidence into
 CrossPool-owned model specs. Adapter discovery is automatic. Each supported model
-family lives in its own module and directly selects its activation, Router, and
-checkpoint mapping functions.
+family lives in its own module and compiles activation, Router Algorithm,
+Router Precision, geometry, and checkpoint identities. Source architecture
+lookup ends at this boundary; execution consumes the compiled semantics.
+Synthetic calibration declares those same semantics directly rather than
+selecting a model Adapter.
 
 Shared family-profile validation admits BF16 and FP16 checkpoint declarations
 alongside the expected model type and SiLU activation. The Llama adapter reuses
@@ -24,22 +27,34 @@ to simplify TP execution. The checkpoint Tensor dtype is source evidence,
 whereas the model profile's payload dtype is the effective BF16 or FP16
 execution dtype. Conversion occurs only for the selected local shard.
 
-Router weight precision is an adapter-owned policy, independent of payload
-and Expert precision. GLM-4 MoE Lite retains FP32 Router weights; weight
-loading, Control Probe resources, and memory estimation preserve that dtype.
+Router Precision determines projection input, retained weight and logits dtypes,
+independently of the Router Algorithm. `PAYLOAD` uses the effective payload dtype
+for all three. `FP32` uses FP32 for all three, converting projection inputs into
+caller-owned storage. `FP32_LOGITS` retains payload-precision inputs and weights
+and produces FP32 logits. These policies preserve backend arithmetic settings,
+including TF32. Loading, Control Probe construction and memory estimation use
+the same declared precision.
 
-Dense layers retain gate, up, and down shards. MoE layers additionally retain
-Router weights, expert tensors, top-k and group-routing parameters, and any
-model-defined correction bias. Activation is parameterized. The admitted
-execution model implements gated formulas.
+Dense layers retain packed gate/up and down shards in two owned storages.
+MoE layers additionally retain Router weights, expert tensors, top-k routing
+parameters, and any model-defined correction bias. Activation is parameterized.
+The admitted execution model implements gated formulas.
+
+Checkpoint loading and synthetic calibration share canonical empty-weight
+allocation factories, preserving shape, dtype, allocation order, and ownership.
+The loader fills those tensors from selected checkpoint shards; calibration
+initializes them without checkpoint I/O.
+Checkpoint-key containers own their ordered key projections. Weight owners
+construct zero-valued shape-equivalent Control Capture Probes and expose
+non-owning native address projections while retaining Tensor ownership.
 
 ## Operators, routing, and delivery
 
 The FFN path uses the pinned low-level Expert implementation from the supported
 SGLang environment for admitted BF16 and FP16 devices. Only
-`xpool.runtime.ffnagent.operators` may import reusable low-level Expert and
-TopK operations, including the fused-MoE Triton configuration and Kernel
-implementation. Model adapters retain model-specific geometry, validation, and
+`xpool.runtime.ffnagent.operators` may import reusable low-level Dense and Expert
+operations, including the fused-MoE Triton configuration and Kernel
+implementation. Model adapters compile model-specific geometry, validation, and
 routing semantics. Startup selects immutable launch configuration and Graph
 Capture executes the Expert kernels.
 
@@ -49,30 +64,48 @@ current seam calls the selected SGLang operator and configuration modules
 directly, without a provider hierarchy or fallback dispatch. Expanding this
 dependency seam requires an accepted design change.
 
-Model adapters select Router functions directly. Qwen3-MoE,
-DeepSeek-V2-Lite, and GLM preserve their upstream routing mathematics. The
-adapter uses an upstream standalone routing operation when its semantics match;
-otherwise it supplies the required CrossPool-owned Triton routing.
+The shared [execution geometry](../../src/xpool/runtime/ffnagent/execution.py)
+owns Signatures, workspace shapes, alignment, offsets and Graph-storage byte
+formulas. Allocation, operator checks, memory estimation and placement consume
+those same formulas. Geometry calculation is below routing and operators and
+performs no Tensor allocation or kernel launch. MoE capture allocates one
+contiguous workspace covering every admitted block size; typed views follow
+the selected kernel configuration and preserve shared-region overlap.
 
-GLM owns a local biased-sigmoid TopK kernel with configuration-driven routed K
-and Expert count. Padded Experts are excluded from selection; equal biased
-scores prefer higher Expert IDs. This is an explicit local tie policy, not a
-guarantee of Torch TopK ordering. Numerical acceptance against the independent
-reference, rather than kernel identity with the serving engine, qualifies it.
-The kernel reuses the FP32 logits workspace to preserve stored-score rounding,
-normalizes selected weights with an explicit zero guard, and regenerates logits
-through the preceding gate GEMM on every execution. Shared-Expert finalization
-remains separate, and temporary storage stays outside Graph ownership.
+The [Router implementation](../../src/xpool/runtime/ffnagent/routing.py) owns
+projection, TopK and final Routing Metadata construction. Source compilers select
+the admitted Algorithm/Precision pairs: Qwen3-MoE uses Softmax with `PAYLOAD`,
+DeepSeek-V2 uses Softmax with `FP32_LOGITS`, and GLM uses Sigmoid with `FP32`.
+The Spec validates these combinations and normalization; execution consumes the
+admitted semantics directly.
 
-GLM converts Router inputs into caller-owned FP32 workspace before its FP32
-matrix multiplication. Only this conversion uses local `torch.compile` during
-pre-capture warmup, producing a kernel compatible with declared-address Graph
-parameterization. Serving-engine whole-model compilation remains outside this
+Both algorithms use one local Triton TopK kernel. The Host entry validates
+resources, constructs projection logits and launches that kernel directly.
+The kernel computes FP32 activated scores and selects Experts using those scores
+plus optional per-Expert FP32 correction bias. Selected weights come from the
+original activated scores, followed by model-declared normalization and scaling.
+The admitted Sigmoid path requires normalization. Bias presence is independent
+of the algorithm.
+
+Softmax uses stable max/exp/sum scoring. Equal selection scores prefer lower
+Expert IDs for Softmax and higher IDs for Sigmoid. These are explicit local tie
+policies rather than guarantees of Torch TopK ordering. Padding is excluded from
+selection, and normalization preserves zero weights when their sum is zero.
+Sigmoid reuses its FP32 logits workspace for a stored-selection-score rounding
+boundary while keeping original scores separate for weight calculation. The
+preceding projection regenerates logits on every execution. Independent
+numerical and Graph qualification establishes the admitted implementation.
+
+The `FP32` policy converts Router inputs into caller-owned workspace before its
+matrix multiplication. Only this conversion uses local `torch.compile`
+during pre-capture warmup, producing a kernel compatible with declared-address
+Graph parameterization. Serving-engine whole-model compilation remains outside this
 seam, and native parameter checks remain in force. Input conversion and logits
 share the accounted Router workspace; payload and Expert arithmetic retain
 their admitted precision.
 
-The Router Owner finalizes Routing Metadata in Lane storage. A successor Kernel
+The Router Owner finalizes Routing Metadata in Lane storage, appending Shared
+Expert routes and invalidating Capacity tails. A successor Kernel
 publishes the fixed-capacity payload and `RoutingMetadataReady` identity to the
 selected FFN TP ranks. Consumers validate the Invocation Key and Executor Lease
 before using their copies. Routing publication is required protocol behavior;
@@ -91,9 +124,14 @@ performance evidence.
 ## GraphTemplate and Executor Lanes
 
 A GraphTemplate is one reusable captured compute structure. Its Execution
-Signature contains compute-function identity, tensor geometry, Capacity, TP
+Signature contains execution semantics, tensor geometry, Capacity, TP
 realization, and delivery behavior. It omits model IDs and layer ordinals when
 multiple layers can safely reuse the same structure.
+Router Algorithm, Precision, normalization and bias presence specialize capture.
+Replay consumes current Tensor contents and binds layer addresses within that
+fixed resource schema; optional ownership remains constant within a Signature.
+Registry installation, memory estimation, and placement use one shared required
+Signature inventory rather than deriving their own capture domains.
 
 Each request selects the smallest installed Capacity that contains its live row
 count. Capacity tails are storage only and carry no semantic payload. Capacity
