@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
 
 import pytest
 
@@ -62,27 +61,45 @@ def test_load_rejects_duplicate_config_member(tmp_path: Path) -> None:
         architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
 
 
-@pytest.mark.parametrize("dtype", ("bfloat16", "float16"))
-def test_load_compiles_llama_dense_layers(tmp_path: Path, dtype: str) -> None:
+@pytest.mark.parametrize(
+    ("dtype", "hidden_size", "intermediate_size", "layer_count"),
+    (
+        pytest.param("bfloat16", 16, 32, 3, id="small-bf16"),
+        pytest.param("float16", 16, 32, 3, id="small-fp16"),
+        pytest.param("float16", 4096, 11008, 32, id="llama-7b-geometry"),
+        pytest.param("float16", 5120, 13824, 40, id="llama-13b-geometry"),
+    ),
+)
+def test_load_compiles_llama_dense_layers(
+    tmp_path: Path, dtype: str, hidden_size: int, intermediate_size: int, layer_count: int
+) -> None:
     config = {
         "architectures": ["LlamaForCausalLM"],
         "model_type": "llama",
         "hidden_act": "silu",
         "torch_dtype": dtype,
-        "hidden_size": 16,
-        "intermediate_size": 32,
-        "num_hidden_layers": 3,
+        "hidden_size": hidden_size,
+        "intermediate_size": intermediate_size,
+        "num_hidden_layers": layer_count,
     }
-    keys = tuple(key for layer_id in range(3) for key in dense_keys(layer_id))
+    keys = tuple(key for layer_id in range(layer_count) for key in dense_keys(layer_id))
     model_path = tmp_path / "model"
     write_indexed_model(model_path, config, keys)
 
     spec = architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
 
     assert spec.model_id == TEST_MODEL_ID
-    assert spec.hidden_size == 16
-    assert len(spec.layers) == 3
-    assert all(cast(DenseFfnSpec, layer).intermediate_size == 32 for layer in spec.layers)
+    assert spec.hidden_size == hidden_size
+    assert len(spec.layers) == layer_count
+    for layer_id, layer in enumerate(spec.layers):
+        assert isinstance(layer, DenseFfnSpec)
+        assert layer.layer_id == layer_id
+        assert layer.intermediate_size == intermediate_size
+        assert (
+            layer.checkpoint.gate_weight_key,
+            layer.checkpoint.up_weight_key,
+            layer.checkpoint.down_weight_key,
+        ) == dense_keys(layer_id)
 
 
 @pytest.mark.parametrize("dtype_field", ("dtype", "torch_dtype"))
