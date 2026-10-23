@@ -24,7 +24,7 @@ wrappers. Model ID links point to the checkpoint configuration.
 | [Qwen/Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B/blob/main/config.json) | `Qwen3ForCausalLM` | ❌ Not supported |
 | [Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json) | `Qwen3ForCausalLM` | ✅ Supported |
 | [Qwen/Qwen3-14B](https://huggingface.co/Qwen/Qwen3-14B/blob/main/config.json) | `Qwen3ForCausalLM` | ✅ Supported |
-| [Qwen/Qwen3-32B](https://huggingface.co/Qwen/Qwen3-32B/blob/main/config.json) | `Qwen3ForCausalLM` | ❌ Not supported |
+| [Qwen/Qwen3-32B](https://huggingface.co/Qwen/Qwen3-32B/blob/main/config.json) | `Qwen3ForCausalLM` | ✅ Supported |
 | [Qwen/Qwen3-30B-A3B](https://huggingface.co/Qwen/Qwen3-30B-A3B/blob/main/config.json) | `Qwen3MoeForCausalLM` | ✅ Supported |
 | [Qwen/Qwen3-235B-A22B](https://huggingface.co/Qwen/Qwen3-235B-A22B/blob/main/config.json) | `Qwen3MoeForCausalLM` | ❌ Not supported |
 | [Qwen/Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
