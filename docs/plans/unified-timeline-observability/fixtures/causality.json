@@ -1,5 +1,5 @@
 {
-  "contract_version": 2,
+  "contract_version": 3,
   "case_identity_notation": {
     "operation": [
       "endpoint_owner",
@@ -1412,90 +1412,6 @@
             "producer": 5,
             "record": {
               "event_sequence": 5,
-              "raw_time_ns": 245,
-              "clock_domain_id": 4,
-              "kind": 406,
-              "presence": 152929,
-              "generation": 1,
-              "endpoint_owner": 0,
-              "endpoint_sequence": 0,
-              "operation_sequence": 0,
-              "graph_owner": 0,
-              "graph_template": 0,
-              "graph_execution": 0,
-              "instance_index": 0,
-              "invocation_sequence": 1,
-              "lane_index": 0,
-              "lease_sequence": 1,
-              "attachment_owner": 0,
-              "attachment_sequence": 0,
-              "local_trace_id": 1,
-              "layer_ordinal": 0,
-              "payload_rows": 2,
-              "dp_rank_payload_rows": 0,
-              "payload_row_capacity": 16,
-              "ready_ticket": 0,
-              "forward_mode": 0,
-              "output_requirement": 1,
-              "dp_row_layout": 0,
-              "delivery": 1,
-              "result_code": 0,
-              "role": 4,
-              "instance_rank": 0,
-              "pe": 1,
-              "data0": 0,
-              "data1": 0,
-              "data2": 0,
-              "data3": 0,
-              "data4": 0
-            }
-          },
-          {
-            "producer": 5,
-            "record": {
-              "event_sequence": 6,
-              "raw_time_ns": 250,
-              "clock_domain_id": 4,
-              "kind": 407,
-              "presence": 152929,
-              "generation": 1,
-              "endpoint_owner": 0,
-              "endpoint_sequence": 0,
-              "operation_sequence": 0,
-              "graph_owner": 0,
-              "graph_template": 0,
-              "graph_execution": 0,
-              "instance_index": 0,
-              "invocation_sequence": 1,
-              "lane_index": 0,
-              "lease_sequence": 1,
-              "attachment_owner": 0,
-              "attachment_sequence": 0,
-              "local_trace_id": 1,
-              "layer_ordinal": 0,
-              "payload_rows": 2,
-              "dp_rank_payload_rows": 0,
-              "payload_row_capacity": 16,
-              "ready_ticket": 0,
-              "forward_mode": 0,
-              "output_requirement": 1,
-              "dp_row_layout": 0,
-              "delivery": 1,
-              "result_code": 0,
-              "role": 4,
-              "instance_rank": 0,
-              "pe": 1,
-              "data0": 0,
-              "data1": 0,
-              "data2": 0,
-              "data3": 0,
-              "data4": 0
-            }
-          },
-          {
-            "producer": 5,
-            "record": {
-              "event_sequence": 7,
               "raw_time_ns": 255,
               "clock_domain_id": 4,
               "kind": 408,
@@ -1537,7 +1453,7 @@
           {
             "producer": 5,
             "record": {
-              "event_sequence": 8,
+              "event_sequence": 6,
               "raw_time_ns": 220,
               "clock_domain_id": 4,
               "kind": 507,
@@ -1579,7 +1495,7 @@
           {
             "producer": 5,
             "record": {
-              "event_sequence": 9,
+              "event_sequence": 7,
               "raw_time_ns": 240,
               "clock_domain_id": 4,
               "kind": 508,
@@ -3303,14 +3219,6 @@
             7
           ],
           [
-            5,
-            8
-          ],
-          [
-            5,
-            9
-          ],
-          [
             1,
             5
           ]
@@ -4716,15 +4624,7 @@
           ],
           [
             5,
-            6
-          ],
-          [
-            5,
             7
-          ],
-          [
-            5,
-            9
           ]
         ]
       },
@@ -4816,15 +4716,7 @@
           ],
           [
             5,
-            6
-          ],
-          [
-            5,
             7
-          ],
-          [
-            5,
-            9
           ]
         ],
         "append_events": [

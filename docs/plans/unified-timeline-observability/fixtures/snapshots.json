@@ -1,5 +1,5 @@
 {
-  "contract_version": 2,
+  "contract_version": 3,
   "input_case": "causality.json#normal_dense",
   "phase_pairs": {
     "transport": [
@@ -364,8 +364,8 @@
             "routing_metadata_observed": 0,
             "compute_started": 220,
             "compute_completed": 240,
-            "partial_ready_published": 245,
-            "peer_partials_ready_observed": 250,
+            "partial_ready_published": 0,
+            "peer_partials_ready_observed": 0,
             "completion_published": 255
           },
           "durations_ns": {
@@ -548,6 +548,3639 @@
         "p99_ns": 11,
         "max_ns": 11
       }
+    },
+    {
+      "id": "opening_event_lost_scalar_facts_recovered",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "transport",
+          "producer": 3,
+          "local_trace_id": 1
+        },
+        "operation_counts": {
+          "sequence": 1,
+          "capacity": 8192
+        },
+        "remove_events": [
+          [
+            3,
+            1
+          ]
+        ]
+      },
+      "expected": {
+        "legacy_record": {
+          "trace_id": 1,
+          "payload_rows": 2,
+          "layer_ordinal": 0,
+          "forward_mode": "decode",
+          "output_requirement": "per_rank_complete",
+          "dp_row_layout": "none",
+          "result_code": "ok",
+          "request_staging_started": 0,
+          "request_staging_completed": 110,
+          "request_published": 120,
+          "request_observed": 0,
+          "execution_started": 0,
+          "execution_completed": 0,
+          "result_published": 0,
+          "result_observed": 310,
+          "output_copied": 320,
+          "result_acknowledged": 330,
+          "closed": 0,
+          "durations_ns": {
+            "request_publication": 10,
+            "output_copy": 10,
+            "result_acknowledgement": 10
+          }
+        },
+        "evidence_entry": {
+          "local_trace_id": 1,
+          "role": "instance",
+          "operation": {
+            "endpoint_owner": 2,
+            "endpoint_sequence": 1,
+            "operation_sequence": 1
+          },
+          "invocation": null,
+          "projection_status": "retained",
+          "evidence_status": "partial",
+          "unknown_fields": [
+            "request_staging_started"
+          ],
+          "not_applicable_fields": [
+            "closed",
+            "execution_completed",
+            "execution_started",
+            "request_observed",
+            "result_published"
+          ],
+          "missing_boundaries": [
+            "RequestStagingStarted"
+          ],
+          "unknown_applicability": [],
+          "quality": [
+            "event_missing"
+          ],
+          "sources": [
+            {
+              "field": "boundary.Closed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "dp_row_layout",
+              "event": {
+                "producer": 3,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "forward_mode",
+              "event": {
+                "producer": 3,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 3,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_copied",
+              "event": {
+                "producer": 3,
+                "event_sequence": 5
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 3,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 3,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_published",
+              "event": {
+                "producer": 3,
+                "event_sequence": 3
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_staging_completed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_acknowledged",
+              "event": {
+                "producer": 3,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_code",
+              "event": {
+                "producer": 3,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_observed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "trace_id",
+              "event": {
+                "producer": 3,
+                "event_sequence": 2
+              },
+              "metadata": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "middle_event_lost_terminal_retained",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "transport",
+          "producer": 2,
+          "local_trace_id": 1
+        },
+        "operation_counts": {
+          "sequence": 1,
+          "capacity": 8192
+        },
+        "remove_events": [
+          [
+            2,
+            2
+          ]
+        ]
+      },
+      "expected": {
+        "legacy_record": {
+          "trace_id": 1,
+          "payload_rows": 2,
+          "layer_ordinal": 0,
+          "forward_mode": "decode",
+          "output_requirement": "per_rank_complete",
+          "dp_row_layout": "none",
+          "result_code": "ok",
+          "request_staging_started": 0,
+          "request_staging_completed": 0,
+          "request_published": 0,
+          "request_observed": 130,
+          "execution_started": 0,
+          "execution_completed": 290,
+          "result_published": 300,
+          "result_observed": 0,
+          "output_copied": 0,
+          "result_acknowledged": 0,
+          "closed": 0,
+          "durations_ns": {
+            "request_processing": 170
+          }
+        },
+        "evidence_entry": {
+          "local_trace_id": 1,
+          "role": "atnagent",
+          "operation": {
+            "endpoint_owner": 2,
+            "endpoint_sequence": 1,
+            "operation_sequence": 1
+          },
+          "invocation": null,
+          "projection_status": "retained",
+          "evidence_status": "partial",
+          "unknown_fields": [
+            "execution_started"
+          ],
+          "not_applicable_fields": [
+            "closed",
+            "output_copied",
+            "request_published",
+            "request_staging_completed",
+            "request_staging_started",
+            "result_acknowledged",
+            "result_observed"
+          ],
+          "missing_boundaries": [
+            "ExecutionStarted"
+          ],
+          "unknown_applicability": [],
+          "quality": [
+            "event_missing"
+          ],
+          "sources": [
+            {
+              "field": "dp_row_layout",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "execution_completed",
+              "event": {
+                "producer": 2,
+                "event_sequence": 3
+              },
+              "metadata": null
+            },
+            {
+              "field": "forward_mode",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_observed",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_code",
+              "event": {
+                "producer": 2,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_published",
+              "event": {
+                "producer": 2,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "trace_id",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            }
+          ]
+        },
+        "legacy_classification": "completed",
+        "phase_sample_counts": {
+          "request_processing": 1,
+          "execution": 0
+        }
+      }
+    },
+    {
+      "id": "result_boundary_lost_result_fact_repeated",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "transport",
+          "producer": 3,
+          "local_trace_id": 1
+        },
+        "operation_counts": {
+          "sequence": 1,
+          "capacity": 8192
+        },
+        "remove_events": [
+          [
+            3,
+            4
+          ]
+        ]
+      },
+      "expected": {
+        "legacy_record": {
+          "trace_id": 1,
+          "payload_rows": 2,
+          "layer_ordinal": 0,
+          "forward_mode": "decode",
+          "output_requirement": "per_rank_complete",
+          "dp_row_layout": "none",
+          "result_code": "ok",
+          "request_staging_started": 100,
+          "request_staging_completed": 110,
+          "request_published": 120,
+          "request_observed": 0,
+          "execution_started": 0,
+          "execution_completed": 0,
+          "result_published": 0,
+          "result_observed": 0,
+          "output_copied": 320,
+          "result_acknowledged": 330,
+          "closed": 0,
+          "durations_ns": {
+            "request_staging": 10,
+            "request_publication": 10,
+            "result_acknowledgement": 10,
+            "result_acknowledged_total": 230
+          }
+        },
+        "evidence_entry": {
+          "local_trace_id": 1,
+          "role": "instance",
+          "operation": {
+            "endpoint_owner": 2,
+            "endpoint_sequence": 1,
+            "operation_sequence": 1
+          },
+          "invocation": null,
+          "projection_status": "retained",
+          "evidence_status": "partial",
+          "unknown_fields": [
+            "result_observed"
+          ],
+          "not_applicable_fields": [
+            "closed",
+            "execution_completed",
+            "execution_started",
+            "request_observed",
+            "result_published"
+          ],
+          "missing_boundaries": [
+            "ResultObserved"
+          ],
+          "unknown_applicability": [],
+          "quality": [
+            "event_missing"
+          ],
+          "sources": [
+            {
+              "field": "boundary.Closed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "dp_row_layout",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "forward_mode",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_copied",
+              "event": {
+                "producer": 3,
+                "event_sequence": 5
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_published",
+              "event": {
+                "producer": 3,
+                "event_sequence": 3
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_staging_completed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_staging_started",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_acknowledged",
+              "event": {
+                "producer": 3,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_code",
+              "event": {
+                "producer": 3,
+                "event_sequence": 5
+              },
+              "metadata": null
+            },
+            {
+              "field": "trace_id",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "all_result_evidence_lost",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "transport",
+          "producer": 3,
+          "local_trace_id": 1
+        },
+        "operation_counts": {
+          "sequence": 1,
+          "capacity": 8192
+        },
+        "remove_events": [
+          [
+            3,
+            4
+          ],
+          [
+            3,
+            5
+          ],
+          [
+            3,
+            6
+          ]
+        ]
+      },
+      "expected": {
+        "legacy_record": {
+          "trace_id": 1,
+          "payload_rows": 2,
+          "layer_ordinal": 0,
+          "forward_mode": "decode",
+          "output_requirement": "per_rank_complete",
+          "dp_row_layout": "none",
+          "result_code": "protocol_mismatch",
+          "request_staging_started": 100,
+          "request_staging_completed": 110,
+          "request_published": 120,
+          "request_observed": 0,
+          "execution_started": 0,
+          "execution_completed": 0,
+          "result_published": 0,
+          "result_observed": 0,
+          "output_copied": 0,
+          "result_acknowledged": 0,
+          "closed": 0,
+          "durations_ns": {
+            "request_staging": 10,
+            "request_publication": 10
+          }
+        },
+        "evidence_entry": {
+          "local_trace_id": 1,
+          "role": "instance",
+          "operation": {
+            "endpoint_owner": 2,
+            "endpoint_sequence": 1,
+            "operation_sequence": 1
+          },
+          "invocation": null,
+          "projection_status": "retained",
+          "evidence_status": "partial",
+          "unknown_fields": [
+            "closed",
+            "output_copied",
+            "result_acknowledged",
+            "result_code",
+            "result_observed"
+          ],
+          "not_applicable_fields": [
+            "execution_completed",
+            "execution_started",
+            "request_observed",
+            "result_published"
+          ],
+          "missing_boundaries": [
+            "ResultObserved"
+          ],
+          "unknown_applicability": [
+            "Closed",
+            "OutputCopied",
+            "ResultAcknowledged"
+          ],
+          "quality": [
+            "applicability_unknown",
+            "event_missing",
+            "unknown_result"
+          ],
+          "sources": [
+            {
+              "field": "dp_row_layout",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "forward_mode",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_published",
+              "event": {
+                "producer": 3,
+                "event_sequence": 3
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_staging_completed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_staging_started",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "trace_id",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            }
+          ]
+        },
+        "legacy_classification": "incomplete"
+      }
+    },
+    {
+      "id": "pre_assignment_lease_unknown",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "fabric",
+          "producer": 2,
+          "local_trace_id": 1
+        },
+        "operation_counts": {
+          "sequence": 2,
+          "capacity": 8192
+        },
+        "remove_events": [
+          [
+            2,
+            8
+          ],
+          [
+            2,
+            9
+          ],
+          [
+            2,
+            10
+          ],
+          [
+            2,
+            11
+          ]
+        ]
+      },
+      "expected": {
+        "legacy_record": {
+          "local_trace_id": 1,
+          "instance_index": 0,
+          "invocation_sequence": 1,
+          "layer_ordinal": 0,
+          "payload_rows": 2,
+          "output_requirement": "per_rank_complete",
+          "kind": "atnagent",
+          "dp_row_layout": "none",
+          "facts": {
+            "dp_rank_payload_rows": 2,
+            "forward_mode": "decode",
+            "executor_lane_index": null,
+            "executor_lease_sequence": null
+          },
+          "events_ns": {
+            "submission_prepared": 146,
+            "submission_published": 150,
+            "admission_observed": 0,
+            "input_ready_published": 0,
+            "output_commit_observed": 0,
+            "output_acknowledgement_published": 0
+          },
+          "durations_ns": {}
+        },
+        "evidence_entry": {
+          "local_trace_id": 1,
+          "role": "atnagent",
+          "operation": null,
+          "invocation": {
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1
+          },
+          "projection_status": "retained",
+          "evidence_status": "partial",
+          "unknown_fields": [
+            "events_ns.admission_observed",
+            "events_ns.input_ready_published",
+            "events_ns.output_acknowledgement_published",
+            "events_ns.output_commit_observed",
+            "facts.executor_lane_index",
+            "facts.executor_lease_sequence"
+          ],
+          "not_applicable_fields": [],
+          "missing_boundaries": [
+            "AdmissionObserved",
+            "InputReadyPublished",
+            "OutputAcknowledgementPublished",
+            "OutputCommitObserved"
+          ],
+          "unknown_applicability": [],
+          "quality": [
+            "event_missing"
+          ],
+          "sources": [
+            {
+              "field": "dp_row_layout",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.submission_prepared",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.submission_published",
+              "event": {
+                "producer": 2,
+                "event_sequence": 7
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.dp_rank_payload_rows",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.forward_mode",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "instance_index",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "invocation_sequence",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "local_trace_id",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "direct_partial_conditional_stages_inapplicable",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "fabric",
+          "producer": 5,
+          "local_trace_id": 1
+        },
+        "operation_counts": {
+          "sequence": 1,
+          "capacity": 8192
+        }
+      },
+      "expected": {
+        "legacy_record": {
+          "local_trace_id": 1,
+          "instance_index": 0,
+          "invocation_sequence": 1,
+          "layer_ordinal": 0,
+          "payload_rows": 2,
+          "output_requirement": "per_rank_complete",
+          "kind": "ffnagent",
+          "dp_row_layout": null,
+          "facts": {
+            "executor_lane_index": 0,
+            "executor_lease_sequence": 1,
+            "payload_row_capacity": 16,
+            "delivery": "direct_partial"
+          },
+          "events_ns": {
+            "lane_execution_observed": 200,
+            "input_ready_observed": 210,
+            "routing_metadata_published": 0,
+            "routing_metadata_observed": 0,
+            "compute_started": 220,
+            "compute_completed": 240,
+            "partial_ready_published": 0,
+            "peer_partials_ready_observed": 0,
+            "completion_published": 255
+          },
+          "durations_ns": {
+            "input_wait": 10,
+            "compute": 20,
+            "total": 55
+          }
+        },
+        "evidence_entry": {
+          "local_trace_id": 1,
+          "role": "ffnagent",
+          "operation": null,
+          "invocation": {
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1
+          },
+          "projection_status": "retained",
+          "evidence_status": "complete",
+          "unknown_fields": [],
+          "not_applicable_fields": [
+            "dp_row_layout",
+            "events_ns.partial_ready_published",
+            "events_ns.peer_partials_ready_observed",
+            "events_ns.routing_metadata_observed",
+            "events_ns.routing_metadata_published"
+          ],
+          "missing_boundaries": [],
+          "unknown_applicability": [],
+          "quality": [],
+          "sources": [
+            {
+              "field": "boundary.PartialReadyPublished",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "boundary.PeerPartialsReadyObserved",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "boundary.RoutingMetadataObserved",
+              "event": null,
+              "metadata": {
+                "producer": 3,
+                "revision": 1,
+                "path": "capabilities.routing"
+              }
+            },
+            {
+              "field": "boundary.RoutingMetadataPublished",
+              "event": null,
+              "metadata": {
+                "producer": 3,
+                "revision": 1,
+                "path": "capabilities.routing"
+              }
+            },
+            {
+              "field": "events_ns.completion_published",
+              "event": {
+                "producer": 5,
+                "event_sequence": 5
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.compute_completed",
+              "event": {
+                "producer": 5,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.compute_started",
+              "event": {
+                "producer": 5,
+                "event_sequence": 3
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.input_ready_observed",
+              "event": {
+                "producer": 5,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.lane_execution_observed",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.delivery",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.executor_lane_index",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.executor_lease_sequence",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.payload_row_capacity",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "instance_index",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "invocation_sequence",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "local_trace_id",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "auxiliary_evidence_missing_required_scalars",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "fabric",
+          "producer": 5,
+          "local_trace_id": 1
+        },
+        "operation_counts": {
+          "sequence": 1,
+          "capacity": 8192
+        },
+        "remove_events": [
+          [
+            5,
+            1
+          ],
+          [
+            5,
+            2
+          ],
+          [
+            5,
+            3
+          ],
+          [
+            5,
+            4
+          ],
+          [
+            5,
+            5
+          ]
+        ]
+      },
+      "expected": {
+        "legacy_record": null,
+        "evidence_entry": {
+          "local_trace_id": 1,
+          "role": "ffnagent",
+          "operation": null,
+          "invocation": {
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1
+          },
+          "projection_status": "omitted",
+          "evidence_status": "partial",
+          "unknown_fields": [
+            "events_ns.completion_published",
+            "events_ns.compute_completed",
+            "events_ns.compute_started",
+            "events_ns.input_ready_observed",
+            "events_ns.lane_execution_observed",
+            "events_ns.partial_ready_published",
+            "events_ns.peer_partials_ready_observed",
+            "facts.delivery",
+            "facts.payload_row_capacity"
+          ],
+          "not_applicable_fields": [
+            "dp_row_layout",
+            "events_ns.routing_metadata_observed",
+            "events_ns.routing_metadata_published"
+          ],
+          "missing_boundaries": [
+            "CompletionPublished",
+            "ComputeCompleted",
+            "ComputeStarted",
+            "InputReadyObserved",
+            "LaneExecutionObserved"
+          ],
+          "unknown_applicability": [
+            "PartialReadyPublished",
+            "PeerPartialsReadyObserved"
+          ],
+          "quality": [
+            "applicability_unknown",
+            "event_missing",
+            "legacy_fact_missing"
+          ],
+          "sources": [
+            {
+              "field": "boundary.RoutingMetadataObserved",
+              "event": null,
+              "metadata": {
+                "producer": 3,
+                "revision": 1,
+                "path": "capabilities.routing"
+              }
+            },
+            {
+              "field": "boundary.RoutingMetadataPublished",
+              "event": null,
+              "metadata": {
+                "producer": 3,
+                "revision": 1,
+                "path": "capabilities.routing"
+              }
+            },
+            {
+              "field": "facts.executor_lane_index",
+              "event": {
+                "producer": 5,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.executor_lease_sequence",
+              "event": {
+                "producer": 5,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "instance_index",
+              "event": {
+                "producer": 5,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "invocation_sequence",
+              "event": {
+                "producer": 5,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 5,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "local_trace_id",
+              "event": {
+                "producer": 5,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 5,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 5,
+                "event_sequence": 6
+              },
+              "metadata": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "zero_timestamp_retains_observed_evidence",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "transport",
+          "producer": 3,
+          "local_trace_id": 1
+        },
+        "operation_counts": {
+          "sequence": 1,
+          "capacity": 8192
+        },
+        "replace_events": [
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 0,
+              "clock_domain_id": 2,
+              "kind": 100,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "legacy_record": {
+          "trace_id": 1,
+          "payload_rows": 2,
+          "layer_ordinal": 0,
+          "forward_mode": "decode",
+          "output_requirement": "per_rank_complete",
+          "dp_row_layout": "none",
+          "result_code": "ok",
+          "request_staging_started": 0,
+          "request_staging_completed": 110,
+          "request_published": 120,
+          "request_observed": 0,
+          "execution_started": 0,
+          "execution_completed": 0,
+          "result_published": 0,
+          "result_observed": 310,
+          "output_copied": 320,
+          "result_acknowledged": 330,
+          "closed": 0,
+          "durations_ns": {
+            "request_publication": 10,
+            "output_copy": 10,
+            "result_acknowledgement": 10
+          }
+        },
+        "evidence_entry": {
+          "local_trace_id": 1,
+          "role": "instance",
+          "operation": {
+            "endpoint_owner": 2,
+            "endpoint_sequence": 1,
+            "operation_sequence": 1
+          },
+          "invocation": null,
+          "projection_status": "retained",
+          "evidence_status": "complete",
+          "unknown_fields": [],
+          "not_applicable_fields": [
+            "closed",
+            "execution_completed",
+            "execution_started",
+            "request_observed",
+            "result_published"
+          ],
+          "missing_boundaries": [],
+          "unknown_applicability": [],
+          "quality": [
+            "legacy_zero_timestamp"
+          ],
+          "sources": [
+            {
+              "field": "boundary.Closed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "dp_row_layout",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "forward_mode",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_copied",
+              "event": {
+                "producer": 3,
+                "event_sequence": 5
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_published",
+              "event": {
+                "producer": 3,
+                "event_sequence": 3
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_staging_completed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_staging_started",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_acknowledged",
+              "event": {
+                "producer": 3,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_code",
+              "event": {
+                "producer": 3,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_observed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "trace_id",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "reversed_boundary_retains_other_durations",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "transport",
+          "producer": 2,
+          "local_trace_id": 1
+        },
+        "operation_counts": {
+          "sequence": 1,
+          "capacity": 8192
+        },
+        "replace_events": [
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 2,
+              "raw_time_ns": 295,
+              "clock_domain_id": 3,
+              "kind": 104,
+              "presence": 67335,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 2,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "legacy_record": {
+          "trace_id": 1,
+          "payload_rows": 2,
+          "layer_ordinal": 0,
+          "forward_mode": "decode",
+          "output_requirement": "per_rank_complete",
+          "dp_row_layout": "none",
+          "result_code": "ok",
+          "request_staging_started": 0,
+          "request_staging_completed": 0,
+          "request_published": 0,
+          "request_observed": 130,
+          "execution_started": 295,
+          "execution_completed": 290,
+          "result_published": 300,
+          "result_observed": 0,
+          "output_copied": 0,
+          "result_acknowledged": 0,
+          "closed": 0,
+          "durations_ns": {
+            "request_processing": 170
+          }
+        },
+        "evidence_entry": {
+          "local_trace_id": 1,
+          "role": "atnagent",
+          "operation": {
+            "endpoint_owner": 2,
+            "endpoint_sequence": 1,
+            "operation_sequence": 1
+          },
+          "invocation": null,
+          "projection_status": "retained",
+          "evidence_status": "partial",
+          "unknown_fields": [],
+          "not_applicable_fields": [
+            "closed",
+            "output_copied",
+            "request_published",
+            "request_staging_completed",
+            "request_staging_started",
+            "result_acknowledged",
+            "result_observed"
+          ],
+          "missing_boundaries": [],
+          "unknown_applicability": [],
+          "quality": [
+            "temporal_conflict"
+          ],
+          "sources": [
+            {
+              "field": "dp_row_layout",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "execution_completed",
+              "event": {
+                "producer": 2,
+                "event_sequence": 3
+              },
+              "metadata": null
+            },
+            {
+              "field": "execution_started",
+              "event": {
+                "producer": 2,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "forward_mode",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_observed",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_code",
+              "event": {
+                "producer": 2,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_published",
+              "event": {
+                "producer": 2,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "trace_id",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "entire_operation_unobserved",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "transport",
+          "producer": 3,
+          "local_trace_id": 1
+        },
+        "remove_events": [
+          [
+            3,
+            1
+          ],
+          [
+            3,
+            2
+          ],
+          [
+            3,
+            3
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            3,
+            5
+          ],
+          [
+            3,
+            6
+          ]
+        ],
+        "operation_counts": {
+          "sequence": 1,
+          "capacity": 8192
+        }
+      },
+      "expected": {
+        "legacy_records": [],
+        "evidence_report": {
+          "contract_version": 3,
+          "run_id": "11111111-1111-4111-8111-111111111111",
+          "producer_id": 3,
+          "observer": "transport",
+          "generation": 1,
+          "endpoint": {
+            "owner": 2,
+            "sequence": 1
+          },
+          "site": "instance",
+          "snapshot_sha256": null,
+          "capacity": 8192,
+          "sequence": 1,
+          "dropped": 0,
+          "unobserved_operations": 1,
+          "entries": [
+            {
+              "local_trace_id": 1,
+              "role": "instance",
+              "operation": null,
+              "invocation": null,
+              "projection_status": "unobserved",
+              "evidence_status": "unavailable",
+              "unknown_fields": [],
+              "not_applicable_fields": [],
+              "missing_boundaries": [],
+              "unknown_applicability": [],
+              "quality": [
+                "operation_unobserved"
+              ],
+              "sources": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "unobserved_fabric_id_does_not_infer_role",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "fabric",
+          "producer": 2
+        },
+        "remove_events": [
+          [
+            2,
+            5
+          ],
+          [
+            2,
+            6
+          ],
+          [
+            2,
+            7
+          ],
+          [
+            2,
+            8
+          ],
+          [
+            2,
+            9
+          ],
+          [
+            2,
+            10
+          ],
+          [
+            2,
+            11
+          ]
+        ],
+        "operation_counts": {
+          "sequence": 2,
+          "capacity": 8192
+        }
+      },
+      "expected": {
+        "legacy_records": [
+          {
+            "local_trace_id": 2,
+            "instance_index": 0,
+            "invocation_sequence": 1,
+            "layer_ordinal": 0,
+            "payload_rows": 2,
+            "output_requirement": "per_rank_complete",
+            "kind": "coordinator",
+            "dp_row_layout": null,
+            "facts": {
+              "executor_lane_index": 0,
+              "executor_lease_sequence": 1,
+              "scheduler": {
+                "policy": "fifo",
+                "ready_ticket": 7
+              }
+            },
+            "events_ns": {
+              "enqueued": 155,
+              "scheduled": 160,
+              "admission_published": 165,
+              "lane_execution_published": 190,
+              "ffnagent_completions_observed": 260,
+              "output_commit_published": 270,
+              "output_acknowledgements_observed": 286,
+              "lane_released": 287
+            },
+            "durations_ns": {
+              "scheduling": 5,
+              "execution": 70,
+              "active_total": 127,
+              "total": 132
+            }
+          }
+        ],
+        "evidence_report": {
+          "contract_version": 3,
+          "run_id": "11111111-1111-4111-8111-111111111111",
+          "producer_id": 2,
+          "observer": "fabric",
+          "generation": 1,
+          "endpoint": null,
+          "site": null,
+          "snapshot_sha256": null,
+          "capacity": 8192,
+          "sequence": 2,
+          "dropped": 0,
+          "unobserved_operations": 1,
+          "entries": [
+            {
+              "local_trace_id": 1,
+              "role": null,
+              "operation": null,
+              "invocation": null,
+              "projection_status": "unobserved",
+              "evidence_status": "unavailable",
+              "unknown_fields": [],
+              "not_applicable_fields": [],
+              "missing_boundaries": [],
+              "unknown_applicability": [],
+              "quality": [
+                "operation_unobserved"
+              ],
+              "sources": []
+            },
+            {
+              "local_trace_id": 2,
+              "role": "coordinator",
+              "operation": null,
+              "invocation": {
+                "generation": 1,
+                "instance_index": 0,
+                "invocation_sequence": 1
+              },
+              "projection_status": "retained",
+              "evidence_status": "complete",
+              "unknown_fields": [],
+              "not_applicable_fields": [
+                "dp_row_layout"
+              ],
+              "missing_boundaries": [],
+              "unknown_applicability": [],
+              "quality": [],
+              "sources": [
+                {
+                  "field": "events_ns.admission_published",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 14
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "events_ns.enqueued",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 12
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "events_ns.ffnagent_completions_observed",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 16
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "events_ns.lane_execution_published",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 15
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "events_ns.lane_released",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 19
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "events_ns.output_acknowledgements_observed",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 18
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "events_ns.output_commit_published",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 17
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "events_ns.scheduled",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 13
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "facts.executor_lane_index",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 13
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "facts.executor_lease_sequence",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 13
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "facts.scheduler.policy",
+                  "event": null,
+                  "metadata": {
+                    "producer": 3,
+                    "revision": 1,
+                    "path": "generations[0].scheduler"
+                  }
+                },
+                {
+                  "field": "facts.scheduler.ready_ticket",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 12
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "instance_index",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 12
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "invocation_sequence",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 12
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "layer_ordinal",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 12
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "local_trace_id",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 12
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "output_requirement",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 12
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "payload_rows",
+                  "event": {
+                    "producer": 2,
+                    "event_sequence": 12
+                  },
+                  "metadata": null
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "unknown_tail_keeps_counts_unknown",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "transport",
+          "producer": 3
+        },
+        "operation_counts": {
+          "sequence": null,
+          "capacity": 8192
+        },
+        "last_checkpoint_sequence": 1,
+        "tail": "unknown"
+      },
+      "expected": {
+        "legacy_records": [
+          {
+            "trace_id": 1,
+            "payload_rows": 2,
+            "layer_ordinal": 0,
+            "forward_mode": "decode",
+            "output_requirement": "per_rank_complete",
+            "dp_row_layout": "none",
+            "result_code": "ok",
+            "request_staging_started": 100,
+            "request_staging_completed": 110,
+            "request_published": 120,
+            "request_observed": 0,
+            "execution_started": 0,
+            "execution_completed": 0,
+            "result_published": 0,
+            "result_observed": 310,
+            "output_copied": 320,
+            "result_acknowledged": 330,
+            "closed": 0,
+            "durations_ns": {
+              "request_staging": 10,
+              "request_publication": 10,
+              "output_copy": 10,
+              "result_acknowledgement": 10,
+              "result_acknowledged_total": 230
+            }
+          }
+        ],
+        "legacy_snapshot_available": false,
+        "evidence_report": {
+          "contract_version": 3,
+          "run_id": "11111111-1111-4111-8111-111111111111",
+          "producer_id": 3,
+          "observer": "transport",
+          "generation": 1,
+          "endpoint": {
+            "owner": 2,
+            "sequence": 1
+          },
+          "site": "instance",
+          "snapshot_sha256": null,
+          "capacity": 8192,
+          "sequence": null,
+          "dropped": null,
+          "unobserved_operations": null,
+          "entries": [
+            {
+              "local_trace_id": 1,
+              "role": "instance",
+              "operation": {
+                "endpoint_owner": 2,
+                "endpoint_sequence": 1,
+                "operation_sequence": 1
+              },
+              "invocation": null,
+              "projection_status": "retained",
+              "evidence_status": "complete",
+              "unknown_fields": [],
+              "not_applicable_fields": [
+                "closed",
+                "execution_completed",
+                "execution_started",
+                "request_observed",
+                "result_published"
+              ],
+              "missing_boundaries": [],
+              "unknown_applicability": [],
+              "quality": [],
+              "sources": [
+                {
+                  "field": "boundary.Closed",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 6
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "dp_row_layout",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 1
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "forward_mode",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 1
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "layer_ordinal",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 1
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "output_copied",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 5
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "output_requirement",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 1
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "payload_rows",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 1
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "request_published",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 3
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "request_staging_completed",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 2
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "request_staging_started",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 1
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "result_acknowledged",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 6
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "result_code",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 4
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "result_observed",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 4
+                  },
+                  "metadata": null
+                },
+                {
+                  "field": "trace_id",
+                  "event": {
+                    "producer": 3,
+                    "event_sequence": 1
+                  },
+                  "metadata": null
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "aggregate_loss_not_attributed_to_fields",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "transport",
+          "producer": 3,
+          "local_trace_id": 1
+        },
+        "operation_counts": {
+          "sequence": 1,
+          "capacity": 8192
+        },
+        "remove_events": [
+          [
+            3,
+            2
+          ]
+        ],
+        "producer_checkpoint": {
+          "attempted": 8,
+          "committed": 7,
+          "dropped_full": 1,
+          "abandoned": 0,
+          "pending": 0
+        }
+      },
+      "expected": {
+        "legacy_record": {
+          "trace_id": 1,
+          "payload_rows": 2,
+          "layer_ordinal": 0,
+          "forward_mode": "decode",
+          "output_requirement": "per_rank_complete",
+          "dp_row_layout": "none",
+          "result_code": "ok",
+          "request_staging_started": 100,
+          "request_staging_completed": 0,
+          "request_published": 120,
+          "request_observed": 0,
+          "execution_started": 0,
+          "execution_completed": 0,
+          "result_published": 0,
+          "result_observed": 310,
+          "output_copied": 320,
+          "result_acknowledged": 330,
+          "closed": 0,
+          "durations_ns": {
+            "output_copy": 10,
+            "result_acknowledgement": 10,
+            "result_acknowledged_total": 230
+          }
+        },
+        "evidence_entry": {
+          "local_trace_id": 1,
+          "role": "instance",
+          "operation": {
+            "endpoint_owner": 2,
+            "endpoint_sequence": 1,
+            "operation_sequence": 1
+          },
+          "invocation": null,
+          "projection_status": "retained",
+          "evidence_status": "partial",
+          "unknown_fields": [
+            "request_staging_completed"
+          ],
+          "not_applicable_fields": [
+            "closed",
+            "execution_completed",
+            "execution_started",
+            "request_observed",
+            "result_published"
+          ],
+          "missing_boundaries": [
+            "RequestStagingCompleted"
+          ],
+          "unknown_applicability": [],
+          "quality": [
+            "event_missing"
+          ],
+          "sources": [
+            {
+              "field": "boundary.Closed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "dp_row_layout",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "forward_mode",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_copied",
+              "event": {
+                "producer": 3,
+                "event_sequence": 5
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_published",
+              "event": {
+                "producer": 3,
+                "event_sequence": 3
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_staging_started",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_acknowledged",
+              "event": {
+                "producer": 3,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_code",
+              "event": {
+                "producer": 3,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_observed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "trace_id",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            }
+          ]
+        },
+        "field_loss_reason": null
+      }
+    },
+    {
+      "id": "repeated_fact_conflict_rejects_projection",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "transport",
+          "producer": 3
+        },
+        "replace_events": [
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 2,
+              "raw_time_ns": 110,
+              "clock_domain_id": 2,
+              "kind": 101,
+              "presence": 67359,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 3,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "identity_conflict",
+        "legacy_snapshot_available": false,
+        "conflicting_sources": [
+          {
+            "producer": 3,
+            "event_sequence": 1
+          },
+          {
+            "producer": 3,
+            "event_sequence": 2
+          }
+        ]
+      }
+    },
+    {
+      "id": "closed_does_not_prove_earlier_path",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "transport",
+          "producer": 3,
+          "local_trace_id": 1
+        },
+        "operation_counts": {
+          "sequence": 1,
+          "capacity": 8192
+        },
+        "remove_events": [
+          [
+            3,
+            3
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            3,
+            5
+          ],
+          [
+            3,
+            6
+          ]
+        ],
+        "append_events": [
+          {
+            "producer": 3,
+            "record": {
+              "event_sequence": 7,
+              "raw_time_ns": 120,
+              "clock_domain_id": 2,
+              "kind": 110,
+              "presence": 100127,
+              "generation": 1,
+              "endpoint_owner": 2,
+              "endpoint_sequence": 1,
+              "operation_sequence": 1,
+              "graph_owner": 1,
+              "graph_template": 1,
+              "graph_execution": 1,
+              "instance_index": 0,
+              "invocation_sequence": 0,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 2,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 1,
+              "role": 1,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "legacy_record": {
+          "trace_id": 1,
+          "payload_rows": 2,
+          "layer_ordinal": 0,
+          "forward_mode": "decode",
+          "output_requirement": "per_rank_complete",
+          "dp_row_layout": "none",
+          "result_code": "shutdown",
+          "request_staging_started": 100,
+          "request_staging_completed": 110,
+          "request_published": 0,
+          "request_observed": 0,
+          "execution_started": 0,
+          "execution_completed": 0,
+          "result_published": 0,
+          "result_observed": 0,
+          "output_copied": 0,
+          "result_acknowledged": 0,
+          "closed": 120,
+          "durations_ns": {
+            "request_staging": 10,
+            "closed_total": 20
+          }
+        },
+        "legacy_classification": "closed",
+        "evidence_entry": {
+          "local_trace_id": 1,
+          "role": "instance",
+          "operation": {
+            "endpoint_owner": 2,
+            "endpoint_sequence": 1,
+            "operation_sequence": 1
+          },
+          "invocation": null,
+          "projection_status": "retained",
+          "evidence_status": "partial",
+          "unknown_fields": [
+            "output_copied",
+            "request_published",
+            "result_observed"
+          ],
+          "not_applicable_fields": [
+            "execution_completed",
+            "execution_started",
+            "request_observed",
+            "result_acknowledged",
+            "result_published"
+          ],
+          "missing_boundaries": [],
+          "unknown_applicability": [
+            "OutputCopied",
+            "RequestPublished",
+            "ResultObserved"
+          ],
+          "quality": [
+            "applicability_unknown"
+          ],
+          "sources": [
+            {
+              "field": "boundary.ResultAcknowledged",
+              "event": {
+                "producer": 3,
+                "event_sequence": 7
+              },
+              "metadata": null
+            },
+            {
+              "field": "closed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 7
+              },
+              "metadata": null
+            },
+            {
+              "field": "dp_row_layout",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "forward_mode",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_staging_completed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_staging_started",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_code",
+              "event": {
+                "producer": 3,
+                "event_sequence": 7
+              },
+              "metadata": null
+            },
+            {
+              "field": "trace_id",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "mandatory_protocol_fact_absent_is_invalid_event",
+      "input": {
+        "base_case": "normal_dense",
+        "select": {
+          "observer": "fabric",
+          "producer": 5
+        },
+        "replace_events": [
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 200,
+              "clock_domain_id": 4,
+              "kind": 400,
+              "presence": 148833,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "invalid_event",
+        "legacy_snapshot_available": false
+      }
+    }
+  ],
+  "expected_evidence_reports": [
+    {
+      "contract_version": 3,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "producer_id": 3,
+      "observer": "transport",
+      "generation": 1,
+      "endpoint": {
+        "owner": 2,
+        "sequence": 1
+      },
+      "site": "instance",
+      "snapshot_sha256": null,
+      "capacity": 8192,
+      "sequence": 1,
+      "dropped": 0,
+      "unobserved_operations": 0,
+      "entries": [
+        {
+          "local_trace_id": 1,
+          "role": "instance",
+          "operation": {
+            "endpoint_owner": 2,
+            "endpoint_sequence": 1,
+            "operation_sequence": 1
+          },
+          "invocation": null,
+          "projection_status": "retained",
+          "evidence_status": "complete",
+          "unknown_fields": [],
+          "not_applicable_fields": [
+            "closed",
+            "execution_completed",
+            "execution_started",
+            "request_observed",
+            "result_published"
+          ],
+          "missing_boundaries": [],
+          "unknown_applicability": [],
+          "quality": [],
+          "sources": [
+            {
+              "field": "boundary.Closed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "dp_row_layout",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "forward_mode",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_copied",
+              "event": {
+                "producer": 3,
+                "event_sequence": 5
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_published",
+              "event": {
+                "producer": 3,
+                "event_sequence": 3
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_staging_completed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_staging_started",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_acknowledged",
+              "event": {
+                "producer": 3,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_code",
+              "event": {
+                "producer": 3,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_observed",
+              "event": {
+                "producer": 3,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "trace_id",
+              "event": {
+                "producer": 3,
+                "event_sequence": 1
+              },
+              "metadata": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "contract_version": 3,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "producer_id": 2,
+      "observer": "transport",
+      "generation": 1,
+      "endpoint": {
+        "owner": 2,
+        "sequence": 1
+      },
+      "site": "atnagent",
+      "snapshot_sha256": null,
+      "capacity": 8192,
+      "sequence": 1,
+      "dropped": 0,
+      "unobserved_operations": 0,
+      "entries": [
+        {
+          "local_trace_id": 1,
+          "role": "atnagent",
+          "operation": {
+            "endpoint_owner": 2,
+            "endpoint_sequence": 1,
+            "operation_sequence": 1
+          },
+          "invocation": null,
+          "projection_status": "retained",
+          "evidence_status": "complete",
+          "unknown_fields": [],
+          "not_applicable_fields": [
+            "closed",
+            "output_copied",
+            "request_published",
+            "request_staging_completed",
+            "request_staging_started",
+            "result_acknowledged",
+            "result_observed"
+          ],
+          "missing_boundaries": [],
+          "unknown_applicability": [],
+          "quality": [],
+          "sources": [
+            {
+              "field": "dp_row_layout",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "execution_completed",
+              "event": {
+                "producer": 2,
+                "event_sequence": 3
+              },
+              "metadata": null
+            },
+            {
+              "field": "execution_started",
+              "event": {
+                "producer": 2,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "forward_mode",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "request_observed",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_code",
+              "event": {
+                "producer": 2,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "result_published",
+              "event": {
+                "producer": 2,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "trace_id",
+              "event": {
+                "producer": 2,
+                "event_sequence": 1
+              },
+              "metadata": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "contract_version": 3,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "producer_id": 2,
+      "observer": "fabric",
+      "generation": 1,
+      "endpoint": null,
+      "site": null,
+      "snapshot_sha256": null,
+      "capacity": 8192,
+      "sequence": 2,
+      "dropped": 0,
+      "unobserved_operations": 0,
+      "entries": [
+        {
+          "local_trace_id": 1,
+          "role": "atnagent",
+          "operation": null,
+          "invocation": {
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1
+          },
+          "projection_status": "retained",
+          "evidence_status": "complete",
+          "unknown_fields": [],
+          "not_applicable_fields": [],
+          "missing_boundaries": [],
+          "unknown_applicability": [],
+          "quality": [],
+          "sources": [
+            {
+              "field": "dp_row_layout",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.admission_observed",
+              "event": {
+                "producer": 2,
+                "event_sequence": 8
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.input_ready_published",
+              "event": {
+                "producer": 2,
+                "event_sequence": 9
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.output_acknowledgement_published",
+              "event": {
+                "producer": 2,
+                "event_sequence": 11
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.output_commit_observed",
+              "event": {
+                "producer": 2,
+                "event_sequence": 10
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.submission_prepared",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.submission_published",
+              "event": {
+                "producer": 2,
+                "event_sequence": 7
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.dp_rank_payload_rows",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.executor_lane_index",
+              "event": {
+                "producer": 2,
+                "event_sequence": 8
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.executor_lease_sequence",
+              "event": {
+                "producer": 2,
+                "event_sequence": 8
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.forward_mode",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "instance_index",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "invocation_sequence",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "local_trace_id",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 2,
+                "event_sequence": 6
+              },
+              "metadata": null
+            }
+          ]
+        },
+        {
+          "local_trace_id": 2,
+          "role": "coordinator",
+          "operation": null,
+          "invocation": {
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1
+          },
+          "projection_status": "retained",
+          "evidence_status": "complete",
+          "unknown_fields": [],
+          "not_applicable_fields": [
+            "dp_row_layout"
+          ],
+          "missing_boundaries": [],
+          "unknown_applicability": [],
+          "quality": [],
+          "sources": [
+            {
+              "field": "events_ns.admission_published",
+              "event": {
+                "producer": 2,
+                "event_sequence": 14
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.enqueued",
+              "event": {
+                "producer": 2,
+                "event_sequence": 12
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.ffnagent_completions_observed",
+              "event": {
+                "producer": 2,
+                "event_sequence": 16
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.lane_execution_published",
+              "event": {
+                "producer": 2,
+                "event_sequence": 15
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.lane_released",
+              "event": {
+                "producer": 2,
+                "event_sequence": 19
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.output_acknowledgements_observed",
+              "event": {
+                "producer": 2,
+                "event_sequence": 18
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.output_commit_published",
+              "event": {
+                "producer": 2,
+                "event_sequence": 17
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.scheduled",
+              "event": {
+                "producer": 2,
+                "event_sequence": 13
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.executor_lane_index",
+              "event": {
+                "producer": 2,
+                "event_sequence": 13
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.executor_lease_sequence",
+              "event": {
+                "producer": 2,
+                "event_sequence": 13
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.scheduler.policy",
+              "event": null,
+              "metadata": {
+                "producer": 3,
+                "revision": 1,
+                "path": "generations[0].scheduler"
+              }
+            },
+            {
+              "field": "facts.scheduler.ready_ticket",
+              "event": {
+                "producer": 2,
+                "event_sequence": 12
+              },
+              "metadata": null
+            },
+            {
+              "field": "instance_index",
+              "event": {
+                "producer": 2,
+                "event_sequence": 12
+              },
+              "metadata": null
+            },
+            {
+              "field": "invocation_sequence",
+              "event": {
+                "producer": 2,
+                "event_sequence": 12
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 2,
+                "event_sequence": 12
+              },
+              "metadata": null
+            },
+            {
+              "field": "local_trace_id",
+              "event": {
+                "producer": 2,
+                "event_sequence": 12
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 2,
+                "event_sequence": 12
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 2,
+                "event_sequence": 12
+              },
+              "metadata": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "contract_version": 3,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "producer_id": 5,
+      "observer": "fabric",
+      "generation": 1,
+      "endpoint": null,
+      "site": null,
+      "snapshot_sha256": null,
+      "capacity": 8192,
+      "sequence": 1,
+      "dropped": 0,
+      "unobserved_operations": 0,
+      "entries": [
+        {
+          "local_trace_id": 1,
+          "role": "ffnagent",
+          "operation": null,
+          "invocation": {
+            "generation": 1,
+            "instance_index": 0,
+            "invocation_sequence": 1
+          },
+          "projection_status": "retained",
+          "evidence_status": "complete",
+          "unknown_fields": [],
+          "not_applicable_fields": [
+            "dp_row_layout",
+            "events_ns.partial_ready_published",
+            "events_ns.peer_partials_ready_observed",
+            "events_ns.routing_metadata_observed",
+            "events_ns.routing_metadata_published"
+          ],
+          "missing_boundaries": [],
+          "unknown_applicability": [],
+          "quality": [],
+          "sources": [
+            {
+              "field": "boundary.PartialReadyPublished",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "boundary.PeerPartialsReadyObserved",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "boundary.RoutingMetadataObserved",
+              "event": null,
+              "metadata": {
+                "producer": 3,
+                "revision": 1,
+                "path": "capabilities.routing"
+              }
+            },
+            {
+              "field": "boundary.RoutingMetadataPublished",
+              "event": null,
+              "metadata": {
+                "producer": 3,
+                "revision": 1,
+                "path": "capabilities.routing"
+              }
+            },
+            {
+              "field": "events_ns.completion_published",
+              "event": {
+                "producer": 5,
+                "event_sequence": 5
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.compute_completed",
+              "event": {
+                "producer": 5,
+                "event_sequence": 4
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.compute_started",
+              "event": {
+                "producer": 5,
+                "event_sequence": 3
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.input_ready_observed",
+              "event": {
+                "producer": 5,
+                "event_sequence": 2
+              },
+              "metadata": null
+            },
+            {
+              "field": "events_ns.lane_execution_observed",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.delivery",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.executor_lane_index",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.executor_lease_sequence",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "facts.payload_row_capacity",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "instance_index",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "invocation_sequence",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "layer_ordinal",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "local_trace_id",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "output_requirement",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            },
+            {
+              "field": "payload_rows",
+              "event": {
+                "producer": 5,
+                "event_sequence": 1
+              },
+              "metadata": null
+            }
+          ]
+        }
+      ]
     }
   ]
 }

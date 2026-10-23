@@ -1,7 +1,7 @@
-# Deterministic Calibration v2
+# Deterministic Calibration v3
 
 The [shared contract](shared-contract.md) preserves the original clock domains.
-Contract version 2 retains calibration algorithm_version=1 and its existing
+Contract version 3 retains calibration algorithm_version=1 and its existing
 numerical expectations; the contract revision changes no calibration mathematics.
 This document fixes the numerical clock calibration algorithm, not merely a set of acceptable
 outputs. Implementations must reproduce [the calibration fixtures](fixtures/calibration.json).
@@ -53,7 +53,7 @@ Positions 4 and 9 are validation; positions 1,2,3,5,6,7,8,10 fit the model.
 Blocks are fixed by attempt number, not by arrival order or only successful
 samples. A partial final block is `incomplete_block`. No sliding windows,
 outlier deletion, automatic refitting, or fallback midpoint regression exists
-in v2. The default interval is 100 ms; actual sample spacing remains evidence.
+in v3. The default interval is 100 ms; actual sample spacing remains evidence.
 
 Use local coordinates x = G - G0, with G0 the first fitting sample's G, and
 h = H_before(first fitting sample). Parameterize:
