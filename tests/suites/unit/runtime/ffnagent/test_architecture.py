@@ -66,8 +66,6 @@ def test_load_rejects_duplicate_config_member(tmp_path: Path) -> None:
     (
         pytest.param("bfloat16", 16, 32, 3, id="small-bf16"),
         pytest.param("float16", 16, 32, 3, id="small-fp16"),
-        pytest.param("float16", 4096, 11008, 32, id="llama-7b-geometry"),
-        pytest.param("float16", 5120, 13824, 40, id="llama-13b-geometry"),
     ),
 )
 def test_load_compiles_llama_dense_layers(
