@@ -46,7 +46,7 @@ wrappers. Model ID links point to the checkpoint configuration.
 | [meta-llama/Llama-2-7b-hf](https://huggingface.co/meta-llama/Llama-2-7b-hf/blob/main/config.json) | `LlamaForCausalLM` | ❌ Not supported |
 | [meta-llama/Llama-2-13b-hf](https://huggingface.co/meta-llama/Llama-2-13b-hf/blob/main/config.json) | `LlamaForCausalLM` | ❌ Not supported |
 | [meta-llama/Llama-2-70b-hf](https://huggingface.co/meta-llama/Llama-2-70b-hf/blob/main/config.json) | `LlamaForCausalLM` | ❌ Not supported |
-| [meta-llama/Llama-3.1-8B](https://huggingface.co/meta-llama/Llama-3.1-8B/blob/main/config.json) | `LlamaForCausalLM` | ❌ Not supported |
+| [meta-llama/Llama-3.1-8B](https://huggingface.co/meta-llama/Llama-3.1-8B/blob/main/config.json) | `LlamaForCausalLM` | ✅ Supported |
 | [meta-llama/Llama-3.1-70B](https://huggingface.co/meta-llama/Llama-3.1-70B/blob/main/config.json) | `LlamaForCausalLM` | ❌ Not supported |
 | [meta-llama/Llama-3.2-1B](https://huggingface.co/meta-llama/Llama-3.2-1B/blob/main/config.json) | `LlamaForCausalLM` | ✅ Supported |
 | [meta-llama/Llama-3.2-3B](https://huggingface.co/meta-llama/Llama-3.2-3B/blob/main/config.json) | `LlamaForCausalLM` | ❌ Not supported |
