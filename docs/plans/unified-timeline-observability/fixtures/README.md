@@ -1,4 +1,4 @@
-# Reference Fixtures v2
+# Reference Fixtures v3
 
 These immutable inputs and expected outputs implement the
 [shared contract](../shared-contract.md) and [calibration algorithm](../calibration.md).
@@ -15,7 +15,7 @@ starts from a fresh Run state; identical IDs across scenarios never join them.
 | [identity-lifecycle.json](identity-lifecycle.json) | Independent-mode allocation matrix, policy failures, and diagnostic read preconditions |
 | [encoding.json](encoding.json) | Full one-event chunk hex and malformed variants with exact structured errors |
 | [causality.json](causality.json) | Complete/partial events, explicit associations, Replay/Eager, identity isolation, Context, tokens, quota, and tail cases |
-| [snapshots.json](snapshots.json) | Complete Transport/Fabric JSON projections, exact phase pairs, and retention/missing-fact cases |
+| [snapshots.json](snapshots.json) | Complete legacy projections and evidence reports, exact phase pairs, and Event-based loss/applicability cases |
 | [quality.json](quality.json) | Full quality checkpoint and conservation, export failure, unknown tail, and counter saturation cases |
 | [routing.json](routing.json) | Publication/attachment outcomes and independent event/tensor availability |
 | [routing.safetensors](routing.safetensors) | Literal published attachment, live_rows=2, effective_topk=2 |
@@ -29,7 +29,7 @@ updates version, bytes, semantic expectations, and checksums together.
 
 ## Case Interpretation
 
-JSON top-level contract_version is 2. Each `cases` entry has a unique `id`,
+JSON top-level contract_version is 3. Each `cases` entry has a unique `id`,
 `input`, and `expected`. Expected dictionaries are assertions on the named
 properties, not a license to discard other quality evidence. The complete
 `normal_dense` case and snapshot projections specify full ordinary behavior.
@@ -70,6 +70,52 @@ events/facts are asserted in separate cases; do not apply the complete-vector
 len(records) equation to partial evidence. The golden phase pairs match the
 existing writers, including AtnAgent total beginning at SubmissionPrepared.
 
+`expected_evidence_reports` freezes complete Native-read report shapes for these
+four snapshot domains (two Transport, two Fabric), including the shared local
+ID sequence of AtnAgent and Coordinator. snapshot_sha256 is null for Native-only
+reads. The Dense routing capability is not_applicable evidence for these synthetic
+layers, not a rule equating a disabled Routing observer with a Dense model.
+DirectPartial has no PartialReadyPublished/PeerPartialsReadyObserved Hook. Its
+legacy times are zero, and the report marks these stages inapplicable. Producer 5
+now has protocol sequences 1..5 and Graph activity sequences 6..7; derived cases
+use those same identities rather than introducing artificial sequence holes.
+
+Snapshot cases with base_case=normal_dense expand against causality.json using
+the same remove/replace/append rules above. `select` chooses an observer domain,
+Producer, and optionally one local_trace_id; it is applied after expansion.
+Transport Endpoint/site and Fabric Generation follow that selected evidence or
+the single matching domain in this fixture's metadata. `operation_counts` gives
+the read cutoff's exact local sequence and retention capacity; null sequence
+means final totals are unknown. Its numbers count operations, not Events.
+`expected.legacy_record` and `evidence_entry` assert the complete selected record
+and entry, including arrays and source references; null legacy_record means
+omission. `legacy_records` and `evidence_report` assert the complete selected
+domain's records and report. Other expected properties assert the explicitly
+named classification, availability, phase sample count, or error context.
+
+Opening and middle loss retain later Events and repeated scalar facts. A terminal
+boundary can preserve legacy completed while evidence remains partial. Losing
+all result-bearing Events preserves the sentinel plus unknown_result, rather
+than an actual ProtocolMismatch outcome. Auxiliary Graph evidence alone can
+identify a local FfnAgent record without its mandatory capacity/delivery, so
+legacy_fact_missing omits the record while retaining its evidence. Omitting a
+mandatory field from an ordinary protocol Event instead fails strict parsing.
+Unobserved Fabric IDs never inherit another local record's role. Unknown tails
+do not promote a prior checkpoint to exact final counts. Aggregate loss has no
+per-field cause without identifying evidence. Zero-time and reversed-boundary
+cases preserve observed evidence while restricting legacy durations.
+The Closed case leaves its earlier conditional path unknown rather than
+inventing a pre-publication rejection. The strict-presence case rejects an
+ordinary protocol Event missing required capacity before any projection.
+
+Quality pair cases resolve snapshot_fixture plus snapshot_pointer (a JSON
+Pointer), serialize that value as UTF-8 JSON with indent=2 and one final newline,
+and compare its SHA-256 against report_snapshot_sha256. Null means no sidecar;
+an incorrect digest leaves the pair unavailable. These serialization settings
+define fixture bytes only; real readers hash the actual published snapshot.
+The resource case supplies hypothetical declared byte sizes to assert admission
+arithmetic; it does not claim measured Native report sizes.
+
 For Routing, capabilities.routing=enabled changes the base Dense fixture to a
 synthetic MoE publication scenario. Published Routing data is:
 
@@ -83,14 +129,14 @@ The event's artifact_id is zero because runtime file publication occurs later;
 the exact attachment identity resolves the final index. Not-collected, pool
 capacity, payload oversize, I/O failure, missing file, and unknown crashed tail
 are different expected outcomes. Safetensors metadata records preserves its
-baseline Invocation fields and adds the association fields defined by v2.
+baseline Invocation fields and adds the association fields defined by v3.
 
 The identity-lifecycle cases describe preparation and diagnostic interfaces:
 allocation is required by Unified Timeline, Transport Observer, or an explicitly
 identity-dependent consumer, rather than by Graph/Routing enablement alone.
 Diagnostic availability is a precondition result; equal Context generations do
 not validate live mutable storage. The stale graph field in the live-peek case
-is deliberately invalid diagnostic input, not part of the version 2 IPC layout.
+is deliberately invalid diagnostic input, not part of the version 3 IPC layout.
 The causal cases execution_never_returns and execution_returns_failure retain
 the entry edge without inventing FFN completion. invocation_multiple_graph_owners
 preserves separate FfnAgent executions under one Invocation. Attributed SGLang

@@ -72,7 +72,12 @@ authoritative only when implemented.
   and Graph Capture.
 - Preserve existing Transport/Fabric snapshot APIs and JSON shapes through
   bounded Host reconstruction of the earliest N operations. Report missing
-  facts and snapshot-capacity loss in separate quality metadata.
+  facts and snapshot-capacity loss in separate quality metadata. Add a bounded
+  per-snapshot evidence report with field-level provenance and explicit unknown
+  and inapplicable fields. Legacy terminal classification remains independent
+  of path-dependent evidence completeness; repeated facts recover scalars,
+  never missing boundary timestamps. Publish the report and legacy JSON as a
+  hash-matched pair at the same read cutoff.
 - Use ten-attempt calibration blocks and a positive-slope affine feasible
   region, with two held-out validation attempts. Preserve raw clocks, model
   assumptions, unavailable intervals, and numerical uncertainty.
@@ -116,18 +121,25 @@ Both Native and offline implementations must independently read and write the
 valid binary vector, reject the invalid vectors by structured code, reconstruct
 the same legacy projections, and produce the exact calibration expectations.
 Fixture changes require a coordinated contract version update; never support
-two conflicting interpretations of v2.
+two conflicting interpretations of v3.
 
-Contract and fixture version 2 supersedes version 1 without a compatibility
+Contract and fixture version 3 supersedes versions 1 and 2 without a compatibility
 mode. Update the raw vectors, metadata hashes and fixture checksums together.
 The Event record remains 256 bytes and calibration mathematics is unchanged.
+Version 3 freezes per-snapshot evidence reports and field availability. The
+ordinary Dense DirectPartial fixture excludes partial-publication and peer-wait
+Hooks, matching the actual production branch.
 
 Focused tests must cover independent-observer IPC allocation and policy mismatch,
 actual Graph-owner isolation, entry association retained after failure or absent
 return, rejection before Submission preparation, diagnostic read preconditions,
 and concurrent reservation/commit/reclamation, multiple
 CTAs/Streams, IPC identity lifetime, repeated Replay and Context isolation,
-partial events, periodic background transfer during serving, Device slot
+partial events, opening/middle/terminal loss, repeated-fact recovery, completed
+operations with partial evidence, unknown versus inapplicable fields, omitted
+and entirely unobserved records, field-level provenance, unknown final counts,
+report/snapshot hash mismatch, report resource admission, periodic background
+transfer during serving, Device slot
 reclamation before file publication, slow Writer isolation, bounded Host
 exhaustion, I/O failure, quota exhaustion, and background-thread shutdown.
 Follow [test conventions](../../../tests/README.md), repository-managed Ruff,

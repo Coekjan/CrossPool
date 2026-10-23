@@ -1,5 +1,5 @@
 {
-  "contract_version": 2,
+  "contract_version": 3,
   "cases": [
     {
       "id": "active_checkpoint",
@@ -121,10 +121,64 @@
         "exported": 4,
         "sum_checkpoints": false
       }
+    },
+    {
+      "id": "snapshot_evidence_pair_matches",
+      "input": {
+        "snapshot_fixture": "snapshots.json",
+        "snapshot_pointer": "/expected_transport/0",
+        "snapshot_encoding": "json_indent_2_newline",
+        "report_snapshot_sha256": "81ea944ba17306ae872202b097619b8c94fcb8ea75fb3dc921511ebddda57348"
+      },
+      "expected": {
+        "pair_available": true,
+        "reason": null
+      }
+    },
+    {
+      "id": "snapshot_evidence_pair_mismatch",
+      "input": {
+        "snapshot_fixture": "snapshots.json",
+        "snapshot_pointer": "/expected_transport/0",
+        "snapshot_encoding": "json_indent_2_newline",
+        "report_snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "pair_available": false,
+        "reason": "snapshot_mismatch"
+      }
+    },
+    {
+      "id": "snapshot_evidence_pair_missing",
+      "input": {
+        "snapshot_fixture": "snapshots.json",
+        "snapshot_pointer": "/expected_transport/0",
+        "snapshot_encoding": "json_indent_2_newline",
+        "report_snapshot_sha256": null
+      },
+      "expected": {
+        "pair_available": false,
+        "reason": "report_missing"
+      }
+    },
+    {
+      "id": "snapshot_evidence_host_budget_rejected",
+      "input": {
+        "host_bytes": 1024,
+        "snapshot_slab_bytes": 256,
+        "report_storage_bytes": 512,
+        "peak_read_staging_bytes": 384,
+        "other_host_bytes": 128
+      },
+      "expected": {
+        "minimum_host_bytes": 1280,
+        "startup_accepted": false,
+        "error": "resource_budget"
+      }
     }
   ],
   "checkpoint": {
-    "contract_version": 2,
+    "contract_version": 3,
     "run_id": "11111111-1111-4111-8111-111111111111",
     "producer_id": 3,
     "revision": 1,
