@@ -40,7 +40,7 @@ wrappers. Model ID links point to the checkpoint configuration.
 | [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it/blob/main/config.json) | `Gemma4ForConditionalGeneration` | ❌ Not supported |
 | [google/gemma-4-12B-it](https://huggingface.co/google/gemma-4-12B-it/blob/main/config.json) | `Gemma4UnifiedForConditionalGeneration` | ❌ Not supported |
 | [huggyllama/llama-7b](https://huggingface.co/huggyllama/llama-7b/blob/main/config.json) | `LlamaForCausalLM` | ✅ Supported |
-| [huggyllama/llama-13b](https://huggingface.co/huggyllama/llama-13b/blob/main/config.json) | `LlamaForCausalLM` | ❌ Not supported |
+| [huggyllama/llama-13b](https://huggingface.co/huggyllama/llama-13b/blob/main/config.json) | `LlamaForCausalLM` | ✅ Supported |
 | [huggyllama/llama-30b](https://huggingface.co/huggyllama/llama-30b/blob/main/config.json) | `LlamaForCausalLM` | ❌ Not supported |
 | [huggyllama/llama-65b](https://huggingface.co/huggyllama/llama-65b/blob/main/config.json) | `LlamaForCausalLM` | ❌ Not supported |
 | [meta-llama/Llama-2-7b-hf](https://huggingface.co/meta-llama/Llama-2-7b-hf/blob/main/config.json) | `LlamaForCausalLM` | ❌ Not supported |
