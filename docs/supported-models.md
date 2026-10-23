@@ -18,7 +18,7 @@ wrappers. Model ID links point to the checkpoint configuration.
 | [Qwen/Qwen2.5-14B-Instruct](https://huggingface.co/Qwen/Qwen2.5-14B-Instruct/blob/main/config.json) | `Qwen2ForCausalLM` | ❌ Not supported |
 | [Qwen/Qwen2.5-32B-Instruct](https://huggingface.co/Qwen/Qwen2.5-32B-Instruct/blob/main/config.json) | `Qwen2ForCausalLM` | ❌ Not supported |
 | [Qwen/Qwen2.5-72B-Instruct](https://huggingface.co/Qwen/Qwen2.5-72B-Instruct/blob/main/config.json) | `Qwen2ForCausalLM` | ❌ Not supported |
-| [deepseek-ai/DeepSeek-R1-Distill-Qwen-32B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B/blob/main/config.json) | `Qwen2ForCausalLM` | ❌ Not supported |
+| [deepseek-ai/DeepSeek-R1-Distill-Qwen-32B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B/blob/main/config.json) | `Qwen2ForCausalLM` | ✅ Supported |
 | [Qwen/Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B/blob/main/config.json) | `Qwen3ForCausalLM` | ✅ Supported |
 | [Qwen/Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B/blob/main/config.json) | `Qwen3ForCausalLM` | ❌ Not supported |
 | [Qwen/Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B/blob/main/config.json) | `Qwen3ForCausalLM` | ❌ Not supported |
