@@ -69,6 +69,8 @@ LayerBindingValues materialize_binding_values(const BindingResourceProjection &r
               .down_weight_address = value.down_weight_address,
               .router_weight_address = 0,
               .router_correction_bias_address = 0,
+              .fc1_bias_address = value.fc1_bias_address.value_or(0),
+              .fc2_bias_address = value.fc2_bias_address.value_or(0),
           };
         } else {
           return LayerBindingValues{
@@ -79,6 +81,8 @@ LayerBindingValues materialize_binding_values(const BindingResourceProjection &r
                   value.router.has_value() && value.router->correction_bias_address.has_value()
                       ? *value.router->correction_bias_address
                       : 0,
+              .fc1_bias_address = 0,
+              .fc2_bias_address = 0,
           };
         }
       },
@@ -101,6 +105,18 @@ std::vector<ResourceReplacement> make_resource_replacements(const ExecutionSigna
                                   value.primary_capture_resources.down_weight_address,
                                   offsetof(LayerBindingValues, down_weight_address)},
           };
+          if (value.primary_capture_resources.fc1_bias_address.has_value()) {
+            result.push_back(ResourceReplacement{*value.primary_capture_resources.fc1_bias_address,
+                                                 *value.control_capture_resources.fc1_bias_address,
+                                                 *value.primary_capture_resources.fc1_bias_address,
+                                                 offsetof(LayerBindingValues, fc1_bias_address)});
+          }
+          if (value.primary_capture_resources.fc2_bias_address.has_value()) {
+            result.push_back(ResourceReplacement{*value.primary_capture_resources.fc2_bias_address,
+                                                 *value.control_capture_resources.fc2_bias_address,
+                                                 *value.primary_capture_resources.fc2_bias_address,
+                                                 offsetof(LayerBindingValues, fc2_bias_address)});
+          }
         } else {
           result = {
               ResourceReplacement{value.primary_capture_resources.expert_gate_up_weight_address,
@@ -144,6 +160,12 @@ void validate_layer_resource_targets(const ExecutionProjection &projection, int 
     if constexpr (std::is_same_v<Resource, DenseBindingResourceProjection>) {
       validate_cuda_address(resources.gate_up_weight_address, device, "Dense gate/up weight");
       validate_cuda_address(resources.down_weight_address, device, "Dense down weight");
+      if (resources.fc1_bias_address.has_value()) {
+        validate_cuda_address(*resources.fc1_bias_address, device, "Dense fc1 bias");
+      }
+      if (resources.fc2_bias_address.has_value()) {
+        validate_cuda_address(*resources.fc2_bias_address, device, "Dense fc2 bias");
+      }
     } else {
       validate_cuda_address(resources.expert_gate_up_weight_address, device, "MoE Expert gate/up weights");
       validate_cuda_address(resources.expert_down_weight_address, device, "MoE Expert down weights");

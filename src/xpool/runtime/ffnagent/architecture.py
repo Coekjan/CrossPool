@@ -92,15 +92,31 @@ class FfnSourceConfig:
             raise ValueError(f"{field_name} must be a JSON {expected_name}")
         return self.get(field_name, expected_type)
 
-    def validate_family_profile(self, *, model_type: str, dtype_field: str) -> None:
-        """Validate common model type, activation, and source dtype fields."""
+    def validate_family_profile(
+        self,
+        *,
+        model_type: str,
+        dtype_field: str,
+        activation_field: str = "hidden_act",
+        allowed_activations: tuple[str, ...] = ("silu",),
+        allowed_dtypes: tuple[str, ...] = ("bfloat16", "float16"),
+    ) -> None:
+        """Validate model type, activation, and source dtype fields."""
 
         if self.get("model_type", str) != model_type:
             raise ValueError(f"model_type must equal {model_type!r}")
-        if self.get("hidden_act", str) != "silu":
-            raise ValueError("hidden_act must equal 'silu'")
-        if self.get(dtype_field, str) not in ("bfloat16", "float16"):
-            raise ValueError(f"{dtype_field} must be 'bfloat16' or 'float16'")
+        activation = self.get(activation_field, str)
+        if activation_field == "hidden_act" and allowed_activations == ("silu",):
+            if activation != "silu":
+                raise ValueError("hidden_act must equal 'silu'")
+        elif activation not in allowed_activations:
+            raise ValueError(f"{activation_field} must be one of {allowed_activations!r}")
+        dtype = self.get(dtype_field, str)
+        if allowed_dtypes == ("bfloat16", "float16"):
+            if dtype not in allowed_dtypes:
+                raise ValueError(f"{dtype_field} must be 'bfloat16' or 'float16'")
+        elif dtype not in allowed_dtypes:
+            raise ValueError(f"{dtype_field} must be one of {allowed_dtypes!r}")
 
 
 class FfnModelAdapter(ABC):
@@ -187,4 +203,15 @@ def gated_checkpoint_keys(prefix: str) -> ffn.GatedFfnCheckpointKeys:
         gate_weight_key=f"{prefix}.gate_proj.weight",
         up_weight_key=f"{prefix}.up_proj.weight",
         down_weight_key=f"{prefix}.down_proj.weight",
+    )
+
+
+def biased_checkpoint_keys(prefix: str) -> ffn.BiasedFfnCheckpointKeys:
+    """Construct the canonical biased unary projection pair below one FFN prefix."""
+
+    return ffn.BiasedFfnCheckpointKeys(
+        fc1_weight_key=f"{prefix}.fc1.weight",
+        fc1_bias_key=f"{prefix}.fc1.bias",
+        fc2_weight_key=f"{prefix}.fc2.weight",
+        fc2_bias_key=f"{prefix}.fc2.bias",
     )

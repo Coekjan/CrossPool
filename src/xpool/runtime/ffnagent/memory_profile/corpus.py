@@ -236,12 +236,42 @@ def materialize_calibration_weights(
             tp_rank = layer_plan.ffnagent_indices.index(ffnagent_index)
             device = torch.device("cuda")
             if isinstance(layer_spec, ffn.DenseFfnSpec):
-                layer_weights = weights.DenseFfnWeights.allocate(
-                    hidden_size=model_spec.hidden_size,
-                    local_intermediate_size=layer_plan.local_intermediate_size,
-                    payload_dtype=torch.bfloat16,
-                    device=device,
-                )
+                if layer_spec.layout is ffn.DenseFfnLayout.BIASED_RELU:
+                    layer_weights = weights.BiasedDenseFfnWeights(
+                        fc1_weight=torch.empty(
+                            layer_plan.local_intermediate_size,
+                            model_spec.hidden_size,
+                            dtype=torch.bfloat16,
+                            device=device,
+                        ),
+                        fc1_bias=torch.empty(
+                            layer_plan.local_intermediate_size,
+                            dtype=torch.bfloat16,
+                            device=device,
+                        ),
+                        fc2_weight=torch.empty(
+                            model_spec.hidden_size,
+                            layer_plan.local_intermediate_size,
+                            dtype=torch.bfloat16,
+                            device=device,
+                        ),
+                        fc2_bias=(
+                            torch.empty(
+                                model_spec.hidden_size,
+                                dtype=torch.bfloat16,
+                                device=device,
+                            )
+                            if tp_rank == 0
+                            else None
+                        ),
+                    )
+                else:
+                    layer_weights = weights.DenseFfnWeights.allocate(
+                        hidden_size=model_spec.hidden_size,
+                        local_intermediate_size=layer_plan.local_intermediate_size,
+                        payload_dtype=torch.bfloat16,
+                        device=device,
+                    )
             else:
                 layer_weights = weights.MoeFfnWeights.allocate(
                     layer_spec,

@@ -77,6 +77,27 @@ def read_checkpoint_key_view(model_path: Path) -> dict[str, Path]:
     return {key: canonical_path for key in keys}
 
 
+def _layer_ffn_prefix(spec: ffn.FfnModelSpec, layer: ffn.FfnLayerSpec) -> str:
+    """Return one layer's FFN checkpoint prefix under the spec namespace."""
+
+    if spec.checkpoint_namespace is None:
+        if isinstance(layer, ffn.DenseFfnSpec) and layer.layout is ffn.DenseFfnLayout.BIASED_RELU:
+            raise ValueError("Biased Dense layer requires a checkpoint namespace")
+        return f"model.layers.{layer.layer_id}.mlp"
+    return spec.checkpoint_namespace.format(layer_id=layer.layer_id)
+
+
+def _biased_ffn_keys(prefix: str, all_keys: set[str]) -> set[str]:
+    """Return only fc1/fc2 keys under one biased layer prefix."""
+
+    prefix_with_dot = prefix + "."
+    return {
+        key
+        for key in all_keys
+        if key.startswith(prefix_with_dot) and key[len(prefix_with_dot) :].split(".", 1)[0] in {"fc1", "fc2"}
+    }
+
+
 def validate_ffn_coverage(
     spec: ffn.FfnModelSpec,
     key_view: Mapping[str, Path],
@@ -87,19 +108,30 @@ def validate_ffn_coverage(
 
     expected_by_layer = {layer.layer_id: set(layer.checkpoint.tensor_keys()) for layer in spec.layers}
     all_checkpoint_keys = set(key_view)
-    for layer_id, expected_keys in expected_by_layer.items():
-        prefix = f"model.layers.{layer_id}.mlp."
-        actual_keys = {key for key in all_checkpoint_keys if key.startswith(prefix)}
+    for layer in spec.layers:
+        expected_keys = expected_by_layer[layer.layer_id]
+        prefix = _layer_ffn_prefix(spec, layer)
+        if isinstance(layer, ffn.DenseFfnSpec) and layer.layout is ffn.DenseFfnLayout.BIASED_RELU:
+            actual_keys = _biased_ffn_keys(prefix, all_checkpoint_keys)
+        else:
+            actual_keys = {key for key in all_checkpoint_keys if key.startswith(prefix + ".")}
         if actual_keys != expected_keys:
             missing = sorted(expected_keys - actual_keys)
             extra = sorted(actual_keys - expected_keys)
-            raise ValueError(f"FFN checkpoint namespace for layer {layer_id} differs: missing={missing}, extra={extra}")
+            raise ValueError(
+                f"FFN checkpoint namespace for layer {layer.layer_id} differs: missing={missing}, extra={extra}"
+            )
 
     if allow_trailing_ffn_layers:
         return
     trailing_keys = []
+    if spec.checkpoint_namespace is None:
+        pattern = MAIN_FFN_KEY_PATTERN
+    else:
+        template = re.escape(spec.checkpoint_namespace).replace(re.escape("{layer_id}"), r"(?P<layer_id>[0-9]+)")
+        pattern = re.compile(r"^" + template + r"\.(?:fc1|fc2)\.")
     for key in all_checkpoint_keys:
-        match = MAIN_FFN_KEY_PATTERN.match(key)
+        match = pattern.match(key)
         if match is not None and int(match.group("layer_id")) not in expected_by_layer:
             trailing_keys.append(key)
     if trailing_keys:

@@ -105,6 +105,91 @@ class MoeGraphCaptureWorkspace:
         )
 
 
+@overload
+def binding_resource_projection(
+    layer_weights: weights.DenseFfnWeights,
+) -> xpool.native.ffnagent.DenseBindingResourceProjection: ...
+
+
+@overload
+def binding_resource_projection(
+    layer_weights: weights.BiasedDenseFfnWeights,
+) -> xpool.native.ffnagent.DenseBindingResourceProjection: ...
+
+
+@overload
+def binding_resource_projection(
+    layer_weights: weights.MoeFfnWeights,
+) -> xpool.native.ffnagent.MoeBindingResourceProjection: ...
+
+
+def binding_resource_projection(
+    layer_weights: weights.FfnLayerWeights,
+) -> xpool.native.ffnagent.DenseBindingResourceProjection | xpool.native.ffnagent.MoeBindingResourceProjection:
+    """Project retained weight addresses into the closed native resource union."""
+
+    if isinstance(layer_weights, weights.DenseFfnWeights):
+        return xpool.native.ffnagent.DenseBindingResourceProjection(
+            gate_up_weight=layer_weights.gate_up_weight,
+            down_weight=layer_weights.down_weight,
+        )
+    if isinstance(layer_weights, weights.BiasedDenseFfnWeights):
+        return xpool.native.ffnagent.DenseBindingResourceProjection(
+            gate_up_weight=layer_weights.fc1_weight,
+            down_weight=layer_weights.fc2_weight,
+            fc1_bias=layer_weights.fc1_bias,
+            fc2_bias=layer_weights.fc2_bias,
+        )
+    if isinstance(layer_weights, weights.MoeFfnWeights):
+        router = layer_weights.router
+        return xpool.native.ffnagent.MoeBindingResourceProjection(
+            expert_gate_up_weight=layer_weights.expert_gate_up_weight,
+            expert_down_weight=layer_weights.expert_down_weight,
+            router=(
+                None
+                if router is None
+                else xpool.native.ffnagent.MoeRouterBindingResourceProjection(
+                    weight=router.weight,
+                    correction_bias=router.correction_bias,
+                )
+            ),
+        )
+    raise TypeError(f"unsupported FFN layer weights {type(layer_weights).__name__}")
+
+
+def create_control_capture_probe(layer_weights: weights.FfnLayerWeights) -> weights.FfnLayerWeights:
+    """Allocate one zero-valued shape-equivalent Control Capture Probe."""
+
+    if isinstance(layer_weights, weights.DenseFfnWeights):
+        return weights.DenseFfnWeights(
+            gate_up_weight=torch.zeros_like(layer_weights.gate_up_weight),
+            down_weight=torch.zeros_like(layer_weights.down_weight),
+        )
+    if isinstance(layer_weights, weights.BiasedDenseFfnWeights):
+        return weights.BiasedDenseFfnWeights(
+            fc1_weight=torch.zeros_like(layer_weights.fc1_weight),
+            fc1_bias=torch.zeros_like(layer_weights.fc1_bias),
+            fc2_weight=torch.zeros_like(layer_weights.fc2_weight),
+            fc2_bias=(None if layer_weights.fc2_bias is None else torch.zeros_like(layer_weights.fc2_bias)),
+        )
+    if not isinstance(layer_weights, weights.MoeFfnWeights):
+        raise TypeError(f"unsupported FFN layer weights {type(layer_weights).__name__}")
+    router = layer_weights.router
+    return weights.MoeFfnWeights(
+        expert_gate_up_weight=torch.zeros_like(layer_weights.expert_gate_up_weight),
+        expert_down_weight=torch.zeros_like(layer_weights.expert_down_weight),
+        router=(
+            None
+            if router is None
+            else weights.MoeRouterWeights(
+                weight=torch.zeros_like(router.weight),
+                correction_bias=(None if router.correction_bias is None else torch.zeros_like(router.correction_bias)),
+            )
+        ),
+    )
+
+
+
 def validate_layer_weights_against_plan(
     *,
     layer_weights: weights.FfnLayerWeights,
@@ -119,15 +204,37 @@ def validate_layer_weights_against_plan(
     """Require one retained weight owner to match its exact local Plan role."""
 
     if isinstance(layer_plan, DenseFfnLayerPlan):
-        if not isinstance(layer_spec, ffn.DenseFfnSpec) or not isinstance(layer_weights, weights.DenseFfnWeights):
-            raise ValueError("Dense Layer Plan requires Dense Model Spec and weights")
-        if layer_weights.gate_up_weight.shape != (2 * layer_plan.local_intermediate_size, hidden_size):
-            raise ValueError("Dense gate/up weights disagree with the Layer Plan")
-        if layer_weights.down_weight.shape != (hidden_size, layer_plan.local_intermediate_size):
-            raise ValueError("Dense down weights disagree with the Layer Plan")
-        tensors = (layer_weights.gate_up_weight, layer_weights.down_weight)
-        if layer_weights.gate_up_weight.dtype is not payload_dtype:
-            raise ValueError("Dense weights disagree with the Instance payload dtype")
+        if not isinstance(layer_spec, ffn.DenseFfnSpec):
+            raise ValueError("Dense Layer Plan requires a Dense Model Spec")
+        if layer_spec.layout is ffn.DenseFfnLayout.GATED_SILU:
+            if not isinstance(layer_weights, weights.DenseFfnWeights):
+                raise ValueError("Gated Dense Layer Plan requires gated Dense weights")
+            if layer_weights.gate_up_weight.shape != (2 * layer_plan.local_intermediate_size, hidden_size):
+                raise ValueError("Dense gate/up weights disagree with the Layer Plan")
+            if layer_weights.down_weight.shape != (hidden_size, layer_plan.local_intermediate_size):
+                raise ValueError("Dense down weights disagree with the Layer Plan")
+            tensors = (layer_weights.gate_up_weight, layer_weights.down_weight)
+            if layer_weights.gate_up_weight.dtype is not payload_dtype:
+                raise ValueError("Dense weights disagree with the Instance payload dtype")
+        else:
+            if not isinstance(layer_weights, weights.BiasedDenseFfnWeights):
+                raise ValueError("Biased Dense Layer Plan requires biased Dense weights")
+            local_intermediate_size = layer_plan.local_intermediate_size
+            if layer_weights.fc1_weight.shape != (local_intermediate_size, hidden_size):
+                raise ValueError("Biased Dense fc1 weight disagrees with the Layer Plan")
+            if layer_weights.fc1_bias.shape != (local_intermediate_size,):
+                raise ValueError("Biased Dense fc1 bias disagrees with the Layer Plan")
+            if layer_weights.fc2_weight.shape != (hidden_size, local_intermediate_size):
+                raise ValueError("Biased Dense fc2 weight disagrees with the Layer Plan")
+            if (tp_rank == 0) != (layer_weights.fc2_bias is not None):
+                raise ValueError("Biased Dense fc2-bias ownership does not match TP rank zero")
+            tensors = (layer_weights.fc1_weight, layer_weights.fc1_bias, layer_weights.fc2_weight)
+            if layer_weights.fc2_bias is not None:
+                if layer_weights.fc2_bias.shape != (hidden_size,):
+                    raise ValueError("Biased Dense fc2 bias disagrees with the Layer Plan")
+                tensors += (layer_weights.fc2_bias,)
+            if layer_weights.fc1_weight.dtype is not payload_dtype:
+                raise ValueError("Biased Dense weights disagree with the Instance payload dtype")
     else:
         if not isinstance(layer_spec, ffn.MoeFfnSpec) or not isinstance(layer_weights, weights.MoeFfnWeights):
             raise ValueError("MoE Layer Plan requires MoE Model Spec and weights")
@@ -176,8 +283,8 @@ def capture_graph(launch: Callable[[], None]) -> torch.cuda.CUDAGraph:
 
 def capture_dense_signature(
     signature: execution.DenseFfnExecutionSignature,
-    primary_weights: weights.DenseFfnWeights,
-    control_probe: weights.DenseFfnWeights,
+    primary_weights: weights.DenseFfnWeights | weights.BiasedDenseFfnWeights,
+    control_probe: weights.DenseFfnWeights | weights.BiasedDenseFfnWeights,
 ) -> CapturedExecutionSignature:
     """Capture primary/control Dense bodies sharing lane placeholders."""
 
@@ -189,8 +296,21 @@ def capture_dense_signature(
     partial = torch.empty_like(hidden_states)
     workspace = torch.empty(execution.compute_workspace_bytes(signature), dtype=torch.uint8, device="cuda")
 
-    def launch(layer_weights: weights.DenseFfnWeights) -> None:
-        operators.compute_dense_partial(
+    def launch(layer_weights: weights.DenseFfnWeights | weights.BiasedDenseFfnWeights) -> None:
+        if signature.layout is ffn.DenseFfnLayout.GATED_SILU:
+            if not isinstance(layer_weights, weights.DenseFfnWeights):
+                raise TypeError("Gated Dense capture requires gated Dense weights")
+            operators.compute_dense_partial(
+                hidden_states=hidden_states,
+                layer_weights=layer_weights,
+                workspace=workspace,
+                output=partial,
+                activation=signature.activation,
+            )
+            return
+        if not isinstance(layer_weights, weights.BiasedDenseFfnWeights):
+            raise TypeError("Biased Dense capture requires biased Dense weights")
+        operators.compute_biased_dense_partial(
             hidden_states=hidden_states,
             layer_weights=layer_weights,
             workspace=workspace,
@@ -479,7 +599,11 @@ class FfnExecutionRegistry:
             # Admission and the signature-keyed cache preserve the weight kind.
             if isinstance(signature, execution.DenseFfnExecutionSignature):
                 dense_weights, dense_probe = cast(
-                    tuple[weights.DenseFfnWeights, weights.DenseFfnWeights], capture_weight_pair
+                    tuple[
+                        weights.DenseFfnWeights | weights.BiasedDenseFfnWeights,
+                        weights.DenseFfnWeights | weights.BiasedDenseFfnWeights,
+                    ],
+                    capture_weight_pair,
                 )
                 captures.append(capture_dense_signature(signature, dense_weights, dense_probe))
             else:

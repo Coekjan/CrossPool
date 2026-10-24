@@ -16,6 +16,8 @@ from xpool.model import ModelId
 
 __all__ = [
     "ActivationKind",
+    "BiasedFfnCheckpointKeys",
+    "DenseFfnLayout",
     "DenseFfnSpec",
     "FfnLayerSpec",
     "FfnModelSpec",
@@ -28,9 +30,17 @@ __all__ = [
 
 
 class ActivationKind(IntEnum):
-    """Gated FFN activation semantics."""
+    """FFN activation semantics."""
 
     SILU = 1
+    RELU = 2
+
+
+class DenseFfnLayout(IntEnum):
+    """Dense FFN projection layout semantics."""
+
+    GATED_SILU = 1
+    BIASED_RELU = 2
 
 
 class RouterAlgorithm(IntEnum):
@@ -74,6 +84,24 @@ class GatedFfnCheckpointKeys(FfnModel):
         return self.gate_weight_key, self.up_weight_key, self.down_weight_key
 
 
+class BiasedFfnCheckpointKeys(FfnModel):
+    """Checkpoint keys for one biased unary FFN projection pair."""
+
+    fc1_weight_key: str = Field(
+        strict=True, min_length=1, description="Safetensors key for the first projection weight."
+    )
+    fc1_bias_key: str = Field(strict=True, min_length=1, description="Safetensors key for the first projection bias.")
+    fc2_weight_key: str = Field(
+        strict=True, min_length=1, description="Safetensors key for the second projection weight."
+    )
+    fc2_bias_key: str = Field(strict=True, min_length=1, description="Safetensors key for the second projection bias.")
+
+    def tensor_keys(self) -> tuple[str, ...]:
+        """Return checkpoint keys in fc1 weight, fc1 bias, fc2 weight, fc2 bias order."""
+
+        return self.fc1_weight_key, self.fc1_bias_key, self.fc2_weight_key, self.fc2_bias_key
+
+
 class MoeFfnCheckpointKeys(FfnModel):
     """Checkpoint keys for one MoE layer and its ordered Experts."""
 
@@ -107,14 +135,30 @@ class MoeFfnCheckpointKeys(FfnModel):
 
 
 class DenseFfnSpec(FfnModel):
-    """Intrinsic semantics and checkpoint identity of one gated Dense layer."""
+    """Intrinsic semantics and checkpoint identity of one Dense layer."""
 
     kind: Literal[xpool.native.ffn.LayerKind.DENSE] = Field(  # ty: ignore[invalid-type-form]
         description="Dense layer discriminator."
     )
+    layout: DenseFfnLayout = Field(
+        default=DenseFfnLayout.GATED_SILU,
+        description="Dense projection and activation layout.",
+    )
     layer_id: int = Field(strict=True, ge=0, description="Model-local decoder layer identity.")
     intermediate_size: int = Field(strict=True, ge=1, description="Full Dense intermediate width.")
-    checkpoint: GatedFfnCheckpointKeys = Field(description="Checkpoint projections consumed by this layer.")
+    checkpoint: GatedFfnCheckpointKeys | BiasedFfnCheckpointKeys = Field(
+        description="Checkpoint projections consumed by this layer."
+    )
+
+    @model_validator(mode="after")
+    def validate_checkpoint_layout(self) -> DenseFfnSpec:
+        """Require the checkpoint projection shape to match the Dense layout."""
+
+        if self.layout is DenseFfnLayout.GATED_SILU and not isinstance(self.checkpoint, GatedFfnCheckpointKeys):
+            raise ValueError("GATED_SILU Dense layers require gated checkpoint keys")
+        if self.layout is DenseFfnLayout.BIASED_RELU and not isinstance(self.checkpoint, BiasedFfnCheckpointKeys):
+            raise ValueError("BIASED_RELU Dense layers require biased checkpoint keys")
+        return self
 
 
 class MoeFfnSpec(FfnModel):
@@ -181,7 +225,12 @@ class FfnModelSpec(FfnModel):
 
     model_id: ModelId = Field(description="Canonical configured model identity.")
     hidden_size: int = Field(strict=True, ge=1, description="Model hidden-state width in elements.")
-    activation: ActivationKind = Field(description="Gated activation shared by all model FFN layers.")
+    activation: ActivationKind = Field(description="Activation shared by all model FFN layers.")
+    checkpoint_namespace: str | None = Field(
+        default=None,
+        strict=True,
+        description="Optional per-layer checkpoint prefix template with one {layer_id} placeholder.",
+    )
     layers: tuple[FfnLayerSpec, ...] = Field(
         min_length=1,
         description="Ordered decoder FFN layer specifications.",
@@ -189,11 +238,27 @@ class FfnModelSpec(FfnModel):
 
     @model_validator(mode="after")
     def validate_model_semantics(self) -> FfnModelSpec:
-        """Require unique layer identities and checkpoint keys."""
+        """Require unique layer identities, activation agreement, and checkpoint keys."""
 
         layer_ids = tuple(layer.layer_id for layer in self.layers)
         if len(set(layer_ids)) != len(layer_ids):
             raise ValueError("FFN Model Spec layer ids must be unique")
+        for layer in self.layers:
+            if isinstance(layer, DenseFfnSpec):
+                expected_activation = (
+                    ActivationKind.SILU if layer.layout is DenseFfnLayout.GATED_SILU else ActivationKind.RELU
+                )
+                if self.activation is not expected_activation:
+                    raise ValueError("Dense FFN layout and activation disagree")
+            elif self.activation is not ActivationKind.SILU:
+                raise ValueError("MoE FFN layers require SiLU activation")
+        if self.checkpoint_namespace is not None:
+            if self.checkpoint_namespace.count("{layer_id}") != 1:
+                raise ValueError("checkpoint_namespace must contain exactly one {layer_id} placeholder")
+            if "{" in self.checkpoint_namespace.replace("{layer_id}", "") or "}" in self.checkpoint_namespace.replace(
+                "{layer_id}", ""
+            ):
+                raise ValueError("checkpoint_namespace contains an unsupported placeholder")
         keys = tuple(key for layer in self.layers for key in layer.checkpoint.tensor_keys())
         if len(set(keys)) != len(keys):
             raise ValueError("FFN Model Spec checkpoint keys must be globally unique")
@@ -203,7 +268,7 @@ class FfnModelSpec(FfnModel):
         """Return the canonical SHA-256 identity of every stored Spec field."""
 
         encoded = json.dumps(
-            self.model_dump(mode="json"),
+            self.model_dump(mode="json", exclude_defaults=True),
             sort_keys=True,
             separators=(",", ":"),
         ).encode()

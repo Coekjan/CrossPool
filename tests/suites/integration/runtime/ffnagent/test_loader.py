@@ -11,7 +11,15 @@ import torch
 
 import xtest
 from xpool.config import XpoolConfig
-from xpool.ffn import DenseFfnSpec, MoeFfnCheckpointKeys, MoeFfnSpec, RouterAlgorithm, RouterPrecision
+from xpool.ffn import (
+    BiasedFfnCheckpointKeys,
+    DenseFfnLayout,
+    DenseFfnSpec,
+    MoeFfnCheckpointKeys,
+    MoeFfnSpec,
+    RouterAlgorithm,
+    RouterPrecision,
+)
 from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent import architecture, loader, weights
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
@@ -57,6 +65,18 @@ def dense_spec() -> DenseFfnSpec:
         layer_id=0,
         intermediate_size=6,
         checkpoint=architecture.gated_checkpoint_keys("model.layers.0.mlp"),
+    )
+
+
+def biased_dense_spec() -> DenseFfnSpec:
+    """Return one small canonical biased-unary Dense layer."""
+
+    return DenseFfnSpec(
+        kind=LayerKind.DENSE,
+        layout=DenseFfnLayout.BIASED_RELU,
+        layer_id=0,
+        intermediate_size=6,
+        checkpoint=architecture.biased_checkpoint_keys("model.decoder.layers.0"),
     )
 
 
@@ -183,6 +203,61 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     ):
         assert probe.data_ptr() != source.data_ptr()
         torch.testing.assert_close(probe, torch.zeros_like(source), rtol=0, atol=0)
+
+
+@xtest.requirements(device_count=1)
+def test_materialize_slices_biased_dense_true_tp_weights_and_output_bias(tmp_path: Path) -> None:
+    install_loader_config()
+    hidden_size = 4
+    layer = biased_dense_spec()
+    assert isinstance(layer.checkpoint, BiasedFfnCheckpointKeys)
+    tensors = {
+        layer.checkpoint.fc1_weight_key: tensor_values((6, hidden_size), 0),
+        layer.checkpoint.fc1_bias_key: torch.arange(100, 106, dtype=torch.float32).to(torch.bfloat16),
+        layer.checkpoint.fc2_weight_key: tensor_values((hidden_size, 6), 200),
+        layer.checkpoint.fc2_bias_key: torch.arange(300, 304, dtype=torch.float32).to(torch.bfloat16),
+    }
+    model_path = tmp_path / "model"
+    write_checkpoint(model_path, (tensors,))
+
+    materialized = loader.materialize_local_layer_weights(
+        requests=tuple(
+            loader.LocalLayerWeightRequest(
+                model_path=model_path,
+                hidden_size=hidden_size,
+                payload_dtype=torch.float16,
+                router_weight_dtype=None,
+                layer=layer,
+                tp_rank=tp_rank,
+                tp_size=2,
+            )
+            for tp_rank in range(2)
+        )
+    )
+
+    for tp_rank, layer_weights in enumerate(materialized):
+        assert isinstance(layer_weights, weights.BiasedDenseFfnWeights)
+        columns = slice(tp_rank * 3, (tp_rank + 1) * 3)
+        torch.testing.assert_close(
+            layer_weights.fc1_weight.cpu(),
+            tensors[layer.checkpoint.fc1_weight_key][columns].to(torch.float16),
+        )
+        torch.testing.assert_close(
+            layer_weights.fc1_bias.cpu(),
+            tensors[layer.checkpoint.fc1_bias_key][columns].to(torch.float16),
+        )
+        torch.testing.assert_close(
+            layer_weights.fc2_weight.cpu(),
+            tensors[layer.checkpoint.fc2_weight_key][:, columns].to(torch.float16),
+        )
+        if tp_rank == 0:
+            assert layer_weights.fc2_bias is not None
+            torch.testing.assert_close(
+                layer_weights.fc2_bias.cpu(),
+                tensors[layer.checkpoint.fc2_bias_key].to(torch.float16),
+            )
+        else:
+            assert layer_weights.fc2_bias is None
 
 
 @xtest.requirements(device_count=1)

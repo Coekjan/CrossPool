@@ -5,8 +5,22 @@ from __future__ import annotations
 import pytest
 import torch
 
-from xpool.ffn import ActivationKind, RouterAlgorithm, RouterPrecision
-from xpool.runtime.ffnagent import execution
+from xpool.ffn import ActivationKind, DenseFfnLayout, RouterAlgorithm, RouterPrecision
+from xpool.runtime.ffnagent import execution, weights
+
+
+def compute_test_routed_topk(
+    *,
+    hidden_states: torch.Tensor,
+    router_weights: weights.MoeRouterWeights,
+    workspace: torch.Tensor,
+    routed_ids: torch.Tensor,
+    routed_weights: torch.Tensor,
+    renormalize: bool,
+) -> None:
+    """Stand in for one Adapter-owned Router callable in pure formula tests."""
+
+    del hidden_states, router_weights, workspace, routed_ids, routed_weights, renormalize
 
 
 def test_payload_row_capacities_cover_power_of_two_buckets_and_exact_maximum() -> None:
@@ -49,6 +63,49 @@ def test_dense_workspace_bytes_is_exact_and_rejects_empty_geometry() -> None:
         activation=ActivationKind.SILU,
     )
     assert execution.compute_workspace_bytes(fp16_signature) == 192
+
+
+def test_biased_dense_workspace_and_probe_formulas() -> None:
+    assert (
+        execution.dense_workspace_bytes(
+            payload_dtype=torch.bfloat16,
+            row_capacity=4,
+            local_intermediate_size=8,
+            layout=DenseFfnLayout.BIASED_RELU,
+        )
+        == 128
+    )
+    owner = execution.DenseFfnExecutionSignature(
+        payload_dtype=torch.bfloat16,
+        payload_row_capacity=4,
+        hidden_size=16,
+        local_intermediate_size=8,
+        activation=ActivationKind.RELU,
+        layout=DenseFfnLayout.BIASED_RELU,
+        fc2_bias_present=True,
+    )
+    non_owner = execution.DenseFfnExecutionSignature(
+        payload_dtype=torch.bfloat16,
+        payload_row_capacity=4,
+        hidden_size=16,
+        local_intermediate_size=8,
+        activation=ActivationKind.RELU,
+        layout=DenseFfnLayout.BIASED_RELU,
+    )
+    assert execution.compute_workspace_bytes(owner) == 128
+    assert execution.control_capture_probe_storage_bytes(owner) == (256, 16, 256, 32)
+    assert execution.control_capture_probe_storage_bytes(non_owner) == (256, 16, 256)
+    assert execution.graph_capture_capacity_storage_bytes(owner) == (128, 128, 128)
+    assert execution.capture_weight_pair_key(owner) != execution.capture_weight_pair_key(non_owner)
+    with pytest.raises(ValueError, match="requires ReLU"):
+        execution.DenseFfnExecutionSignature(
+            payload_dtype=torch.bfloat16,
+            payload_row_capacity=4,
+            hidden_size=16,
+            local_intermediate_size=8,
+            activation=ActivationKind.SILU,
+            layout=DenseFfnLayout.BIASED_RELU,
+        )
 
 
 def test_capture_source_shares_only_capacity_independent_weights() -> None:

@@ -51,13 +51,15 @@ def moe_alignment_workspace_shapes(
 
 @dataclass(frozen=True, slots=True)
 class DenseFfnExecutionSignature:
-    """Complete reusable gated-Dense Graph identity."""
+    """Complete reusable Dense Graph identity."""
 
     payload_dtype: torch.dtype
     payload_row_capacity: int
     hidden_size: int
     local_intermediate_size: int
     activation: ffn.ActivationKind
+    layout: ffn.DenseFfnLayout = ffn.DenseFfnLayout.GATED_SILU
+    fc2_bias_present: bool = False
 
     def __post_init__(self) -> None:
         """Reject unsupported or empty Dense execution geometry."""
@@ -66,8 +68,18 @@ class DenseFfnExecutionSignature:
             raise ValueError("Dense FFN execution requires BF16 or FP16 payloads")
         if min(self.payload_row_capacity, self.hidden_size, self.local_intermediate_size) <= 0:
             raise ValueError("Dense FFN execution dimensions must be positive")
-        if self.activation is not ffn.ActivationKind.SILU:
-            raise ValueError("Dense FFN execution supports only SiLU activation")
+        if not isinstance(self.fc2_bias_present, bool):
+            raise ValueError("Dense FFN fc2_bias_present must be a Boolean")
+        if self.layout is ffn.DenseFfnLayout.GATED_SILU:
+            if self.activation is not ffn.ActivationKind.SILU:
+                raise ValueError("Gated Dense FFN execution requires SiLU activation")
+            if self.fc2_bias_present:
+                raise ValueError("Gated Dense FFN execution cannot own an fc2 bias")
+        elif self.layout is ffn.DenseFfnLayout.BIASED_RELU:
+            if self.activation is not ffn.ActivationKind.RELU:
+                raise ValueError("Biased Dense FFN execution requires ReLU activation")
+        else:
+            raise ValueError(f"unsupported Dense FFN layout {self.layout!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +198,42 @@ def router_workspace_bytes(
     raise ValueError(f"unsupported Router precision {precision!r}")
 
 
+def dense_workspace_bytes(
+    *,
+    payload_dtype: torch.dtype,
+    row_capacity: int,
+    local_intermediate_size: int,
+    layout: ffn.DenseFfnLayout = ffn.DenseFfnLayout.GATED_SILU,
+) -> int:
+    """Return the exact intermediate workspace bytes for one Dense branch."""
+
+    if payload_dtype not in (torch.bfloat16, torch.float16):
+        raise ValueError("Dense workspace requires BF16 or FP16 payloads")
+    if row_capacity <= 0 or local_intermediate_size <= 0:
+        raise ValueError("Dense workspace dimensions must be positive")
+    intermediate_factor = 3 if layout is ffn.DenseFfnLayout.GATED_SILU else 2
+    return row_capacity * intermediate_factor * local_intermediate_size * payload_dtype.itemsize
+
+
+def moe_alignment_workspace_shapes(
+    *,
+    row_capacity: int,
+    effective_topk: int,
+    expert_count: int,
+    block_size_m: int,
+) -> tuple[int, int, int]:
+    """Return exact sorted-id, block-id, and cumsum element counts."""
+
+    if row_capacity <= 0 or effective_topk <= 0 or expert_count <= 0:
+        raise ValueError("MoE alignment dimensions must be positive")
+    if block_size_m not in QUALIFIED_MOE_BLOCK_SIZE_M_VALUES:
+        raise ValueError(f"MoE BLOCK_SIZE_M {block_size_m} is outside the qualified domain")
+    route_count = row_capacity * effective_topk
+    maximum_padded = route_count + (expert_count + 1) * (block_size_m - 1)
+    expert_block_count = (maximum_padded + block_size_m - 1) // block_size_m
+    return maximum_padded, expert_block_count, expert_count + 2
+
+
 def moe_workspace_layout(
     signature: MoeFfnExecutionSignature,
     *,
@@ -246,6 +294,7 @@ def compute_workspace_bytes(signature: ExecutionSignature) -> int:
             payload_dtype=signature.payload_dtype,
             row_capacity=signature.payload_row_capacity,
             local_intermediate_size=signature.local_intermediate_size,
+            layout=signature.layout,
         )
     return max(moe_workspace_layout(signature, block_size_m=value)[2] for value in QUALIFIED_MOE_BLOCK_SIZE_M_VALUES)
 
@@ -256,7 +305,16 @@ def control_capture_probe_storage_bytes(signature: ExecutionSignature) -> tuple[
     gate_up_bytes = 2 * signature.payload_dtype.itemsize * signature.hidden_size * signature.local_intermediate_size
     down_bytes = signature.payload_dtype.itemsize * signature.hidden_size * signature.local_intermediate_size
     if isinstance(signature, DenseFfnExecutionSignature):
-        return gate_up_bytes, down_bytes
+        if signature.layout is ffn.DenseFfnLayout.GATED_SILU:
+            return gate_up_bytes, down_bytes
+        result = (
+            signature.payload_dtype.itemsize * signature.hidden_size * signature.local_intermediate_size,
+            signature.payload_dtype.itemsize * signature.local_intermediate_size,
+            signature.payload_dtype.itemsize * signature.hidden_size * signature.local_intermediate_size,
+        )
+        if signature.fc2_bias_present:
+            result += (signature.payload_dtype.itemsize * signature.hidden_size,)
+        return result
     result = [signature.expert_count * gate_up_bytes, signature.expert_count * down_bytes]
     if signature.router is not None:
         result.append(
@@ -319,6 +377,8 @@ def required_execution_signatures(
                 hidden_size=model_spec.hidden_size,
                 local_intermediate_size=local_intermediate_size,
                 activation=model_spec.activation,
+                layout=layer.layout,
+                fc2_bias_present=(tp_rank == 0 and layer.layout is ffn.DenseFfnLayout.BIASED_RELU),
             )
             for capacity in capacities
         )

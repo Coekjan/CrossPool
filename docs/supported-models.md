@@ -50,13 +50,13 @@ wrappers. Model ID links point to the checkpoint configuration.
 | [meta-llama/Llama-3.1-70B](https://huggingface.co/meta-llama/Llama-3.1-70B/blob/main/config.json) | `LlamaForCausalLM` | ❌ Not supported |
 | [meta-llama/Llama-3.2-1B](https://huggingface.co/meta-llama/Llama-3.2-1B/blob/main/config.json) | `LlamaForCausalLM` | ✅ Supported |
 | [meta-llama/Llama-3.2-3B](https://huggingface.co/meta-llama/Llama-3.2-3B/blob/main/config.json) | `LlamaForCausalLM` | ❌ Not supported |
-| [facebook/opt-125m](https://huggingface.co/facebook/opt-125m/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
-| [facebook/opt-350m](https://huggingface.co/facebook/opt-350m/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
-| [facebook/opt-1.3b](https://huggingface.co/facebook/opt-1.3b/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
-| [facebook/opt-2.7b](https://huggingface.co/facebook/opt-2.7b/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
-| [facebook/opt-6.7b](https://huggingface.co/facebook/opt-6.7b/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
-| [facebook/opt-13b](https://huggingface.co/facebook/opt-13b/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
-| [facebook/opt-30b](https://huggingface.co/facebook/opt-30b/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
+| [facebook/opt-125m](https://huggingface.co/facebook/opt-125m/blob/main/config.json) | `OPTForCausalLM` | ✅ Supported |
+| [facebook/opt-350m](https://huggingface.co/facebook/opt-350m/blob/main/config.json) | `OPTForCausalLM` | ✅ Supported |
+| [facebook/opt-1.3b](https://huggingface.co/facebook/opt-1.3b/blob/main/config.json) | `OPTForCausalLM` | ✅ Supported |
+| [facebook/opt-2.7b](https://huggingface.co/facebook/opt-2.7b/blob/main/config.json) | `OPTForCausalLM` | ✅ Supported |
+| [facebook/opt-6.7b](https://huggingface.co/facebook/opt-6.7b/blob/main/config.json) | `OPTForCausalLM` | ✅ Supported |
+| [facebook/opt-13b](https://huggingface.co/facebook/opt-13b/blob/main/config.json) | `OPTForCausalLM` | ✅ Supported |
+| [facebook/opt-30b](https://huggingface.co/facebook/opt-30b/blob/main/config.json) | `OPTForCausalLM` | ✅ Supported |
 | [facebook/opt-66b](https://huggingface.co/facebook/opt-66b/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
 | [tiiuae/falcon-7b](https://huggingface.co/tiiuae/falcon-7b/blob/main/config.json) | `FalconForCausalLM` | ❌ Not supported |
 | [tiiuae/falcon-40b](https://huggingface.co/tiiuae/falcon-40b/blob/main/config.json) | `FalconForCausalLM` | ❌ Not supported |

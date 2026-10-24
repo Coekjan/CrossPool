@@ -297,45 +297,118 @@ def prepare_layer_weight_request(
     torch_device = torch.device("cuda", device)
 
     if isinstance(layer, ffn.DenseFfnSpec):
-        materialized = weights.DenseFfnWeights.allocate(
-            hidden_size=request.hidden_size,
-            local_intermediate_size=local_intermediate_size,
-            payload_dtype=request.payload_dtype,
+        if layer.layout is ffn.DenseFfnLayout.GATED_SILU:
+            materialized = weights.DenseFfnWeights.allocate(
+                hidden_size=request.hidden_size,
+                local_intermediate_size=local_intermediate_size,
+                payload_dtype=request.payload_dtype,
+                device=torch_device,
+            )
+            gate_up_weight = materialized.gate_up_weight
+            down_weight = materialized.down_weight
+            checkpoints = layer.checkpoint
+            descriptors = (
+                TensorReadDescriptor.from_key_view(
+                    key_view,
+                    weight_key=checkpoints.gate_weight_key,
+                    source_shape=(intermediate_size, request.hidden_size),
+                    narrow_dimension=0,
+                    narrow_start=local_start,
+                    narrow_length=local_intermediate_size,
+                    destination=gate_up_weight[:local_intermediate_size],
+                ),
+                TensorReadDescriptor.from_key_view(
+                    key_view,
+                    weight_key=checkpoints.up_weight_key,
+                    source_shape=(intermediate_size, request.hidden_size),
+                    narrow_dimension=0,
+                    narrow_start=local_start,
+                    narrow_length=local_intermediate_size,
+                    destination=gate_up_weight[local_intermediate_size:],
+                ),
+                TensorReadDescriptor.from_key_view(
+                    key_view,
+                    weight_key=checkpoints.down_weight_key,
+                    source_shape=(request.hidden_size, intermediate_size),
+                    narrow_dimension=1,
+                    narrow_start=local_start,
+                    narrow_length=local_intermediate_size,
+                    destination=down_weight,
+                ),
+            )
+            return materialized, descriptors
+
+        checkpoints = layer.checkpoint
+        if not isinstance(checkpoints, ffn.BiasedFfnCheckpointKeys):
+            raise ValueError("Biased Dense layer requires biased checkpoint keys")
+        fc1_weight = torch.empty(
+            (local_intermediate_size, request.hidden_size),
+            dtype=request.payload_dtype,
             device=torch_device,
         )
-        gate_up_weight = materialized.gate_up_weight
-        down_weight = materialized.down_weight
-        checkpoints = layer.checkpoint
-        descriptors = (
+        fc1_bias = torch.empty(
+            (local_intermediate_size,),
+            dtype=request.payload_dtype,
+            device=torch_device,
+        )
+        fc2_weight = torch.empty(
+            (request.hidden_size, local_intermediate_size),
+            dtype=request.payload_dtype,
+            device=torch_device,
+        )
+        fc2_bias = (
+            torch.empty((request.hidden_size,), dtype=request.payload_dtype, device=torch_device)
+            if request.tp_rank == 0
+            else None
+        )
+        materialized = weights.BiasedDenseFfnWeights(
+            fc1_weight=fc1_weight,
+            fc1_bias=fc1_bias,
+            fc2_weight=fc2_weight,
+            fc2_bias=fc2_bias,
+        )
+        descriptors = [
             TensorReadDescriptor.from_key_view(
                 key_view,
-                weight_key=checkpoints.gate_weight_key,
+                weight_key=checkpoints.fc1_weight_key,
                 source_shape=(intermediate_size, request.hidden_size),
                 narrow_dimension=0,
                 narrow_start=local_start,
                 narrow_length=local_intermediate_size,
-                destination=gate_up_weight[:local_intermediate_size],
+                destination=fc1_weight,
             ),
             TensorReadDescriptor.from_key_view(
                 key_view,
-                weight_key=checkpoints.up_weight_key,
-                source_shape=(intermediate_size, request.hidden_size),
+                weight_key=checkpoints.fc1_bias_key,
+                source_shape=(intermediate_size,),
                 narrow_dimension=0,
                 narrow_start=local_start,
                 narrow_length=local_intermediate_size,
-                destination=gate_up_weight[local_intermediate_size:],
+                destination=fc1_bias,
             ),
             TensorReadDescriptor.from_key_view(
                 key_view,
-                weight_key=checkpoints.down_weight_key,
+                weight_key=checkpoints.fc2_weight_key,
                 source_shape=(request.hidden_size, intermediate_size),
                 narrow_dimension=1,
                 narrow_start=local_start,
                 narrow_length=local_intermediate_size,
-                destination=down_weight,
+                destination=fc2_weight,
             ),
-        )
-        return materialized, descriptors
+        ]
+        if fc2_bias is not None:
+            descriptors.append(
+                TensorReadDescriptor.from_key_view(
+                    key_view,
+                    weight_key=checkpoints.fc2_bias_key,
+                    source_shape=(request.hidden_size,),
+                    narrow_dimension=None,
+                    narrow_start=0,
+                    narrow_length=0,
+                    destination=fc2_bias,
+                )
+            )
+        return materialized, tuple(descriptors)
 
     routed_expert_count = layer.routed_expert_count
     materialized = weights.MoeFfnWeights.allocate(

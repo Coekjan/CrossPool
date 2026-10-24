@@ -17,14 +17,14 @@ from xpool.fabric import (
     InstanceFfnProfile,
     InstanceRankTopology,
 )
-from xpool.ffn import FfnModelSpec
+from xpool.ffn import DenseFfnLayout, FfnModelSpec
 from xpool.memory import MIB, SIGNED_INT64_MAX, FfnMemoryCalibrationCoefficients
 from xpool.runtime.ffnagent import device_memory, execution
 from xpool.runtime.ffnagent.memory_profile import corpus
 from xpool.service.daemon.ffn_placement import place_ffn_models
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config, synthetic_config
 from xtest.harness.support.native.sizing import install_native_allocation_sizing
-from xtest.harness.support.service.daemon import ffn_model_spec, ffn_profile
+from xtest.harness.support.service.daemon import biased_ffn_model_spec, ffn_model_spec, ffn_profile
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -100,6 +100,71 @@ def test_fp32_router_keeps_fp32_weights_and_input_workspace() -> None:
         assert signature.router is not None
         assert signature.router.router_weight_dtype is torch.float32
         assert signature.router.router_workspace_bytes == 4 * signature.payload_row_capacity * (spec.hidden_size + 64)
+
+
+def biased_estimator_and_plan() -> tuple[device_memory.DeviceMemoryEstimator, FabricPlan]:
+    """Build one small two-rank biased Dense world."""
+
+    config = XpoolConfig.from_mapping(
+        {
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1, 2]},
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
+        }
+    )
+    install_test_config(config)
+    spec = FfnModelSpec.model_validate(biased_ffn_model_spec(model_id=str(TEST_MODEL_ID)))
+    profile = InstanceFfnProfile.model_validate(ffn_profile())
+    instance_plan = FabricInstancePlan(
+        model_id=TEST_MODEL_ID,
+        ffn_profile=profile,
+        instance_rank_topology=InstanceRankTopology(atn_tp_size=1, atn_dp_size=1, atnagent_indices=(0,)),
+    )
+    model_plans = place_ffn_models(
+        model_specs=(spec,),
+        instance_plans=(instance_plan,),
+        ffnagent_free_memory_bytes=(1 << 30, 1 << 30),
+    )
+    plan = FabricPlan(
+        generation=FabricGenerationId(high=1, low=1),
+        uid=FabricUid("a" * 256),
+        pe_placements=(
+            FabricPePlacement(role=FabricRole.ATNAGENT, device=0),
+            FabricPePlacement(role=FabricRole.FFNAGENT, device=1),
+            FabricPePlacement(role=FabricRole.FFNAGENT, device=2),
+        ),
+        executor_lane_count=1,
+        scheduler=FifoSchedulerPolicy(),
+        model_plans=model_plans,
+        instance_plans=(instance_plan,),
+    )
+    return device_memory.DeviceMemoryEstimator(model_specs=(spec,), instance_profiles=(profile,)), plan
+
+
+def test_biased_dense_memory_accounts_owner_bias_asymmetry() -> None:
+    estimator, _ = biased_estimator_and_plan()
+
+    assert estimator.packed_weight_storage_bytes(0, 0, 0) == (32, 8, 32, 8)
+    assert estimator.packed_weight_storage_bytes(0, 0, 1) == (32, 8, 32)
+    owner = execution.required_execution_signatures(
+        model_spec=estimator.model_specs[0],
+        profile=estimator.instance_profiles[0],
+        layer_ordinal=0,
+        tp_size=2,
+        tp_rank=0,
+    )[0]
+    non_owner = execution.required_execution_signatures(
+        model_spec=estimator.model_specs[0],
+        profile=estimator.instance_profiles[0],
+        layer_ordinal=0,
+        tp_size=2,
+        tp_rank=1,
+    )[0]
+    assert owner.layout is DenseFfnLayout.BIASED_RELU
+    assert owner.fc2_bias_present is True
+    assert non_owner.fc2_bias_present is False
+    assert execution.compute_workspace_bytes(owner) == 16
 
 
 def test_exact_dense_allocation_ledger_and_feature_rows() -> None:

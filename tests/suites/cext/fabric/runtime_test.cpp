@@ -120,6 +120,57 @@ moe_execution_projection(bool router_owner, std::optional<std::uintptr_t> captur
   };
 }
 
+xpool::ffnagent::DenseExecutionSignatureProjection dense_signature(bool fc1_bias, bool fc2_bias) {
+  return {
+      .payload_dtype = c10::ScalarType::BFloat16,
+      .payload_row_capacity = 1,
+      .hidden_size = 2,
+      .local_intermediate_size = 2,
+      .primary_graph_address = 1,
+      .control_graph_address = 2,
+      .capture_input_address = 3,
+      .capture_partial_address = 4,
+      .capture_workspace_address = 5,
+      .compute_workspace_bytes = 1,
+      .primary_capture_resources =
+          {
+              .gate_up_weight_address = 8,
+              .down_weight_address = 9,
+              .fc1_bias_address = fc1_bias ? std::optional<std::uintptr_t>{10} : std::nullopt,
+              .fc2_bias_address = fc2_bias ? std::optional<std::uintptr_t>{11} : std::nullopt,
+          },
+      .control_capture_resources =
+          {
+              .gate_up_weight_address = 12,
+              .down_weight_address = 13,
+              .fc1_bias_address = fc1_bias ? std::optional<std::uintptr_t>{14} : std::nullopt,
+              .fc2_bias_address = fc2_bias ? std::optional<std::uintptr_t>{15} : std::nullopt,
+          },
+  };
+}
+
+xpool::ffnagent::ExecutionProjection
+dense_execution_projection(bool signature_fc1, bool signature_fc2, bool target_fc1, bool target_fc2) {
+  return {
+      .signatures = {dense_signature(signature_fc1, signature_fc2)},
+      .layers =
+          {
+              xpool::ffnagent::LayerExecutionProjection{
+                  .instance_index = 0,
+                  .layer_ordinal = 0,
+                  .execution_signature_indices = {0},
+                  .layer_resource_targets =
+                      xpool::ffnagent::DenseBindingResourceProjection{
+                          .gate_up_weight_address = 16,
+                          .down_weight_address = 17,
+                          .fc1_bias_address = target_fc1 ? std::optional<std::uintptr_t>{18} : std::nullopt,
+                          .fc2_bias_address = target_fc2 ? std::optional<std::uintptr_t>{19} : std::nullopt,
+                      },
+              },
+          },
+  };
+}
+
 } // namespace
 
 TEST(FabricArenaProjectionTest, DerivesTopologyAndComparesExactInputs) {
@@ -175,6 +226,8 @@ TEST(FfnExecutionProjectionTest, RejectsLayerResourceSchemaMismatch) {
   kind_mismatch.layers.front().layer_resource_targets = xpool::ffnagent::DenseBindingResourceProjection{
       .gate_up_weight_address = 17,
       .down_weight_address = 18,
+      .fc1_bias_address = std::nullopt,
+      .fc2_bias_address = std::nullopt,
   };
   EXPECT_THROW(kind_mismatch.validate(), c10::Error);
 
@@ -182,6 +235,20 @@ TEST(FfnExecutionProjectionTest, RejectsLayerResourceSchemaMismatch) {
   std::get<xpool::ffnagent::MoeBindingResourceProjection>(bias_mismatch.layers.front().layer_resource_targets)
       .router->correction_bias_address = 17;
   EXPECT_THROW(bias_mismatch.validate(), c10::Error);
+}
+
+TEST(FfnExecutionProjectionTest, ValidatesBiasedDenseResourceSchemas) {
+  EXPECT_NO_THROW(dense_execution_projection(false, false, false, false).validate());
+  EXPECT_NO_THROW(dense_execution_projection(true, true, true, true).validate());
+  EXPECT_NO_THROW(dense_execution_projection(true, false, true, false).validate());
+  EXPECT_THROW(dense_execution_projection(false, false, true, true).validate(), c10::Error);
+  EXPECT_THROW(dense_execution_projection(true, true, false, false).validate(), c10::Error);
+  EXPECT_THROW(dense_execution_projection(false, true, false, true).validate(), c10::Error);
+
+  auto mismatch = dense_execution_projection(true, true, true, true);
+  std::get<xpool::ffnagent::DenseExecutionSignatureProjection>(mismatch.signatures.front())
+      .control_capture_resources.fc1_bias_address = std::nullopt;
+  EXPECT_THROW(mismatch.validate(), c10::Error);
 }
 
 TEST(FfnExecutionProjectionTest, RejectsCrossCapacityWeightGeometryMismatch) {

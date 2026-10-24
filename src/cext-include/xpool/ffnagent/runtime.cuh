@@ -33,6 +33,10 @@ struct LayerBindingValues {
   std::uintptr_t router_weight_address;
   /// Device address of router correction bias, or zero when absent.
   std::uintptr_t router_correction_bias_address;
+  /// Device address of the biased first projection bias, or zero when absent.
+  std::uintptr_t fc1_bias_address;
+  /// Device address of the biased second projection bias, or zero when absent.
+  std::uintptr_t fc2_bias_address;
 };
 
 /// One lane/signature slice in the lane-owned Binding Site table.
