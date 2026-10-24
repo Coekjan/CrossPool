@@ -109,6 +109,48 @@ class DenseFfnWeights:
 
 
 @dataclass(frozen=True, slots=True)
+class BiasedDenseFfnWeights:
+    """One canonical local biased-unary-Dense shard.
+
+    Attributes:
+        fc1_weight: First projection payload tensor shaped ``[I_r, H]``.
+        fc1_bias: First projection bias shaped ``[I_r]``.
+        fc2_weight: Second projection payload tensor shaped ``[H, I_r]``.
+        fc2_bias: Second projection bias shaped ``[H]`` on TP rank zero,
+            otherwise ``None``.
+    """
+
+    fc1_weight: torch.Tensor
+    fc1_bias: torch.Tensor
+    fc2_weight: torch.Tensor
+    fc2_bias: torch.Tensor | None
+
+    def __post_init__(self) -> None:
+        """Validate canonical biased-Dense ranks, dimensions, storage, and device."""
+
+        payload_dtype = self.fc1_weight.dtype
+        if payload_dtype not in (torch.bfloat16, torch.float16):
+            raise ValueError("Biased Dense weights require BF16 or FP16 payloads")
+        validate_weight_tensor(self.fc1_weight, name="fc1_weight", dtype=payload_dtype, dimensions=2)
+        validate_weight_tensor(self.fc1_bias, name="fc1_bias", dtype=payload_dtype, dimensions=1)
+        validate_weight_tensor(self.fc2_weight, name="fc2_weight", dtype=payload_dtype, dimensions=2)
+        local_intermediate_size, hidden_size = self.fc1_weight.shape
+        if self.fc1_bias.shape != (local_intermediate_size,):
+            raise ValueError("fc1_bias dimensions disagree with fc1_weight")
+        if self.fc2_weight.shape != (hidden_size, local_intermediate_size):
+            raise ValueError("fc2_weight dimensions disagree with fc1_weight")
+        if self.fc2_bias is not None:
+            validate_weight_tensor(self.fc2_bias, name="fc2_bias", dtype=payload_dtype, dimensions=1)
+            if self.fc2_bias.shape != (hidden_size,):
+                raise ValueError("fc2_bias dimensions disagree with fc2_weight")
+        devices = {self.fc1_weight.device, self.fc1_bias.device, self.fc2_weight.device}
+        if self.fc2_bias is not None:
+            devices.add(self.fc2_bias.device)
+        if len(devices) != 1:
+            raise ValueError("Biased Dense weights must share one device")
+
+
+@dataclass(frozen=True, slots=True)
 class MoeRouterWeights:
     """Router-owner-only canonical MoE weights.
 
@@ -268,4 +310,4 @@ class MoeFfnWeights:
                 raise ValueError("MoE Router dimensions disagree with Expert weights")
 
 
-type FfnLayerWeights = DenseFfnWeights | MoeFfnWeights
+type FfnLayerWeights = DenseFfnWeights | BiasedDenseFfnWeights | MoeFfnWeights

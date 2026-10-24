@@ -166,10 +166,19 @@ class DeviceMemoryEstimator:
             if layer.intermediate_size % tp_size:
                 raise ValueError("Dense intermediate size is not divisible by FFN TP")
             local_width = layer.intermediate_size // tp_size
-            return (
-                2 * payload_bytes * spec.hidden_size * local_width,
+            if layer.layout is ffn.DenseFfnLayout.GATED_SILU:
+                return (
+                    2 * payload_bytes * spec.hidden_size * local_width,
+                    payload_bytes * spec.hidden_size * local_width,
+                )
+            result = [
                 payload_bytes * spec.hidden_size * local_width,
-            )
+                payload_bytes * local_width,
+                payload_bytes * spec.hidden_size * local_width,
+            ]
+            if tp_rank == 0:
+                result.append(payload_bytes * spec.hidden_size)
+            return tuple(result)
         if layer.expert_intermediate_size % tp_size:
             raise ValueError("MoE Expert intermediate size is not divisible by FFN TP")
         local_width = layer.expert_intermediate_size // tp_size

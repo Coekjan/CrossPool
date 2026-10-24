@@ -107,13 +107,24 @@ void bind_fabric(py::module_ &module) {
 
   py::class_<xpool::ffnagent::DenseBindingResourceProjection>(ffnagent, "DenseBindingResourceProjection",
                                                               "Non-owning Dense weight addresses.")
-      .def(py::init([](const at::Tensor &gate_up_weight, const at::Tensor &down_weight) {
+      .def(py::init([](const at::Tensor &gate_up_weight, const at::Tensor &down_weight,
+                       const std::optional<at::Tensor> &fc1_bias,
+                       const std::optional<at::Tensor> &fc2_bias) {
              return xpool::ffnagent::DenseBindingResourceProjection{
                  .gate_up_weight_address = require_cuda_address(gate_up_weight, "Dense gate/up weight"),
                  .down_weight_address = require_cuda_address(down_weight, "Dense down weight"),
+                 .fc1_bias_address =
+                     fc1_bias.has_value()
+                         ? std::optional{require_cuda_address(*fc1_bias, "Dense fc1 bias")}
+                         : std::nullopt,
+                 .fc2_bias_address =
+                     fc2_bias.has_value()
+                         ? std::optional{require_cuda_address(*fc2_bias, "Dense fc2 bias")}
+                         : std::nullopt,
              };
            }),
-           py::arg("gate_up_weight"), py::arg("down_weight"));
+           py::arg("gate_up_weight"), py::arg("down_weight"), py::arg("fc1_bias") = py::none(),
+           py::arg("fc2_bias") = py::none());
 
   py::class_<xpool::ffnagent::MoeRouterBindingResourceProjection>(ffnagent, "MoeRouterBindingResourceProjection",
                                                                   "Non-owning Router weight addresses.")

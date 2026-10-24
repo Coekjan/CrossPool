@@ -15,10 +15,14 @@ namespace xpool::ffnagent {
 
 /// Canonical local Dense weight addresses used during capture or service.
 struct DenseBindingResourceProjection {
-  /// Device address of the fused gate/up projection weights.
+  /// Device address of the fused gate/up or biased first projection weights.
   std::uintptr_t gate_up_weight_address;
-  /// Device address of the down projection weights.
+  /// Device address of the down or biased second projection weights.
   std::uintptr_t down_weight_address;
+  /// Device address of the biased first projection bias, or empty for gated Dense.
+  std::optional<std::uintptr_t> fc1_bias_address;
+  /// Device address of the biased second projection bias, or empty when absent.
+  std::optional<std::uintptr_t> fc2_bias_address;
 
   constexpr bool operator==(const DenseBindingResourceProjection &other) const = default;
 };

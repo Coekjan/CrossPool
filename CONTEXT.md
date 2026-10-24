@@ -237,6 +237,12 @@ behavior and checkpoint identity, distinct from the source model architecture
 used to interpret its configuration.
 _Avoid_: Source architecture, Execution Signature, Fabric Plan
 
+**Biased Unary FFN**:
+A Dense FFN with one projection followed by ReLU and a second projection, with
+both projections carrying model-owned biases and no gate. It is a distinct
+Dense layout from the gated FFN.
+_Avoid_: Unary MLP, non-gated FFN, two-layer MLP
+
 **Execution Activation**:
 The startup transition that makes an installed FFN execution available to the
 generation.

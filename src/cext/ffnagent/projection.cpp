@@ -35,6 +35,17 @@ void validate_signature(const DenseExecutionSignatureProjection &signature) {
                   primary.down_weight_address != control.down_weight_address,
               "xpool FFN Execution Projection Primary and Control Dense Capture resources must use distinct "
               "corresponding addresses");
+  TORCH_CHECK(primary.fc1_bias_address.has_value() == control.fc1_bias_address.has_value() &&
+                  primary.fc2_bias_address.has_value() == control.fc2_bias_address.has_value(),
+              "xpool FFN Execution Projection Primary and Control Dense bias schemas disagree");
+  TORCH_CHECK(!primary.fc2_bias_address.has_value() || primary.fc1_bias_address.has_value(),
+              "xpool FFN Execution Projection Dense fc2 bias requires an fc1 bias");
+  TORCH_CHECK(!primary.fc1_bias_address.has_value() ||
+                  primary.fc1_bias_address != control.fc1_bias_address,
+              "xpool FFN Execution Projection Primary and Control Dense fc1 bias addresses must be distinct");
+  TORCH_CHECK(!primary.fc2_bias_address.has_value() ||
+                  primary.fc2_bias_address != control.fc2_bias_address,
+              "xpool FFN Execution Projection Primary and Control Dense fc2 bias addresses must be distinct");
 }
 
 void validate_signature(const MoeExecutionSignatureProjection &signature) {
@@ -72,7 +83,13 @@ void validate_signature(const MoeExecutionSignatureProjection &signature) {
 
 bool binding_schema_matches(const ExecutionSignatureProjection &signature, const BindingResourceProjection &target) {
   if (std::holds_alternative<DenseExecutionSignatureProjection>(signature)) {
-    return std::holds_alternative<DenseBindingResourceProjection>(target);
+    const auto *resources = std::get_if<DenseBindingResourceProjection>(&target);
+    if (resources == nullptr) {
+      return false;
+    }
+    const auto &captured = std::get<DenseExecutionSignatureProjection>(signature).primary_capture_resources;
+    return captured.fc1_bias_address.has_value() == resources->fc1_bias_address.has_value() &&
+           captured.fc2_bias_address.has_value() == resources->fc2_bias_address.has_value();
   }
   const auto *resources = std::get_if<MoeBindingResourceProjection>(&target);
   if (resources == nullptr) {
@@ -87,8 +104,16 @@ bool binding_schema_matches(const ExecutionSignatureProjection &signature, const
 bool weight_geometry_matches(const ExecutionSignatureProjection &left, const ExecutionSignatureProjection &right) {
   if (const auto *left_dense = std::get_if<DenseExecutionSignatureProjection>(&left)) {
     const auto *right_dense = std::get_if<DenseExecutionSignatureProjection>(&right);
-    return right_dense != nullptr && left_dense->hidden_size == right_dense->hidden_size &&
-           left_dense->local_intermediate_size == right_dense->local_intermediate_size;
+    if (right_dense == nullptr) {
+      return false;
+    }
+    const auto left_fc1_bias = left_dense->primary_capture_resources.fc1_bias_address.has_value();
+    const auto right_fc1_bias = right_dense->primary_capture_resources.fc1_bias_address.has_value();
+    const auto left_fc2_bias = left_dense->primary_capture_resources.fc2_bias_address.has_value();
+    const auto right_fc2_bias = right_dense->primary_capture_resources.fc2_bias_address.has_value();
+    return left_dense->hidden_size == right_dense->hidden_size &&
+           left_dense->local_intermediate_size == right_dense->local_intermediate_size &&
+           left_fc1_bias == right_fc1_bias && left_fc2_bias == right_fc2_bias;
   }
   const auto *left_moe = std::get_if<MoeExecutionSignatureProjection>(&left);
   const auto *right_moe = std::get_if<MoeExecutionSignatureProjection>(&right);

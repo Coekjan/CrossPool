@@ -10,9 +10,45 @@ from collections.abc import Generator
 import torch
 from triton import language
 
-from xpool.ffn import ActivationKind
+from xpool.ffn import ActivationKind, DenseFfnLayout
 from xpool.runtime.ffnagent import execution, weights
 
+BIASED_DENSE_BLOCK_SIZE = 1024
+
+
+@triton.jit
+def biased_dense_activation_kernel(
+    input_pointer,
+    bias_pointer,
+    output_pointer,
+    element_count,
+    N_COLS: language.constexpr,
+    BLOCK_SIZE: language.constexpr,
+):
+    """Apply a per-column bias and ReLU in place over a flat payload."""
+
+    offsets = language.program_id(0) * BLOCK_SIZE + language.arange(0, BLOCK_SIZE)
+    mask = offsets < element_count
+    values = language.load(input_pointer + offsets, mask=mask)
+    biases = language.load(bias_pointer + offsets % N_COLS, mask=mask)
+    language.store(output_pointer + offsets, language.maximum(values + biases, 0.0), mask=mask)
+
+
+@triton.jit
+def dense_output_bias_kernel(
+    output_pointer,
+    bias_pointer,
+    element_count,
+    N_COLS: language.constexpr,
+    BLOCK_SIZE: language.constexpr,
+):
+    """Add a per-column output bias in place over a flat payload."""
+
+    offsets = language.program_id(0) * BLOCK_SIZE + language.arange(0, BLOCK_SIZE)
+    mask = offsets < element_count
+    values = language.load(output_pointer + offsets, mask=mask)
+    biases = language.load(bias_pointer + offsets % N_COLS, mask=mask)
+    language.store(output_pointer + offsets, values + biases, mask=mask)
 
 @contextlib.contextmanager
 def sglang_moe_config_selection() -> Generator[None, None, None]:
@@ -407,4 +443,116 @@ def compute_dense_partial(
     if returned_output is not activated_up:
         raise RuntimeError("sgl_kernel.silu_and_mul did not preserve caller-owned output")
     torch.mm(activated_up, layer_weights.down_weight.t(), out=output)
+    return output
+
+
+def compute_biased_dense_partial(
+    *,
+    hidden_states: torch.Tensor,
+    layer_weights: weights.BiasedDenseFfnWeights,
+    workspace: torch.Tensor,
+    output: torch.Tensor,
+    activation: ActivationKind,
+) -> torch.Tensor:
+    """Compute one fixed-Capacity rank-local biased-unary Dense Partial.
+
+    Args:
+        hidden_states: Caller-owned contiguous payload input shaped ``[C, H]``.
+        layer_weights: Canonical local true-TP projection weights and biases.
+        workspace: Caller-owned contiguous CUDA byte tensor with the exact
+            result of :func:`execution.dense_workspace_bytes` for ``BIASED_RELU``.
+        output: Caller-owned contiguous payload destination shaped ``[C, H]``.
+        activation: Startup-selected activation semantic.
+
+    Returns:
+        The exact ``output`` object after all Capacity rows are evaluated.
+
+    Raises:
+        ValueError: If activation, shapes, dtype, device, contiguity, or
+            alignment do not match the fixed biased Dense implementation.
+
+    Side Effects:
+        Writes ``workspace`` and ``output`` on the current CUDA stream. It
+        allocates no Torch output or persistent auxiliary tensor.
+    """
+
+    if activation is not ActivationKind.RELU:
+        raise ValueError(f"unsupported biased Dense activation {activation!r}")
+    payload_dtype = hidden_states.dtype
+    if payload_dtype not in (torch.bfloat16, torch.float16):
+        raise ValueError("Dense execution requires BF16 or FP16 payloads")
+    weights.validate_tensor(hidden_states, name="hidden_states", dtype=payload_dtype, dimensions=2)
+    weights.validate_tensor(output, name="Dense Partial output", dtype=payload_dtype, dimensions=2)
+    weights.validate_tensor(workspace, name="Dense workspace", dtype=torch.uint8, dimensions=1)
+
+    row_capacity, hidden_size = hidden_states.shape
+    local_intermediate_size, weight_hidden_size = layer_weights.fc1_weight.shape
+    if (
+        weight_hidden_size != hidden_size
+        or layer_weights.fc1_weight.dtype is not payload_dtype
+        or layer_weights.fc1_bias.shape != (local_intermediate_size,)
+        or layer_weights.fc2_weight.shape != (hidden_size, local_intermediate_size)
+        or output.shape != hidden_states.shape
+    ):
+        raise ValueError("Biased Dense input, output, and weight dimensions disagree")
+    if layer_weights.fc2_bias is not None and layer_weights.fc2_bias.shape != (hidden_size,):
+        raise ValueError("Biased Dense fc2_bias dimensions disagree")
+    expected_workspace_bytes = execution.dense_workspace_bytes(
+        payload_dtype=payload_dtype,
+        row_capacity=row_capacity,
+        local_intermediate_size=local_intermediate_size,
+        layout=DenseFfnLayout.BIASED_RELU,
+    )
+    if workspace.numel() != expected_workspace_bytes:
+        raise ValueError(f"Dense workspace must contain exactly {expected_workspace_bytes} bytes")
+    device = hidden_states.device
+    tensors = (
+        output,
+        workspace,
+        layer_weights.fc1_weight,
+        layer_weights.fc1_bias,
+        layer_weights.fc2_weight,
+    )
+    if layer_weights.fc2_bias is not None:
+        tensors += (layer_weights.fc2_bias,)
+    if any(tensor.device != device for tensor in tensors):
+        raise ValueError("Dense input, output, workspace, and weights must share one device")
+    for name, tensor in (
+        ("hidden_states", hidden_states),
+        ("Dense Partial output", output),
+        ("Dense workspace", workspace),
+        ("fc1 weight", layer_weights.fc1_weight),
+        ("fc1 bias", layer_weights.fc1_bias),
+        ("fc2 weight", layer_weights.fc2_weight),
+        *((("fc2 bias", layer_weights.fc2_bias),) if layer_weights.fc2_bias is not None else ()),
+    ):
+        if tensor.data_ptr() % execution.OPERATOR_ALIGNMENT_BYTES != 0:
+            raise ValueError(f"{name} must be 16-byte aligned")
+    if local_intermediate_size * payload_dtype.itemsize % execution.OPERATOR_ALIGNMENT_BYTES != 0:
+        raise ValueError("Dense intermediate rows must be 16-byte aligned")
+
+    workspace_values = workspace.view(payload_dtype)
+    local_elements = row_capacity * local_intermediate_size
+    fc1_output = workspace_values[:local_elements].view(row_capacity, local_intermediate_size)
+    activated = workspace_values[local_elements:].view(row_capacity, local_intermediate_size)
+
+    torch.mm(hidden_states, layer_weights.fc1_weight.t(), out=fc1_output)
+    biased_dense_activation_kernel[(triton.cdiv(local_elements, BIASED_DENSE_BLOCK_SIZE),)](
+        fc1_output,
+        layer_weights.fc1_bias,
+        activated,
+        local_elements,
+        N_COLS=typing.cast(language.constexpr, local_intermediate_size),
+        BLOCK_SIZE=typing.cast(language.constexpr, BIASED_DENSE_BLOCK_SIZE),
+    )
+    torch.mm(activated, layer_weights.fc2_weight.t(), out=output)
+    if layer_weights.fc2_bias is not None:
+        output_elements = row_capacity * hidden_size
+        dense_output_bias_kernel[(triton.cdiv(output_elements, BIASED_DENSE_BLOCK_SIZE),)](
+            output,
+            layer_weights.fc2_bias,
+            output_elements,
+            N_COLS=typing.cast(language.constexpr, hidden_size),
+            BLOCK_SIZE=typing.cast(language.constexpr, BIASED_DENSE_BLOCK_SIZE),
+        )
     return output

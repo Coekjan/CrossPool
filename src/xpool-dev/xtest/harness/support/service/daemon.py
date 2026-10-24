@@ -223,6 +223,32 @@ def ffn_model_spec(*, model_id: str = str(TEST_MODEL_ID), hidden_size: int = 4) 
     }
 
 
+def biased_ffn_model_spec(*, model_id: str = str(TEST_MODEL_ID), hidden_size: int = 4) -> dict[str, object]:
+    """Return one valid generation-independent biased Dense FFN Model Spec."""
+
+    return {
+        "model_id": model_id,
+        "architecture_name": "OPTForCausalLM",
+        "hidden_size": hidden_size,
+        "activation": 2,
+        "checkpoint_namespace": "model.decoder.layers.{layer_id}",
+        "layers": [
+            {
+                "kind": 1,
+                "layout": 2,
+                "layer_id": 0,
+                "intermediate_size": 8,
+                "checkpoint": {
+                    "fc1_weight_key": "model.decoder.layers.0.fc1.weight",
+                    "fc1_bias_key": "model.decoder.layers.0.fc1.bias",
+                    "fc2_weight_key": "model.decoder.layers.0.fc2.weight",
+                    "fc2_bias_key": "model.decoder.layers.0.fc2.bias",
+                },
+            }
+        ],
+    }
+
+
 def ffn_profile(*, hidden_size: int = 4) -> dict[str, object]:
     """Return one valid rank-independent FFN Profile payload."""
 

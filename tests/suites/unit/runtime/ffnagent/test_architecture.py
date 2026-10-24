@@ -6,7 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from xpool.ffn import DenseFfnSpec, FfnModelSpec, MoeFfnSpec, RouterAlgorithm, RouterPrecision
+from xpool.ffn import (
+    ActivationKind,
+    BiasedFfnCheckpointKeys,
+    DenseFfnLayout,
+    DenseFfnSpec,
+    FfnModelSpec,
+    MoeFfnSpec,
+    RouterAlgorithm,
+    RouterPrecision,
+)
 from xpool.runtime.ffnagent import architecture
 from xpool.runtime.ffnagent.models.deepseek_v2 import DeepseekV2Adapter
 from xpool.runtime.ffnagent.models.glm4_moe_lite import Glm4MoeLiteAdapter
@@ -17,6 +26,16 @@ from xtest.harness.support.config import TEST_MODEL_ID
 def dense_keys(layer_id: int) -> tuple[str, ...]:
     prefix = f"model.layers.{layer_id}.mlp"
     return tuple(f"{prefix}.{projection}_proj.weight" for projection in ("gate", "up", "down"))
+
+
+def opt_keys(layer_id: int) -> tuple[str, ...]:
+    prefix = f"model.decoder.layers.{layer_id}"
+    return (
+        f"{prefix}.fc1.weight",
+        f"{prefix}.fc1.bias",
+        f"{prefix}.fc2.weight",
+        f"{prefix}.fc2.bias",
+    )
 
 
 def write_indexed_model(path: Path, config: Mapping[str, object], keys: tuple[str, ...]) -> None:
@@ -98,6 +117,53 @@ def test_load_compiles_llama_dense_layers(
             layer.checkpoint.up_weight_key,
             layer.checkpoint.down_weight_key,
         ) == dense_keys(layer_id)
+
+
+def test_load_compiles_opt_biased_dense_layers(tmp_path: Path) -> None:
+    config = {
+        "architectures": ["OPTForCausalLM"],
+        "model_type": "opt",
+        "activation_function": "relu",
+        "torch_dtype": "float16",
+        "hidden_size": 16,
+        "ffn_dim": 32,
+        "num_hidden_layers": 3,
+    }
+    keys = tuple(key for layer_id in range(3) for key in opt_keys(layer_id))
+    model_path = tmp_path / "model"
+    write_indexed_model(model_path, config, keys)
+
+    spec = architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
+
+    assert spec.architecture_name == "OPTForCausalLM"
+    assert spec.activation is ActivationKind.RELU
+    assert spec.checkpoint_namespace == "model.decoder.layers.{layer_id}"
+    assert len(spec.layers) == 3
+    for layer_id, layer in enumerate(spec.layers):
+        dense = cast(DenseFfnSpec, layer)
+        assert dense.layout is DenseFfnLayout.BIASED_RELU
+        assert dense.intermediate_size == 32
+        assert isinstance(dense.checkpoint, BiasedFfnCheckpointKeys)
+        assert dense.checkpoint.fc1_weight_key == f"model.decoder.layers.{layer_id}.fc1.weight"
+
+
+def test_load_rejects_opt_without_biases(tmp_path: Path) -> None:
+    config = {
+        "architectures": ["OPTForCausalLM"],
+        "model_type": "opt",
+        "activation_function": "relu",
+        "torch_dtype": "float16",
+        "hidden_size": 16,
+        "ffn_dim": 32,
+        "num_hidden_layers": 1,
+        "enable_bias": False,
+    }
+    keys = opt_keys(0)
+    model_path = tmp_path / "model"
+    write_indexed_model(model_path, config, keys)
+
+    with pytest.raises(RuntimeError, match="enable_bias"):
+        architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
 
 
 @pytest.mark.parametrize("dtype_field", ("dtype", "torch_dtype"))
