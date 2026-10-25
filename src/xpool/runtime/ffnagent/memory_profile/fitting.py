@@ -80,6 +80,10 @@ def solve_coefficients(
     model.add(overprediction == int(solver.value(overprediction)))
     values = []
     for variable in variables:
+        # The previous optimum stays feasible after fixing its objective value.
+        model.clear_hints()
+        for candidate in variables:
+            model.add_hint(candidate, int(solver.value(candidate)))
         model.minimize(variable)
         solver = solve_optimal()
         value = int(solver.value(variable))
