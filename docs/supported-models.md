@@ -10,10 +10,8 @@ wrappers. Model ID links point to the checkpoint configuration.
 | Model ID | Family | Support |
 | --- | --- | --- |
 | [Qwen/Qwen2.5-0.5B](https://huggingface.co/Qwen/Qwen2.5-0.5B/blob/main/config.json) | `Qwen2ForCausalLM` | ✅ Supported |
-| [Qwen/Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/blob/main/config.json) | `Qwen2ForCausalLM` | ❌ Not supported |
-| [Qwen/Qwen2.5-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct/blob/main/config.json) | `Qwen2ForCausalLM` | ✅ Supported |
 | [Qwen/Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/blob/main/config.json) | `Qwen2ForCausalLM` | ✅ Supported |
-| [Qwen/Qwen2.5-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct/blob/main/config.json) | `Qwen2ForCausalLM` | ❌ Not supported |
+| [Qwen/Qwen2.5-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct/blob/main/config.json) | `Qwen2ForCausalLM` | ✅ Supported |
 | [Qwen/Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/blob/main/config.json) | `Qwen2ForCausalLM` | ❌ Not supported |
 | [Qwen/Qwen2.5-14B-Instruct](https://huggingface.co/Qwen/Qwen2.5-14B-Instruct/blob/main/config.json) | `Qwen2ForCausalLM` | ❌ Not supported |
 | [Qwen/Qwen2.5-32B-Instruct](https://huggingface.co/Qwen/Qwen2.5-32B-Instruct/blob/main/config.json) | `Qwen2ForCausalLM` | ❌ Not supported |
@@ -61,14 +59,10 @@ wrappers. Model ID links point to the checkpoint configuration.
 | [tiiuae/falcon-7b](https://huggingface.co/tiiuae/falcon-7b/blob/main/config.json) | `FalconForCausalLM` | ❌ Not supported |
 | [tiiuae/falcon-40b](https://huggingface.co/tiiuae/falcon-40b/blob/main/config.json) | `FalconForCausalLM` | ❌ Not supported |
 | [tiiuae/falcon-11B](https://huggingface.co/tiiuae/falcon-11B/blob/main/config.json) | `FalconForCausalLM` | ❌ Not supported |
-| [tiiuae/falcon-180B](https://huggingface.co/tiiuae/falcon-180B/blob/main/config.json) | `FalconForCausalLM` (provisional) | ❌ Not supported |
 | [deepseek-ai/DeepSeek-OCR](https://huggingface.co/deepseek-ai/DeepSeek-OCR/blob/main/config.json) | `DeepseekOCRForCausalLM` | ❌ Not supported |
-| [deepseek-ai/DeepSeek-V3](https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/config.json) | `DeepseekV3ForCausalLM` | ❌ Not supported (deferred) |
+| [deepseek-ai/DeepSeek-V3](https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/config.json) | `DeepseekV3ForCausalLM` | ❌ Not supported |
 | [deepseek-ai/DeepSeek-V2-Lite-Chat](https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite-Chat/blob/main/config.json) | `DeepseekV2ForCausalLM` | ✅ Supported |
 | [zai-org/GLM-4.7-Flash](https://huggingface.co/zai-org/GLM-4.7-Flash/blob/main/config.json) | `Glm4MoeLiteForCausalLM` | ✅ Supported |
-
-Falcon-180B's family remains provisional until its gated checkpoint configuration
-is verified. DeepSeek-V3 is deferred from the current adaptation scope.
 
 Run the relevant `xtest run --suite <model-id> --strict-requirements` suite
 when changes invalidate that model's qualification evidence. The complete

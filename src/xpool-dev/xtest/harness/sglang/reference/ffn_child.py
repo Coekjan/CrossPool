@@ -24,6 +24,36 @@ SUPPORTED_MODEL_CLASSES = frozenset(
 )
 
 
+def read_routing_output(output: object) -> tuple[torch.Tensor, torch.Tensor]:
+    """Read the actual upstream carrier on CPU after plugin-isolated bootstrap.
+
+    The process entry imports SGLang only after selecting the reference plugin
+    set, so the external carrier types are resolved at this boundary.
+    """
+
+    from sglang.srt.layers.moe.topk import StandardTopKOutput, StandardTopKOutputPacked, TritonKernelTopKOutput
+
+    if isinstance(output, (StandardTopKOutput, StandardTopKOutputPacked)):
+        return (
+            output.topk_ids.detach().to(device="cpu", dtype=torch.int32).clone(),
+            output.topk_weights.detach().to(device="cpu", dtype=torch.float32).clone(),
+        )
+    if not isinstance(output, TritonKernelTopKOutput):
+        raise RuntimeError(f"FFN reference received an unsupported TopK carrier: {type(output).__name__}")
+
+    expert_sizes = output.a_ragged_metadata.slice_sizes.detach().cpu()
+    expert_ids = torch.repeat_interleave(
+        torch.arange(expert_sizes.numel(), dtype=torch.int32), expert_sizes.to(torch.int64)
+    )
+    scatter = output.scatter_indx.detach().to(device="cpu", dtype=torch.int64)
+    token_expert_ids = torch.empty_like(scatter, dtype=torch.int32)
+    token_weights = torch.empty_like(scatter, dtype=torch.float32)
+    # Invert the upstream expert-major dispatch into its original token slots.
+    token_expert_ids[scatter] = expert_ids
+    token_weights[scatter] = output.gate_scal.detach().to(device="cpu", dtype=torch.float32)
+    return token_expert_ids.view(-1, output.n_expts_act), token_weights.view(-1, output.n_expts_act)
+
+
 def run_ffn_reference_child(
     connection: Connection,
     job: ffn_protocol.FfnReferenceJob,
@@ -247,23 +277,14 @@ def execute_ffn_reference_case(
         def capture_topk(
             module: torch.nn.Module,
             inputs: tuple[torch.Tensor, ...],
-            output: sglang.srt.layers.moe.topk.StandardTopKOutput | sglang.srt.layers.moe.topk.StandardTopKOutputPacked,
+            output: (
+                sglang.srt.layers.moe.topk.StandardTopKOutput
+                | sglang.srt.layers.moe.topk.StandardTopKOutputPacked
+                | sglang.srt.layers.moe.topk.TritonKernelTopKOutput
+            ),
         ) -> None:
             del module, inputs
-            if not isinstance(
-                output,
-                (
-                    sglang.srt.layers.moe.topk.StandardTopKOutput,
-                    sglang.srt.layers.moe.topk.StandardTopKOutputPacked,
-                ),
-            ):
-                raise RuntimeError(f"FFN reference requires a standard TopK carrier, received {type(output).__name__}")
-            captured_routing.append(
-                (
-                    output.topk_ids.detach().to(device="cpu", dtype=torch.int32).clone(),
-                    output.topk_weights.detach().to(device="cpu", dtype=torch.float32).clone(),
-                )
-            )
+            captured_routing.append(read_routing_output(output))
 
         hook_handles.append(topk.register_forward_hook(capture_topk))
 

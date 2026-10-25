@@ -94,6 +94,16 @@ def world(
     )
 
 
+def test_solve_coefficients_preserves_canonical_tie_break() -> None:
+    coefficient_count = len(fitting.COEFFICIENT_NAMES)
+    coefficients = fitting.solve_coefficients(
+        {(1,) * coefficient_count: 14},
+        observation_quantum_bytes=2,
+    )
+
+    assert coefficients.values() == (0,) * (coefficient_count - 1) + (14,)
+
+
 @pytest.mark.parametrize("underpredict", (False, True))
 def test_fit_worlds_covers_all_features_and_held_out_evidence(underpredict: bool) -> None:
     experiments, held_out_experiment = corpus.calibration_experiments(synthetic_config())

@@ -333,7 +333,9 @@ Equal feature rows retain their largest residual rather than an average.
 The fitter adds one empirically derived Device
 Observation Quantum to each grouped residual target and finds nonnegative,
 quantized coefficients minimizing total overprediction, with a canonical
-coefficient tie-break. The quantum is absorbed into the fitted coefficients;
+coefficient tie-break. The single-worker fitter supplies the preceding optimal
+assignment as a search hint for each successive objective and still proves
+every optimum. The quantum is absorbed into the fitted coefficients;
 it is separate from Profile fields and the operator margin. Successful fitting
 and held-out validation do not replace independent
 [Resource Qualification](qualification.md#resource-evidence).
