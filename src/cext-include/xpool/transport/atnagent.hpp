@@ -68,10 +68,12 @@ public:
 
   /// Publish the process-local Resident drain command without synchronizing.
   /// Repeated calls during or after completed drain are no-ops.
+  /// Before activation, the arena set has no Resident work to drain.
   void drain_async();
 
   /// Poll process-wide Resident completion and release its device resources.
   /// Returns true while the Resident or its control write remains pending.
+  /// An incomplete activation is an error, not confirmed preactivation drain.
   bool drain_pending();
 
   /// Destroy known arenas during preactivation rollback or after Resident drain.
@@ -117,6 +119,7 @@ private:
   std::optional<c10::DeviceIndex> device_;
   std::map<ArenaHandle, Arena> arenas_;
   std::optional<Resident> resident_;
+  bool activation_attempted_ = false;
 };
 
 } // namespace xpool::transport

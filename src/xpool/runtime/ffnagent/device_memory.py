@@ -15,11 +15,11 @@ from xpool.memory import (
     MIB,
     DeviceMemoryEstimate,
     FfnMemoryCalibrationCoefficients,
-    ensure_nonnegative_int64,
     load_memory_calibration_profile,
 )
 from xpool.runtime.ffnagent import execution
 from xpool.utils import align_up
+from xpool.utils.integer import ensure_sint64_nonnegative
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +71,7 @@ def allocator_reservation_bytes(storage_bytes: tuple[int, ...]) -> int:
     Existing cached blocks can reduce this charge, but are never assumed.
     """
 
-    ensure_nonnegative_int64(*storage_bytes)
+    ensure_sint64_nonnegative(*storage_bytes)
     if not storage_bytes:
         return 0
     if any(value == 0 for value in storage_bytes):
@@ -85,7 +85,7 @@ def allocator_reservation_bytes(storage_bytes: tuple[int, ...]) -> int:
         result = sum(
             2 * MIB if value <= MIB else 20 * MIB if value < 10 * MIB else align_up(value, 2 * MIB) for value in rounded
         )
-    ensure_nonnegative_int64(result)
+    ensure_sint64_nonnegative(result)
     return result
 
 
@@ -104,7 +104,7 @@ def graph_capture_allocator_allowance_bytes(signature: execution.ExecutionSignat
         requests = storage_bytes + execution.graph_capture_initialization_storage_bytes(signature)
         reserved = sum(allocator_reservation_bytes((value,)) for value in requests)
     result = reserved - sum(storage_bytes)
-    ensure_nonnegative_int64(result)
+    ensure_sint64_nonnegative(result)
     return result
 
 
@@ -197,7 +197,7 @@ class DeviceMemoryEstimator:
     ) -> int:
         """Return exact native readiness, lookup, binding, and Lane storage."""
 
-        ensure_nonnegative_int64(local_layer_count, local_layer_capacity_count, local_signature_count)
+        ensure_sint64_nonnegative(local_layer_count, local_layer_capacity_count, local_signature_count)
         lanes = self.config.scheduler.ffn_concurrency
         return xpool.native.fabric.ffnagent_control_allocation_bytes(
             coordinator,
@@ -212,7 +212,7 @@ class DeviceMemoryEstimator:
     def routing_record_buffer_bytes(self, element_capacity: int) -> int:
         """Return exact optional Routing Observer allocation bytes."""
 
-        ensure_nonnegative_int64(element_capacity)
+        ensure_sint64_nonnegative(element_capacity)
         return xpool.native.devkit.ffn_routing_observer.allocation_bytes(element_capacity)
 
     def fabric_observer_bytes(self) -> int:
@@ -454,5 +454,5 @@ class DeviceMemoryEstimator:
                 )
             )
             estimates.append(point.exact_resource_ledger_bytes + point.allocator_allowance_bytes + calibrated_overhead)
-        ensure_nonnegative_int64(*estimates)
+        ensure_sint64_nonnegative(*estimates)
         return DeviceMemoryEstimate(retained_bytes=estimates[-1], peak_bytes=max(estimates))

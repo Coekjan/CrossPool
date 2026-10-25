@@ -22,13 +22,13 @@ from xpool.service.wire import (
     AtnAgentTransportArenaUpsertRequest,
     AtnAgentTransportLeaseQuiesceResponse,
     ConfigCheckRequest,
+    ElasticContextStateControlChannelRef,
     FabricParticipantReport,
     FabricQuiesceRequest,
     FfnAgentRegistration,
     HeartbeatResponse,
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
-    KvControlChannelRef,
     MpsClientTermination,
     ProcessRef,
     ReadinessSnapshot,
@@ -253,11 +253,13 @@ class XpoolClient:
         if response.status_code != HTTPStatus.NO_CONTENT:
             raise XpoolClientError("protocol", "xpool daemon did not confirm MPS client termination")
 
-    def kv_control_channel(self, generation: FabricGenerationId) -> KvControlChannelRef:
-        """Return the native KV control channel for one current generation."""
+    def context_state_control_channel(self, generation: FabricGenerationId) -> ElasticContextStateControlChannelRef:
+        """Return the native elastic context state control channel for one current generation."""
 
-        response = self.request("GET", f"/kv/control-channel/{quote(generation.format(), safe='')}")
-        return self.decode_model(response, KvControlChannelRef, "kv control channel")
+        response = self.request("GET", f"/ecs/control-channel/{quote(generation.format(), safe='')}")
+        return self.decode_model(
+            response, ElasticContextStateControlChannelRef, "elastic context state control channel"
+        )
 
     def request_fabric_quiesce(self, request: FabricQuiesceRequest) -> None:
         """Ask the daemon to stop admission for one retained generation."""

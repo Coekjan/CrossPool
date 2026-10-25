@@ -152,6 +152,10 @@ Prefer explicit concrete types. Use `Any` or `object` only for a genuinely
 dynamic boundary and document the reason nearby. Import pinned third-party
 types instead of inventing local look-alike protocols.
 
+Use `uintN` and `sintN` for project-owned fixed-width integer bounds and
+validation-helper names. Name narrower ranges explicitly when signedness does
+not imply them, as in `ensure_sint64_nonnegative`. Preserve external API names.
+
 Preserve precise producer, parameter and return types through their consumers.
 Express input/output correspondence on an existing API with overloads when
 needed. Use `cast` only as a narrow static assertion at an established dynamic,

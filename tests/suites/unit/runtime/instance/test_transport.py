@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import pytest
+from xpool.native import ABI_VERSION
+from xpool.native.ffn import ResultCode
 
 import xpool.runtime.instance
 from xpool.model import ModelId
-from xpool.native import ABI_VERSION
-from xpool.native.ffn import ResultCode
 from xpool.runtime.instance import InstanceRankError, InstanceRankFailureMonitor
 from xpool.service.wire import InstanceRankRegistration, ProcessRef
 from xpool.transport import TransportArenaHandle
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
-from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.ecs import context_state_profile
 from xtest.harness.support.runtime.instance import (
     ffn_profile,
     install_offline_instance_client,
@@ -116,11 +116,11 @@ def test_started_instance_rejects_different_transport(monkeypatch: pytest.Monkey
         pid=instance.process_ref.pid,
         transport=transport_attributes(),
         ffn_profile=ffn_profile(),
-        kv_capacity=kv_capacity_profile(),
+        context_state_profile=context_state_profile(),
         atn_runtime_headroom_bytes=0,
     )
     with pytest.raises(InstanceRankError, match="different transport"):
-        instance.start_runtime(changed_transport, ffn_profile(), kv_capacity_profile(), 0)
+        instance.start_runtime(changed_transport, ffn_profile(), context_state_profile(), 0)
 
 
 def test_started_instance_rejects_different_runtime_headroom(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -132,9 +132,9 @@ def test_started_instance_rejects_different_runtime_headroom(monkeypatch: pytest
         pid=instance.process_ref.pid,
         transport=transport_attributes(),
         ffn_profile=ffn_profile(),
-        kv_capacity=kv_capacity_profile(),
+        context_state_profile=context_state_profile(),
         atn_runtime_headroom_bytes=1024,
     )
 
     with pytest.raises(InstanceRankError, match="different attention runtime headroom"):
-        instance.start_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile(), 2048)
+        instance.start_runtime(transport_attributes(), ffn_profile(), context_state_profile(), 2048)

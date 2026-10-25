@@ -64,7 +64,7 @@ schedule and horizon, rather than seeds alone, are the replay authority.
 
 Owned execution checks prepared requests against the actual static service
 limits after startup and before warmup. The integration interprets `/server_info`;
-Elastic KV's immutable Capacity Group ceiling is distinct from its currently
+Elastic Context State's immutable Capacity Group ceiling is distinct from its currently
 mapped prefix. A mismatch retains the offending request and fails the case,
 without resizing or resampling. Client endpoints acquire no arbitrary metadata
 query requirement. Model context, request acceptance and immediate physical

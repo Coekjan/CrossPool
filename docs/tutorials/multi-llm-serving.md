@@ -97,10 +97,10 @@ curl -sS http://127.0.0.1:31000/generate \
 ```
 
 The two Instances keep separate logical KV contents and prefix caches while
-sharing the attention device's physical KV Capacity Pool. Their model-specific
+sharing the attention device's physical Elastic Context State Capacity Pool. Their model-specific
 FFN weight shards coexist on the FFN device. This smoke topology covers concurrent
 two-model startup and inference on those two device roles. Dynamic KV-capacity
-borrowing is covered by the dedicated Elastic KV qualification.
+borrowing is covered by the dedicated Elastic Context State qualification.
 
 Finish or cancel startup, then stop both SGLang Instances and wait for their
 workers and helpers to exit before requesting daemon shutdown. Start no new

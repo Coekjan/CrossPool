@@ -15,6 +15,7 @@ from xpool.config import FfnSchedulingPolicy
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
 from xpool.utils.dtype import TorchDtype
+from xpool.utils.integer import UINT64_MAX
 
 __all__ = [
     "FABRIC_UID_HEX_LENGTH",
@@ -41,8 +42,6 @@ __all__ = [
 
 FABRIC_UID_HEX_LENGTH = int(xpool.native.fabric.UID_HEX_LENGTH)
 """Character count of a lowercase hexadecimal NVSHMEM unique id."""
-
-UINT64_MAX = 2**64 - 1
 
 
 class FabricGenerationPhase(StrEnum):

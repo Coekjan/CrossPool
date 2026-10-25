@@ -37,13 +37,13 @@ from xpool.service.wire import (
     AtnAgentTransportArenaUpsertRequest,
     AtnAgentTransportLeaseQuiesceResponse,
     ConfigCheckRequest,
+    ElasticContextStateControlChannelRef,
     FabricParticipantReport,
     FabricQuiesceRequest,
     FfnAgentRegistration,
     HeartbeatResponse,
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
-    KvControlChannelRef,
     MpsClientTermination,
     ProcessRef,
     ReadinessSnapshot,
@@ -53,7 +53,7 @@ from xpool.service.wire import (
 from xpool.transport import TransportArenaHandle
 
 logger = logging.getLogger(__name__)
-KV_CAPACITY_POLICY_INTERVAL_S = 0.01
+CONTEXT_STATE_CAPACITY_POLICY_INTERVAL_S = 0.01
 
 
 @dataclass(slots=True)
@@ -175,15 +175,15 @@ def create_daemon() -> FastAPI:
                 logger.exception("serving health monitor failed")
                 daemon_failure.record(exception)
 
-        async def run_kv_capacity_policy() -> None:
+        async def run_context_state_capacity_policy() -> None:
             try:
                 while True:
-                    await asyncio.to_thread(control_plane.step_kv_capacity)
-                    await asyncio.sleep(KV_CAPACITY_POLICY_INTERVAL_S)
+                    await asyncio.to_thread(control_plane.step_context_state_capacity)
+                    await asyncio.sleep(CONTEXT_STATE_CAPACITY_POLICY_INTERVAL_S)
             except asyncio.CancelledError:
                 raise
             except BaseException as exception:
-                logger.exception("kv capacity policy failed")
+                logger.exception("elastic context state capacity policy failed")
                 daemon_failure.record(exception)
 
         config = get_global_config()
@@ -194,7 +194,7 @@ def create_daemon() -> FastAPI:
             tasks = (
                 asyncio.create_task(run_watchdog(), name="xpool-daemon-watchdog"),
                 asyncio.create_task(monitor_serving_health(), name="xpool-serving-health"),
-                asyncio.create_task(run_kv_capacity_policy(), name="xpool-kv-capacity-policy"),
+                asyncio.create_task(run_context_state_capacity_policy(), name="xpool-context-state-capacity-policy"),
             )
             yield
         except BaseException as error:
@@ -255,9 +255,9 @@ def create_daemon() -> FastAPI:
 
         return await asyncio.to_thread(control_plane.require_fabric_plan)
 
-    @app.get("/kv/control-channel/{generation}")
-    async def get_kv_control_channel(generation: str) -> KvControlChannelRef:
-        """Return the native KV control channel for the retained Fabric generation.
+    @app.get("/ecs/control-channel/{generation}")
+    async def get_context_state_control_channel(generation: str) -> ElasticContextStateControlChannelRef:
+        """Return the native elastic context state control channel for the retained Fabric generation.
 
         Raises:
             404: The generation identity is invalid or is not retained.
@@ -266,8 +266,10 @@ def create_daemon() -> FastAPI:
         try:
             generation_id = FabricGenerationId.parse(generation)
         except ValueError as error:
-            raise XpoolDaemonError("not_found", "kv control channel generation is invalid") from error
-        return await asyncio.to_thread(control_plane.kv_control_channel, generation_id)
+            raise XpoolDaemonError(
+                "not_found", "elastic context state control channel generation is invalid"
+            ) from error
+        return await asyncio.to_thread(control_plane.context_state_control_channel, generation_id)
 
     @app.post("/fabric/quiesce")
     async def request_fabric_quiesce(request: FabricQuiesceRequest) -> Response:
@@ -495,7 +497,7 @@ def create_daemon() -> FastAPI:
                 pid=request.pid,
                 transport=request.transport,
                 ffn_profile=request.ffn_profile,
-                kv_capacity=request.kv_capacity,
+                context_state_profile=request.context_state_profile,
                 atn_runtime_headroom_bytes=request.atn_runtime_headroom_bytes,
                 now=monotonic(),
             ),

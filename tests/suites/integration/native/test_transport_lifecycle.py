@@ -6,17 +6,17 @@ from pathlib import Path
 
 import pytest
 import torch
-
 import xpool.native
+from xpool.native import RuntimeRole
+
 import xtest
 from xpool.config import DebugConfig
-from xpool.native import RuntimeRole
 from xtest.harness.native.case import run_native_case
 
 pytestmark = pytest.mark.timeout(180)
 
 
-def isolated_transport_activation_requires_joined_fabric() -> None:
+def isolated_transport_preactivation_retirement() -> None:
     xpool.native.initialize(
         RuntimeRole.ATNAGENT,
         device=torch.cuda.current_device(),
@@ -24,12 +24,16 @@ def isolated_transport_activation_requires_joined_fabric() -> None:
     )
     arena = xpool.native.transport.create_arena(0, 0, 8, 4, torch.bfloat16, 0, 1, 0, 1)
     try:
+        xpool.native.transport.drain_async()
+        assert not xpool.native.transport.drain_pending()
         with pytest.raises(RuntimeError, match="unavailable outside a joined generation"):
             xpool.native.transport.activate()
+        xpool.native.transport.drain_async()
+        assert not xpool.native.transport.drain_pending()
     finally:
         xpool.native.transport.destroy_arenas([arena])
 
 
 @xtest.requirements(device_count=1)
-def test_transport_activation_requires_joined_fabric(tmp_path: Path) -> None:
-    run_native_case(isolated_transport_activation_requires_joined_fabric, workdir=tmp_path / "case")
+def test_transport_preactivation_retirement(tmp_path: Path) -> None:
+    run_native_case(isolated_transport_preactivation_retirement, workdir=tmp_path / "case")

@@ -31,9 +31,9 @@ from xpool.fabric import (
 )
 from xpool.model import ModelId
 from xpool.native import ABI_VERSION
+from xpool.service.daemon import ecs
 from xpool.service.daemon.fabric import FabricController, FabricGenerationState, FabricMembership
 from xpool.service.daemon.ffn_placement import place_ffn_models
-from xpool.service.daemon.kv import KvCapacityPolicy
 from xpool.service.daemon.readiness import ControlPlaneProjection
 from xpool.service.daemon.registration import (
     HEARTBEAT_WARNING_WATERMARK_S,
@@ -56,6 +56,7 @@ from xpool.service.wire import (
     AtnAgentTransportLeaseQuiesceResponse,
     ConfigCheckRequest,
     ControlPlaneWarning,
+    ElasticContextStateControlChannelRef,
     FabricInstanceRankOwnerFailure,
     FabricOwnerFailureReason,
     FabricParticipantReport,
@@ -66,7 +67,6 @@ from xpool.service.wire import (
     InstanceRankInitializedPublication,
     InstanceRankRef,
     InstanceRankRegistration,
-    KvControlChannelRef,
     MpsClientTermination,
     ProcessRef,
     ReadinessSnapshot,
@@ -137,7 +137,7 @@ class ControlPlane:
         self.registrations = RegistrationBook()
         self.transport_broker = TransportBroker()
         self.fabric_controller = FabricController()
-        self.kv_capacity_policy: KvCapacityPolicy | None = None
+        self.context_state_capacity_policy: ecs.CapacityPolicy | None = None
         self.serving_startup = ServingStartupState()
         self.membership_revision = 0
         self.warning_cache_at = float("-inf")
@@ -425,10 +425,10 @@ class ControlPlane:
         any_alive = any(owner.is_alive() for owner in owners)
         with self.lock:
             if self.fabric_controller.generation is fabric and not any_alive:
-                policy = self.kv_capacity_policy
+                policy = self.context_state_capacity_policy
                 if policy is not None:
                     policy.close()
-                    self.kv_capacity_policy = None
+                    self.context_state_capacity_policy = None
                 self.fabric_controller.generation = None
                 self.serving_startup = ServingStartupState()
 
@@ -644,8 +644,6 @@ class ControlPlane:
                     raise XpoolDaemonError("conflict", "instance transport attributes disagree across ranks")
                 if peer.ffn_profile != registration.ffn_profile:
                     raise XpoolDaemonError("conflict", "FFN ffn_profile disagrees across instance ranks")
-                if peer.transport.atn_dp_rank == transport.atn_dp_rank and peer.kv_capacity != registration.kv_capacity:
-                    raise XpoolDaemonError("conflict", "kv capacity geometry disagrees across instance ranks")
             changed = self.registrations.instances.install_snapshot(
                 registration,
                 existing,
@@ -743,7 +741,7 @@ class ControlPlane:
                 model_plans=model_plans,
                 instance_plans=membership.instance_plans,
             )
-            policy = KvCapacityPolicy.create(config, plan.generation)
+            policy = ecs.CapacityPolicy.create(config, plan.generation)
             # Commit: install only if no generation appeared and the captured
             # membership revision still describes the authoritative registration set.
             with self.lock:
@@ -765,7 +763,7 @@ class ControlPlane:
                         instance_owners=dict(membership.instance_owners),
                     )
                 )
-                self.kv_capacity_policy = policy
+                self.context_state_capacity_policy = policy
                 self.serving_startup = ServingStartupState(generation=installed_plan.generation)
             logger.info(
                 "fabric plan installed generation=%s model_count=%s pe_count=%s elapsed=%.3fs",
@@ -782,22 +780,22 @@ class ControlPlane:
         with self.lock:
             return self.fabric_controller.require_plan()
 
-    def kv_control_channel(self, generation: FabricGenerationId) -> KvControlChannelRef:
-        """Return the KV control channel for the retained Fabric generation."""
+    def context_state_control_channel(self, generation: FabricGenerationId) -> ElasticContextStateControlChannelRef:
+        """Return the elastic context state control channel for the retained Fabric generation."""
 
         with self.lock:
             fabric = self.fabric_controller.generation
-            policy = self.kv_capacity_policy
+            policy = self.context_state_capacity_policy
             if fabric is None or policy is None or fabric.plan.generation != generation:
-                raise XpoolDaemonError("not_found", "kv control channel generation is not retained")
+                raise XpoolDaemonError("not_found", "elastic context state control channel generation is not retained")
             return policy.channel_ref
 
-    def step_kv_capacity(self) -> None:
+    def step_context_state_capacity(self) -> None:
         """Advance one Generation-scoped KV policy transition."""
 
         with self.lock:
             fabric = self.fabric_controller.generation
-            policy = self.kv_capacity_policy
+            policy = self.context_state_capacity_policy
             if fabric is None or policy is None:
                 return
             if fabric.phase is not FabricGenerationPhase.EXECUTABLE:
@@ -805,7 +803,7 @@ class ControlPlane:
             try:
                 policy.step(self.registrations, fabric)
             except Exception as error:
-                fabric.record_control_failure(f"kv capacity policy failed: {error}")
+                fabric.record_control_failure(f"elastic context state capacity policy failed: {error}")
                 self.fabric_controller.abort(now=monotonic())
                 raise
 
@@ -913,9 +911,9 @@ class ControlPlane:
                                     continue
                                 scope.stop(deadline=deadline)
                             with self.lock:
-                                if self.kv_capacity_policy is not None:
-                                    self.kv_capacity_policy.close()
-                                    self.kv_capacity_policy = None
+                                if self.context_state_capacity_policy is not None:
+                                    self.context_state_capacity_policy.close()
+                                    self.context_state_capacity_policy = None
                                 self.closed = True
                             logger.info("shutdown completed pid=%s", os.getpid())
                             return

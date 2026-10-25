@@ -4,10 +4,10 @@ from http import HTTPStatus
 from types import SimpleNamespace
 
 import pytest
+from xpool.native import ABI_VERSION
 
 import xpool.service.client
 from xpool.fabric import FabricGenerationId, FabricRole
-from xpool.native import ABI_VERSION
 from xpool.service.client import ATNAGENT_TRANSPORT_LEASE_QUIESCE_TIMEOUT_S, XpoolClient
 from xpool.service.errors import XpoolClientError
 from xpool.service.wire import (
@@ -22,7 +22,7 @@ from xpool.service.wire import (
 )
 from xpool.utils.mps import MPS_STARTUP_TIMEOUT_S, MPS_TERMINATION_TIMEOUT_S
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
-from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.ecs import context_state_profile
 from xtest.harness.support.runtime.instance import ffn_profile, transport_attributes
 from xtest.harness.support.service.client import (
     arena_record,
@@ -128,7 +128,7 @@ def test_participant_registration_sends_declared_contract(
                 rank=0,
                 transport=transport_attributes(),
                 ffn_profile=ffn_profile(),
-                kv_capacity=kv_capacity_profile(),
+                context_state_profile=context_state_profile(),
                 atn_runtime_headroom_bytes=0,
             )
             client.register_instance(registration)
@@ -217,25 +217,25 @@ def test_instance_deregistration_preserves_rank_and_owner(monkeypatch: pytest.Mo
     ]
 
 
-def test_kv_control_channel_uses_generation_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_context_state_control_channel_uses_generation_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     generation = FabricGenerationId(high=1, low=2)
     probe = install_scripted_http_client(
         monkeypatch,
         [
             response(HTTPStatus.OK, None),
-            response(HTTPStatus.OK, {"generation": {"high": 1, "low": 2}, "name": "/xpool-kv-test"}),
+            response(HTTPStatus.OK, {"generation": {"high": 1, "low": 2}, "name": "/xpool-ecs-test"}),
         ],
     )
 
     client = XpoolClient()
     try:
-        channel = client.kv_control_channel(generation)
+        channel = client.context_state_control_channel(generation)
     finally:
         client.close()
 
     assert channel.generation == generation
-    assert channel.name == "/xpool-kv-test"
+    assert channel.name == "/xpool-ecs-test"
     assert probe.calls == [
         ("GET", "/health", None),
-        ("GET", "/kv/control-channel/00000000000000010000000000000002", None),
+        ("GET", "/ecs/control-channel/00000000000000010000000000000002", None),
     ]

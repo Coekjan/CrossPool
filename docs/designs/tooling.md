@@ -218,7 +218,7 @@ vendor-root fallback. Assembly reads raw base TOML and merges explicit layers
 before defaults and registered overrides; an effective preflight configuration
 cannot replace that input without changing source precedence. Serving tests,
 native qualification and owned benchmarks consume the deployment's complete
-topology and SLO. Elastic KV tests additionally
+topology and SLO. Elastic Context State tests additionally
 project a byte budget using the assigned attention devices' total memory.
 
 For a selected pytest item declaring configuration, resource setup resolves

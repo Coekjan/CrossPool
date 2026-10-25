@@ -15,6 +15,7 @@ from pathlib import Path
 
 import safetensors.torch
 import torch
+from xpool.native import ABI_VERSION, RuntimeRole
 
 from xkit.child import PythonChildFailure, PythonChildProcess
 from xkit.network import TcpEndpointReservation
@@ -24,7 +25,6 @@ from xkit.task import get_task_root
 from xpool import bootstrap, devkit
 from xpool.config import XpoolConfig, init_global_config
 from xpool.model import ModelId
-from xpool.native import ABI_VERSION, RuntimeRole
 from xpool.ops import ffn_shim
 from xpool.runtime.instance import InstanceRankRuntime
 from xpool.service.client import XpoolClient
@@ -43,7 +43,7 @@ from xtest.harness.native.ffn.protocol import (
     FfnInstanceSpec,
 )
 from xtest.harness.native.mps import MpsServerObservation, query_mps_servers
-from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.ecs import context_state_profile
 from xtest.harness.support.wait import remaining_seconds
 
 logger = logging.getLogger(__name__)
@@ -342,7 +342,7 @@ def run_ffn_instance(connection: Connection, spec: FfnInstanceSpec) -> None:
             rank=spec.rank,
             transport=spec.transport,
             ffn_profile=spec.ffn_profile,
-            kv_capacity=kv_capacity_profile(),
+            context_state_profile=context_state_profile(),
             atn_runtime_headroom_bytes=0,
             on_failure=report,
         )

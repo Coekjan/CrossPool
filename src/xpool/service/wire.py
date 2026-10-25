@@ -209,41 +209,27 @@ class AtnAgentRegistration(ProcessRef):
     device: int = Field(ge=0, description="device index owned by the AtnAgent.")
 
 
-class KvCapacityPartitionProfile(WireModel):
-    """Immutable elastic KV geometry for one Instance rank partition."""
+class ElasticContextStatePartitionProfile(WireModel):
+    """Immutable Elastic Context State backing bounds for one Instance rank."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    bundle_bytes: int = Field(ge=1, description="Physical bytes mapped or unmapped by one compound bundle.")
-    bundle_capacity: int = Field(ge=1, le=2**32 - 1, description="Reserved compound-bundle capacity.")
-    floor_bundles: int = Field(ge=1, le=2**32 - 1, description="Minimum always-backed bundle prefix.")
-    token_capacity: int = Field(ge=1, description="Reserved engine-visible token capacity.")
-    mapping_granularity_bytes: int = Field(ge=1, description="CUDA VMM allocation granularity in bytes.")
-    row_bytes: int = Field(ge=1, description="Bytes occupied by one row of one KV component.")
-    tokens_per_row: int = Field(ge=1, description="Logical tokens represented by one KV row.")
-    token_page_size: int = Field(ge=1, description="Allocator token-page alignment.")
+    floor_bytes: int = Field(ge=0, le=2**64 - 1, strict=True, description="Minimum retained physical backing bytes.")
+    reservation_bytes: int = Field(
+        ge=0, le=2**64 - 1, strict=True, description="Geometry's physical backing upper bound."
+    )
 
     @model_validator(mode="after")
-    def validate_bundle_floor(self) -> KvCapacityPartitionProfile:
-        """Require the immutable floor to fit inside the reservation."""
+    def validate_byte_bounds(self) -> ElasticContextStatePartitionProfile:
+        """Require the retained floor to fit inside the physical reservation."""
 
-        if self.floor_bundles > self.bundle_capacity:
-            raise ValueError("KV floor bundles exceed bundle capacity")
+        if self.floor_bytes > self.reservation_bytes:
+            raise ValueError("elastic context state backing floor exceeds its reservation")
         return self
 
-    def usable_tokens(self, bundle_count: int) -> int:
-        """Return the page-aligned token capacity covered by a bundle prefix."""
 
-        if not 0 <= bundle_count <= self.bundle_capacity:
-            raise ValueError("KV bundle count is outside its reservation")
-        backed_tokens = (
-            bundle_count * self.mapping_granularity_bytes // self.row_bytes * self.tokens_per_row - self.token_page_size
-        )
-        return min(self.token_capacity, max(0, backed_tokens)) // self.token_page_size * self.token_page_size
-
-
-class KvControlChannelRef(WireModel):
-    """Generation-scoped discovery reference for one native KV control channel."""
+class ElasticContextStateControlChannelRef(WireModel):
+    """Generation-scoped discovery reference for one native Elastic Context State channel."""
 
     generation: FabricGenerationId = Field(description="Fabric generation owning the channel.")
     name: str = Field(min_length=1, description="Opaque POSIX shared-memory channel name.")
@@ -296,8 +282,8 @@ class InstanceRankRegistration(InstanceRankRef):
     ffn_profile: InstanceFfnProfile = Field(
         description="Resolved rank-independent FFN profile agreed by every instance rank.",
     )
-    kv_capacity: KvCapacityPartitionProfile = Field(
-        description="Immutable elastic KV geometry agreed by every rank in one capacity group.",
+    context_state_profile: ElasticContextStatePartitionProfile = Field(
+        description="Immutable rank-local physical elastic context state backing bounds.",
     )
     atn_runtime_headroom_bytes: int = Field(
         ge=0,

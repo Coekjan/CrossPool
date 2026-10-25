@@ -2,7 +2,7 @@
 
 #include <pybind11/pybind11.h>
 
-#include "bindings.hpp"
+#include <xpool/bindings.hpp>
 #include <xpool/debug/options.hpp>
 
 namespace py = pybind11;

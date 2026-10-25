@@ -124,12 +124,12 @@ Devkit boundaries; a missing observation is a design-review input. Production
 interfaces, alternate execution paths, and telemetry follow the accepted
 qualification design rather than adapting a runner around an absent boundary.
 
-Elastic KV qualification follows the same evidence ownership. Native tests
-prove the process-shared KV Control Channel. Integration tests prove physical
+Elastic Context State qualification follows the same evidence ownership. Native tests
+prove the process-shared Elastic Context State Control Channel. Integration tests prove physical
 VMM behavior and CUDA Event ordering together with allocator, prefix-cache,
 command, and daemon-policy behavior. Ordinary subprocess serving E2E proves
-mandatory Elastic KV startup under the combined graph mode. The dedicated
-Elastic KV E2E observes a confirmed prefix-cache hit decrease after peer
+mandatory Elastic Context State startup under the combined graph mode. The dedicated
+Elastic Context State E2E observes a confirmed prefix-cache hit decrease after peer
 pressure, a positive stable hit after repopulation within the current active
 capacity, and concurrent request completion by both models on the same device
 under Decode Full plus Prefill Breakable. Absolute `cached_tokens` counts are

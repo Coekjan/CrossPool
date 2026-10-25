@@ -5,8 +5,8 @@
 #include <pybind11/native_enum.h>
 #include <pybind11/stl.h>
 
-#include "bindings.hpp"
 #include <xpool/abi.hpp>
+#include <xpool/bindings.hpp>
 #include <xpool/debug/options.hpp>
 #include <xpool/ffn.hpp>
 #include <xpool/runtime.hpp>
@@ -73,7 +73,7 @@ PYBIND11_MODULE(native, module) {
       "runtime_role", []() { return xpool::RuntimeState::singleton().role(); }, "Return the initialized process role.");
 
   xpool::bindings::bind_fabric(module);
-  xpool::bindings::bind_kv(module);
+  xpool::bindings::bind_ecs(module);
   xpool::bindings::bind_transport(module);
   xpool::bindings::bind_devkit(module);
 }

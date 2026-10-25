@@ -115,15 +115,15 @@ implementation, and qualification package per model family.
 - **Class:** Product Capability.
 - **Outcome:** Support SGLang Prefill and Decode Context Parallelism with a
   context-parallel degree greater than one while preserving correct FFN row
-  ownership and Elastic KV Cache capacity semantics.
+  ownership and Elastic Context State Cache capacity semantics.
 - **Current seam:** SGLang integration rejects context-parallel execution; the
   attention topology and FFN handoff currently use TP/DP rank geometry.
 - **Requires:** Current SGLang model and topology support evidence, a runnable
-  prototype, an accepted FFN row and KV Capacity Group contract, and numerical,
+  prototype, an accepted FFN row and Elastic Context State Capacity Group contract, and numerical,
   graph, and serving qualification.
 - **Benefits from:** Existing model-qualification and installed-serving harnesses.
 
-Research must establish rank-local FFN row shapes, KV Capacity Group membership,
+Research must establish rank-local FFN row shapes, Elastic Context State Capacity Group membership,
 and graph behavior for a runnable Prefill and Decode Context Parallelism setup
 before changing CrossPool interfaces. Candidate deliverables are a SGLang
 support audit, a minimal installed-serving prototype, and a decision-complete

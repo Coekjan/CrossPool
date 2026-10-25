@@ -91,13 +91,6 @@ class FabricMembership:
             ffn_profile = complete_ranks[0].ffn_profile
             if any(registration.ffn_profile != ffn_profile for registration in complete_ranks[1:]):
                 raise XpoolDaemonError("conflict", "FFN ffn_profile disagrees across instance ranks")
-            for dp_rank in range(atn_dp_size):
-                capacity_group = tuple(
-                    registration for registration in complete_ranks if registration.transport.atn_dp_rank == dp_rank
-                )
-                kv_capacity = capacity_group[0].kv_capacity
-                if any(registration.kv_capacity != kv_capacity for registration in capacity_group[1:]):
-                    raise XpoolDaemonError("conflict", "kv capacity geometry disagrees within a capacity group")
             expected_coordinates = {
                 (tp_rank, dp_rank) for dp_rank in range(atn_dp_size) for tp_rank in range(atn_tp_size)
             }

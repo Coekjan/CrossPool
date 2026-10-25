@@ -119,11 +119,11 @@ reference:
 | `models[].atn_tp_size` | Fixes attention TP width; omission resolves from the Attention World and the model's DP size. |
 | `models[].atn_dp_size` | Partitions the Attention World into DP groups; defaults to one. |
 | `models[].ffn_tp_size` | Fixes the model's FFN tensor-parallel width; omission uses the number of FfnAgents. |
-| `scheduler.slo` / `models[].slo` | Sets default TTFT/TBT targets; models may override both for Elastic KV arbitration. |
+| `scheduler.slo` / `models[].slo` | Sets default TTFT/TBT targets; models may override both for Elastic Context State arbitration. |
 | `atn.devices` / `ffn.devices` | Assigns attention-side and FFN-side deployment-visible device indices. |
 | `scheduler.ffn_concurrency` | Sets the Executor Lane count, not a row or token budget. |
 | `scheduler.ffn_policy` | Selects `fifo` or `random` admission. |
-| `atn.device_memory_utilization` | Sets the maximum attention-device memory fraction used to freeze the Elastic KV Capacity Pool. |
+| `atn.device_memory_utilization` | Sets the maximum attention-device memory fraction used to freeze the Elastic Context State Capacity Pool. |
 | `scheduler.atn_concurrency` | Reserved for future attention compute admission; currently has no runtime effect. |
 | `logging.level` / `logging.color` | Sets runtime log level and enables terminal-aware color on stderr. |
 | `ffn.loader.parallelism` | Sets the number of checkpoint readers per FfnAgent. |

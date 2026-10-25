@@ -18,9 +18,9 @@ from sglang.srt.runtime_context import get_device, get_parallel
 from torch import nn
 
 from xpool.config import get_global_config
+from xpool.integrations.sglang.ecs.capacity import CapacityReconciler
+from xpool.integrations.sglang.ecs.state import SglangElasticContextState
 from xpool.integrations.sglang.hooks.registry import SglangHook
-from xpool.integrations.sglang.kv.capacity import CapacityReconciler
-from xpool.integrations.sglang.kv.pool import ElasticMHATokenToKVPool, ElasticMLATokenToKVPool
 from xpool.integrations.sglang.shim import FfnShimModule, iter_ffn_shims
 from xpool.integrations.sglang.topology import SglangAttentionTopology, SglangModelMetadata
 from xpool.model import ModelId
@@ -238,7 +238,8 @@ class SglangInstanceRankRuntime:
 
     binding: SglangInstanceRankBinding
     instance_rank: InstanceRankRuntime | None = None
-    kv_capacity: CapacityReconciler | None = None
+    capacity_reconciler: CapacityReconciler | None = None
+    context_state: SglangElasticContextState | None = None
 
     @classmethod
     def attach(cls, model_runner: ModelRunner, binding: SglangInstanceRankBinding) -> SglangInstanceRankRuntime:
@@ -266,12 +267,12 @@ class SglangInstanceRankRuntime:
         """
 
         torch.cuda.synchronize(self.binding.worker_rank)
-        if self.kv_capacity is not None:
-            self.kv_capacity.close()
-            self.kv_capacity = None
-        pool = getattr(model_runner, "token_to_kv_pool", None)
-        if isinstance(pool, ElasticMHATokenToKVPool | ElasticMLATokenToKVPool):
-            pool.close()
+        if self.capacity_reconciler is not None:
+            self.capacity_reconciler.close()
+            self.capacity_reconciler = None
+        if self.context_state is not None:
+            self.context_state.close()
+            self.context_state = None
         if self.instance_rank is not None:
             self.instance_rank.close()
             self.instance_rank = None

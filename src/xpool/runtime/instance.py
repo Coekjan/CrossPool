@@ -16,9 +16,9 @@ from xpool.native.ffn import ResultCode
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.client import XpoolClient, XpoolClientError, XpoolDaemonError
 from xpool.service.wire import (
+    ElasticContextStatePartitionProfile,
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
-    KvCapacityPartitionProfile,
     ProcessRef,
     ServingListener,
 )
@@ -251,7 +251,7 @@ class InstanceRankRuntime:
         rank: int,
         transport: InstanceRankTransportProfile,
         ffn_profile: InstanceFfnProfile,
-        kv_capacity: KvCapacityPartitionProfile,
+        context_state_profile: ElasticContextStatePartitionProfile,
         atn_runtime_headroom_bytes: int,
         on_failure: Callable[[BaseException], None],
     ) -> InstanceRankRuntime:
@@ -262,7 +262,7 @@ class InstanceRankRuntime:
             rank: Rank-local SGLang process index within the instance.
             transport: Transport geometry declared by this rank.
             ffn_profile: Rank-independent FFN execution contract.
-            kv_capacity: Immutable elastic KV reservation geometry.
+            context_state_profile: Rank-local aggregate elastic context state backing floor and reservation byte bounds.
             atn_runtime_headroom_bytes: Attention runtime memory reserved outside
                 the elastic KV Capacity Pool.
             on_failure: Lifecycle callback shared by background failure producers.
@@ -280,7 +280,7 @@ class InstanceRankRuntime:
 
         runtime = cls(model_id=model_id, rank=rank, on_failure=on_failure)
         try:
-            runtime.start_runtime(transport, ffn_profile, kv_capacity, atn_runtime_headroom_bytes)
+            runtime.start_runtime(transport, ffn_profile, context_state_profile, atn_runtime_headroom_bytes)
         except BaseException as error:
             on_failure(error)
             runtime.close()
@@ -291,13 +291,13 @@ class InstanceRankRuntime:
         self,
         transport: InstanceRankTransportProfile,
         ffn_profile: InstanceFfnProfile,
-        kv_capacity: KvCapacityPartitionProfile,
+        context_state_profile: ElasticContextStatePartitionProfile,
         atn_runtime_headroom_bytes: int,
     ) -> None:
         """Register this Instance Rank's runtime contracts and start its heartbeat."""
 
         was_registered = self.registration is not None
-        self.register_runtime(transport, ffn_profile, kv_capacity, atn_runtime_headroom_bytes)
+        self.register_runtime(transport, ffn_profile, context_state_profile, atn_runtime_headroom_bytes)
         if was_registered:
             return
         try:
@@ -313,7 +313,7 @@ class InstanceRankRuntime:
         self,
         transport: InstanceRankTransportProfile,
         ffn_profile: InstanceFfnProfile,
-        kv_capacity: KvCapacityPartitionProfile,
+        context_state_profile: ElasticContextStatePartitionProfile,
         atn_runtime_headroom_bytes: int,
     ) -> None:
         """Register this Instance Rank's Transport, FFN, KV, and headroom contracts."""
@@ -322,8 +322,10 @@ class InstanceRankRuntime:
             self.expect_transport(transport)
             if self.registration.ffn_profile != ffn_profile:
                 raise InstanceRankError("instance runtime is already registered with a different ffn_profile")
-            if self.registration.kv_capacity != kv_capacity:
-                raise InstanceRankError("instance runtime is already registered with different kv capacity geometry")
+            if self.registration.context_state_profile != context_state_profile:
+                raise InstanceRankError(
+                    "instance runtime is already registered with different elastic context state capacity geometry"
+                )
             if self.registration.atn_runtime_headroom_bytes != atn_runtime_headroom_bytes:
                 raise InstanceRankError(
                     "instance runtime is already registered with different attention runtime headroom"
@@ -336,7 +338,7 @@ class InstanceRankRuntime:
             pid=self.process_ref.pid,
             transport=transport,
             ffn_profile=ffn_profile,
-            kv_capacity=kv_capacity,
+            context_state_profile=context_state_profile,
             atn_runtime_headroom_bytes=atn_runtime_headroom_bytes,
         )
         self.client.register_instance(registration)

@@ -9,11 +9,11 @@ from ortools.sat.python import cp_model
 
 from xpool.memory import (
     MIB,
-    SIGNED_INT64_MAX,
     FfnMemoryCalibrationCoefficients,
 )
 from xpool.runtime.ffnagent.device_memory import DeviceMemoryFeatures
 from xpool.runtime.ffnagent.memory_profile.evidence import MemoryProfileWorld
+from xpool.utils.integer import SINT64_MAX
 
 COEFFICIENT_NAMES = tuple(field.name for field in fields(FfnMemoryCalibrationCoefficients))
 
@@ -53,8 +53,8 @@ def solve_coefficients(
     }
     maximum_target = max(quantized_targets.values())
     if (
-        maximum_target * observation_quantum_bytes > SIGNED_INT64_MAX
-        or maximum_target * sum(sum(vector) for vector in quantized_targets) > SIGNED_INT64_MAX
+        maximum_target * observation_quantum_bytes > SINT64_MAX
+        or maximum_target * sum(sum(vector) for vector in quantized_targets) > SINT64_MAX
     ):
         raise ValueError("memory-profile fit exceeds signed-64-bit arithmetic")
 
@@ -128,7 +128,7 @@ def fit_worlds(
     coefficients = solve_coefficients(targets, observation_quantum_bytes)
 
     # The held-out matrix is never fitted; retain its minimum headroom as a diagnostic.
-    minimum_headroom = SIGNED_INT64_MAX
+    minimum_headroom = SINT64_MAX
     for world in held_out_worlds:
         for observation in world.observations:
             observed_residual = observation.observed_device_bytes - observation.point.exact_resource_ledger_bytes
@@ -154,6 +154,6 @@ def fit_worlds(
                 minimum_headroom,
                 observation.point.allocator_allowance_bytes + prediction - observed_residual,
             )
-    if minimum_headroom == SIGNED_INT64_MAX:
+    if minimum_headroom == SINT64_MAX:
         raise ValueError("memory-profile held-out inventory is empty")
     return coefficients, minimum_headroom

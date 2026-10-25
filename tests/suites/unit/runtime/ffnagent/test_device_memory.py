@@ -18,10 +18,11 @@ from xpool.fabric import (
     InstanceRankTopology,
 )
 from xpool.ffn import FfnModelSpec
-from xpool.memory import MIB, SIGNED_INT64_MAX, FfnMemoryCalibrationCoefficients
+from xpool.memory import MIB, FfnMemoryCalibrationCoefficients
 from xpool.runtime.ffnagent import device_memory, execution
 from xpool.runtime.ffnagent.memory_profile import corpus
 from xpool.service.daemon.ffn_placement import place_ffn_models
+from xpool.utils.integer import SINT64_MAX
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config, synthetic_config
 from xtest.harness.support.native.sizing import install_native_allocation_sizing
 from xtest.harness.support.service.daemon import ffn_model_spec, ffn_profile
@@ -220,7 +221,7 @@ def test_allocator_reservation_bounds_segments_without_assuming_cached_reuse(
     assert device_memory.allocator_reservation_bytes(requests) == reserved
 
 
-@pytest.mark.parametrize("requests", ((0,), (-1,), (True,), (SIGNED_INT64_MAX,)))
+@pytest.mark.parametrize("requests", ((0,), (-1,), (True,), (SINT64_MAX,)))
 def test_allocator_reservation_rejects_invalid_or_overflowing_byte_counts(requests: tuple[int, ...]) -> None:
     with pytest.raises(ValueError):
         device_memory.allocator_reservation_bytes(requests)
@@ -315,7 +316,7 @@ def test_calibrated_overhead_uses_one_mib_ceiling_and_rejects_overflow() -> None
             dense_graph_capture_count=0,
             moe_graph_capture_count=0,
             executor_lane_count=0,
-            compute_branch_count=SIGNED_INT64_MAX,
+            compute_branch_count=SINT64_MAX,
             dense_implementation_present=False,
             moe_implementation_present=False,
             joined_ffnagent=False,

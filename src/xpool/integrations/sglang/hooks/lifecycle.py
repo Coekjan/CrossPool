@@ -11,7 +11,6 @@ from typing import Concatenate
 import torch
 from sglang.srt.arg_groups.overrides import declare_resolution, resolution_result
 from sglang.srt.managers.scheduler import Scheduler
-from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 from sglang.srt.model_executor.cuda_graph_config import Backend, PhaseConfig
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.model_executor.pool_configurator import MemoryPoolConfig
@@ -34,13 +33,9 @@ from xpool.integrations.sglang.adapter import (
     SglangShimAdapter,
     model_runner_architectures,
 )
+from xpool.integrations.sglang.ecs.capacity import CapacityReconciler, capacity_reconciler_scope
+from xpool.integrations.sglang.ecs.state import SglangElasticContextState
 from xpool.integrations.sglang.hooks.registry import SglangHook, SglangHookSet
-from xpool.integrations.sglang.kv.allocator import (
-    ElasticPagedTokenToKVPoolAllocator,
-    ElasticTokenToKVPoolAllocator,
-)
-from xpool.integrations.sglang.kv.capacity import CapacityReconciler
-from xpool.integrations.sglang.kv.pool import ElasticMHATokenToKVPool, ElasticMLATokenToKVPool
 from xpool.integrations.sglang.registry import MODELS_PACKAGE, discover_sglang_model_adapters
 from xpool.integrations.sglang.server_args import validate_sglang_server_args
 from xpool.integrations.sglang.shim import iter_ffn_shims
@@ -48,7 +43,7 @@ from xpool.integrations.sglang.worker import WorkerLifecycle
 from xpool.native import RuntimeRole
 from xpool.runtime.instance import InstanceRankRuntime
 from xpool.runtime.transport import InstanceRankTransportProfile
-from xpool.service.wire import ServingListener
+from xpool.service.wire import ElasticContextStatePartitionProfile, ServingListener
 from xpool.utils.device import visible_uuids
 from xpool.utils.mps import MpsEndpoint
 
@@ -128,7 +123,11 @@ def around_scheduler_run_event_loop(
 
     lifecycle = WorkerLifecycle.current()
     try:
-        original_fn(scheduler)
+        runtime = SglangInstanceRankRuntime.require(scheduler.tp_worker.model_runner)
+        if runtime.capacity_reconciler is None:
+            raise RuntimeError("xpool scheduler event loop requires its elastic context state capacity owner")
+        with capacity_reconciler_scope(runtime.capacity_reconciler):
+            original_fn(scheduler)
     except BaseException as error:
         lifecycle.fail(error)
         raise
@@ -268,15 +267,13 @@ def after_model_runner_alloc_memory_pool[R](
     try:
         ffn_profile = derive_instance_ffn_profile(model_runner, binding)
         transport = derive_instance_rank_transport_profile(binding, ffn_profile)
-        pool = model_runner.token_to_kv_pool
-        if not isinstance(pool, ElasticMHATokenToKVPool | ElasticMLATokenToKVPool):
-            raise RuntimeError("xpool elastic kv pool replacement was not applied")
-        allocator = model_runner.token_to_kv_pool_allocator
-        if not isinstance(allocator, ElasticTokenToKVPoolAllocator | ElasticPagedTokenToKVPoolAllocator):
-            raise RuntimeError("xpool elastic kv allocator replacement was not applied")
-        request_pool = model_runner.req_to_token_pool
-        if not isinstance(request_pool, ReqToTokenPool):
-            raise RuntimeError("xpool SGLang request pool is unavailable after memory-pool allocation")
+        state = SglangElasticContextState.create(
+            model_runner.token_to_kv_pool,
+            model_runner.token_to_kv_pool_allocator,
+            model_runner.req_to_token_pool,
+            configurator=model_runner.kv_cache_configurator,
+        )
+        runtime.context_state = state
         device_total_bytes = torch.cuda.get_device_properties(binding.worker_rank).total_memory
         atn_runtime_headroom_bytes = int(device_total_bytes * (1 - model_runner.mem_fraction_static))
         decode_graph = get_exec().graph.cuda_graph_config.decode
@@ -295,24 +292,26 @@ def after_model_runner_alloc_memory_pool[R](
             rank=binding.worker_rank,
             transport=transport,
             ffn_profile=ffn_profile,
-            kv_capacity=pool.backing.capacity_profile,
+            context_state_profile=ElasticContextStatePartitionProfile(
+                floor_bytes=state.profile.floor_bytes, reservation_bytes=state.profile.reservation_bytes
+            ),
             atn_runtime_headroom_bytes=atn_runtime_headroom_bytes,
             on_failure=WorkerLifecycle.current().fail,
         )
         plan = runtime.instance_rank.wait_for_fabric_executable()
-        channel_ref = runtime.instance_rank.client.kv_control_channel(plan.generation)
+        channel_ref = runtime.instance_rank.client.context_state_control_channel(plan.generation)
         if channel_ref.generation != plan.generation:
-            raise RuntimeError("xpool daemon returned a kv control channel for a different fabric generation")
+            raise RuntimeError(
+                "xpool daemon returned an elastic context state control channel for a different fabric generation"
+            )
         config = get_global_config()
         model = config.models[binding.instance_index]
-        runtime.kv_capacity = CapacityReconciler.attach(
+        runtime.capacity_reconciler = CapacityReconciler.attach(
             channel_name=channel_ref.name,
-            group_index=binding.instance_index * config.atn_world_size + binding.atn_dp_rank,
+            group_index=sum(item.atn_dp_size for item in config.models[: binding.instance_index]) + binding.atn_dp_rank,
             partition_index=binding.instance_index * config.atn_world_size + binding.worker_rank,
             dp_group_count=binding.atn_dp_size,
-            backing=pool.backing,
-            allocator=allocator,
-            request_pool=request_pool,
+            state=state,
             instance_rank=runtime.instance_rank,
             slo=model.slo or config.scheduler.slo,
         )

@@ -11,6 +11,7 @@ import torch
 from sglang.srt.distributed.parallel_state_wrapper import ParallelState
 from sglang.srt.layers.communicator import LayerScatterModes, ScatterMode
 from sglang.srt.layers.dp_attention import DpPaddingMode
+from sglang.srt.mem_cache.kv_cache_configurator import KVCacheConfigurator
 from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.model_executor.model_runner import ModelRunner
@@ -90,6 +91,7 @@ class FakeModelRunner:
     token_to_kv_pool: object | None = None
     token_to_kv_pool_allocator: object | None = None
     req_to_token_pool: object | None = None
+    kv_cache_configurator: KVCacheConfigurator | None = None
     xpool_runtime: SglangInstanceRankRuntime | None = None
 
     def as_model_runner(self) -> ModelRunner:
