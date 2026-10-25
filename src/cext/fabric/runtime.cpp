@@ -154,7 +154,7 @@ void Runtime::join(c10::DeviceIndex device, const ArenaProjection &projection, i
   }
 }
 
-void Runtime::install_ffnagent_execution(const xpool::ffnagent::ExecutionProjection &projection) {
+void Runtime::install_ffnagent_execution(const xpool::ffnagent::ExecutionInstallDescriptor &projection) {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(phase_ == Phase::Joined, "xpool FFN execution install requires a joined process runtime");
   TORCH_CHECK(static_cast<std::size_t>(*pe_) >= projection_->atnagent_count,

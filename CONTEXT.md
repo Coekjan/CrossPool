@@ -249,6 +249,20 @@ behavior and checkpoint identity, distinct from the source model architecture
 used to interpret its configuration.
 _Avoid_: Source architecture, Execution Signature, Fabric Plan
 
+**FFN Activation**:
+The model-declared nonlinear combination of gate and up projection results
+after their optional additive biases, including any declared clipping, slope
+and Up offset. It is distinct from the runtime startup transition called
+Execution Activation.
+_Avoid_: Source activation string, Execution Activation
+
+**FFN Gate/Up Order**:
+The arrangement of Gate and Up projection rows in an FFN weight representation,
+with checkpoint order describing stored sources and execution order describing
+the operator's required arrangement. It is independent of FFN Activation and
+Quantization Scheme.
+_Avoid_: Gate/Up activation kind, model mathematics
+
 **Execution Activation**:
 The startup transition that makes an installed FFN execution available to the
 generation.
@@ -288,9 +302,15 @@ _Avoid_: Router output, TopK result
 The scoring rule used to select routed Experts and derive their weights,
 distinct from its numerical precision policy.
 
-**Router Precision**:
+**Router Projection Precision**:
 The element-type policy for Router projection inputs, retained weights and
-logits, distinct from the Router Algorithm and payload element type.
+logits, distinct from the Router Algorithm, TopK Weight Rounding and payload
+element type.
+
+**TopK Weight Rounding**:
+The additional numerical rounding of normalized routed-Expert mixing
+coefficients before Shared Expert routes are appended, distinct from the
+element type used to store or exchange Routing Metadata.
 
 **Router Correction Bias**:
 A per-Expert adjustment applied to activated scores only for Expert selection.
@@ -327,6 +347,12 @@ _Avoid_: Local result, latest failure
 The scalar type of hidden-state payload elements, distinct from wider types used
 for algorithm state or accumulation.
 _Avoid_: PayloadDType, dtype code
+
+**Quantization Scheme**:
+The numerical rules and encoding used to represent weights and their associated
+scaling data, independent of the model using them and the concrete operator
+that consumes them.
+_Avoid_: Model family, operator backend, payload element type
 
 **Native ABI Version**:
 The stopped-world compatibility identity shared by one native extension and its

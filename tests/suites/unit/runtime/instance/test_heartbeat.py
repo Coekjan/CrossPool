@@ -6,12 +6,12 @@ from http import HTTPStatus
 from types import SimpleNamespace
 
 import pytest
-from xpool.native import ABI_VERSION
 
 import xpool.runtime.instance
 import xpool.utils.background
 from xpool.fabric import FabricGenerationPhase
 from xpool.model import ModelId
+from xpool.native import ABI_VERSION
 from xpool.runtime.instance import InstanceRankError, InstanceRankRuntime
 from xpool.service.wire import (
     HeartbeatResponse,

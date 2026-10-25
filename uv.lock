@@ -2782,6 +2782,7 @@ source = { editable = "." }
 dependencies = [
     { name = "cuda-bindings" },
     { name = "fastapi" },
+    { name = "flashinfer-python", extra = ["cu13"] },
     { name = "httpx" },
     { name = "nvidia-nvshmem-cu13" },
     { name = "ortools" },
@@ -2817,6 +2818,7 @@ dev = [
 requires-dist = [
     { name = "cuda-bindings", specifier = ">=13.0.3,<14" },
     { name = "fastapi", specifier = ">=0.137.1" },
+    { name = "flashinfer-python", extras = ["cu13"], specifier = "==0.6.18" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "nvidia-nvshmem-cu13", specifier = "==3.7.2" },
     { name = "ortools", specifier = "==9.15.6755" },

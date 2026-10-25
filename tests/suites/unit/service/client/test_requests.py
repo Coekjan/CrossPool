@@ -4,10 +4,10 @@ from http import HTTPStatus
 from types import SimpleNamespace
 
 import pytest
-from xpool.native import ABI_VERSION
 
 import xpool.service.client
 from xpool.fabric import FabricGenerationId, FabricRole
+from xpool.native import ABI_VERSION
 from xpool.service.client import ATNAGENT_TRANSPORT_LEASE_QUIESCE_TIMEOUT_S, XpoolClient
 from xpool.service.errors import XpoolClientError
 from xpool.service.wire import (

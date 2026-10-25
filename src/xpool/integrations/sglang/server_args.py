@@ -65,7 +65,6 @@ SGLANG_SERVER_ARG_RULES: tuple[ServerArgRule, ...] = (
     ServerArgRule("Attention Context Parallelism", lambda: get_parallel().attn_cp_size == 1),
     ServerArgRule("Speculative Decoding", lambda: get_spec().speculative_algorithm is None),
     ServerArgRule("LoRA", lambda: not get_lora().enable_lora and not get_lora().lora_paths),
-    ServerArgRule("Quantization", lambda: get_model().quantization is None),
     ServerArgRule("Expert Parallelism", lambda: get_parallel().ep_size == 1),
     ServerArgRule("MoE Dense TP", lambda: get_parallel().moe_dense_tp_size in (None, 1)),
     ServerArgRule("MoE A2A Backend", lambda: get_exec().moe.moe_a2a_backend == "none"),

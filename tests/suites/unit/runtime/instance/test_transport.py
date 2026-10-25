@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import pytest
-from xpool.native import ABI_VERSION
-from xpool.native.ffn import ResultCode
 
 import xpool.runtime.instance
 from xpool.model import ModelId
+from xpool.native import ABI_VERSION
+from xpool.native.ffn import ResultCode
 from xpool.runtime.instance import InstanceRankError, InstanceRankFailureMonitor
 from xpool.service.wire import InstanceRankRegistration, ProcessRef
 from xpool.transport import TransportArenaHandle

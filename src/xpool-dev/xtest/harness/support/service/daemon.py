@@ -11,15 +11,18 @@ from http import HTTPStatus
 import httpx
 import psutil
 import pytest
-import xpool.native
 from fastapi import FastAPI
-from xpool.native import ABI_VERSION
 
+import xpool.native
 import xpool.service.daemon.app
 import xpool.service.daemon.control
 import xpool.service.daemon.ecs
+from xpool import ffn
 from xpool.config import XpoolConfig, get_global_config
 from xpool.fabric import FabricGenerationId, FabricParticipantPhase, FabricPlan, FabricRole
+from xpool.model import ModelId
+from xpool.native import ABI_VERSION
+from xpool.quantization import Unquantized
 from xpool.service.daemon.app import create_daemon
 from xpool.service.wire import ElasticContextStateControlChannelRef
 from xpool.utils.mps import MpsEndpoint, MpsProbeResult, MpsScope
@@ -205,23 +208,27 @@ def ffnagent_registration(
 def ffn_model_spec(*, model_id: str = str(TEST_MODEL_ID), hidden_size: int = 4) -> dict[str, object]:
     """Return one valid generation-independent Dense FFN Model Spec."""
 
-    return {
-        "model_id": model_id,
-        "hidden_size": hidden_size,
-        "activation": 1,
-        "layers": [
-            {
-                "kind": 1,
-                "layer_id": 0,
-                "intermediate_size": 8,
-                "checkpoint": {
-                    "gate_weight_key": "model.layers.0.mlp.gate_proj.weight",
-                    "up_weight_key": "model.layers.0.mlp.up_proj.weight",
-                    "down_weight_key": "model.layers.0.mlp.down_proj.weight",
-                },
-            }
-        ],
-    }
+    return ffn.FfnModelSpec(
+        model_id=ModelId(model_id),
+        hidden_size=hidden_size,
+        activation=ffn.SiluActivation(),
+        layers=(
+            ffn.DenseFfnSpec(
+                kind=xpool.native.ffn.LayerKind.DENSE,
+                layer_id=0,
+                intermediate_size=8,
+                projections=ffn.GatedProjectionSpec(
+                    gate=ffn.ProjectionSpec(
+                        quantization=Unquantized(), values_key="model.layers.0.mlp.gate_proj.weight"
+                    ),
+                    up=ffn.ProjectionSpec(quantization=Unquantized(), values_key="model.layers.0.mlp.up_proj.weight"),
+                    down=ffn.ProjectionSpec(
+                        quantization=Unquantized(), values_key="model.layers.0.mlp.down_proj.weight"
+                    ),
+                ),
+            ),
+        ),
+    ).model_dump(mode="json")
 
 
 def ffn_profile(*, hidden_size: int = 4) -> dict[str, object]:

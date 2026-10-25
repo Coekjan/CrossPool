@@ -51,7 +51,7 @@ class Glm4MoeLiteAdapter(architecture.FfnModelAdapter):
                         kind=LayerKind.DENSE,
                         layer_id=layer_id,
                         intermediate_size=intermediate_size,
-                        checkpoint=architecture.gated_checkpoint_keys(f"model.layers.{layer_id}.mlp"),
+                        projections=model_config.gated_projections(f"model.layers.{layer_id}.mlp"),
                     )
                 )
                 continue
@@ -59,31 +59,32 @@ class Glm4MoeLiteAdapter(architecture.FfnModelAdapter):
                 ffn.MoeFfnSpec(
                     kind=LayerKind.MOE,
                     router_algorithm=ffn.RouterAlgorithm.SIGMOID,
-                    router_precision=ffn.RouterPrecision.FP32,
+                    router_projection_precision=ffn.RouterProjectionPrecision.FP32,
                     layer_id=layer_id,
                     expert_intermediate_size=expert_intermediate_size,
+                    routed_expert_count=routed_expert_count,
                     shared_expert_count=shared_expert_count,
                     routed_topk=routed_topk,
                     renormalize=renormalize,
                     routed_scaling_factor=routed_scaling_factor,
-                    checkpoint=ffn.MoeFfnCheckpointKeys(
-                        router_weight_key=f"model.layers.{layer_id}.mlp.gate.weight",
-                        router_correction_bias_key=(f"model.layers.{layer_id}.mlp.gate.e_score_correction_bias"),
-                        routed_experts=tuple(
-                            architecture.gated_checkpoint_keys(f"model.layers.{layer_id}.mlp.experts.{expert_id}")
+                    router=model_config.projection(f"model.layers.{layer_id}.mlp.gate"),
+                    router_correction_bias_key=f"model.layers.{layer_id}.mlp.gate.e_score_correction_bias",
+                    routed_experts=ffn.PerExpertSource(
+                        experts=tuple(
+                            model_config.gated_projections(f"model.layers.{layer_id}.mlp.experts.{expert_id}")
                             for expert_id in range(routed_expert_count)
                         ),
-                        shared_expert=(
-                            architecture.gated_checkpoint_keys(f"model.layers.{layer_id}.mlp.shared_experts")
-                            if shared_expert_count > 0
-                            else None
-                        ),
+                    ),
+                    shared_expert=(
+                        model_config.gated_projections(f"model.layers.{layer_id}.mlp.shared_experts")
+                        if shared_expert_count > 0
+                        else None
                     ),
                 )
             )
         return ffn.FfnModelSpec(
             model_id=model_id,
             hidden_size=hidden_size,
-            activation=ffn.ActivationKind.SILU,
+            activation=ffn.SiluActivation(),
             layers=tuple(layers),
         )

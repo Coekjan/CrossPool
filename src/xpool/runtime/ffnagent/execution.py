@@ -4,15 +4,24 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
+from enum import IntEnum
 
 import torch
 
 from xpool import ffn
-from xpool.fabric import InstanceFfnProfile
+from xpool.quantization import TensorLayout
+from xpool.runtime.ffnagent.weights import ProjectionLayout
 from xpool.utils import align_up
 
 OPERATOR_ALIGNMENT_BYTES = 16
 QUALIFIED_MOE_BLOCK_SIZE_M_VALUES = (16, 32, 64, 128)
+
+
+class ExpertOperationKind(IntEnum):
+    """Concrete grouped computation captured into a reusable Graph."""
+
+    SGLANG_TRITON = 1
+    TRITON_KERNELS = 2
 
 
 def dense_workspace_bytes(
@@ -57,7 +66,9 @@ class DenseFfnExecutionSignature:
     payload_row_capacity: int
     hidden_size: int
     local_intermediate_size: int
-    activation: ffn.ActivationKind
+    activation: ffn.ActivationSpec
+    gate_up: ProjectionLayout
+    down: ProjectionLayout
 
     def __post_init__(self) -> None:
         """Reject unsupported or empty Dense execution geometry."""
@@ -66,8 +77,6 @@ class DenseFfnExecutionSignature:
             raise ValueError("Dense FFN execution requires BF16 or FP16 payloads")
         if min(self.payload_row_capacity, self.hidden_size, self.local_intermediate_size) <= 0:
             raise ValueError("Dense FFN execution dimensions must be positive")
-        if self.activation is not ffn.ActivationKind.SILU:
-            raise ValueError("Dense FFN execution supports only SiLU activation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,18 +84,23 @@ class MoeRouterExecutionSignature:
     """Router-owner Graph implementation and resource identity."""
 
     algorithm: ffn.RouterAlgorithm
-    precision: ffn.RouterPrecision
-    router_weight_dtype: torch.dtype
+    projection_precision: ffn.RouterProjectionPrecision
+    weight_rounding: ffn.TopKWeightRounding
+    projection: ProjectionLayout
     routed_expert_count: int
     router_workspace_bytes: int
-    correction_bias_present: bool
+    correction_bias: TensorLayout | None
     renormalize: bool
 
     def __post_init__(self) -> None:
         """Reject invalid Router semantics and resource geometry."""
 
-        if not isinstance(self.algorithm, ffn.RouterAlgorithm) or not isinstance(self.precision, ffn.RouterPrecision):
+        if not isinstance(self.algorithm, ffn.RouterAlgorithm) or not isinstance(
+            self.projection_precision, ffn.RouterProjectionPrecision
+        ):
             raise ValueError("MoE Router execution requires a supported algorithm and precision")
+        if not isinstance(self.weight_rounding, ffn.TopKWeightRounding):
+            raise ValueError("MoE Router execution requires a supported TopK weight rounding policy")
         if self.routed_expert_count <= 0 or self.router_workspace_bytes < 0:
             raise ValueError("MoE Router execution geometry is inconsistent")
 
@@ -101,9 +115,12 @@ class MoeFfnExecutionSignature:
     local_intermediate_size: int
     expert_count: int
     effective_topk: int
-    activation: ffn.ActivationKind
+    activation: ffn.ActivationSpec
     routed_scaling_factor: float
     router: MoeRouterExecutionSignature | None
+    operation: ExpertOperationKind
+    gate_up: ProjectionLayout
+    down: ProjectionLayout
 
     def __post_init__(self) -> None:
         """Reject unsupported or empty MoE execution geometry."""
@@ -123,8 +140,8 @@ class MoeFfnExecutionSignature:
             raise ValueError("MoE FFN execution dimensions must be positive")
         if self.effective_topk > self.expert_count:
             raise ValueError("MoE effective TopK exceeds Expert count")
-        if self.activation is not ffn.ActivationKind.SILU:
-            raise ValueError("MoE FFN execution supports only SiLU activation")
+        if not isinstance(self.operation, ExpertOperationKind):
+            raise ValueError("MoE execution requires a concrete Expert operation")
         if not math.isfinite(self.routed_scaling_factor) or self.routed_scaling_factor <= 0:
             raise ValueError("MoE routed scaling factor must be finite and positive")
 
@@ -159,7 +176,7 @@ def derive_payload_row_capacities(maximum_row_capacity: int) -> tuple[int, ...]:
 
 
 def router_workspace_bytes(
-    precision: ffn.RouterPrecision,
+    projection_precision: ffn.RouterProjectionPrecision,
     *,
     payload_dtype: torch.dtype,
     payload_row_capacity: int,
@@ -176,14 +193,14 @@ def router_workspace_bytes(
         or routed_topk > routed_expert_count
     ):
         raise ValueError("Router dimensions are inconsistent")
-    match precision:
-        case ffn.RouterPrecision.PAYLOAD:
+    match projection_precision:
+        case ffn.RouterProjectionPrecision.PAYLOAD:
             return payload_row_capacity * routed_expert_count * payload_dtype.itemsize
-        case ffn.RouterPrecision.FP32_LOGITS:
+        case ffn.RouterProjectionPrecision.FP32_LOGITS:
             return payload_row_capacity * routed_expert_count * torch.float32.itemsize
-        case ffn.RouterPrecision.FP32:
+        case ffn.RouterProjectionPrecision.FP32:
             return payload_row_capacity * (hidden_size + routed_expert_count) * torch.float32.itemsize
-    raise ValueError(f"unsupported Router precision {precision!r}")
+    raise ValueError(f"unsupported Router projection precision {projection_precision!r}")
 
 
 def moe_workspace_layout(
@@ -216,19 +233,6 @@ def moe_workspace_layout(
             ),
         ),
     ]
-    if signature.router is not None:
-        shared_expert_count = signature.expert_count - signature.router.routed_expert_count
-        routed_topk = signature.effective_topk - shared_expert_count
-        if routed_topk <= 0:
-            raise ValueError("Router-owner Execution Signature has invalid routed TopK")
-        region_specs.extend(
-            (
-                (torch.uint8, (signature.router.router_workspace_bytes,)),
-                (torch.int32, (signature.payload_row_capacity, routed_topk)),
-                (torch.float32, (signature.payload_row_capacity, routed_topk)),
-            )
-        )
-
     offsets = []
     cursor = 0
     for dtype, shape in region_specs:
@@ -238,50 +242,16 @@ def moe_workspace_layout(
     return tuple(region_specs), tuple(offsets), cursor
 
 
-def compute_workspace_bytes(signature: ExecutionSignature) -> int:
-    """Return the selector-independent allocated Compute Workspace extent."""
-
-    if isinstance(signature, DenseFfnExecutionSignature):
-        return dense_workspace_bytes(
-            payload_dtype=signature.payload_dtype,
-            row_capacity=signature.payload_row_capacity,
-            local_intermediate_size=signature.local_intermediate_size,
-        )
-    return max(moe_workspace_layout(signature, block_size_m=value)[2] for value in QUALIFIED_MOE_BLOCK_SIZE_M_VALUES)
-
-
 def control_capture_probe_storage_bytes(signature: ExecutionSignature) -> tuple[int, ...]:
-    """Return logical bytes of every Control Capture Probe storage."""
+    """Return physical byte requests of every Control Capture Probe storage."""
 
-    gate_up_bytes = 2 * signature.payload_dtype.itemsize * signature.hidden_size * signature.local_intermediate_size
-    down_bytes = signature.payload_dtype.itemsize * signature.hidden_size * signature.local_intermediate_size
-    if isinstance(signature, DenseFfnExecutionSignature):
-        return gate_up_bytes, down_bytes
-    result = [signature.expert_count * gate_up_bytes, signature.expert_count * down_bytes]
-    if signature.router is not None:
-        result.append(
-            signature.router.router_weight_dtype.itemsize * signature.router.routed_expert_count * signature.hidden_size
-        )
-        if signature.router.correction_bias_present:
-            result.append(4 * signature.router.routed_expert_count)
-    return tuple(result)
-
-
-def graph_capture_capacity_storage_bytes(signature: ExecutionSignature) -> tuple[int, ...]:
-    """Return logical bytes of every Capacity-dependent Graph Capture storage."""
-
-    payload_bytes = signature.payload_dtype.itemsize * signature.payload_row_capacity * signature.hidden_size
-    if isinstance(signature, DenseFfnExecutionSignature):
-        return payload_bytes, payload_bytes, compute_workspace_bytes(signature)
-    result = [
-        payload_bytes,
-        payload_bytes,
-        8 * signature.payload_row_capacity * signature.effective_topk,
-        compute_workspace_bytes(signature),
-    ]
-    if signature.router is not None:
-        result.append(8)
-    return tuple(result)
+    result = signature.gate_up.allocation_bytes() + signature.down.allocation_bytes()
+    if isinstance(signature, MoeFfnExecutionSignature) and signature.router is not None:
+        result += signature.router.projection.allocation_bytes()
+        correction = signature.router.correction_bias
+        if correction is not None:
+            result += (math.prod(correction.shape) * correction.dtype.itemsize,)
+    return result
 
 
 def graph_capture_initialization_storage_bytes(signature: ExecutionSignature) -> tuple[int, ...]:
@@ -290,71 +260,3 @@ def graph_capture_initialization_storage_bytes(signature: ExecutionSignature) ->
     if isinstance(signature, DenseFfnExecutionSignature):
         return ()
     return (4 * signature.effective_topk,) * 2
-
-
-def required_execution_signatures(
-    *,
-    model_spec: ffn.FfnModelSpec,
-    profile: InstanceFfnProfile,
-    layer_ordinal: int,
-    tp_size: int,
-    tp_rank: int,
-) -> tuple[ExecutionSignature, ...]:
-    """Derive every Capacity-specialized Signature for one prospective TP rank."""
-
-    if not 0 <= layer_ordinal < len(model_spec.layers) or not 0 <= tp_rank < tp_size:
-        raise ValueError("FFN Signature coordinate is outside the model or TP domain")
-    layer = model_spec.layers[layer_ordinal]
-    capacities = derive_payload_row_capacities(
-        max(profile.decode_payload_row_capacity, profile.prefill_payload_row_capacity)
-    )
-    if isinstance(layer, ffn.DenseFfnSpec):
-        if layer.intermediate_size % tp_size:
-            raise ValueError("Dense intermediate size is not divisible by FFN TP")
-        local_intermediate_size = layer.intermediate_size // tp_size
-        return tuple(
-            DenseFfnExecutionSignature(
-                payload_dtype=profile.payload_dtype,
-                payload_row_capacity=capacity,
-                hidden_size=model_spec.hidden_size,
-                local_intermediate_size=local_intermediate_size,
-                activation=model_spec.activation,
-            )
-            for capacity in capacities
-        )
-
-    if layer.expert_intermediate_size % tp_size:
-        raise ValueError("MoE Expert intermediate size is not divisible by FFN TP")
-    return tuple(
-        MoeFfnExecutionSignature(
-            payload_dtype=profile.payload_dtype,
-            payload_row_capacity=capacity,
-            hidden_size=model_spec.hidden_size,
-            local_intermediate_size=layer.expert_intermediate_size // tp_size,
-            expert_count=layer.routed_expert_count + layer.shared_expert_count,
-            effective_topk=layer.routed_topk + layer.shared_expert_count,
-            activation=model_spec.activation,
-            routed_scaling_factor=layer.routed_scaling_factor,
-            router=(
-                MoeRouterExecutionSignature(
-                    algorithm=layer.router_algorithm,
-                    precision=layer.router_precision,
-                    router_weight_dtype=layer.router_precision.weight_dtype(payload_dtype=profile.payload_dtype),
-                    routed_expert_count=layer.routed_expert_count,
-                    router_workspace_bytes=router_workspace_bytes(
-                        layer.router_precision,
-                        payload_dtype=profile.payload_dtype,
-                        payload_row_capacity=capacity,
-                        hidden_size=model_spec.hidden_size,
-                        routed_expert_count=layer.routed_expert_count,
-                        routed_topk=layer.routed_topk,
-                    ),
-                    correction_bias_present=(layer.checkpoint.router_correction_bias_key is not None),
-                    renormalize=layer.renormalize,
-                )
-                if tp_rank == 0
-                else None
-            ),
-        )
-        for capacity in capacities
-    )

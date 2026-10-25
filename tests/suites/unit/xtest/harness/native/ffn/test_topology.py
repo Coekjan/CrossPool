@@ -10,12 +10,12 @@ from typing import cast
 
 import pytest
 import torch
-from xpool.native.ffn import DpRowLayout, ForwardMode, LayerKind, OutputRequirement
 
 from xkit.child import PythonChildFailure
 from xpool.config import XpoolConfig
 from xpool.fabric import FABRIC_UID_HEX_LENGTH
 from xpool.model import ModelId
+from xpool.native.ffn import DpRowLayout, ForwardMode, LayerKind, OutputRequirement
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xtest.harness.native.ffn import topology
 from xtest.harness.native.ffn.protocol import FfnInstanceCommand, FfnInstanceSpec, FfnInvocationSpec

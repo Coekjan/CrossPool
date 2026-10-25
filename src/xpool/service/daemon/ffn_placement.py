@@ -14,7 +14,7 @@ from xpool.fabric import (
     place_ffn_layer,
 )
 from xpool.memory import MIB
-from xpool.runtime.ffnagent import execution
+from xpool.runtime.ffnagent import execution, preparation
 from xpool.runtime.ffnagent.device_memory import (
     DeviceMemoryEstimator,
     allocator_reservation_bytes,
@@ -225,22 +225,22 @@ class PlacementSolver:
                 try:
                     rows = []
                     for tp_rank in range(tp_size):
-                        storage_bytes = estimator.packed_weight_storage_bytes(
-                            model_index,
-                            layer_ordinal,
-                            tp_rank,
+                        layout = preparation.prepare_ffn_layer(
+                            spec,
+                            layer_ordinal=layer_ordinal,
+                            payload_dtype=instance_plan.ffn_profile.payload_dtype,
+                            tp_size=tp_size,
+                            tp_rank=tp_rank,
                         )
+                        storage_bytes = layout.weight_allocation_bytes()
                         rows.append(
                             (
                                 sum(storage_bytes),
                                 len(storage_bytes),
                                 allocator_reservation_bytes(storage_bytes) - sum(storage_bytes),
-                                execution.required_execution_signatures(
-                                    model_spec=spec,
+                                preparation.required_execution_signatures(
+                                    layer_layout=layout,
                                     profile=instance_plan.ffn_profile,
-                                    layer_ordinal=layer_ordinal,
-                                    tp_size=tp_size,
-                                    tp_rank=tp_rank,
                                 ),
                             )
                         )
@@ -269,7 +269,7 @@ class PlacementSolver:
         )
         capture_weight_pair_index = {key: index for index, key in enumerate(capture_weight_pair_keys)}
         signature_storage_bytes = {
-            signature: execution.graph_capture_capacity_storage_bytes(signature) for signature in all_signatures
+            signature: preparation.graph_capture_capacity_storage_bytes(signature) for signature in all_signatures
         }
         capture_weight_pair_storage_bytes = {
             weight_pair_key: execution.control_capture_probe_storage_bytes(weight_pair_key)
@@ -306,7 +306,7 @@ class PlacementSolver:
             capture_weight_pair_allocator_allowance_bytes.values()
         )
         maximum_workspace_bytes = config.scheduler.ffn_concurrency * max(
-            (execution.compute_workspace_bytes(item) for item in all_signatures),
+            (preparation.compute_workspace_bytes(item) for item in all_signatures),
             default=0,
         )
         maximum_runtime_bytes = estimator.execution_runtime_bytes(
@@ -566,7 +566,7 @@ class PlacementSolver:
                 [
                     0,
                     *(
-                        execution.compute_workspace_bytes(signature)
+                        preparation.compute_workspace_bytes(signature)
                         * signature_present[ffnagent_index, signature_index[signature]]
                         for signature in all_signatures
                     ),
@@ -878,7 +878,17 @@ class PlacementSolver:
                 FfnModelPlan(
                     model_spec_digest=spec.digest(),
                     layers=tuple(
-                        place_ffn_layer(layer, groups_by_coordinate[model_index, layer_ordinal])
+                        place_ffn_layer(
+                            layer,
+                            groups_by_coordinate[model_index, layer_ordinal],
+                            local_intermediate_size=preparation.prepare_ffn_layer(
+                                spec,
+                                layer_ordinal=layer_ordinal,
+                                payload_dtype=instance_plans[model_index].ffn_profile.payload_dtype,
+                                tp_size=len(groups_by_coordinate[model_index, layer_ordinal]),
+                                tp_rank=0,
+                            ).local_intermediate_size,
+                        )
                         for layer_ordinal, layer in enumerate(spec.layers)
                     ),
                 )

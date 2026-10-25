@@ -133,11 +133,20 @@ def test_fit_worlds_covers_all_features_and_held_out_evidence(underpredict: bool
     assert headroom == 2
 
 
-@pytest.mark.parametrize("ffn_devices", ((1,), (1, 2)))
+@pytest.mark.parametrize(
+    ("ffn_devices", "packed_tp_sizes"),
+    (
+        ((1,), (1,)),
+        ((1, 2), (2,)),
+        ((1, 2, 3), (2, 3)),
+        ((1, 2, 3, 4), (2, 4)),
+    ),
+)
 def test_profile_ffn_memory_runs_fixed_complete_fleet_matrix(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     ffn_devices: tuple[int, ...],
+    packed_tp_sizes: tuple[int, ...],
 ) -> None:
     config = synthetic_config(ffn_devices=ffn_devices)
     config = config.model_copy(
@@ -172,7 +181,13 @@ def test_profile_ffn_memory_runs_fixed_complete_fleet_matrix(
     result = runner.profile_ffn_memory()
     profile = result.profile
 
-    assert len(experiments) == (5 if len(ffn_devices) >= 2 else 4)
+    packed_spec = held_out_experiment.models[-1].spec
+    assert (
+        tuple(
+            model.ffn_tp_size for experiment in experiments for model in experiment.models if model.spec == packed_spec
+        )
+        == packed_tp_sizes
+    )
     assert all(1 <= model.ffn_tp_size <= len(ffn_devices) for exp in experiments for model in exp.models)
     assert measured == [
         (experiment, repetition) for experiment in (*experiments, held_out_experiment) for repetition in range(1, 4)
@@ -190,8 +205,12 @@ def test_profile_ffn_memory_runs_fixed_complete_fleet_matrix(
     ]
 
 
-def test_experiment_projections_preserve_models_placement_and_complete_fleet(tmp_path: Path) -> None:
-    source = synthetic_config(atn_devices=(0, 1), ffn_devices=(2, 3))
+@pytest.mark.parametrize("ffn_devices", ((2, 3), (2, 3, 4, 5)))
+def test_experiment_projections_preserve_models_placement_and_complete_fleet(
+    tmp_path: Path,
+    ffn_devices: tuple[int, ...],
+) -> None:
+    source = synthetic_config(atn_devices=(0, 1), ffn_devices=ffn_devices)
     fit, held_out = corpus.calibration_experiments(source)
 
     for index, experiment in enumerate((*fit, held_out)):
@@ -213,9 +232,7 @@ def test_experiment_projections_preserve_models_placement_and_complete_fleet(tmp
         assert tuple(placement.role for placement in plan.pe_placements) == (
             FabricRole.ATNAGENT,
             FabricRole.ATNAGENT,
-            FabricRole.FFNAGENT,
-            FabricRole.FFNAGENT,
-        )
+        ) + (FabricRole.FFNAGENT,) * len(ffn_devices)
         assert definition == {
             "models": [
                 {
@@ -338,11 +355,14 @@ def test_evidence_publication_keeps_the_runtime_profile_separate(
 def test_calibration_corpus_uses_one_copy_of_each_signature_shape() -> None:
     fit, held_out = corpus.calibration_experiments(synthetic_config(ffn_devices=(1, 2)))
     members = tuple(experiment.models[0].spec for experiment in fit[:4])
-    assert tuple(model.ffn_tp_size for experiment in fit for model in experiment.models) == (1, 1, 2, 2, 2)
+    assert tuple(model.ffn_tp_size for experiment in fit for model in experiment.models) == (1, 1, 2, 2, 2, 2)
     assert fit[4].model_specs == (members[0],)
-    assert held_out.model_specs == (members[3], members[0])
-    assert tuple(model.ffn_tp_size for model in held_out.models) == (2, 2)
-    assert tuple(model.group_sum_complete_admitted for model in held_out.models) == (True, False)
+    assert held_out.model_specs == (members[3], members[0], fit[-1].models[0].spec)
+    packed_layer = fit[-1].models[0].spec.layers[0]
+    assert isinstance(packed_layer, ffn.MoeFfnSpec)
+    assert packed_layer.topk_weight_rounding is ffn.TopKWeightRounding.LOGITS_DTYPE
+    assert tuple(model.ffn_tp_size for model in held_out.models) == (2, 2, 2)
+    assert tuple(model.group_sum_complete_admitted for model in held_out.models) == (True, False, True)
 
     assert tuple(tuple(layer.kind for layer in member.layers) for member in members) == (
         (LayerKind.DENSE,),
@@ -364,13 +384,13 @@ def test_calibration_corpus_uses_one_copy_of_each_signature_shape() -> None:
     assert isinstance(moe128, ffn.MoeFfnSpec)
     assert (members[0].hidden_size, dense.intermediate_size) == (5120, 17408)
     assert (
-        (softmax_moe.router_algorithm, softmax_moe.router_precision),
-        (corrected_moe.router_algorithm, corrected_moe.router_precision),
-        (moe128.router_algorithm, moe128.router_precision),
+        (softmax_moe.router_algorithm, softmax_moe.router_projection_precision),
+        (corrected_moe.router_algorithm, corrected_moe.router_projection_precision),
+        (moe128.router_algorithm, moe128.router_projection_precision),
     ) == (
-        (ffn.RouterAlgorithm.SOFTMAX, ffn.RouterPrecision.FP32_LOGITS),
-        (ffn.RouterAlgorithm.SIGMOID, ffn.RouterPrecision.FP32),
-        (ffn.RouterAlgorithm.SOFTMAX, ffn.RouterPrecision.PAYLOAD),
+        (ffn.RouterAlgorithm.SOFTMAX, ffn.RouterProjectionPrecision.FP32_LOGITS),
+        (ffn.RouterAlgorithm.SIGMOID, ffn.RouterProjectionPrecision.FP32),
+        (ffn.RouterAlgorithm.SOFTMAX, ffn.RouterProjectionPrecision.PAYLOAD),
     )
     assert (
         members[1].hidden_size,
@@ -379,7 +399,7 @@ def test_calibration_corpus_uses_one_copy_of_each_signature_shape() -> None:
         softmax_moe.routed_expert_count,
         softmax_moe.shared_expert_count,
         softmax_moe.routed_topk,
-        softmax_moe.checkpoint.router_correction_bias_key is not None,
+        softmax_moe.router_correction_bias_key is not None,
         softmax_moe.renormalize,
         softmax_moe.routed_scaling_factor,
     ) == (2048, 10944, 1408, 64, 2, 6, False, False, 1.0)
@@ -390,7 +410,7 @@ def test_calibration_corpus_uses_one_copy_of_each_signature_shape() -> None:
         corrected_moe.routed_expert_count,
         corrected_moe.shared_expert_count,
         corrected_moe.routed_topk,
-        corrected_moe.checkpoint.router_correction_bias_key is not None,
+        corrected_moe.router_correction_bias_key is not None,
         corrected_moe.renormalize,
         corrected_moe.routed_scaling_factor,
     ) == (2048, 10240, 1536, 64, 1, 4, True, True, 1.8)
@@ -400,7 +420,7 @@ def test_calibration_corpus_uses_one_copy_of_each_signature_shape() -> None:
         moe128.routed_expert_count,
         moe128.shared_expert_count,
         moe128.routed_topk,
-        moe128.checkpoint.router_correction_bias_key is not None,
+        moe128.router_correction_bias_key is not None,
         moe128.renormalize,
         moe128.routed_scaling_factor,
     ) == (2048, 768, 128, 0, 8, False, True, 1.0)

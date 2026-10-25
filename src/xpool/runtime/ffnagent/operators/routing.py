@@ -11,6 +11,7 @@ from triton import language
 
 from xpool import ffn
 from xpool.runtime.ffnagent import execution, weights
+from xpool.runtime.ffnagent.operators import linear
 
 ROUTING_FINALIZATION_BLOCK_SIZE = 256
 
@@ -40,6 +41,7 @@ def router_topk_kernel(
     SOFTMAX: language.constexpr,
     CORRECTION_BIAS_PRESENT: language.constexpr,
     RENORMALIZE: language.constexpr,
+    ROUND_TO_LOGITS_DTYPE: language.constexpr,
 ):
     """Select corrected routes and retain uncorrected activated weights.
 
@@ -82,20 +84,26 @@ def router_topk_kernel(
         normalizer += weight
         selection = language.where(experts == expert, -float("inf"), selection)
 
-    if RENORMALIZE:
+    if RENORMALIZE or ROUND_TO_LOGITS_DTYPE:
         # Slot loads can use different threads from the selection-loop stores.
         language.debug_barrier()
         slots = language.arange(0, TOPK_BLOCK_SIZE)
         output_offsets = row * TOPK + slots
         selected_weights = language.load(routed_weights_pointer + output_offsets, mask=slots < TOPK, other=0.0)
-        denominator = language.where(normalizer > 0.0, normalizer, 1.0)
-        language.store(routed_weights_pointer + output_offsets, selected_weights / denominator, mask=slots < TOPK)
+        if RENORMALIZE:
+            denominator = language.where(normalizer > 0.0, normalizer, 1.0)
+            selected_weights = selected_weights / denominator
+        if ROUND_TO_LOGITS_DTYPE:
+            selected_weights = selected_weights.to(logits_pointer.dtype.element_ty).to(language.float32)
+        language.store(routed_weights_pointer + output_offsets, selected_weights, mask=slots < TOPK)
 
 
 def compute_routed_topk(
     algorithm: ffn.RouterAlgorithm,
-    precision: ffn.RouterPrecision,
+    projection_precision: ffn.RouterProjectionPrecision,
     *,
+    projection_operation: linear.LinearOperationKind,
+    weight_rounding: ffn.TopKWeightRounding,
     hidden_states: torch.Tensor,
     router_weights: weights.MoeRouterWeights,
     workspace: torch.Tensor,
@@ -105,29 +113,33 @@ def compute_routed_topk(
 ) -> None:
     """Write qualified routed-only IDs and weights into caller-owned storage.
 
-    Precision selects projection dtypes and caller-owned workspace. Optional
-    correction changes selection only. Capture warmup compiles FP32 conversion.
+    Projection precision selects operand dtypes and caller-owned workspace.
+    Weight rounding applies after normalization while carrier storage stays
+    FP32. Optional correction changes selection only. Capture warmup compiles
+    FP32 input conversion.
     """
 
     payload_dtype = hidden_states.dtype
-    expected_dtype = precision.weight_dtype(payload_dtype=payload_dtype)
+    expected_dtype = projection_precision.weight_dtype(payload_dtype=payload_dtype)
     weights.validate_tensor(hidden_states, name="hidden_states", dtype=payload_dtype, dimensions=2)
     weights.validate_tensor(workspace, name="Router workspace", dtype=torch.uint8, dimensions=1)
     weights.validate_tensor(routed_ids, name="routed Expert ids", dtype=torch.int32, dimensions=2)
     weights.validate_tensor(routed_weights, name="routed Expert weights", dtype=torch.float32, dimensions=2)
     row_capacity, hidden_size = hidden_states.shape
-    routed_expert_count, router_hidden_size = router_weights.weight.shape
+    routed_expert_count, router_hidden_size = router_weights.projection.values.shape
     routed_topk = routed_ids.shape[1]
     if (
         router_hidden_size != hidden_size
-        or router_weights.weight.dtype is not expected_dtype
+        or router_weights.projection.values.dtype is not expected_dtype
         or routed_ids.shape != routed_weights.shape
         or routed_ids.shape[0] != row_capacity
     ):
         raise ValueError("Router tensors disagree with the execution geometry")
     correction_bias = router_weights.correction_bias
+    if router_weights.projection.scales is not None:
+        raise ValueError("Router floating execution does not support encoded scales")
     expected_bytes = execution.router_workspace_bytes(
-        precision,
+        projection_precision,
         payload_dtype=payload_dtype,
         payload_row_capacity=row_capacity,
         hidden_size=hidden_size,
@@ -136,26 +148,31 @@ def compute_routed_topk(
     )
     if workspace.numel() != expected_bytes:
         raise ValueError(f"Router workspace must contain exactly {expected_bytes} bytes")
-    tensors = (router_weights.weight, workspace, routed_ids, routed_weights)
+    tensors = (router_weights.projection.values, workspace, routed_ids, routed_weights)
     if any(tensor.device != hidden_states.device for tensor in tensors):
         raise ValueError("Router tensors must share one device")
     if correction_bias is not None and correction_bias.device != hidden_states.device:
         raise ValueError("Router correction bias must share the input device")
 
-    match precision:
-        case ffn.RouterPrecision.PAYLOAD:
+    match projection_precision:
+        case ffn.RouterProjectionPrecision.PAYLOAD:
             logits = workspace.view(payload_dtype).view(row_capacity, routed_expert_count)
-            torch.mm(hidden_states, router_weights.weight.t(), out=logits)
-        case ffn.RouterPrecision.FP32_LOGITS:
+            router_input = hidden_states
+        case ffn.RouterProjectionPrecision.FP32_LOGITS:
             logits = workspace.view(torch.float32).view(row_capacity, routed_expert_count)
-            torch.mm(hidden_states, router_weights.weight.t(), out=logits, out_dtype=torch.float32)
-        case ffn.RouterPrecision.FP32:
+            router_input = hidden_states
+        case ffn.RouterProjectionPrecision.FP32:
             scratch = workspace.view(torch.float32)
             input_elements = row_capacity * hidden_size
             router_input = scratch[:input_elements].view(row_capacity, hidden_size)
             logits = scratch[input_elements:].view(row_capacity, routed_expert_count)
             copy_router_input(hidden_states, router_input)
-            torch.mm(router_input, router_weights.weight.t(), out=logits)
+    linear.compute_projection(
+        projection_operation,
+        hidden_states=router_input,
+        projection=router_weights.projection,
+        output=logits,
+    )
     # Triton launch metadata exceeds the constexpr-annotated signature.
     typing.cast(typing.Callable[..., object], router_topk_kernel[(row_capacity,)])(
         logits,
@@ -169,6 +186,7 @@ def compute_routed_topk(
         SOFTMAX=algorithm is ffn.RouterAlgorithm.SOFTMAX,
         CORRECTION_BIAS_PRESENT=correction_bias is not None,
         RENORMALIZE=renormalize,
+        ROUND_TO_LOGITS_DTYPE=weight_rounding is ffn.TopKWeightRounding.LOGITS_DTYPE,
         num_warps=1,
     )
 

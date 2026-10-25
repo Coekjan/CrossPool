@@ -12,7 +12,7 @@
 #include <xpool/fabric/arena.hpp>
 #include <xpool/fabric/layout.hpp>
 #include <xpool/fabric/projection.hpp>
-#include <xpool/ffnagent/projection.hpp>
+#include <xpool/ffnagent/execution.hpp>
 #include <xpool/ffnagent/runtime.cuh>
 #include <xpool/macros.hpp>
 #include <xpool/utils/device.hpp>
@@ -42,7 +42,7 @@ public:
   /// \pre projection passed intrinsic validation at construction.
   /// \pre fabric_projection and layout belong to the joined Fabric Runtime.
   /// \pre arena and activation_count refer to resources owned by the joined Fabric Runtime.
-  void install(const ExecutionProjection &projection, xpool::fabric::ArenaView arena,
+  void install(const ExecutionInstallDescriptor &projection, xpool::fabric::ArenaView arena,
                const xpool::fabric::ArenaLayout &layout, const xpool::fabric::ArenaProjection &fabric_projection,
                std::size_t ffnagent_index, std::uint32_t *activation_count);
 
@@ -86,15 +86,15 @@ private:
     void destroy();
   };
 
-  void materialize_shared_tables(const ExecutionProjection &projection,
+  void materialize_shared_tables(const ExecutionInstallDescriptor &projection,
                                  const xpool::fabric::ArenaProjection &fabric_projection, std::size_t ffnagent_index);
 
-  void materialize_lane(const ExecutionProjection &projection, xpool::fabric::ArenaView arena,
+  void materialize_lane(const ExecutionInstallDescriptor &projection, xpool::fabric::ArenaView arena,
                         const xpool::fabric::ArenaLayout &layout,
                         const xpool::fabric::ArenaProjection &fabric_projection, std::size_t ffnagent_index,
                         std::size_t executor_lane_index, int device, std::uint32_t *activation_count);
 
-  void materialize(const ExecutionProjection &projection, xpool::fabric::ArenaView arena,
+  void materialize(const ExecutionInstallDescriptor &projection, xpool::fabric::ArenaView arena,
                    const xpool::fabric::ArenaLayout &layout, const xpool::fabric::ArenaProjection &fabric_projection,
                    std::size_t ffnagent_index, std::uint32_t *activation_count);
 

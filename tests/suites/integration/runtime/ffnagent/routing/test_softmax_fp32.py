@@ -6,8 +6,9 @@ import pytest
 import torch
 
 import xtest
-from xpool.ffn import RouterAlgorithm, RouterPrecision
-from xpool.runtime.ffnagent import execution, routing, weights
+from xpool.ffn import RouterAlgorithm, RouterProjectionPrecision, TopKWeightRounding
+from xpool.runtime.ffnagent import execution, weights
+from xpool.runtime.ffnagent.operators import linear, routing
 
 
 @pytest.mark.parametrize("payload_dtype", (torch.bfloat16, torch.float16), ids=("bfloat16", "float16"))
@@ -25,12 +26,14 @@ def test_softmax_fp32_router_matches_selection_only_correction(
         torch.tensor((-0.75, -0.25, 0.5, 0.8), device="cuda", dtype=torch.float32) if correction_present else None
     )
     router = weights.MoeRouterWeights(
-        weight=torch.eye(4, device="cuda", dtype=payload_dtype),
+        projection=weights.ProjectionWeights(
+            values=torch.eye(4, device="cuda", dtype=payload_dtype), scales=None, bias=None
+        ),
         correction_bias=correction_bias,
     )
     workspace = torch.empty(
         execution.router_workspace_bytes(
-            RouterPrecision.FP32_LOGITS,
+            RouterProjectionPrecision.FP32_LOGITS,
             payload_dtype=payload_dtype,
             payload_row_capacity=2,
             hidden_size=4,
@@ -45,7 +48,9 @@ def test_softmax_fp32_router_matches_selection_only_correction(
 
     routing.compute_routed_topk(
         RouterAlgorithm.SOFTMAX,
-        RouterPrecision.FP32_LOGITS,
+        RouterProjectionPrecision.FP32_LOGITS,
+        projection_operation=linear.LinearOperationKind.TORCH,
+        weight_rounding=TopKWeightRounding.NONE,
         hidden_states=hidden_states,
         router_weights=router,
         workspace=workspace,
@@ -58,7 +63,9 @@ def test_softmax_fp32_router_matches_selection_only_correction(
     with torch.cuda.graph(graph):
         routing.compute_routed_topk(
             RouterAlgorithm.SOFTMAX,
-            RouterPrecision.FP32_LOGITS,
+            RouterProjectionPrecision.FP32_LOGITS,
+            projection_operation=linear.LinearOperationKind.TORCH,
+            weight_rounding=TopKWeightRounding.NONE,
             hidden_states=hidden_states,
             router_weights=router,
             workspace=workspace,

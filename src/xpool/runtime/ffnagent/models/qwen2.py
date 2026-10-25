@@ -29,13 +29,13 @@ class Qwen2Adapter(architecture.FfnModelAdapter):
         return ffn.FfnModelSpec(
             model_id=model_id,
             hidden_size=hidden_size,
-            activation=ffn.ActivationKind.SILU,
+            activation=ffn.SiluActivation(),
             layers=tuple(
                 ffn.DenseFfnSpec(
                     kind=LayerKind.DENSE,
                     layer_id=layer_id,
                     intermediate_size=intermediate_size,
-                    checkpoint=architecture.gated_checkpoint_keys(f"model.layers.{layer_id}.mlp"),
+                    projections=model_config.gated_projections(f"model.layers.{layer_id}.mlp"),
                 )
                 for layer_id in range(layer_count)
             ),

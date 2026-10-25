@@ -51,7 +51,7 @@ public:
   void activate_ffnagent();
 
   /// Install one complete FfnAgent execution after Fabric join.
-  void install_ffnagent_execution(const xpool::ffnagent::ExecutionProjection &projection);
+  void install_ffnagent_execution(const xpool::ffnagent::ExecutionInstallDescriptor &projection);
 
   /// Reject premature completion or CUDA failure of the active Resident.
   void check_ffnagent_health() const;

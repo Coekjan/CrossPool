@@ -3,12 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from xpool.native import ABI_VERSION
 
 import xpool.runtime.instance
 from xpool.config import XpoolConfig
 from xpool.fabric import FabricGenerationId, FabricGenerationPhase
 from xpool.model import ModelId
+from xpool.native import ABI_VERSION
 from xpool.runtime.instance import InstanceRankError, InstanceRankRuntime
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.wire import InstanceRankRegistration, ReadinessSnapshot, ReadinessStatus

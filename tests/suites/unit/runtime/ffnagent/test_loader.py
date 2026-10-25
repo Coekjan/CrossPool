@@ -23,9 +23,10 @@ from xpool.fabric import (
     InstanceFfnProfile,
     InstanceRankTopology,
 )
-from xpool.ffn import ActivationKind, DenseFfnSpec, FfnModelSpec, GatedFfnCheckpointKeys
+from xpool.ffn import DenseFfnSpec, FfnModelSpec, GatedProjectionSpec, ProjectionSpec, SiluActivation
 from xpool.native.ffn import LayerKind
-from xpool.runtime.ffnagent import loader, weights
+from xpool.quantization import Unquantized
+from xpool.runtime.ffnagent import loader, preparation, weights
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
@@ -38,16 +39,16 @@ def test_plan_materialization_selects_only_local_layers(
     spec = FfnModelSpec(
         model_id=TEST_MODEL_ID,
         hidden_size=4,
-        activation=ActivationKind.SILU,
+        activation=SiluActivation(),
         layers=(
             DenseFfnSpec(
                 kind=LayerKind.DENSE,
                 layer_id=0,
                 intermediate_size=8,
-                checkpoint=GatedFfnCheckpointKeys(
-                    gate_weight_key="gate",
-                    up_weight_key="up",
-                    down_weight_key="down",
+                projections=GatedProjectionSpec(
+                    gate=ProjectionSpec(quantization=Unquantized(), values_key="gate"),
+                    up=ProjectionSpec(quantization=Unquantized(), values_key="up"),
+                    down=ProjectionSpec(quantization=Unquantized(), values_key="down"),
                 ),
             ),
         ),
@@ -125,12 +126,13 @@ def test_plan_materialization_selects_only_local_layers(
     assert observed_requests[0] == (
         loader.LocalLayerWeightRequest(
             model_path=tmp_path,
-            hidden_size=4,
-            payload_dtype=torch.bfloat16,
-            router_weight_dtype=None,
-            layer=spec.layers[0],
-            tp_rank=0,
-            tp_size=1,
+            layer_layout=preparation.prepare_ffn_layer(
+                spec,
+                layer_ordinal=0,
+                payload_dtype=torch.bfloat16,
+                tp_rank=0,
+                tp_size=1,
+            ),
         ),
     )
     assert observed_requests[1] == ()

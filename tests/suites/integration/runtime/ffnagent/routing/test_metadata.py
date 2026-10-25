@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 
 import xtest
-from xpool.runtime.ffnagent import routing
+from xpool.runtime.ffnagent.operators import routing
 
 
 @xtest.requirements(device_count=1)

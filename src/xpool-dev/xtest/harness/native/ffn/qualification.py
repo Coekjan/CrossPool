@@ -1,4 +1,4 @@
-"""Deterministic small Dense execution used by final-runtime qualification."""
+"""Deterministic FFN structures and independent numerical references."""
 
 from __future__ import annotations
 
@@ -23,13 +23,57 @@ from xpool.fabric import (
 )
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind, OutputRequirement
-from xpool.runtime.ffnagent.weights import DenseFfnWeights, MoeFfnWeights, MoeRouterWeights
+from xpool.quantization import Unquantized
+from xpool.runtime.ffnagent.weights import DenseFfnWeights, MoeFfnWeights, MoeRouterWeights, ProjectionWeights
 
 EXECUTION_HIDDEN_SIZE = 16
 DENSE_INTERMEDIATE_SIZE = 32
 MOE_INTERMEDIATE_SIZE = 16
 MOE_EXPERT_COUNT = 4
 MOE_TOPK = 2
+
+
+def decode_mxfp4_weights(values: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
+    """Expand an isolated reference through the independent E2M1 codebook."""
+
+    codebook = torch.tensor((0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1, -1.5, -2, -3, -4, -6), device=values.device)
+    codes = torch.stack((values & 15, values >> 4), dim=-1).flatten(-2).long()
+    factors = torch.exp2(scales.float() - 127).repeat_interleave(32, dim=-1)
+    return codebook[codes] * factors
+
+
+def packed_moe_reference(
+    hidden_states: torch.Tensor,
+    *,
+    gate_up: ProjectionWeights,
+    down: ProjectionWeights,
+    ids: torch.Tensor,
+    probabilities: torch.Tensor,
+    activation: ffn.ActivationSpec,
+    routed_scaling_factor: float,
+) -> torch.Tensor:
+    """Evaluate isolated packed Experts without the production decoder or kernels."""
+
+    assert gate_up.scales is not None and down.scales is not None
+    assert gate_up.bias is not None and down.bias is not None
+    first = decode_mxfp4_weights(gate_up.values, gate_up.scales)
+    second = decode_mxfp4_weights(down.values, down.scales)
+    result = torch.zeros_like(hidden_states, dtype=torch.float32)
+    for expert in range(first.shape[0]):
+        rows, slots = torch.where(ids == expert)
+        projected = hidden_states[rows].float() @ first[expert].t() + gate_up.bias[expert]
+        gate = projected[:, ::2]
+        up = projected[:, 1::2]
+        if activation.limit is not None:
+            gate = gate.clamp(max=activation.limit)
+            up = up.clamp(min=-activation.limit, max=activation.limit)
+        activated = (gate * torch.sigmoid(activation.alpha * gate) * (up + activation.up_offset)).to(
+            hidden_states.dtype
+        )
+        partial = activated.float() @ second[expert].t() + down.bias[expert]
+        weighted = (partial * probabilities[rows, slots, None]).to(hidden_states.dtype).float()
+        result.index_add_(0, rows, weighted)
+    return (result * routed_scaling_factor).to(hidden_states.dtype)
 
 
 def execution_model_specs(
@@ -40,11 +84,11 @@ def execution_model_specs(
 ) -> tuple[ffn.FfnModelSpec, ...]:
     """Build the co-indexed Model Specs used by deterministic qualification."""
 
-    def gated_keys(prefix: str) -> ffn.GatedFfnCheckpointKeys:
-        return ffn.GatedFfnCheckpointKeys(
-            gate_weight_key=f"{prefix}.gate.weight",
-            up_weight_key=f"{prefix}.up.weight",
-            down_weight_key=f"{prefix}.down.weight",
+    def gated_projections(prefix: str) -> ffn.GatedProjectionSpec:
+        return ffn.GatedProjectionSpec(
+            gate=ffn.ProjectionSpec(quantization=Unquantized(), values_key=f"{prefix}.gate.weight"),
+            up=ffn.ProjectionSpec(quantization=Unquantized(), values_key=f"{prefix}.up.weight"),
+            down=ffn.ProjectionSpec(quantization=Unquantized(), values_key=f"{prefix}.down.weight"),
         )
 
     result = []
@@ -58,7 +102,7 @@ def execution_model_specs(
                         kind=execution_kind,
                         layer_id=layer_ordinal,
                         intermediate_size=DENSE_INTERMEDIATE_SIZE,
-                        checkpoint=gated_keys(prefix),
+                        projections=gated_projections(prefix),
                     )
                 )
             else:
@@ -66,29 +110,30 @@ def execution_model_specs(
                     ffn.MoeFfnSpec(
                         kind=execution_kind,
                         router_algorithm=ffn.RouterAlgorithm.SOFTMAX,
-                        router_precision=ffn.RouterPrecision.PAYLOAD,
+                        router_projection_precision=ffn.RouterProjectionPrecision.PAYLOAD,
                         layer_id=layer_ordinal,
                         expert_intermediate_size=MOE_INTERMEDIATE_SIZE,
+                        routed_expert_count=MOE_EXPERT_COUNT,
                         shared_expert_count=0,
                         routed_topk=MOE_TOPK,
                         renormalize=True,
                         routed_scaling_factor=1.0,
-                        checkpoint=ffn.MoeFfnCheckpointKeys(
-                            router_weight_key=f"{prefix}.router.weight",
-                            router_correction_bias_key=None,
-                            routed_experts=tuple(
-                                gated_keys(f"{prefix}.experts.{expert_index}")
+                        router=ffn.ProjectionSpec(quantization=Unquantized(), values_key=f"{prefix}.router.weight"),
+                        router_correction_bias_key=None,
+                        routed_experts=ffn.PerExpertSource(
+                            experts=tuple(
+                                gated_projections(f"{prefix}.experts.{expert_index}")
                                 for expert_index in range(MOE_EXPERT_COUNT)
                             ),
-                            shared_expert=None,
                         ),
+                        shared_expert=None,
                     )
                 )
         result.append(
             ffn.FfnModelSpec(
                 model_id=ModelId(f"qualification/{execution_kind.name.lower()}-{instance_index}"),
                 hidden_size=EXECUTION_HIDDEN_SIZE,
-                activation=ffn.ActivationKind.SILU,
+                activation=ffn.SiluActivation(),
                 layers=tuple(layers),
             )
         )
@@ -181,8 +226,10 @@ def dense_layer_weights(
     end = begin + local_width
     gate, up, down = dense_full_weights(device=device, payload_dtype=payload_dtype, layer_ordinal=layer_ordinal)
     return DenseFfnWeights(
-        gate_up_weight=torch.cat((gate[begin:end], up[begin:end])).contiguous(),
-        down_weight=down[:, begin:end].contiguous(),
+        gate_up=ProjectionWeights(
+            values=torch.cat((gate[begin:end], up[begin:end])).contiguous(), scales=None, bias=None
+        ),
+        down=ProjectionWeights(values=down[:, begin:end].contiguous(), scales=None, bias=None),
     )
 
 
@@ -252,9 +299,15 @@ def moe_layer_weights(
     end = begin + local_width
     router, gate, up, down = moe_full_weights(device=device, payload_dtype=payload_dtype, layer_ordinal=layer_ordinal)
     return MoeFfnWeights(
-        expert_gate_up_weight=torch.cat((gate[:, begin:end], up[:, begin:end]), dim=1).contiguous(),
-        expert_down_weight=down[:, :, begin:end].contiguous(),
-        router=MoeRouterWeights(weight=router, correction_bias=None) if ffnagent_index == 0 else None,
+        gate_up=ProjectionWeights(
+            values=torch.cat((gate[:, begin:end], up[:, begin:end]), dim=1).contiguous(), scales=None, bias=None
+        ),
+        down=ProjectionWeights(values=down[:, :, begin:end].contiguous(), scales=None, bias=None),
+        router=MoeRouterWeights(
+            projection=ProjectionWeights(values=router, scales=None, bias=None), correction_bias=None
+        )
+        if ffnagent_index == 0
+        else None,
     )
 
 

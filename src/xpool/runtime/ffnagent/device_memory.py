@@ -17,7 +17,7 @@ from xpool.memory import (
     FfnMemoryCalibrationCoefficients,
     load_memory_calibration_profile,
 )
-from xpool.runtime.ffnagent import execution
+from xpool.runtime.ffnagent import execution, preparation
 from xpool.utils import align_up
 from xpool.utils.integer import ensure_sint64_nonnegative
 
@@ -97,7 +97,7 @@ def graph_capture_allocator_allowance_bytes(signature: execution.ExecutionSignat
     Transient reservations include their logical bytes, absent from the ledger.
     """
 
-    storage_bytes = execution.graph_capture_capacity_storage_bytes(signature)
+    storage_bytes = preparation.graph_capture_capacity_storage_bytes(signature)
     if isinstance(signature, execution.DenseFfnExecutionSignature):
         reserved = allocator_reservation_bytes(storage_bytes)
     else:
@@ -147,45 +147,6 @@ class DeviceMemoryEstimator:
 
         model = self.config.models[model_plan_index]
         return model.ffn_tp_size or len(self.config.ffn.devices)
-
-    def packed_weight_storage_bytes(
-        self,
-        model_plan_index: int,
-        layer_ordinal: int,
-        tp_rank: int,
-    ) -> tuple[int, ...]:
-        """Return one packed layer's consecutive canonical allocation requests."""
-
-        spec = self.model_specs[model_plan_index]
-        payload_bytes = self.instance_profiles[model_plan_index].payload_dtype.itemsize
-        layer = spec.layers[layer_ordinal]
-        tp_size = self.tp_size(model_plan_index)
-        if not 0 <= tp_rank < tp_size:
-            raise ValueError("packed-weight TP rank is outside the configured width")
-        if isinstance(layer, ffn.DenseFfnSpec):
-            if layer.intermediate_size % tp_size:
-                raise ValueError("Dense intermediate size is not divisible by FFN TP")
-            local_width = layer.intermediate_size // tp_size
-            return (
-                2 * payload_bytes * spec.hidden_size * local_width,
-                payload_bytes * spec.hidden_size * local_width,
-            )
-        if layer.expert_intermediate_size % tp_size:
-            raise ValueError("MoE Expert intermediate size is not divisible by FFN TP")
-        local_width = layer.expert_intermediate_size // tp_size
-        expert_count = layer.routed_expert_count + layer.shared_expert_count
-        result = [
-            2 * payload_bytes * expert_count * spec.hidden_size * local_width,
-            payload_bytes * expert_count * spec.hidden_size * local_width,
-        ]
-        if tp_rank == 0:
-            router_dtype = layer.router_precision.weight_dtype(
-                payload_dtype=self.instance_profiles[model_plan_index].payload_dtype,
-            )
-            result.append(router_dtype.itemsize * layer.routed_expert_count * spec.hidden_size)
-            if layer.checkpoint.router_correction_bias_key is not None:
-                result.append(4 * layer.routed_expert_count)
-        return tuple(result)
 
     def execution_runtime_bytes(
         self,
@@ -288,24 +249,23 @@ class DeviceMemoryEstimator:
         packed_weight_allowance = 0
         local_layer_count = 0
         local_layer_capacity_count = 0
-        for model_index, (spec, profile, model_plan) in enumerate(
-            zip(self.model_specs, self.instance_profiles, model_plans, strict=True)
-        ):
+        for spec, profile, model_plan in zip(self.model_specs, self.instance_profiles, model_plans, strict=True):
             for layer_ordinal, layer_plan in enumerate(model_plan.layers):
                 if ffnagent_index not in layer_plan.ffnagent_indices:
                     continue
                 tp_rank = layer_plan.ffnagent_indices.index(ffnagent_index)
-                local_signatures = execution.required_execution_signatures(
-                    model_spec=spec,
-                    profile=profile,
+                layout = preparation.prepare_ffn_layer(
+                    spec,
                     layer_ordinal=layer_ordinal,
+                    payload_dtype=profile.payload_dtype,
                     tp_size=len(layer_plan.ffnagent_indices),
                     tp_rank=tp_rank,
                 )
+                local_signatures = preparation.required_execution_signatures(layer_layout=layout, profile=profile)
                 signatures.update(local_signatures)
                 local_layer_count += 1
                 local_layer_capacity_count += len(local_signatures)
-                storage_bytes = self.packed_weight_storage_bytes(model_index, layer_ordinal, tp_rank)
+                storage_bytes = layout.weight_allocation_bytes()
                 packed_weight_storage_bytes.extend(storage_bytes)
                 packed_weight_allowance += allocator_reservation_bytes(storage_bytes) - sum(storage_bytes)
 
@@ -315,7 +275,7 @@ class DeviceMemoryEstimator:
             for signature in capture_weight_pair_keys
             for value in execution.control_capture_probe_storage_bytes(signature)
         ) + tuple(
-            value for signature in signatures for value in execution.graph_capture_capacity_storage_bytes(signature)
+            value for signature in signatures for value in preparation.graph_capture_capacity_storage_bytes(signature)
         )
         packed_weight_storage_bytes_tuple = tuple(packed_weight_storage_bytes)
         packed_weight_bytes = sum(packed_weight_storage_bytes_tuple)
@@ -335,7 +295,7 @@ class DeviceMemoryEstimator:
         executor_lane_count = self.config.scheduler.ffn_concurrency
         compute_branch_count = executor_lane_count * len(signatures)
         lane_workspace_bytes = executor_lane_count * max(
-            (execution.compute_workspace_bytes(signature) for signature in signatures), default=0
+            (preparation.compute_workspace_bytes(signature) for signature in signatures), default=0
         )
         execution_runtime_bytes = self.execution_runtime_bytes(
             local_layer_count=local_layer_count,

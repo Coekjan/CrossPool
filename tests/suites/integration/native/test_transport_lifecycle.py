@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 import torch
-import xpool.native
-from xpool.native import RuntimeRole
 
+import xpool.native
 import xtest
 from xpool.config import DebugConfig
+from xpool.native import RuntimeRole
 from xtest.harness.native.case import run_native_case
 
 pytestmark = pytest.mark.timeout(180)

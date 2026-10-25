@@ -3,7 +3,6 @@ from __future__ import annotations
 from http import HTTPStatus
 
 import pytest
-from xpool.native import ABI_VERSION
 
 import xpool.service.daemon.control
 from xpool.config import FfnSchedulingPolicy, XpoolConfig
@@ -16,6 +15,7 @@ from xpool.fabric import (
     FifoSchedulerPolicy,
     RandomSchedulerPolicy,
 )
+from xpool.native import ABI_VERSION
 from xpool.service.wire import AgentStartupAdmission, ServingListener
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
 from xtest.harness.support.ecs import context_state_profile

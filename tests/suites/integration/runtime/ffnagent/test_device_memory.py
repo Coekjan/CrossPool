@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 
 import xtest
+from xpool.quantization import TensorLayout
 from xpool.runtime.ffnagent import device_memory, weights
 
 
@@ -17,16 +18,23 @@ def test_canonical_dense_reservation_covers_inactive_segment_splits() -> None:
         for _ in range(24):
             layers.append(
                 weights.DenseFfnWeights.allocate(
-                    hidden_size=896,
-                    local_intermediate_size=2432,
-                    payload_dtype=torch.bfloat16,
+                    gate_up=weights.ProjectionLayout(
+                        values=TensorLayout((4864, 896), torch.bfloat16, 0),
+                        scales=None,
+                        bias=None,
+                    ),
+                    down=weights.ProjectionLayout(
+                        values=TensorLayout((896, 2432), torch.bfloat16, 0),
+                        scales=None,
+                        bias=None,
+                    ),
                     device=torch.device("cuda", torch.cuda.current_device()),
                 )
             )
         torch.cuda.synchronize()
         reserved = torch.cuda.memory_reserved() - before
         budget = sum(
-            device_memory.allocator_reservation_bytes((layer.gate_up_weight.nbytes, layer.down_weight.nbytes))
+            device_memory.allocator_reservation_bytes((layer.gate_up.values.nbytes, layer.down.values.nbytes))
             for layer in layers
         )
 

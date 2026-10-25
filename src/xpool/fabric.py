@@ -297,28 +297,30 @@ class FfnModelPlan(FabricModel):
         return self
 
 
-def place_ffn_layer(layer: ffn.FfnLayerSpec, execution_group: tuple[int, ...]) -> FfnLayerPlan:
+def place_ffn_layer(
+    layer: ffn.FfnLayerSpec,
+    execution_group: tuple[int, ...],
+    *,
+    local_intermediate_size: int,
+) -> FfnLayerPlan:
     """Project a layer onto an ordered TP group without choosing its members.
 
-    The returned Plan preserves the group order and exact local width. Empty
-    groups, invalid membership and non-divisible widths raise ValueError.
+    The caller supplies the prepared allocated width, including encoding and
+    operation padding. The returned Plan preserves group order; empty groups
+    and invalid width or membership raise ValueError.
     """
 
     tp_size = len(execution_group)
     if tp_size == 0:
         raise ValueError("FFN execution group must not be empty")
     if isinstance(layer, ffn.DenseFfnSpec):
-        if layer.intermediate_size % tp_size:
-            raise ValueError(f"Dense layer {layer.layer_id} intermediate size is not divisible by FFN TP")
         return DenseFfnLayerPlan(
             ffnagent_indices=execution_group,
-            local_intermediate_size=layer.intermediate_size // tp_size,
+            local_intermediate_size=local_intermediate_size,
         )
-    if layer.expert_intermediate_size % tp_size:
-        raise ValueError(f"MoE layer {layer.layer_id} intermediate size is not divisible by FFN TP")
     return MoeFfnLayerPlan(
         ffnagent_indices=execution_group,
-        local_intermediate_size=layer.expert_intermediate_size // tp_size,
+        local_intermediate_size=local_intermediate_size,
         effective_topk=layer.routed_topk + layer.shared_expert_count,
     )
 

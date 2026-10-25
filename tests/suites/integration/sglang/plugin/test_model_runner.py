@@ -15,7 +15,6 @@ from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseCo
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.runtime_context import get_context, get_exec, pre_capture_activation_reserve_mb
 from tests.suites.integration.sglang.ecs.support import install_vmm_driver
-from xpool.native import RuntimeRole
 
 import xpool.config
 import xpool.integrations.sglang.hooks.lifecycle
@@ -31,6 +30,7 @@ from xpool.integrations.sglang.ecs.vmm import KvVmmBacking, KvVmmLayout
 from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
 from xpool.integrations.sglang.worker import WorkerLifecycle
 from xpool.model import ModelId
+from xpool.native import RuntimeRole
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.wire import ElasticContextStateControlChannelRef, ServingListener
 from xpool.utils.procs import ProcUniqId

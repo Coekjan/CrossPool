@@ -6,7 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from xpool.ffn import DenseFfnSpec, FfnModelSpec, MoeFfnSpec, RouterAlgorithm, RouterPrecision
+from xpool.ffn import (
+    DenseFfnSpec,
+    FfnModelSpec,
+    MoeFfnSpec,
+    RouterAlgorithm,
+    RouterProjectionPrecision,
+    TopKWeightRounding,
+)
+from xpool.quantization import Mxfp4, Unquantized
 from xpool.runtime.ffnagent import architecture
 from xpool.runtime.ffnagent.models.deepseek_v2 import DeepseekV2Adapter
 from xpool.runtime.ffnagent.models.glm4_moe_lite import Glm4MoeLiteAdapter
@@ -93,11 +101,7 @@ def test_load_compiles_llama_dense_layers(
         assert isinstance(layer, DenseFfnSpec)
         assert layer.layer_id == layer_id
         assert layer.intermediate_size == intermediate_size
-        assert (
-            layer.checkpoint.gate_weight_key,
-            layer.checkpoint.up_weight_key,
-            layer.checkpoint.down_weight_key,
-        ) == dense_keys(layer_id)
+        assert layer.tensor_keys() == dense_keys(layer_id)
 
 
 @pytest.mark.parametrize("dtype_field", ("dtype", "torch_dtype"))
@@ -137,13 +141,27 @@ def test_source_config_reads_strict_types_and_constraints() -> None:
         config.optional("optional", int)
 
 
+def test_source_config_binds_quantization_exclusions_to_individual_projections() -> None:
+    config = architecture.FfnSourceConfig(
+        {
+            "quantization_config": {"quant_method": "mxfp4", "modules_to_not_convert": ["down_proj"]},
+        }
+    )
+    projections = config.gated_projections("model.layers.0.mlp")
+
+    assert projections.gate.quantization == Mxfp4()
+    assert projections.up.quantization == Mxfp4()
+    assert projections.down.quantization == Unquantized()
+    assert projections.tensor_keys() == dense_keys(0)
+
+
 @pytest.mark.parametrize(
     "adapter, algorithm, precision, source",
     (
         (
             DeepseekV2Adapter,
             RouterAlgorithm.SOFTMAX,
-            RouterPrecision.FP32_LOGITS,
+            RouterProjectionPrecision.FP32_LOGITS,
             {
                 "model_type": "deepseek_v2",
                 "torch_dtype": "bfloat16",
@@ -155,13 +173,13 @@ def test_source_config_reads_strict_types_and_constraints() -> None:
         (
             Glm4MoeLiteAdapter,
             RouterAlgorithm.SIGMOID,
-            RouterPrecision.FP32,
+            RouterProjectionPrecision.FP32,
             {"model_type": "glm4_moe_lite", "dtype": "bfloat16", "topk_method": "noaux_tc"},
         ),
         (
             Qwen3MoeAdapter,
             RouterAlgorithm.SOFTMAX,
-            RouterPrecision.PAYLOAD,
+            RouterProjectionPrecision.PAYLOAD,
             {"model_type": "qwen3_moe", "torch_dtype": "bfloat16", "decoder_sparse_step": 1, "mlp_only_layers": []},
         ),
     ),
@@ -169,7 +187,7 @@ def test_source_config_reads_strict_types_and_constraints() -> None:
 def test_compilers_select_serializable_router_semantics(
     adapter: type[architecture.FfnModelAdapter],
     algorithm: RouterAlgorithm,
-    precision: RouterPrecision,
+    precision: RouterProjectionPrecision,
     source: dict[str, object],
 ) -> None:
     config = architecture.FfnSourceConfig(
@@ -194,12 +212,13 @@ def test_compilers_select_serializable_router_semantics(
     spec = adapter.compile(model_id=TEST_MODEL_ID, model_config=config)
     assert isinstance(spec.layers[0], MoeFfnSpec)
     assert spec.layers[0].router_algorithm is algorithm
-    assert spec.layers[0].router_precision is precision
-    assert (spec.layers[0].checkpoint.router_correction_bias_key is not None) == (algorithm is RouterAlgorithm.SIGMOID)
+    assert spec.layers[0].router_projection_precision is precision
+    assert spec.layers[0].topk_weight_rounding is TopKWeightRounding.NONE
+    assert (spec.layers[0].router_correction_bias_key is not None) == (algorithm is RouterAlgorithm.SIGMOID)
     assert FfnModelSpec.model_validate(spec.model_dump(mode="json")) == spec
 
     payload = spec.model_dump(mode="json")
-    payload["layers"][0]["checkpoint"]["router_correction_bias_key"] = (
+    payload["layers"][0]["router_correction_bias_key"] = (
         None if algorithm is RouterAlgorithm.SIGMOID else "model.layers.0.mlp.gate.bias"
     )
     changed = FfnModelSpec.model_validate(payload)
