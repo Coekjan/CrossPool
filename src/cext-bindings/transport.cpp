@@ -6,7 +6,7 @@
 #include <pybind11/stl.h>
 #include <torch/python.h>
 
-#include "bindings.hpp"
+#include <xpool/bindings.hpp>
 #include <xpool/ffn.hpp>
 #include <xpool/runtime.hpp>
 #include <xpool/transport/atnagent.hpp>
@@ -26,9 +26,7 @@ void bind_transport(py::module_ &module) {
          std::size_t atn_dp_rank, std::size_t atn_dp_size) {
         xpool::RuntimeState::singleton().require_role(xpool::RuntimeRole::AtnAgent,
                                                       "xpool.native.transport.create_arena");
-        const auto payload_dtype = torch::python::detail::py_object_to_dtype(dtype);
-        TORCH_CHECK(xpool::ffn::is_supported_payload_dtype(payload_dtype),
-                    "xpool Transport payload dtype must be torch.float16 or torch.bfloat16");
+        const auto payload_dtype = require_payload_dtype(dtype, "Transport");
         return xpool::transport::AtnAgentRuntime::singleton()
             .create_arena(xpool::RuntimeState::singleton().device("xpool.native.transport.create_arena"),
                           instance_index, instance_rank, payload_row_capacity, hidden_size, payload_dtype, atn_tp_rank,

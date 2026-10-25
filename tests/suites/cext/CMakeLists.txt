@@ -33,6 +33,7 @@ target_link_libraries(xpool_cext_header_compile
     xpool_compiler_options
     NVSHMEM::NVSHMEM
     ${TORCH_LIBRARIES}
+    Python3::Module
     CUDA::cudart
 )
 target_compile_features(xpool_cext_header_compile PRIVATE cxx_std_20)

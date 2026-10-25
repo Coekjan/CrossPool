@@ -7,8 +7,10 @@ from typing import cast
 
 import pytest
 import torch
-
 import xpool.native
+from xpool.native import RuntimeRole
+from xpool.native.ffn import LayerKind
+
 import xpool.runtime.agent
 import xpool.runtime.ffnagent.agent
 from xpool.config import XpoolConfig
@@ -29,13 +31,11 @@ from xpool.fabric import (
     InstanceRankTopology,
 )
 from xpool.ffn import FfnModelSpec
-from xpool.native import RuntimeRole
-from xpool.native.ffn import LayerKind
 from xpool.runtime.agent import AgentError
 from xpool.runtime.atnagent import AtnAgent
 from xpool.runtime.ffnagent import FfnAgent
 from xpool.service.client import XpoolClient, XpoolClientError
-from xpool.service.wire import FabricParticipantReport, KvControlChannelRef
+from xpool.service.wire import ElasticContextStateControlChannelRef, FabricParticipantReport
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config, synthetic_config
 from xtest.harness.support.runtime.atnagent import (
     create_atnagent,
@@ -288,18 +288,18 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
         def report_fabric_participant(self, report: FabricParticipantReport) -> None:
             events.append(report.phase)
 
-        def kv_control_channel(self, generation: FabricGenerationId) -> KvControlChannelRef:
+        def context_state_control_channel(self, generation: FabricGenerationId) -> ElasticContextStateControlChannelRef:
             events.append("capacity_channel")
-            return KvControlChannelRef(generation=generation, name="/xpool-kv-test")
+            return ElasticContextStateControlChannelRef(generation=generation, name="/xpool-ecs-test")
 
     agent.client = cast(XpoolClient, FabricClient())
     monkeypatch.setattr(agent, "prepare_fabric_join", lambda: events.append("prepare") or True)
     monkeypatch.setattr(xpool.native.fabric, "join", lambda projection, pe: events.append("join"))
     monkeypatch.setattr(
-        xpool.native.kv.AtnAgentControlChannel,
+        xpool.native.ecs.AtnAgentControlChannel,
         "attach",
-        lambda name, pool_index, partition_indices: (
-            events.append(("capacity_attach", name, pool_index, partition_indices)) or object()
+        lambda name, device_index, partition_indices: (
+            events.append(("capacity_attach", name, device_index, partition_indices)) or object()
         ),
     )
     monkeypatch.setattr(agent.transport, "activate", lambda: events.append("transport"))
@@ -321,7 +321,7 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
         "join",
         FabricParticipantPhase.JOINED,
         "capacity_channel",
-        ("capacity_attach", "/xpool-kv-test", 0, [0]),
+        ("capacity_attach", "/xpool-ecs-test", 0, [0]),
         FabricParticipantPhase.EXECUTION_READY,
         "transport",
         "health",

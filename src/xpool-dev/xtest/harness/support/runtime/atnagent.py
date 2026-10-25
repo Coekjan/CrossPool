@@ -6,12 +6,12 @@ import os
 from collections.abc import Callable, Iterator
 
 import pytest
+from xpool.native import ABI_VERSION
 
 import xpool.runtime.agent
 import xpool.runtime.atnagent
 from xpool.config import XpoolConfig
 from xpool.model import ModelId
-from xpool.native import ABI_VERSION
 from xpool.runtime.agent import (
     Agent,
     AgentHeartbeat,
@@ -23,7 +23,7 @@ from xpool.runtime.atnagent import (
 from xpool.service.wire import AgentStartupAdmission, HeartbeatResponse, InstanceRankRegistration
 from xpool.transport import TransportArenaHandle
 from xtest.harness.support.config import install_test_config
-from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.ecs import context_state_profile
 
 
 class SynchronousAgentHeartbeat:
@@ -140,7 +140,7 @@ def instance_registration_view(*, model_id: str, rank: int) -> dict[str, object]
             "prefill_payload_row_capacity": 1,
             "group_sum_complete_admitted": False,
         },
-        "kv_capacity": kv_capacity_profile().model_dump(mode="json"),
+        "context_state_profile": context_state_profile().model_dump(mode="json"),
         "atn_runtime_headroom_bytes": 0,
     }
 

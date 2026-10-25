@@ -109,7 +109,7 @@ DP Attention. The integration validates engine geometry against configuration;
 daemon registration and readiness require the complete configured rank set.
 
 `atn.device_memory_utilization` defines the maximum share of each attention
-device that the post-capture Elastic KV Capacity Pool may retain. Available KV
+device that the post-capture Elastic Context State Capacity Pool may retain. Available KV
 bytes are the AtnAgent's observed free bytes plus already mapped bootstrap
 backing. The daemon subtracts the larger of the configured unused-memory
 margin and the summed Attention Runtime Headroom declared by co-located
@@ -123,13 +123,13 @@ within captured coverage and avoids reserving eager-Decode activation memory
 for an otherwise unused upstream concurrency default.
 
 `scheduler.slo` supplies required positive, finite `ttft_ms` and `tbt_ms`
-targets for Elastic KV arbitration. A model may replace both targets with a
+targets for Elastic Context State arbitration. A model may replace both targets with a
 complete `models[].slo` value; overrides must be complete and request-level
 SLOs are outside this interface. These targets use scheduler-local Prefill and
 Decode timing rather than client-observed HTTP latency. The pinned SGLang
 scheduler provides timing observations and request priority, but no typed
 per-request TTFT/TBT objective. Priority remains an ordering hint. See
-[Elastic KV Cache Pooling](elastic-kv-cache.md) for the demand and deadline
+[Elastic Context State](elastic-context-state.md) for the demand and deadline
 contract.
 
 `scheduler.atn_concurrency` is retained as an explicitly reserved attention-side
@@ -243,14 +243,15 @@ FfnAgent members.
 result-delivery requirements. Model and Instance plans are co-indexed by
 `instance_index`; request lookup uses `(instance_index, layer_ordinal)`.
 
-Elastic KV memory has a separate control seam. Instance registrations carry
-immutable, model-derived partition geometry. Live capacity is coordinated by
-the separate Elastic KV control seam.
+Elastic Context State memory has a separate control seam. Instance registrations carry
+each rank's immutable aggregate physical-byte floor and reservation bound;
+component geometry stays in the Instance.
 One Generation-scoped daemon policy freezes each attention device's physical pool
-after Graph capture and coordinates persistent quantified demand, immutable
-group capacity operations, TP readiness votes, and terminal partition completions
+after Graph capture and coordinates per-rank byte grants, persistent admission
+demand, TP readiness votes, and terminal partition completions
 through a host-local native channel. SGLang retains logical allocation and
-prefix-cache ownership. See [Elastic KV Cache Pooling](elastic-kv-cache.md).
+prefix-cache ownership; one rank-local quota covers its actual component pools.
+See [Elastic Context State](elastic-context-state.md).
 
 `xpool::fabric::ArenaProjection` is the minimal native join projection derived
 from the plan. Native layout code derives byte geometry, offsets, and local

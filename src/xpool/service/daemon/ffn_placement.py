@@ -13,7 +13,7 @@ from xpool.fabric import (
     FfnModelPlan,
     place_ffn_layer,
 )
-from xpool.memory import MIB, ensure_nonnegative_int64
+from xpool.memory import MIB
 from xpool.runtime.ffnagent import execution
 from xpool.runtime.ffnagent.device_memory import (
     DeviceMemoryEstimator,
@@ -22,6 +22,7 @@ from xpool.runtime.ffnagent.device_memory import (
 )
 from xpool.service.errors import XpoolDaemonError
 from xpool.utils import align_up
+from xpool.utils.integer import ensure_sint64_nonnegative
 
 
 def remaining_placement_seconds(deadline: float, phase: str) -> float:
@@ -151,8 +152,8 @@ def place_ffn_models(
             "configured Models, Instance Plans, and FfnAgent memory are not co-indexed",
         )
     try:
-        ensure_nonnegative_int64(*ffnagent_free_memory_bytes)
-        ensure_nonnegative_int64(config.ffn.device_memory_extra_margin_bytes)
+        ensure_sint64_nonnegative(*ffnagent_free_memory_bytes)
+        ensure_sint64_nonnegative(config.ffn.device_memory_extra_margin_bytes)
     except ValueError as error:
         raise XpoolDaemonError("conflict", str(error)) from error
     if any(value == 0 for value in ffnagent_free_memory_bytes):
@@ -360,7 +361,7 @@ class PlacementSolver:
             maximum_stage_overhead = (
                 maximum_weight_allowance + maximum_graph_capture_allowance + maximum_calibrated_overhead
             )
-            ensure_nonnegative_int64(
+            ensure_sint64_nonnegative(
                 maximum_exact_bytes,
                 maximum_stage_overhead,
                 maximum_exact_bytes + maximum_stage_overhead + config.ffn.device_memory_extra_margin_bytes,

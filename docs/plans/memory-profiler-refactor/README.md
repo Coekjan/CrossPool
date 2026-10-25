@@ -1019,7 +1019,7 @@ do not add an observer framework as part of this task.
    low-level operator import boundary explicit when relocating code. Explain
    cleaned retained observations separately from instantaneous allocator-reserved
    memory after production startup. Align Qualification's Resource Evidence with
-   the accepted tight-pressure success interval. Align Elastic KV's storage
+   the accepted tight-pressure success interval. Align Elastic Context State's storage
    description with the explicit local allocation properties. Update test
    documentation where coverage responsibilities change.
 

@@ -6,12 +6,12 @@ from http import HTTPStatus
 from types import SimpleNamespace
 
 import pytest
+from xpool.native import ABI_VERSION
 
 import xpool.runtime.instance
 import xpool.utils.background
 from xpool.fabric import FabricGenerationPhase
 from xpool.model import ModelId
-from xpool.native import ABI_VERSION
 from xpool.runtime.instance import InstanceRankError, InstanceRankRuntime
 from xpool.service.wire import (
     HeartbeatResponse,
@@ -19,7 +19,7 @@ from xpool.service.wire import (
     ProcessRef,
 )
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
-from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.ecs import context_state_profile
 from xtest.harness.support.runtime.instance import (
     ffn_profile,
     install_offline_instance_client,
@@ -71,7 +71,7 @@ def test_instance_deregister_stops_heartbeat_worker(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(xpool.runtime.instance, "XpoolClient", FakeXpoolClient)
 
     instance = runtime_instance(config, monkeypatch)
-    instance.register_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile(), 0)
+    instance.register_runtime(transport_attributes(), ffn_profile(), context_state_profile(), 0)
     instance.arena_handle = transport_arena()
     instance.start_heartbeat_worker()
     heartbeat_worker = instance.heartbeat_worker
@@ -97,8 +97,8 @@ def test_instance_start_registers_heartbeat_without_attaching_transport(monkeypa
 
     instance = runtime_instance(config, monkeypatch)
     monkeypatch.setattr(instance.client, "register_instance", lambda registration: events.append("register"))
-    instance.start_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile(), 0)
-    instance.start_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile(), 0)
+    instance.start_runtime(transport_attributes(), ffn_profile(), context_state_profile(), 0)
+    instance.start_runtime(transport_attributes(), ffn_profile(), context_state_profile(), 0)
 
     assert events == ["register", "heartbeat"]
 
@@ -114,7 +114,7 @@ def test_instance_start_deregisters_when_heartbeat_start_fails(monkeypatch: pyte
     monkeypatch.setattr(
         InstanceRankRuntime,
         "register_runtime",
-        lambda self, transport, resolved, kv_capacity, headroom: events.append("register"),
+        lambda self, transport, resolved, context_state_profile, headroom: events.append("register"),
     )
     monkeypatch.setattr(InstanceRankRuntime, "start_heartbeat_worker", fail_heartbeat)
     monkeypatch.setattr(InstanceRankRuntime, "attach_arena_from_daemon", lambda self: events.append("attach"))
@@ -123,7 +123,7 @@ def test_instance_start_deregisters_when_heartbeat_start_fails(monkeypatch: pyte
 
     with pytest.raises(RuntimeError, match="heartbeat failed"):
         instance = runtime_instance(config, monkeypatch)
-        instance.start_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile(), 0)
+        instance.start_runtime(transport_attributes(), ffn_profile(), context_state_profile(), 0)
 
     assert events == ["register", "heartbeat", "deregister"]
 

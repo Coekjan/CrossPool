@@ -11,20 +11,21 @@ from http import HTTPStatus
 import httpx
 import psutil
 import pytest
-from fastapi import FastAPI
-
 import xpool.native
+from fastapi import FastAPI
+from xpool.native import ABI_VERSION
+
 import xpool.service.daemon.app
 import xpool.service.daemon.control
+import xpool.service.daemon.ecs
 from xpool.config import XpoolConfig, get_global_config
 from xpool.fabric import FabricGenerationId, FabricParticipantPhase, FabricPlan, FabricRole
-from xpool.native import ABI_VERSION
 from xpool.service.daemon.app import create_daemon
-from xpool.service.wire import KvControlChannelRef
+from xpool.service.wire import ElasticContextStateControlChannelRef
 from xpool.utils.mps import MpsEndpoint, MpsProbeResult, MpsScope
 from xpool.utils.procs import ProcUniqId
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config
-from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.ecs import context_state_profile
 
 
 @dataclass(slots=True)
@@ -77,14 +78,14 @@ def deterministic_daemon_dependencies(
     )
     monkeypatch.setattr(xpool.native.fabric, "create_uid", lambda: "ab" * 128)
 
-    class FakeKvCapacityPolicy:
+    class FakeCapacityPolicy:
         def __init__(self, generation: FabricGenerationId) -> None:
             self.generation = generation
             self.closed = False
 
         @property
-        def channel_ref(self) -> KvControlChannelRef:
-            return KvControlChannelRef(generation=self.generation, name="/xpool-kv-test")
+        def channel_ref(self) -> ElasticContextStateControlChannelRef:
+            return ElasticContextStateControlChannelRef(generation=self.generation, name="/xpool-ecs-test")
 
         def step(self, registrations: object, fabric: object) -> None:
             return
@@ -93,9 +94,9 @@ def deterministic_daemon_dependencies(
             self.closed = True
 
     monkeypatch.setattr(
-        xpool.service.daemon.control.KvCapacityPolicy,
+        xpool.service.daemon.ecs.CapacityPolicy,
         "create",
-        staticmethod(lambda config, generation: FakeKvCapacityPolicy(generation)),
+        staticmethod(lambda config, generation: FakeCapacityPolicy(generation)),
     )
     return clock
 
@@ -163,7 +164,7 @@ def instance_registration(
             atn_dp_size=atn_dp_size,
         ),
         "ffn_profile": ffn_profile(),
-        "kv_capacity": kv_capacity_profile().model_dump(mode="json"),
+        "context_state_profile": context_state_profile().model_dump(mode="json"),
         "atn_runtime_headroom_bytes": atn_runtime_headroom_bytes,
     }
 

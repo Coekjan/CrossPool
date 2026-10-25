@@ -10,12 +10,12 @@ from typing import cast
 
 import pytest
 import torch
+from xpool.native.ffn import DpRowLayout, ForwardMode, LayerKind, OutputRequirement
 
 from xkit.child import PythonChildFailure
 from xpool.config import XpoolConfig
 from xpool.fabric import FABRIC_UID_HEX_LENGTH
 from xpool.model import ModelId
-from xpool.native.ffn import DpRowLayout, ForwardMode, LayerKind, OutputRequirement
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xtest.harness.native.ffn import topology
 from xtest.harness.native.ffn.protocol import FfnInstanceCommand, FfnInstanceSpec, FfnInvocationSpec
@@ -159,7 +159,7 @@ def test_instance_failure_stops_later_invocations_and_retains_the_owner(
     monkeypatch.setattr(topology.bootstrap, "init", lambda *args: None)
     monkeypatch.setattr(topology.devkit, "install", lambda: None)
     monkeypatch.setattr(topology, "InstanceRankRuntime", SimpleNamespace(start=start))
-    monkeypatch.setattr(topology, "kv_capacity_profile", lambda: None)
+    monkeypatch.setattr(topology, "context_state_profile", lambda: None)
     monkeypatch.setattr(topology.safetensors.torch, "load_file", load)
     monkeypatch.setattr(topology, "ffn_shim", invoke)
     monkeypatch.setattr(topology, "time", SimpleNamespace(sleep=retain))

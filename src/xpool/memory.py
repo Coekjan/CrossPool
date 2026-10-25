@@ -12,16 +12,9 @@ from xpool.native import ABI_VERSION
 from xpool.utils import align_up
 from xpool.utils.cuda import cuda_versions
 from xpool.utils.files import atomic_write_text
+from xpool.utils.integer import SINT64_MAX, ensure_sint64_nonnegative
 
 MIB = 1 << 20
-SIGNED_INT64_MAX = 2**63 - 1
-
-
-def ensure_nonnegative_int64(*values: int) -> None:
-    """Reject Boolean, negative, or signed-64-bit-overflow values."""
-
-    if any(type(value) is not int or not 0 <= value <= SIGNED_INT64_MAX for value in values):
-        raise ValueError("memory calibration arithmetic requires non-negative signed 64-bit integers")
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +51,7 @@ class FfnMemoryCalibrationCoefficients:
     def __post_init__(self) -> None:
         """Reject negative or out-of-domain coefficients."""
 
-        ensure_nonnegative_int64(*self.values())
+        ensure_sint64_nonnegative(*self.values())
 
     def values(self) -> tuple[int, ...]:
         """Return coefficients in their stable fit tie-break order."""
@@ -99,7 +92,7 @@ class FfnMemoryCalibrationCoefficients:
             executor_lane_count,
             compute_branch_count,
         )
-        ensure_nonnegative_int64(*numeric)
+        ensure_sint64_nonnegative(*numeric)
         tensor_storage_mib = align_up(tensor_storage_bytes, MIB) // MIB
         features = (
             1,
@@ -114,7 +107,7 @@ class FfnMemoryCalibrationCoefficients:
             int(joined_ffnagent),
         )
         result = sum(coefficient * value for coefficient, value in zip(self.values(), features, strict=True))
-        ensure_nonnegative_int64(result)
+        ensure_sint64_nonnegative(result)
         return result
 
 
@@ -165,7 +158,7 @@ class FfnMemoryCalibration(BaseModel):
     executor_lane_count: int = Field(ge=1, description="Configured Executor Lane count used by every world.")
     minimum_held_out_headroom_bytes: int = Field(
         ge=0,
-        le=SIGNED_INT64_MAX,
+        le=SINT64_MAX,
         description="Minimum nonnegative held-out prediction headroom retained for diagnostics.",
     )
     coefficients: FfnMemoryCalibrationCoefficients = Field(description="Qualified FFN opaque-overhead envelope.")
@@ -190,7 +183,7 @@ class DeviceMemoryEstimate:
     def __post_init__(self) -> None:
         """Reject invalid byte counts."""
 
-        ensure_nonnegative_int64(self.retained_bytes, self.peak_bytes)
+        ensure_sint64_nonnegative(self.retained_bytes, self.peak_bytes)
         if self.retained_bytes > self.peak_bytes:
             raise ValueError("retained device memory cannot exceed startup peak memory")
 

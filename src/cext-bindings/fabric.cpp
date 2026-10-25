@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 #include <torch/python.h>
 
-#include "bindings.hpp"
+#include <xpool/bindings.hpp>
 #include <xpool/fabric/runtime.hpp>
 #include <xpool/ffn.hpp>
 #include <xpool/ffnagent/runtime.hpp>
@@ -17,13 +17,6 @@
 namespace py = pybind11;
 
 namespace {
-
-c10::ScalarType require_payload_dtype(const py::object &dtype) {
-  const auto scalar_type = torch::python::detail::py_object_to_dtype(dtype);
-  TORCH_CHECK(xpool::ffn::is_supported_payload_dtype(scalar_type),
-              "xpool FFN payload dtype must be torch.float16 or torch.bfloat16");
-  return scalar_type;
-}
 
 std::uintptr_t require_cuda_address(const at::Tensor &tensor, const char *name) {
   TORCH_CHECK(tensor.is_cuda(), "xpool ", name, " must be a CUDA Tensor");
@@ -65,7 +58,7 @@ void bind_fabric(py::module_ &module) {
             return xpool::fabric::InstanceProjection{
                 .decode_payload_row_capacity = decode_payload_row_capacity,
                 .prefill_payload_row_capacity = prefill_payload_row_capacity,
-                .payload_dtype = require_payload_dtype(payload_dtype),
+                .payload_dtype = require_payload_dtype(payload_dtype, "FFN"),
                 .hidden_size = hidden_size,
                 .group_sum_complete_admitted = group_sum_complete_admitted,
                 .atn_tp_size = atn_tp_size,
@@ -151,7 +144,7 @@ void bind_fabric(py::module_ &module) {
                        xpool::ffnagent::DenseBindingResourceProjection primary_capture_resources,
                        xpool::ffnagent::DenseBindingResourceProjection control_capture_resources) {
              return xpool::ffnagent::DenseExecutionSignatureProjection{
-                 .payload_dtype = require_payload_dtype(payload_dtype),
+                 .payload_dtype = require_payload_dtype(payload_dtype, "FFN"),
                  .payload_row_capacity = payload_row_capacity,
                  .hidden_size = hidden_size,
                  .local_intermediate_size = local_intermediate_size,
@@ -183,7 +176,7 @@ void bind_fabric(py::module_ &module) {
                        xpool::ffnagent::MoeBindingResourceProjection primary_capture_resources,
                        xpool::ffnagent::MoeBindingResourceProjection control_capture_resources) {
              return xpool::ffnagent::MoeExecutionSignatureProjection{
-                 .payload_dtype = require_payload_dtype(payload_dtype),
+                 .payload_dtype = require_payload_dtype(payload_dtype, "FFN"),
                  .payload_row_capacity = payload_row_capacity,
                  .hidden_size = hidden_size,
                  .local_intermediate_size = local_intermediate_size,

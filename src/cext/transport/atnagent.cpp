@@ -155,7 +155,7 @@ ArenaHandle AtnAgentRuntime::create_arena(c10::DeviceIndex device, std::size_t i
                                           std::size_t atn_tp_rank, std::size_t atn_tp_size, std::size_t atn_dp_rank,
                                           std::size_t atn_dp_size) {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
-  TORCH_CHECK(!resident_.has_value(), "xpool cannot create a Transport arena after Resident activation");
+  TORCH_CHECK(!activation_attempted_, "xpool cannot create a Transport arena after Resident activation begins");
   TORCH_CHECK(!device_.has_value() || *device_ == device, "xpool AtnAgent Transport arenas must share one device");
   for (const auto &entry : arenas_) {
     TORCH_CHECK(entry.second.layout().instance_index != instance_index,
@@ -178,11 +178,12 @@ ArenaHandle AtnAgentRuntime::create_arena(c10::DeviceIndex device, std::size_t i
 
 void AtnAgentRuntime::activate() {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
-  TORCH_CHECK(!resident_.has_value(), "xpool Transport Resident is already active or terminal");
+  TORCH_CHECK(!activation_attempted_, "xpool Transport Resident is already active or terminal");
   TORCH_CHECK(device_.has_value() && !arenas_.empty(), "xpool Transport Resident requires a non-empty arena set");
 
   const auto fabric_arena = xpool::fabric::Runtime::singleton().arena();
   const auto views = ordered_views();
+  activation_attempted_ = true;
   resident_.emplace(*device_, std::span<const ArenaView>{views}, fabric_arena);
 
   const auto ready = [&] {
@@ -228,7 +229,11 @@ void AtnAgentRuntime::check_health() const {
 void AtnAgentRuntime::drain_async() {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(!arenas_.empty(), "xpool Transport Resident is unavailable after arena destruction");
-  TORCH_CHECK(resident_.has_value(), "xpool Transport Resident has not been activated");
+  if (!resident_.has_value()) {
+    TORCH_CHECK(!activation_attempted_,
+                "xpool Transport Resident activation did not complete; retirement is unconfirmed");
+    return;
+  }
   if (resident_->released()) {
     TORCH_CHECK(resident_->host_drain_requested(),
                 "xpool Transport Resident was released without a host drain request");
@@ -240,8 +245,12 @@ void AtnAgentRuntime::drain_async() {
 bool AtnAgentRuntime::drain_pending() {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(!arenas_.empty(), "xpool Transport Resident is unavailable after arena destruction");
-  TORCH_CHECK(resident_.has_value() && resident_->host_drain_requested(),
-              "xpool Transport Resident drain has not been started");
+  if (!resident_.has_value()) {
+    TORCH_CHECK(!activation_attempted_,
+                "xpool Transport Resident activation did not complete; retirement is unconfirmed");
+    return false;
+  }
+  TORCH_CHECK(resident_->host_drain_requested(), "xpool Transport Resident drain has not been started");
   if (resident_->released()) {
     return false;
   }
@@ -254,7 +263,7 @@ bool AtnAgentRuntime::drain_pending() {
 
 void AtnAgentRuntime::destroy_arenas(std::span<const ArenaHandle> handles) {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
-  TORCH_CHECK(!resident_.has_value() || resident_->released(),
+  TORCH_CHECK(!activation_attempted_ || (resident_.has_value() && resident_->released()),
               "xpool Transport arenas require preactivation rollback or completed Resident drain");
 
   auto distinct = std::set<ArenaHandle>{};
@@ -279,7 +288,7 @@ void AtnAgentRuntime::destroy_arenas(std::span<const ArenaHandle> handles) {
       failures.push_back(handle.encode() + ": unknown native cleanup error");
     }
   }
-  if (!resident_.has_value() && arenas_.empty()) {
+  if (!activation_attempted_ && arenas_.empty()) {
     device_.reset();
   }
   if (!failures.empty()) {

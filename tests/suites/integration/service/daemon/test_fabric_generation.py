@@ -3,6 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 
 import pytest
+from xpool.native import ABI_VERSION
 
 import xpool.service.daemon.control
 from xpool.config import FfnSchedulingPolicy, XpoolConfig
@@ -15,10 +16,9 @@ from xpool.fabric import (
     FifoSchedulerPolicy,
     RandomSchedulerPolicy,
 )
-from xpool.native import ABI_VERSION
 from xpool.service.wire import AgentStartupAdmission, ServingListener
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
-from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.ecs import context_state_profile
 from xtest.harness.support.service.daemon import (
     FakeMonotonicClock,
     activate_fabric_world,
@@ -291,45 +291,31 @@ def test_rank_independent_ffn_profile_mismatch_is_rejected_during_registration()
     assert "ffn_profile disagrees" in response.json()["detail"]["message"]
 
 
-def test_kv_capacity_geometry_mismatch_is_rejected_during_registration() -> None:
+@pytest.mark.parametrize("atn_dp_size", [1, 2])
+def test_attention_byte_bounds_may_differ_between_ranks(atn_dp_size: int) -> None:
+    atn_tp_size = 2 // atn_dp_size
     config = make_config(
         {
             "atn": {"devices": [0, 1]},
             "ffn": {"devices": [2]},
-            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
+            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m", "atn_dp_size": atn_dp_size}],
         }
     )
     app = create_app(config)
-    first = instance_registration(model_id=str(TEST_MODEL_ID), rank=0, atn_tp_size=2)
-    second = instance_registration(model_id=str(TEST_MODEL_ID), rank=1, atn_tp_size=2)
-    second["kv_capacity"] = kv_capacity_profile().model_copy(update={"row_bytes": 2048}).model_dump(mode="json")
-
-    assert register(app, "/instance/register", first).status_code == HTTPStatus.NO_CONTENT
-    response = register(app, "/instance/register", second)
-
-    assert response.status_code == HTTPStatus.CONFLICT
-    assert "kv capacity geometry disagrees" in response.json()["detail"]["message"]
-
-
-def test_kv_capacity_geometry_may_differ_between_dp_groups() -> None:
-    config = make_config(
-        {
-            "atn": {"devices": [0, 1]},
-            "ffn": {"devices": [2]},
-            "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m", "atn_dp_size": 2}],
-        }
-    )
-    app = create_app(config)
-    first = instance_registration(model_id=str(TEST_MODEL_ID), rank=0, atn_tp_size=1, atn_dp_size=2)
+    first = instance_registration(model_id=str(TEST_MODEL_ID), rank=0, atn_tp_size=atn_tp_size, atn_dp_size=atn_dp_size)
     second = instance_registration(
         model_id=str(TEST_MODEL_ID),
         rank=1,
-        atn_tp_rank=0,
-        atn_tp_size=1,
-        atn_dp_rank=1,
-        atn_dp_size=2,
+        atn_tp_rank=1 % atn_tp_size,
+        atn_tp_size=atn_tp_size,
+        atn_dp_rank=1 // atn_tp_size,
+        atn_dp_size=atn_dp_size,
     )
-    second["kv_capacity"] = kv_capacity_profile().model_copy(update={"row_bytes": 2048}).model_dump(mode="json")
+    second["context_state_profile"] = (
+        context_state_profile()
+        .model_copy(update={"floor_bytes": 8192, "reservation_bytes": 65536})
+        .model_dump(mode="json")
+    )
 
     assert register(app, "/atnagent/register", atnagent_registration(device=0)).status_code == 204
     assert register(app, "/atnagent/register", atnagent_registration(device=1)).status_code == 204

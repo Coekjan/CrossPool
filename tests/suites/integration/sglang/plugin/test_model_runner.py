@@ -9,29 +9,32 @@ import pytest
 import torch
 from sglang.srt.distributed.parallel_state_wrapper import ParallelState
 from sglang.srt.managers.scheduler import Scheduler
+from sglang.srt.mem_cache.kv_cache_configurator import KVCacheConfigurator
 from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.runtime_context import get_context, get_exec, pre_capture_activation_reserve_mb
+from tests.suites.integration.sglang.ecs.support import install_vmm_driver
+from xpool.native import RuntimeRole
 
 import xpool.config
 import xpool.integrations.sglang.hooks.lifecycle
 import xpool.integrations.sglang.worker
+import xtest.harness.support.ecs
+from xpool import ecs
 from xpool.config import LatencySloConfig, MissingRequiredConfig
 from xpool.fabric import FabricGenerationId
 from xpool.integrations.sglang.adapter import SglangInstanceRankRuntime
-from xpool.integrations.sglang.kv.allocator import ElasticTokenToKVPoolAllocator
-from xpool.integrations.sglang.kv.pool import ElasticMHATokenToKVPool
-from xpool.integrations.sglang.kv.vmm import KvVmmBacking
+from xpool.integrations.sglang.ecs.allocator import ElasticTokenToKVPoolAllocator
+from xpool.integrations.sglang.ecs.pool import ElasticMHATokenToKVPool
+from xpool.integrations.sglang.ecs.vmm import KvVmmBacking, KvVmmLayout
 from xpool.integrations.sglang.topology import SglangAttentionKind, SglangModelMetadata
 from xpool.integrations.sglang.worker import WorkerLifecycle
 from xpool.model import ModelId
-from xpool.native import RuntimeRole
 from xpool.runtime.transport import InstanceRankTransportProfile
-from xpool.service.wire import KvControlChannelRef, ServingListener
+from xpool.service.wire import ElasticContextStateControlChannelRef, ServingListener
 from xpool.utils.procs import ProcUniqId
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
-from xtest.harness.support.kv import kv_capacity_profile
 from xtest.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner
 from xtest.harness.support.sglang.plugin import (
     FailingAfterLoadAdapter,
@@ -54,6 +57,7 @@ def fake_device_properties(monkeypatch: pytest.MonkeyPatch, published_sglang_con
     monkeypatch.setattr(ProcUniqId, "send_signal", lambda self, signum: None)
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: SimpleNamespace(total_memory=100_000))
     monkeypatch.setattr(torch.cuda, "synchronize", lambda device: None)
+    install_vmm_driver(monkeypatch)
     with get_context().override_server_args(
         cuda_graph_config=get_exec().graph.cuda_graph_config, chunked_prefill_size=4096
     ):
@@ -64,18 +68,19 @@ class FakeElasticPool(ElasticMHATokenToKVPool):
     """Concrete elastic-pool witness for lifecycle tests."""
 
     def __init__(self) -> None:
-        self.backing = cast(KvVmmBacking, SimpleNamespace(capacity_profile=kv_capacity_profile()))
-
-    def close(self) -> None:
-        """Release no resources because this witness allocates none."""
+        layout = KvVmmLayout(torch.device("cuda:0"), torch.uint8, (64, 512), 1, 1, 1, 1, 4096)
+        self.backing = KvVmmBacking(layout, ecs.MemoryQuota(layout.profile.bytes_for(layout.profile.floor_bundles)))
+        self.k_buffer, self.v_buffer = [], []
 
 
 def install_fake_elastic_kv(runner: FakeModelRunner) -> None:
     """Install concrete replacement witnesses without allocating KV storage."""
 
-    runner.token_to_kv_pool = FakeElasticPool()
-    runner.token_to_kv_pool_allocator = ElasticTokenToKVPoolAllocator.__new__(ElasticTokenToKVPoolAllocator)
-    runner.req_to_token_pool = ReqToTokenPool.__new__(ReqToTokenPool)
+    pool = FakeElasticPool()
+    runner.token_to_kv_pool = pool
+    runner.token_to_kv_pool_allocator = ElasticTokenToKVPoolAllocator(63, torch.float16, "cpu", pool, True)
+    runner.req_to_token_pool = ReqToTokenPool(2, 64, "cpu", False)
+    runner.kv_cache_configurator = object.__new__(KVCacheConfigurator)
 
 
 @pytest.mark.parametrize(("devices", "rank"), [((0,), 0), ((0, 1, 2, 3), 2)])
@@ -297,10 +302,10 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     generation = FabricGenerationId(high=1, low=2)
 
     class FakeClient:
-        def kv_control_channel(self, candidate: FabricGenerationId) -> KvControlChannelRef:
+        def context_state_control_channel(self, candidate: FabricGenerationId) -> ElasticContextStateControlChannelRef:
             assert candidate == generation
             events.append("discover_capacity")
-            return KvControlChannelRef(generation=generation, name="/xpool-kv-test")
+            return ElasticContextStateControlChannelRef(generation=generation, name="/xpool-ecs-test")
 
     class FakeInstanceRuntime:
         fabric_plan = None
@@ -332,13 +337,13 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         rank: int,
         transport: InstanceRankTransportProfile,
         ffn_profile: object,
-        kv_capacity: object,
+        context_state_profile: object,
         atn_runtime_headroom_bytes: int,
         on_failure: Callable[[BaseException], None],
     ) -> FakeInstanceRuntime:
         registrations.append((model_id, rank, transport.payload_row_capacity))
         profiles.append(ffn_profile)
-        assert kv_capacity == kv_capacity_profile()
+        assert context_state_profile == xtest.harness.support.ecs.context_state_profile()
         assert atn_runtime_headroom_bytes == expected_headroom_bytes
         installs.append((model_id, rank))
         events.append("start_instance")
@@ -546,9 +551,9 @@ def test_model_runner_hook_cleans_up_when_post_executable_transport_attach_fails
     generation = FabricGenerationId(high=1, low=2)
 
     class FakeClient:
-        def kv_control_channel(self, candidate: FabricGenerationId) -> KvControlChannelRef:
+        def context_state_control_channel(self, candidate: FabricGenerationId) -> ElasticContextStateControlChannelRef:
             assert candidate == generation
-            return KvControlChannelRef(generation=generation, name="/xpool-kv-test")
+            return ElasticContextStateControlChannelRef(generation=generation, name="/xpool-ecs-test")
 
     class FakeInstanceRuntime:
         client = FakeClient()

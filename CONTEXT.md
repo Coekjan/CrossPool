@@ -143,82 +143,94 @@ public HTTP health check has succeeded for the current listener snapshot. It
 is not continuous availability monitoring or a Fabric lifecycle phase.
 _Avoid_: System ready, Fabric executable, serving monitor
 
-**Elastic KV Cache Pooling**:
-Attention-side capacity management that lends and reclaims physical KV memory
-among co-located Instance Ranks while preserving Instance isolation and
-SGLang's logical cache semantics. Reclamation may evict reclaimable cached
-suffixes before releasing their physical backing.
-_Avoid_: Shared KV Cache, KV Cache content sharing
+**Elastic Context State (ECS)**:
+Request context retained for later inference whose physical-memory capacity
+can grow and be reclaimed. It includes token histories, active recurrent state,
+reusable checkpoints and auxiliary indices. Capacity sharing preserves each
+Instance's state isolation and logical cache semantics.
+_Avoid_: KV Cache when referring to non-KV retained state, model weights,
+temporary execution workspace, Transport buffers
 
-**KV Capacity Pool**:
-The physical-memory capacity available for KV mappings across the Instance
-Ranks colocated on one attention device.
-_Avoid_: Global KV Cache, KV tensor pool
+**Active Recurrent State**:
+The mutable retained state advanced by one request's recurrent attention,
+distinct from a reusable prefix snapshot.
+_Avoid_: Token KV page, cached recurrent checkpoint
+
+**Recurrent Checkpoint**:
+A reusable snapshot of recurrent state at a processed prefix, distinct from
+the active state advanced by an executing request.
+_Avoid_: Active Recurrent State, token KV page
+
+**Elastic Context State Memory Quota**:
+The physical-memory allowance assigned to an Instance on one attention Device
+for its managed Elastic Context State, distinct from the memory currently
+backed and the logical capacities of its individual pools. Its pools share the allowance
+without fixed live shares. Resident and retiring backing remain charged until
+their physical release is confirmed.
+_Avoid_: Pool bundle count, mapped memory, free device memory
+
+**Elastic Context State Capacity Pool**:
+The physical-memory capacity available for context-state backing across
+Instance Ranks colocated on one attention Device.
+_Avoid_: Shared state contents, token KV tensor pool
 
 **Attention Runtime Headroom**:
 One Instance Rank's immutable byte budget for service-time attention memory
-kept outside its attention device's KV Capacity Pool. The daemon sums these
-declarations per device. It is distinct from the configured utilization margin
+kept outside its Device's Elastic Context State Capacity Pool. The daemon sums
+these declarations per device. It is distinct from the configured utilization margin
 and the one-time device-memory observation.
 _Avoid_: KV margin, live memory usage, free-memory report
 
-**KV Control Channel**:
+**Elastic Context State Control Channel**:
 The daemon-owned, Fabric-Generation-scoped host-local control surface that
-connects per-device KV Capacity Pools, logical KV Capacity Groups, and their
+connects per-device capacity pools, logical capacity groups, and their
 rank-local partitions. It carries capacity demand, adjustment commands, group
 coordination, and physical completion observations.
-_Avoid_: KV Capacity Channel, AtnAgent channel, TP-group channel, KV data channel
+_Avoid_: AtnAgent channel, TP-group channel, state-data channel
 
-**KV Capacity Group**:
-The Instance ranks for one `(model_id, atn_dp_rank)` that share a logical KV
-capacity target across their tensor-parallel shards.
+**Elastic Context State Capacity Group**:
+The Instance ranks for one Model's attention data-parallel replica that jointly
+adopt physical-byte quotas across their tensor-parallel shards.
 _Avoid_: TP pool, KV allocation group
 
-**KV Capacity Target**:
-The group-wide number of physical KV page bundles that each local partition is
-currently authorized to back and must converge toward, distinct from the
-physical page bundles still backed.
-_Avoid_: Desired capacity, KV limit, KV budget bytes
+**Elastic Context State Quota Target**:
+The absolute physical-byte allowance for each rank in a capacity group,
+distinct from retained backing and individual pools' logical capacities.
+_Avoid_: Bundle target, mapped capacity, token limit
 
-**KV Active Capacity**:
-The group-wide KV page-bundle prefix currently exposed to every logical
-allocator in a KV Capacity Group, after all of its local partitions have the
-required physical backing.
-_Avoid_: Applied target, mapped capacity, active requests
+**Elastic Context State Active Quota**:
+The physical-byte quotas currently adopted by a capacity group. Its ranks
+may retain different sparse backing inventories within their allowances.
+_Avoid_: Active bundle prefix, mapped capacity, active requests
 
-**KV Capacity Command**:
+**Elastic Context State Quota Command**:
 A distinct group capacity adjustment with a fixed target. The daemon authorizes
 the target; the group coordinates safe application and reports its outcome.
 
-**KV Capacity Demand**:
-The Capacity Group leader's persistent latest-state report of the logical
-capacity evaluated by scheduling and the absolute bundle capacity
-required by one unresolved authoritative admission-failure witness, paired with
-that witness's scheduler-local SLO deadline. It is state, not a consumed pressure
-event.
-_Avoid_: KV pressure, capacity request event, one-bundle request
+**Elastic Context State Quota Demand**:
+The Capacity Group leader's persistent report of the evaluated grant and
+absolute per-rank bytes required by an unresolved admission-failure witness,
+paired with its scheduler-local SLO deadline.
+_Avoid_: Device utilization, capacity request event, one-bundle request
 
-**KV Capacity Completion**:
-One partition's terminal report that a Capacity Command has been applied and
-its physical backing has reached the reported bundle count.
+**Elastic Context State Quota Completion**:
+One rank's terminal report that it adopted a Quota Command and its actual
+retained physical bytes fit the new allowance.
 
 **KV Page Bundle**:
-One rank-local compound VMM mapping unit covering the same KV page index across
-every local attention layer and K/V buffer. Its byte size is derived from
-immutable local geometry, and the whole bundle is mapped or unmapped as one
-contiguous range.
+One rank-local compound VMM mapping unit covering the same row interval across
+one KV pool's layers and buffers. Its physical cost follows that pool's
+immutable geometry.
 _Avoid_: CUDA page, KV block
 
 **KV VMM Backing**:
-The Instance-Rank-local stable virtual storage, strided per-layer Tensor views,
-and physical backing for one KV pool, distinct from the device-wide KV Capacity
-Pool and SGLang's logical KV allocator.
+The stable virtual storage, Tensor views and sparse physical residency for one
+rank-local KV pool, distinct from shared byte permission and logical allocation.
 _Avoid_: VMM manager, elastic KV pool
 
-**KV Capacity Reconciliation**:
-The Instance-Rank-local convergence of a KV Capacity Target and KV Active
-Capacity to actual KV VMM Backing while preserving logical allocation and
-in-flight device access.
+**Elastic Context State Capacity Reconciliation**:
+The adoption of a Quota Target and safe adjustment of rank-local backing
+while preserving logical allocation and in-flight device access.
 _Avoid_: KV resize, capacity application, VMM policy
 
 **FFN Execution Installation**:

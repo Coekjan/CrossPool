@@ -5,7 +5,7 @@
 #include <pybind11/stl.h>
 #include <torch/csrc/utils/pybind.h>
 
-#include "bindings.hpp"
+#include <xpool/bindings.hpp>
 #include <xpool/devkit/fabric_observer.hpp>
 #include <xpool/devkit/ffn_routing_observer.hpp>
 #include <xpool/devkit/graph_observer.hpp>
@@ -287,13 +287,7 @@ void bind_devkit(py::module_ &module) {
       .def_readonly("dropped", &xpool::devkit::ffn_routing_observer::Snapshot::dropped, "Dropped record count.")
       .def_property_readonly(
           "records",
-          [](const xpool::devkit::ffn_routing_observer::Snapshot &snapshot) {
-            auto records = py::tuple(snapshot.records.size());
-            for (auto index = std::size_t{0}; index < snapshot.records.size(); ++index) {
-              records[index] = py::cast(snapshot.records[index]);
-            }
-            return records;
-          },
+          [](const xpool::devkit::ffn_routing_observer::Snapshot &snapshot) { return typed_tuple(snapshot.records); },
           "Retained routing records in reservation order.");
 
   fabric.def(

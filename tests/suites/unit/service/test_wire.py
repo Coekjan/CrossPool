@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from xtest.harness.support.kv import kv_capacity_profile
+from xpool.service.wire import ElasticContextStatePartitionProfile
 
 
-def test_kv_capacity_profile_projects_bundle_prefix_to_aligned_tokens() -> None:
-    profile = kv_capacity_profile()
+@pytest.mark.parametrize(("floor_bytes", "reservation_bytes"), [(0, 0), (4096, 32768)])
+def test_attention_partition_profile_round_trips_byte_bounds(floor_bytes: int, reservation_bytes: int) -> None:
+    profile = ElasticContextStatePartitionProfile(floor_bytes=floor_bytes, reservation_bytes=reservation_bytes)
 
-    assert [profile.usable_tokens(bundle_count) for bundle_count in (1, 2, 8)] == [0, 4, 28]
-    with pytest.raises(ValueError, match="outside its reservation"):
-        profile.usable_tokens(9)
+    assert ElasticContextStatePartitionProfile.model_validate_json(profile.model_dump_json()) == profile
+
+
+def test_attention_partition_profile_requires_floor_within_reservation() -> None:
+    with pytest.raises(ValueError, match="floor exceeds its reservation"):
+        ElasticContextStatePartitionProfile(floor_bytes=8192, reservation_bytes=4096)

@@ -324,7 +324,7 @@ class AtnAgent(Agent):
             local_rank=self.local_rank,
             publisher=self.process_ref,
         )
-        self.control_channel: xpool.native.kv.AtnAgentControlChannel | None = None
+        self.control_channel: xpool.native.ecs.AtnAgentControlChannel | None = None
         self.capacity_memory_published = False
         self.heartbeat_worker = AgentHeartbeat(agent=self)
 
@@ -370,27 +370,29 @@ class AtnAgent(Agent):
         return prepared
 
     def prepare_fabric_execution(self) -> None:
-        """Attach this rank to the Generation-scoped KV Control Channel."""
+        """Attach this rank to the Generation-scoped Elastic Context State channel."""
 
         if self.control_channel is not None:
             return
         plan = self.fabric_plan
         if plan is None:
-            raise AgentError("atnagent cannot attach kv capacity before receiving a fabric plan")
+            raise AgentError("atnagent cannot attach elastic context state capacity before receiving a fabric plan")
         config = get_global_config()
-        channel_ref = self.client.kv_control_channel(plan.generation)
+        channel_ref = self.client.context_state_control_channel(plan.generation)
         if channel_ref.generation != plan.generation:
-            raise AgentError("daemon returned a kv control channel for a different fabric generation")
-        self.control_channel = xpool.native.kv.AtnAgentControlChannel.attach(
+            raise AgentError(
+                "daemon returned an elastic context state control channel for a different fabric generation"
+            )
+        self.control_channel = xpool.native.ecs.AtnAgentControlChannel.attach(
             channel_ref.name,
-            pool_index=self.local_rank,
+            device_index=self.local_rank,
             partition_indices=[
                 instance.instance_index * config.atn_world_size + self.local_rank for instance in config.instances
             ],
         )
         self.capacity_memory_published = False
         logger.info(
-            "kv control attached device=%s pool=%s partition_count=%s",
+            "elastic context state control attached device=%s device_index=%s partition_count=%s",
             self.device,
             self.local_rank,
             len(config.instances),
@@ -407,7 +409,7 @@ class AtnAgent(Agent):
 
         self.transport.quiesce()
 
-    def publish_kv_memory_if_ready(self) -> None:
+    def publish_device_memory_if_ready(self) -> None:
         """Publish the one-shot post-capture device-memory observation."""
 
         if (
@@ -420,7 +422,7 @@ class AtnAgent(Agent):
         self.control_channel.publish_device_memory(total_bytes, free_bytes)
         self.capacity_memory_published = True
         logger.info(
-            "kv memory observed device=%s total_bytes=%s free_bytes=%s",
+            "device memory observed device=%s total_bytes=%s free_bytes=%s",
             self.device,
             total_bytes,
             free_bytes,
@@ -442,7 +444,7 @@ class AtnAgent(Agent):
             except AgentError as error:
                 self.report_local_control_failure(str(error))
                 raise
-        self.publish_kv_memory_if_ready()
+        self.publish_device_memory_if_ready()
 
     def close_role(self) -> None:
         """Release every local transport arena."""

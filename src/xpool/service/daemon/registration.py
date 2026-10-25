@@ -15,9 +15,9 @@ from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
     AtnAgentRegistration,
+    ElasticContextStatePartitionProfile,
     FfnAgentRegistration,
     InstanceRankRegistration,
-    KvCapacityPartitionProfile,
     ProcessRef,
     ReadinessStatus,
 )
@@ -102,9 +102,9 @@ class InstanceRankRegistrationState(CommonRegistration):
     __slots__ = (
         "abi_version",
         "atn_runtime_headroom_bytes",
+        "context_state_profile",
         "ffn_profile",
         "instance",
-        "kv_capacity",
         "transport",
     )
 
@@ -112,7 +112,7 @@ class InstanceRankRegistrationState(CommonRegistration):
     instance: InstanceRankId
     transport: InstanceRankTransportProfile
     ffn_profile: InstanceFfnProfile
-    kv_capacity: KvCapacityPartitionProfile
+    context_state_profile: ElasticContextStatePartitionProfile
     atn_runtime_headroom_bytes: int
 
     def __init__(
@@ -123,7 +123,7 @@ class InstanceRankRegistrationState(CommonRegistration):
         pid: int,
         transport: InstanceRankTransportProfile,
         ffn_profile: InstanceFfnProfile,
-        kv_capacity: KvCapacityPartitionProfile,
+        context_state_profile: ElasticContextStatePartitionProfile,
         atn_runtime_headroom_bytes: int,
         now: float,
     ) -> None:
@@ -134,7 +134,7 @@ class InstanceRankRegistrationState(CommonRegistration):
         self.instance = instance
         self.transport = transport
         self.ffn_profile = ffn_profile
-        self.kv_capacity = kv_capacity
+        self.context_state_profile = context_state_profile
         self.atn_runtime_headroom_bytes = atn_runtime_headroom_bytes
 
     def key(self) -> InstanceRankId:
@@ -153,7 +153,7 @@ class InstanceRankRegistrationState(CommonRegistration):
             or self.abi_version != candidate.abi_version
             or self.transport != candidate.transport
             or self.ffn_profile != candidate.ffn_profile
-            or self.kv_capacity != candidate.kv_capacity
+            or self.context_state_profile != candidate.context_state_profile
             or self.atn_runtime_headroom_bytes != candidate.atn_runtime_headroom_bytes
         )
 
@@ -325,7 +325,7 @@ class RegistrationBook:
                 abi_version=registration.abi_version,
                 transport=registration.transport,
                 ffn_profile=registration.ffn_profile,
-                kv_capacity=registration.kv_capacity,
+                context_state_profile=registration.context_state_profile,
                 atn_runtime_headroom_bytes=registration.atn_runtime_headroom_bytes,
             )
             for registration in self.instances.values()

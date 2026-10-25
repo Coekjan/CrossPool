@@ -3,17 +3,17 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from xpool.native import ABI_VERSION
 
 import xpool.runtime.instance
 from xpool.config import XpoolConfig
 from xpool.fabric import FabricGenerationId, FabricGenerationPhase
 from xpool.model import ModelId
-from xpool.native import ABI_VERSION
 from xpool.runtime.instance import InstanceRankError, InstanceRankRuntime
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.wire import InstanceRankRegistration, ReadinessSnapshot, ReadinessStatus
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
-from xtest.harness.support.kv import kv_capacity_profile
+from xtest.harness.support.ecs import context_state_profile
 from xtest.harness.support.runtime.instance import (
     ffn_profile,
     install_offline_instance_client,
@@ -44,7 +44,7 @@ def test_instance_register_rejects_unknown_instance() -> None:
             rank=0,
             transport=transport_attributes(),
             ffn_profile=ffn_profile(),
-            kv_capacity=kv_capacity_profile(),
+            context_state_profile=context_state_profile(),
             atn_runtime_headroom_bytes=0,
             on_failure=lambda error: None,
         )
@@ -66,7 +66,7 @@ def test_instance_register_publishes_runtime_contract(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(xpool.runtime.instance, "XpoolClient", FakeXpoolClient)
     instance = runtime_instance(config, monkeypatch)
-    instance.register_runtime(transport_attributes(), ffn_profile(), kv_capacity_profile(), 1024)
+    instance.register_runtime(transport_attributes(), ffn_profile(), context_state_profile(), 1024)
 
     assert registrations
     payload = registrations[0].model_dump(mode="json")
@@ -96,7 +96,7 @@ def test_instance_deregister_keeps_registration_when_runtime_clear_fails(
         pid=instance.process_ref.pid,
         transport=transport_attributes(),
         ffn_profile=ffn_profile(),
-        kv_capacity=kv_capacity_profile(),
+        context_state_profile=context_state_profile(),
         atn_runtime_headroom_bytes=0,
     )
     arena_handle = transport_arena()
@@ -120,7 +120,7 @@ def test_instance_deregister_detaches_before_publishing_departure(
         pid=instance.process_ref.pid,
         transport=transport_attributes(),
         ffn_profile=ffn_profile(),
-        kv_capacity=kv_capacity_profile(),
+        context_state_profile=context_state_profile(),
         atn_runtime_headroom_bytes=0,
     )
     events: list[str] = []
@@ -157,7 +157,7 @@ def test_instance_start_closes_local_client_without_remote_deregistration_on_reg
         self: InstanceRankRuntime,
         transport: InstanceRankTransportProfile,
         resolved: object,
-        kv_capacity: object,
+        context_state_profile: object,
         atn_runtime_headroom_bytes: int,
     ) -> None:
         events.append("register")
@@ -172,7 +172,7 @@ def test_instance_start_closes_local_client_without_remote_deregistration_on_reg
             rank=0,
             transport=transport_attributes(),
             ffn_profile=ffn_profile(),
-            kv_capacity=kv_capacity_profile(),
+            context_state_profile=context_state_profile(),
             atn_runtime_headroom_bytes=0,
             on_failure=reported.append,
         )
