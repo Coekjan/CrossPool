@@ -37,27 +37,28 @@ class Qwen3MoeAdapter(architecture.FfnModelAdapter):
         return ffn.FfnModelSpec(
             model_id=model_id,
             hidden_size=hidden_size,
-            activation=ffn.ActivationKind.SILU,
+            activation=ffn.SiluActivation(),
             layers=tuple(
                 ffn.MoeFfnSpec(
                     kind=LayerKind.MOE,
                     router_algorithm=ffn.RouterAlgorithm.SOFTMAX,
-                    router_precision=ffn.RouterPrecision.PAYLOAD,
+                    router_projection_precision=ffn.RouterProjectionPrecision.PAYLOAD,
                     layer_id=layer_id,
                     expert_intermediate_size=expert_intermediate_size,
+                    routed_expert_count=routed_expert_count,
                     shared_expert_count=0,
                     routed_topk=routed_topk,
                     renormalize=renormalize,
                     routed_scaling_factor=1.0,
-                    checkpoint=ffn.MoeFfnCheckpointKeys(
-                        router_weight_key=f"model.layers.{layer_id}.mlp.gate.weight",
-                        router_correction_bias_key=None,
-                        routed_experts=tuple(
-                            architecture.gated_checkpoint_keys(f"model.layers.{layer_id}.mlp.experts.{expert_id}")
+                    router=model_config.projection(f"model.layers.{layer_id}.mlp.gate"),
+                    router_correction_bias_key=None,
+                    routed_experts=ffn.PerExpertSource(
+                        experts=tuple(
+                            model_config.gated_projections(f"model.layers.{layer_id}.mlp.experts.{expert_id}")
                             for expert_id in range(routed_expert_count)
                         ),
-                        shared_expert=None,
                     ),
+                    shared_expert=None,
                 )
                 for layer_id in range(layer_count)
             ),

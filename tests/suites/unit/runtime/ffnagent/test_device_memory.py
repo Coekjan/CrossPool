@@ -19,7 +19,7 @@ from xpool.fabric import (
 )
 from xpool.ffn import FfnModelSpec
 from xpool.memory import MIB, FfnMemoryCalibrationCoefficients
-from xpool.runtime.ffnagent import device_memory, execution
+from xpool.runtime.ffnagent import device_memory, execution, preparation
 from xpool.runtime.ffnagent.memory_profile import corpus
 from xpool.service.daemon.ffn_placement import place_ffn_models
 from xpool.utils.integer import SINT64_MAX
@@ -80,42 +80,38 @@ def test_fp32_router_keeps_fp32_weights_and_input_workspace() -> None:
     model = experiments[2].models[0]
     spec = model.spec
     profile = model.instance_plan().ffn_profile
-    install_test_config(
-        XpoolConfig.from_mapping(
-            {
-                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
-                "atn": {"devices": [0]},
-                "ffn": {"devices": [1, 2]},
-                "models": [{"id": spec.model_id, "path": "/models/glm"}],
-            }
-        )
+    layout = preparation.prepare_ffn_layer(
+        spec,
+        layer_ordinal=1,
+        payload_dtype=profile.payload_dtype,
+        tp_size=2,
+        tp_rank=0,
     )
-    estimator = device_memory.DeviceMemoryEstimator(model_specs=(spec,), instance_profiles=(profile,))
-
-    assert estimator.packed_weight_storage_bytes(0, 1, 0)[-2:] == (4 * 64 * spec.hidden_size, 4 * 64)
-    signatures = execution.required_execution_signatures(
-        model_spec=spec, profile=profile, layer_ordinal=1, tp_rank=0, tp_size=2
-    )
+    assert layout.weight_allocation_bytes()[-2:] == (4 * 64 * spec.hidden_size, 4 * 64)
+    signatures = preparation.required_execution_signatures(layer_layout=layout, profile=profile)
     for signature in signatures:
         assert isinstance(signature, execution.MoeFfnExecutionSignature)
         assert signature.router is not None
-        assert signature.router.router_weight_dtype is torch.float32
+        assert signature.router.projection.values.dtype is torch.float32
         assert signature.router.router_workspace_bytes == 4 * signature.payload_row_capacity * (spec.hidden_size + 64)
 
 
 def test_exact_dense_allocation_ledger_and_feature_rows() -> None:
     estimator, plan = estimator_and_plan()
 
-    assert estimator.packed_weight_storage_bytes(0, 0, 0) == (64, 32)
-    signature = execution.required_execution_signatures(
-        model_spec=estimator.model_specs[0],
-        profile=estimator.instance_profiles[0],
+    layout = preparation.prepare_ffn_layer(
+        estimator.model_specs[0],
         layer_ordinal=0,
+        payload_dtype=estimator.instance_profiles[0].payload_dtype,
         tp_size=2,
         tp_rank=0,
-    )[0]
+    )
+    assert layout.weight_allocation_bytes() == (64, 32)
+    signature = preparation.required_execution_signatures(layer_layout=layout, profile=estimator.instance_profiles[0])[
+        0
+    ]
     assert execution.control_capture_probe_storage_bytes(signature) == (64, 32)
-    assert execution.graph_capture_capacity_storage_bytes(signature) == (8, 8, 24)
+    assert preparation.graph_capture_capacity_storage_bytes(signature) == (8, 8, 24)
     assert estimator.fabric_arena_bytes() == 3328
     assert (
         estimator.execution_runtime_bytes(
@@ -232,10 +228,17 @@ def test_moe_capture_budget_includes_transient_initialization_reservations() -> 
     model = experiment.models[0]
     spec = model.spec
     profile = model.instance_plan().ffn_profile
-    signature = execution.required_execution_signatures(
-        model_spec=spec, profile=profile, layer_ordinal=0, tp_rank=0, tp_size=2
+    signature = preparation.required_execution_signatures(
+        layer_layout=preparation.prepare_ffn_layer(
+            spec,
+            layer_ordinal=0,
+            payload_dtype=profile.payload_dtype,
+            tp_size=2,
+            tp_rank=0,
+        ),
+        profile=profile,
     )[0]
-    retained = execution.graph_capture_capacity_storage_bytes(signature)
+    retained = preparation.graph_capture_capacity_storage_bytes(signature)
     temporary = execution.graph_capture_initialization_storage_bytes(signature)
 
     assert temporary == (32, 32)
@@ -309,7 +312,7 @@ def test_calibrated_overhead_uses_one_mib_ceiling_and_rejects_overflow() -> None
         )
         == 119
     )
-    with pytest.raises(ValueError, match="signed 64-bit"):
+    with pytest.raises(ValueError, match="sint64"):
         coefficients.evaluate(
             tensor_storage_bytes=0,
             tensor_storage_allocation_count=0,

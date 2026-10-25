@@ -1,6 +1,6 @@
 #pragma once
 
-/// \file xpool/ffnagent/projection.hpp
+/// \file xpool/ffnagent/execution.hpp
 /// \brief One-time native FFN execution installation input.
 
 #include <cstddef>
@@ -13,43 +13,77 @@
 
 namespace xpool::ffnagent {
 
-/// Canonical local Dense weight addresses used during capture or service.
-struct DenseBindingResourceProjection {
-  /// Device address of the fused gate/up projection weights.
-  std::uintptr_t gate_up_weight_address;
-  /// Device address of the down projection weights.
-  std::uintptr_t down_weight_address;
+/// Encoded values, optional scales and optional additive bias of one projection.
+struct ProjectionBindingView {
+  /// Nonzero device address of the retained values Tensor.
+  std::uintptr_t values;
+  /// Positive logical byte extent of the values Tensor.
+  std::size_t values_bytes;
+  /// Device address of scale storage, when present.
+  std::optional<std::uintptr_t> scales;
+  /// Scale Tensor bytes, or zero when scales are absent.
+  std::size_t scales_bytes;
+  /// Device address of additive projection bias, when present.
+  std::optional<std::uintptr_t> bias;
+  /// Bias Tensor bytes, or zero when bias is absent.
+  std::size_t bias_bytes;
 
-  constexpr bool operator==(const DenseBindingResourceProjection &other) const = default;
+  /// Check resource presence, nonnull addresses and corresponding byte extents.
+  /// \throws c10::Error when an address/extent pair is malformed.
+  void validate() const;
+
+  /// Compare resource presence and byte extents, ignoring addresses and encoding.
+  bool schema_matches(const ProjectionBindingView &other) const;
+
+  constexpr bool operator==(const ProjectionBindingView &other) const = default;
+};
+
+/// Canonical local Dense resources used during capture or service.
+struct DenseBindingView {
+  /// Fused gate/up projection resources.
+  ProjectionBindingView gate_up;
+  /// Down projection resources.
+  ProjectionBindingView down;
+
+  constexpr bool operator==(const DenseBindingView &other) const = default;
 };
 
 /// Router-owner-only weight addresses used during capture or service.
-struct MoeRouterBindingResourceProjection {
-  /// Device address of router weights on the router-owning FfnAgent.
-  std::uintptr_t weight_address;
+struct MoeRouterBindingView {
+  /// Projection resources on the router-owning FfnAgent.
+  ProjectionBindingView projection;
   /// Optional device address of the model-specific router correction bias.
   std::optional<std::uintptr_t> correction_bias_address;
+  /// Correction-bias Tensor bytes, or zero when absent.
+  std::size_t correction_bias_bytes;
 
-  constexpr bool operator==(const MoeRouterBindingResourceProjection &other) const = default;
+  /// Check projection resources and correction-bias presence/extent.
+  /// \throws c10::Error when a resource is malformed.
+  void validate() const;
+
+  /// Compare resource presence and byte extents without comparing addresses.
+  bool schema_matches(const MoeRouterBindingView &other) const;
+
+  constexpr bool operator==(const MoeRouterBindingView &other) const = default;
 };
 
 /// Canonical local MoE weight addresses used during capture or service.
-struct MoeBindingResourceProjection {
-  /// Device address of local expert gate/up weights.
-  std::uintptr_t expert_gate_up_weight_address;
-  /// Device address of local expert down weights.
-  std::uintptr_t expert_down_weight_address;
+struct MoeBindingView {
+  /// Local Expert gate/up projection resources.
+  ProjectionBindingView gate_up;
+  /// Local Expert down projection resources.
+  ProjectionBindingView down;
   /// Router resources when this FfnAgent owns routing for the layer.
-  std::optional<MoeRouterBindingResourceProjection> router;
+  std::optional<MoeRouterBindingView> router;
 
-  constexpr bool operator==(const MoeBindingResourceProjection &other) const = default;
+  constexpr bool operator==(const MoeBindingView &other) const = default;
 };
 
 /// Canonical Dense or MoE weight-address representation.
-using BindingResourceProjection = std::variant<DenseBindingResourceProjection, MoeBindingResourceProjection>;
+using BindingView = std::variant<DenseBindingView, MoeBindingView>;
 
 /// One captured gated-Dense computation body and its Primary/Control captures.
-struct DenseExecutionSignatureProjection {
+struct DenseCaptureDescriptor {
   /// Dtype used by Fabric payloads and graph input/output tensors.
   c10::ScalarType payload_dtype;
   /// Fixed row Capacity captured by this signature.
@@ -71,15 +105,15 @@ struct DenseExecutionSignatureProjection {
   /// Exact logical byte extent used to qualify and rebase captured workspace pointers.
   std::size_t compute_workspace_bytes;
   /// Canonical resources used by the Primary capture.
-  DenseBindingResourceProjection primary_capture_resources;
+  DenseBindingView primary_capture_resources;
   /// Canonical resources used by the Control capture.
-  DenseBindingResourceProjection control_capture_resources;
+  DenseBindingView control_capture_resources;
 
-  constexpr bool operator==(const DenseExecutionSignatureProjection &other) const = default;
+  constexpr bool operator==(const DenseCaptureDescriptor &other) const = default;
 };
 
 /// One captured MoE computation body and its Primary/Control captures.
-struct MoeExecutionSignatureProjection {
+struct MoeCaptureDescriptor {
   /// Dtype used by Fabric payloads and graph input/output tensors.
   c10::ScalarType payload_dtype;
   /// Fixed row Capacity captured by this signature.
@@ -111,18 +145,18 @@ struct MoeExecutionSignatureProjection {
   /// Optional device address used for dynamic live-row count during capture.
   std::optional<std::uintptr_t> capture_payload_rows_address;
   /// Canonical resources used by the Primary capture.
-  MoeBindingResourceProjection primary_capture_resources;
+  MoeBindingView primary_capture_resources;
   /// Canonical resources used by the Control capture.
-  MoeBindingResourceProjection control_capture_resources;
+  MoeBindingView control_capture_resources;
 
-  constexpr bool operator==(const MoeExecutionSignatureProjection &other) const = default;
+  constexpr bool operator==(const MoeCaptureDescriptor &other) const = default;
 };
 
 /// Captured Dense or MoE signature accepted by native installation.
-using ExecutionSignatureProjection = std::variant<DenseExecutionSignatureProjection, MoeExecutionSignatureProjection>;
+using CaptureDescriptor = std::variant<DenseCaptureDescriptor, MoeCaptureDescriptor>;
 
 /// One Plan-addressed local layer and its increasing-Capacity signatures.
-struct LayerExecutionProjection {
+struct LayerExecutionDescriptor {
   /// Fabric instance index addressed by this layer.
   std::size_t instance_index;
   /// Model-local layer ordinal.
@@ -130,23 +164,23 @@ struct LayerExecutionProjection {
   /// Increasing-Capacity signature indices available to this layer.
   std::vector<std::size_t> execution_signature_indices;
   /// Layer-specific weight addresses installed into the shared signatures.
-  BindingResourceProjection layer_resource_targets;
+  BindingView layer_resource_targets;
 
-  bool operator==(const LayerExecutionProjection &other) const = default;
+  bool operator==(const LayerExecutionDescriptor &other) const = default;
 };
 
 /// Complete one-time installation input for one FfnAgent PE.
-struct ExecutionProjection {
+struct ExecutionInstallDescriptor {
   /// Unique local execution signatures in deterministic installation order.
-  std::vector<ExecutionSignatureProjection> signatures;
+  std::vector<CaptureDescriptor> signatures;
   /// Locally placed layers in deterministic first-use order.
-  std::vector<LayerExecutionProjection> layers;
+  std::vector<LayerExecutionDescriptor> layers;
 
   /// Validate intrinsic structure and deterministic first-use ordering.
   /// \throws c10::Error when the projection is malformed.
   void validate() const;
 
-  bool operator==(const ExecutionProjection &other) const = default;
+  bool operator==(const ExecutionInstallDescriptor &other) const = default;
 };
 
 } // namespace xpool::ffnagent

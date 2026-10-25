@@ -5,12 +5,12 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-import xpool.native
-from xpool.native.ecs import DeviceMemoryReport, QuotaCommand, QuotaCompletion, QuotaDemand
 
+import xpool.native
 import xpool.service.daemon.ecs
 from xpool.config import XpoolConfig
 from xpool.fabric import FabricGenerationId
+from xpool.native.ecs import DeviceMemoryReport, QuotaCommand, QuotaCompletion, QuotaDemand
 from xpool.service.daemon import ecs
 from xpool.service.daemon.control import ControlPlane
 from xpool.service.daemon.fabric import FabricGenerationState

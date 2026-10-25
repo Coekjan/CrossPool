@@ -202,7 +202,7 @@ def record_registry_phases(recorder: PhaseRecorder) -> Iterator[None]:
     saved_install = xpool.native.ffnagent.install_execution
     invocation_count = 0
 
-    def install_forwarder(projection: xpool.native.ffnagent.ExecutionProjection) -> None:
+    def install_forwarder(projection: xpool.native.ffnagent.ExecutionInstallDescriptor) -> None:
         nonlocal invocation_count
         invocation_count += 1
         if invocation_count != 1:

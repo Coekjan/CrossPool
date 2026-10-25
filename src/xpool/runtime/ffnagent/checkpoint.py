@@ -85,7 +85,7 @@ def validate_ffn_coverage(
 ) -> None:
     """Require exact family-owned FFN keys for every main decoder layer."""
 
-    expected_by_layer = {layer.layer_id: set(layer.checkpoint.tensor_keys()) for layer in spec.layers}
+    expected_by_layer = {layer.layer_id: set(layer.tensor_keys()) for layer in spec.layers}
     all_checkpoint_keys = set(key_view)
     for layer_id, expected_keys in expected_by_layer.items():
         prefix = f"model.layers.{layer_id}.mlp."

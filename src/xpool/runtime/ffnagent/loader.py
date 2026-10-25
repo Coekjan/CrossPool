@@ -12,63 +12,37 @@ from pathlib import Path
 from typing import cast
 
 import torch
+
+# cuda-bindings exposes this binary module without Python type stubs.
+from cuda.bindings import runtime  # ty: ignore[unresolved-import]
 from safetensors import safe_open
 
 from xpool import ffn
 from xpool.config import get_global_config
 from xpool.fabric import FabricPlan, FabricRole, MoeFfnLayerPlan
-from xpool.runtime.ffnagent import checkpoint, weights
+from xpool.quantization import TensorSlice
+from xpool.runtime.ffnagent import checkpoint, preparation, weights
+from xpool.runtime.ffnagent.operators import moe
+from xpool.utils.cuda import check_runtime
 
 
 @dataclass(frozen=True, slots=True)
 class LocalLayerWeightRequest:
-    """One engine-neutral local TP layer requested from a checkpoint.
-
-    Attributes:
-        model_path: Checkpoint directory containing the layer's exact keys.
-        hidden_size: Model-wide hidden width.
-        payload_dtype: Effective BF16 or FP16 execution dtype.
-        router_weight_dtype: Retained Router precision, absent for Dense layers.
-        layer: Intrinsic Dense or MoE layer specification.
-        tp_rank: Rank within this layer's ordered Execution Group.
-        tp_size: Fixed model-wide FFN tensor-parallel width.
-    """
+    """One checkpoint directory and its prepared local TP resource description."""
 
     model_path: Path
-    hidden_size: int
-    payload_dtype: torch.dtype
-    router_weight_dtype: torch.dtype | None
-    layer: ffn.FfnLayerSpec
-    tp_rank: int
-    tp_size: int
-
-    def __post_init__(self) -> None:
-        """Validate request-local scalar geometry before CUDA allocation."""
-
-        if self.hidden_size <= 0:
-            raise ValueError("hidden_size must be positive")
-        if self.payload_dtype not in (torch.bfloat16, torch.float16):
-            raise ValueError("local FFN weights require BF16 or FP16 payloads")
-        if isinstance(self.layer, ffn.MoeFfnSpec) and self.router_weight_dtype not in (
-            torch.bfloat16,
-            torch.float16,
-            torch.float32,
-        ):
-            raise ValueError("MoE loading requires an explicit supported Router weight dtype")
-        if self.tp_size <= 0 or not 0 <= self.tp_rank < self.tp_size:
-            raise ValueError("TP rank must belong to a positive TP world")
+    layer_layout: preparation.FfnLayerLayout
 
 
 @dataclass(frozen=True, slots=True)
 class TensorReadDescriptor:
-    """Prevalidated source projection and stable CUDA destination."""
+    """Prevalidated source view, TP slice and stable destination."""
 
     shard_path: Path
     weight_key: str
     source_shape: tuple[int, ...]
-    narrow_dimension: int | None
-    narrow_start: int
-    narrow_length: int
+    view_shape: tuple[int, ...]
+    selection: TensorSlice | None
     staged_shape: tuple[int, ...]
     destination: torch.Tensor
 
@@ -79,9 +53,8 @@ class TensorReadDescriptor:
         *,
         weight_key: str,
         source_shape: tuple[int, ...],
-        narrow_dimension: int | None,
-        narrow_start: int,
-        narrow_length: int,
+        view_shape: tuple[int, ...] | None = None,
+        selection: TensorSlice | None,
         destination: torch.Tensor,
     ) -> TensorReadDescriptor:
         """Resolve one selected key to a stable preallocated destination."""
@@ -93,9 +66,8 @@ class TensorReadDescriptor:
             shard_path=shard_path,
             weight_key=weight_key,
             source_shape=source_shape,
-            narrow_dimension=narrow_dimension,
-            narrow_start=narrow_start,
-            narrow_length=narrow_length,
+            view_shape=source_shape if view_shape is None else view_shape,
+            selection=selection,
             staged_shape=tuple(destination.shape),
             destination=destination,
         )
@@ -110,6 +82,45 @@ class TensorReadDescriptor:
         """Return exact local-TP staging bytes."""
 
         return math.prod(self.staged_shape) * self.destination.element_size()
+
+    def copy_from(self, slot: torch.Tensor) -> None:
+        """Finish a pinned Host transfer on the destination's current stream.
+
+        Destinations are the loader's one-to-three-dimensional weight views.
+        Non-contiguous rows use direct pitched copies rather than Torch device
+        temporaries. Each span completes before advancing or returning the slot.
+        """
+
+        source = self.slot_view(slot)
+        destination = self.destination
+        if destination.is_contiguous():
+            destination.copy_(source, non_blocking=False)
+            return
+        if destination.stride(-1) != 1:
+            # A strided bias is an element-wide matrix column.
+            source = source.unsqueeze(-1)
+            destination = destination.unsqueeze(-1)
+        if destination.ndim == 2:
+            source = source.unsqueeze(0)
+            destination = destination.unsqueeze(0)
+        itemsize = destination.element_size()
+        width_bytes = destination.shape[2] * itemsize
+        row_count = destination.shape[1]
+        stream = torch.cuda.current_stream(destination.device).cuda_stream
+        for expert in range(destination.shape[0]):
+            (status,) = runtime.cudaMemcpy2DAsync(
+                destination[expert].data_ptr(),
+                destination.stride(1) * itemsize,
+                source[expert].data_ptr(),
+                source.stride(1) * itemsize,
+                width_bytes,
+                row_count,
+                runtime.cudaMemcpyKind.cudaMemcpyHostToDevice,
+                stream,
+            )
+            check_runtime(status, "cudaMemcpy2DAsync(ffn weight)")
+            (status,) = runtime.cudaStreamSynchronize(stream)
+            check_runtime(status, "cudaStreamSynchronize(ffn weight)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,29 +195,22 @@ def materialize_layer_weights(
             if ffnagent_index not in layer_plan.ffnagent_indices:
                 continue
             tp_rank = layer_plan.ffnagent_indices.index(ffnagent_index)
+            layer_layout = preparation.prepare_ffn_layer(
+                spec,
+                layer_ordinal=layer_ordinal,
+                payload_dtype=instance_plan.ffn_profile.payload_dtype,
+                tp_size=model_plan.tp_size,
+                tp_rank=tp_rank,
+            )
             requests.append(
                 LocalLayerWeightRequest(
                     model_path=model_path,
-                    hidden_size=spec.hidden_size,
-                    payload_dtype=instance_plan.ffn_profile.payload_dtype,
-                    router_weight_dtype=(
-                        layer.router_precision.weight_dtype(payload_dtype=instance_plan.ffn_profile.payload_dtype)
-                        if isinstance(layer, ffn.MoeFfnSpec)
-                        else None
-                    ),
-                    layer=layer,
-                    tp_rank=tp_rank,
-                    tp_size=model_plan.tp_size,
+                    layer_layout=layer_layout,
                 )
             )
             positions.append((model_index, layer_ordinal))
 
-            intrinsic_intermediate_size = (
-                layer.intermediate_size if isinstance(layer, ffn.DenseFfnSpec) else layer.expert_intermediate_size
-            )
-            if intrinsic_intermediate_size % model_plan.tp_size != 0:
-                raise ValueError(f"Model Spec {model_index} layer {layer_ordinal} is not divisible by its TP size")
-            if layer_plan.local_intermediate_size != intrinsic_intermediate_size // model_plan.tp_size:
+            if layer_plan.local_intermediate_size != layer_layout.local_intermediate_size:
                 raise ValueError(f"Model Spec {model_index} layer {layer_ordinal} has inconsistent TP geometry")
             if isinstance(layer, ffn.MoeFfnSpec):
                 moe_plan = cast(MoeFfnLayerPlan, layer_plan)
@@ -258,6 +262,8 @@ def materialize_local_layer_weights(
             descriptors.extend(layer_descriptors)
 
         parallelism = get_global_config().ffn.loader.parallelism
+        if not descriptors:
+            return tuple(layer_weights)
         slot_bytes = max(descriptor.staged_bytes for descriptor in descriptors)
         slots: queue.Queue[torch.Tensor] = queue.Queue()
         for _ in range(parallelism):
@@ -282,178 +288,289 @@ def prepare_layer_weight_request(
     key_view: dict[str, Path],
     device: int,
 ) -> tuple[weights.FfnLayerWeights, tuple[TensorReadDescriptor, ...]]:
-    """Allocate one canonical destination and resolve all exact-key reads."""
+    """Allocate prepared neutral resources and bind only their actual source slices."""
 
-    layer = request.layer
-    intermediate_size = (
-        layer.intermediate_size if isinstance(layer, ffn.DenseFfnSpec) else layer.expert_intermediate_size
-    )
-    if intermediate_size % request.tp_size != 0:
-        raise ValueError(
-            f"layer {layer.layer_id} intermediate size {intermediate_size} is not divisible by TP {request.tp_size}"
-        )
-    local_intermediate_size = intermediate_size // request.tp_size
-    local_start = request.tp_rank * local_intermediate_size
+    layout = request.layer_layout
     torch_device = torch.device("cuda", device)
-
-    if isinstance(layer, ffn.DenseFfnSpec):
-        materialized = weights.DenseFfnWeights.allocate(
-            hidden_size=request.hidden_size,
-            local_intermediate_size=local_intermediate_size,
-            payload_dtype=request.payload_dtype,
-            device=torch_device,
-        )
-        gate_up_weight = materialized.gate_up_weight
-        down_weight = materialized.down_weight
-        checkpoints = layer.checkpoint
-        descriptors = (
-            TensorReadDescriptor.from_key_view(
-                key_view,
-                weight_key=checkpoints.gate_weight_key,
-                source_shape=(intermediate_size, request.hidden_size),
-                narrow_dimension=0,
-                narrow_start=local_start,
-                narrow_length=local_intermediate_size,
-                destination=gate_up_weight[:local_intermediate_size],
-            ),
-            TensorReadDescriptor.from_key_view(
-                key_view,
-                weight_key=checkpoints.up_weight_key,
-                source_shape=(intermediate_size, request.hidden_size),
-                narrow_dimension=0,
-                narrow_start=local_start,
-                narrow_length=local_intermediate_size,
-                destination=gate_up_weight[local_intermediate_size:],
-            ),
-            TensorReadDescriptor.from_key_view(
-                key_view,
-                weight_key=checkpoints.down_weight_key,
-                source_shape=(request.hidden_size, intermediate_size),
-                narrow_dimension=1,
-                narrow_start=local_start,
-                narrow_length=local_intermediate_size,
-                destination=down_weight,
-            ),
+    if isinstance(layout, preparation.DenseFfnLayerLayout):
+        materialized = weights.DenseFfnWeights.allocate(gate_up=layout.gate_up, down=layout.down, device=torch_device)
+        descriptors = gated_descriptors(
+            key_view,
+            projections=layout.layer.projections,
+            layout=layout,
+            source_intermediate_size=layout.layer.intermediate_size,
+            source_start=layout.source_start,
+            expert_id=None,
+            gate_up=materialized.gate_up,
+            down=materialized.down,
+            read_down_bias=layout.tp_rank == 0,
         )
         return materialized, descriptors
 
-    routed_expert_count = layer.routed_expert_count
+    layer = layout.layer
     materialized = weights.MoeFfnWeights.allocate(
-        layer,
-        hidden_size=request.hidden_size,
-        local_intermediate_size=local_intermediate_size,
-        payload_dtype=request.payload_dtype,
-        router_weight_dtype=request.router_weight_dtype if request.tp_rank == 0 else None,
+        gate_up=layout.experts.gate_up,
+        down=layout.experts.down,
+        router=layout.router,
+        correction_bias=layout.router_correction_bias,
         device=torch_device,
     )
-    expert_gate_up_weight = materialized.expert_gate_up_weight
-    expert_down_weight = materialized.expert_down_weight
-    descriptors = []
-    for expert_id, checkpoints in enumerate(layer.checkpoint.routed_experts):
+    descriptors: list[TensorReadDescriptor] = []
+    source = layer.routed_experts
+    if isinstance(source, ffn.StackedExpertSource):
+        if layout.source_length:
+            target_order = moe.expert_operation_type(layout.operation).required_gate_up_order
+            segments = (
+                (
+                    TensorSlice(1, 2 * layout.source_start, 2 * layout.source_length),
+                    TensorSlice(1, 0, 2 * layout.source_length),
+                ),
+            )
+            if (
+                source.gate_up_order is not ffn.GateUpOrder.INTERLEAVED
+                or target_order is not ffn.GateUpOrder.INTERLEAVED
+            ):
+                source_rows = source.gate_up_order.row_slices(
+                    axis=1,
+                    width=layer.expert_intermediate_size,
+                    start=layout.source_start,
+                    length=layout.source_length,
+                )
+                target_rows = target_order.row_slices(
+                    axis=1,
+                    width=layout.local_intermediate_size,
+                    start=0,
+                    length=layout.source_length,
+                )
+                segments = tuple(zip(source_rows, target_rows, strict=True))
+            for source_selection, target_selection in segments:
+                target_indices = target_selection.indices()
+                descriptors.extend(
+                    projection_descriptors(
+                        key_view,
+                        projection=source.gate_up,
+                        logical_shape=(
+                            layer.routed_expert_count,
+                            2 * layer.expert_intermediate_size,
+                            layout.hidden_size,
+                        ),
+                        selection=source_selection,
+                        dtype=layout.payload_dtype,
+                        values=materialized.gate_up.values[: layer.routed_expert_count][target_indices],
+                        scales=None
+                        if materialized.gate_up.scales is None
+                        else materialized.gate_up.scales[: layer.routed_expert_count][target_indices],
+                        bias=None
+                        if materialized.gate_up.bias is None
+                        else materialized.gate_up.bias[: layer.routed_expert_count][target_indices],
+                        read_bias=True,
+                    )
+                )
         descriptors.extend(
-            expert_descriptors(
+            projection_descriptors(
                 key_view,
-                checkpoints=checkpoints,
-                expert_id=expert_id,
-                source_intermediate_size=intermediate_size,
-                source_start=local_start,
-                local_intermediate_size=local_intermediate_size,
-                hidden_size=request.hidden_size,
-                expert_gate_up_weight=expert_gate_up_weight,
-                expert_down_weight=expert_down_weight,
+                projection=source.down,
+                logical_shape=(layer.routed_expert_count, layout.hidden_size, layer.expert_intermediate_size),
+                selection=TensorSlice(2, layout.source_start, layout.source_length),
+                dtype=layout.payload_dtype,
+                values=materialized.down.values[: layer.routed_expert_count],
+                scales=None
+                if materialized.down.scales is None
+                else materialized.down.scales[: layer.routed_expert_count],
+                bias=None if materialized.down.bias is None else materialized.down.bias[: layer.routed_expert_count],
+                read_bias=layout.tp_rank == 0,
             )
         )
-    if layer.checkpoint.shared_expert is not None:
-        for shared_ordinal in range(layer.shared_expert_count):
+    else:
+        for expert_id, projections in enumerate(source.experts):
             descriptors.extend(
-                expert_descriptors(
+                gated_descriptors(
                     key_view,
-                    checkpoints=layer.checkpoint.shared_expert,
-                    expert_id=routed_expert_count + shared_ordinal,
-                    source_intermediate_size=intermediate_size * layer.shared_expert_count,
-                    source_start=shared_ordinal * intermediate_size + local_start,
-                    local_intermediate_size=local_intermediate_size,
-                    hidden_size=request.hidden_size,
-                    expert_gate_up_weight=expert_gate_up_weight,
-                    expert_down_weight=expert_down_weight,
+                    projections=projections,
+                    layout=layout,
+                    source_intermediate_size=layer.expert_intermediate_size,
+                    source_start=layout.source_start,
+                    expert_id=expert_id,
+                    gate_up=materialized.gate_up,
+                    down=materialized.down,
+                    read_down_bias=layout.tp_rank == 0,
                 )
             )
-
+    if layer.shared_expert is not None:
+        for ordinal in range(layer.shared_expert_count):
+            descriptors.extend(
+                gated_descriptors(
+                    key_view,
+                    projections=layer.shared_expert,
+                    layout=layout,
+                    source_intermediate_size=layer.expert_intermediate_size * layer.shared_expert_count,
+                    source_start=ordinal * layer.expert_intermediate_size + layout.source_start,
+                    expert_id=layer.routed_expert_count + ordinal,
+                    gate_up=materialized.gate_up,
+                    down=materialized.down,
+                    read_down_bias=layout.tp_rank == 0 and ordinal == 0,
+                )
+            )
     router = materialized.router
     if router is not None:
-        router_weight = router.weight
-        descriptors.append(
-            TensorReadDescriptor.from_key_view(
+        descriptors.extend(
+            projection_descriptors(
                 key_view,
-                weight_key=layer.checkpoint.router_weight_key,
-                source_shape=(routed_expert_count, request.hidden_size),
-                narrow_dimension=None,
-                narrow_start=0,
-                narrow_length=0,
-                destination=router_weight,
+                projection=layer.router,
+                logical_shape=(layer.routed_expert_count, layout.hidden_size),
+                selection=None,
+                dtype=layer.router_projection_precision.weight_dtype(payload_dtype=layout.payload_dtype),
+                values=router.projection.values,
+                scales=router.projection.scales,
+                bias=router.projection.bias,
+                read_bias=True,
             )
         )
-        if layer.checkpoint.router_correction_bias_key is not None:
-            correction_bias = router.correction_bias
-            if correction_bias is None:
-                raise AssertionError("allocated Router lacks its correction bias")
+        if layer.router_correction_bias_key is not None:
+            if router.correction_bias is None:
+                raise AssertionError("prepared Router lacks its correction resource")
             descriptors.append(
                 TensorReadDescriptor.from_key_view(
                     key_view,
-                    weight_key=layer.checkpoint.router_correction_bias_key,
-                    source_shape=(routed_expert_count,),
-                    narrow_dimension=None,
-                    narrow_start=0,
-                    narrow_length=0,
-                    destination=correction_bias,
+                    weight_key=layer.router_correction_bias_key,
+                    source_shape=(layer.routed_expert_count,),
+                    selection=None,
+                    destination=router.correction_bias,
                 )
             )
     return materialized, tuple(descriptors)
 
 
-def expert_descriptors(
+def gated_descriptors(
     key_view: dict[str, Path],
     *,
-    checkpoints: ffn.GatedFfnCheckpointKeys,
-    expert_id: int,
+    projections: ffn.GatedProjectionSpec,
+    layout: preparation.FfnLayerLayout,
     source_intermediate_size: int,
     source_start: int,
-    local_intermediate_size: int,
-    hidden_size: int,
-    expert_gate_up_weight: torch.Tensor,
-    expert_down_weight: torch.Tensor,
+    expert_id: int | None,
+    gate_up: weights.ProjectionWeights,
+    down: weights.ProjectionWeights,
+    read_down_bias: bool,
 ) -> tuple[TensorReadDescriptor, ...]:
-    """Resolve one routed or logical shared Expert's three local projections."""
+    """Bind separate gate/up sources into the prepared fused destination order."""
 
-    return (
-        TensorReadDescriptor.from_key_view(
-            key_view,
-            weight_key=checkpoints.gate_weight_key,
-            source_shape=(source_intermediate_size, hidden_size),
-            narrow_dimension=0,
-            narrow_start=source_start,
-            narrow_length=local_intermediate_size,
-            destination=expert_gate_up_weight[expert_id, :local_intermediate_size],
-        ),
-        TensorReadDescriptor.from_key_view(
-            key_view,
-            weight_key=checkpoints.up_weight_key,
-            source_shape=(source_intermediate_size, hidden_size),
-            narrow_dimension=0,
-            narrow_start=source_start,
-            narrow_length=local_intermediate_size,
-            destination=expert_gate_up_weight[expert_id, local_intermediate_size:],
-        ),
-        TensorReadDescriptor.from_key_view(
-            key_view,
-            weight_key=checkpoints.down_weight_key,
-            source_shape=(hidden_size, source_intermediate_size),
-            narrow_dimension=1,
-            narrow_start=source_start,
-            narrow_length=local_intermediate_size,
-            destination=expert_down_weight[expert_id],
-        ),
+    gate_values = gate_up.values if expert_id is None else gate_up.values[expert_id]
+    gate_scales = gate_up.scales if expert_id is None or gate_up.scales is None else gate_up.scales[expert_id]
+    gate_bias = gate_up.bias if expert_id is None or gate_up.bias is None else gate_up.bias[expert_id]
+    order = (
+        ffn.GateUpOrder.CONCATENATED
+        if isinstance(layout, preparation.DenseFfnLayerLayout)
+        else moe.expert_operation_type(layout.operation).required_gate_up_order
     )
+    target_rows = order.row_slices(
+        axis=0,
+        width=layout.local_intermediate_size,
+        start=0,
+        length=layout.source_length,
+    )
+    descriptors = []
+    for source, target_selection in zip((projections.gate, projections.up), target_rows, strict=True):
+        rows = target_selection.indices()
+        descriptors.extend(
+            projection_descriptors(
+                key_view,
+                projection=source,
+                logical_shape=(source_intermediate_size, layout.hidden_size),
+                selection=TensorSlice(0, source_start, layout.source_length),
+                dtype=layout.payload_dtype,
+                values=gate_values[rows],
+                scales=None if gate_scales is None else gate_scales[rows],
+                bias=None if gate_bias is None else gate_bias[rows],
+                read_bias=True,
+            )
+        )
+    descriptors.extend(
+        projection_descriptors(
+            key_view,
+            projection=projections.down,
+            logical_shape=(layout.hidden_size, source_intermediate_size),
+            selection=TensorSlice(1, source_start, layout.source_length),
+            dtype=layout.payload_dtype,
+            values=down.values if expert_id is None else down.values[expert_id],
+            scales=down.scales if expert_id is None or down.scales is None else down.scales[expert_id],
+            bias=down.bias if expert_id is None or down.bias is None else down.bias[expert_id],
+            read_bias=read_down_bias,
+        )
+    )
+    return tuple(descriptors)
+
+
+def projection_descriptors(
+    key_view: dict[str, Path],
+    *,
+    projection: ffn.ProjectionSpec,
+    logical_shape: tuple[int, ...],
+    selection: TensorSlice | None,
+    dtype: torch.dtype,
+    values: torch.Tensor,
+    scales: torch.Tensor | None,
+    bias: torch.Tensor | None,
+    read_bias: bool,
+) -> tuple[TensorReadDescriptor, ...]:
+    """Translate a scheme's source geometry into bounded, encoding-preserving reads."""
+
+    encoded = projection.quantization.weight_layout(logical_shape=logical_shape, dtype=dtype)
+    slices = (
+        projection.quantization.weight_slices(logical_shape=logical_shape, selection=selection)
+        if selection is not None
+        else None
+    )
+    if (encoded.scales is None) != (projection.scales_key is None) or (encoded.scales is None) != (scales is None):
+        raise ValueError("projection source and destination scales disagree with its encoding")
+    source_shape = encoded.values.shape
+    if projection.values_layout is ffn.ValuesSourceLayout.SCALE_BLOCKED:
+        if encoded.scales is None or source_shape[-1] % encoded.scales.shape[-1]:
+            raise ValueError("blocked source values require resolvable scale groups")
+        source_shape = (*source_shape[:-1], encoded.scales.shape[-1], source_shape[-1] // encoded.scales.shape[-1])
+    descriptors = []
+    if selection is None or selection.length:
+        physical_slice = None if slices is None else slices.values
+        descriptors.append(
+            TensorReadDescriptor.from_key_view(
+                key_view,
+                weight_key=projection.values_key,
+                source_shape=source_shape,
+                view_shape=encoded.values.shape,
+                selection=physical_slice,
+                destination=values
+                if physical_slice is None
+                else values.narrow(physical_slice.axis, 0, physical_slice.length),
+            )
+        )
+        if encoded.scales is not None and projection.scales_key is not None and scales is not None:
+            scale_slice = None if slices is None else slices.scales
+            descriptors.append(
+                TensorReadDescriptor.from_key_view(
+                    key_view,
+                    weight_key=projection.scales_key,
+                    source_shape=encoded.scales.shape,
+                    selection=scale_slice,
+                    destination=scales
+                    if scale_slice is None
+                    else scales.narrow(scale_slice.axis, 0, scale_slice.length),
+                )
+            )
+    if projection.bias_key is not None and read_bias:
+        if bias is None:
+            raise ValueError("projection source bias lacks a prepared destination")
+        bias_slice = selection if selection is not None and selection.axis < len(logical_shape) - 1 else None
+        if bias_slice is None or bias_slice.length:
+            descriptors.append(
+                TensorReadDescriptor.from_key_view(
+                    key_view,
+                    weight_key=projection.bias_key,
+                    source_shape=logical_shape[:-1],
+                    selection=bias_slice,
+                    destination=bias if bias_slice is None else bias.narrow(bias_slice.axis, 0, bias_slice.length),
+                )
+            )
+    return tuple(descriptors)
 
 
 def copy_staged_tensors(
@@ -492,8 +609,7 @@ def copy_staged_tensors(
                 continue
             try:
                 if first_error is None:
-                    staged_view = message.descriptor.slot_view(message.slot)
-                    message.descriptor.destination.copy_(staged_view, non_blocking=False)
+                    message.descriptor.copy_from(message.slot)
             except Exception as error:
                 if first_error is None:
                     first_error = error
@@ -526,18 +642,18 @@ def stage_shard(
                     break
                 try:
                     source = checkpoint.get_tensor(descriptor.weight_key)
-                    if not source.is_floating_point() or tuple(source.shape) != descriptor.source_shape:
+                    compatible_dtype = source.dtype == descriptor.destination.dtype or (
+                        source.is_floating_point() and descriptor.destination.is_floating_point()
+                    )
+                    if not compatible_dtype or tuple(source.shape) != descriptor.source_shape:
                         raise ValueError(
-                            f"checkpoint tensor {descriptor.weight_key!r} expected "
-                            f"floating-point {descriptor.source_shape}, found {source.dtype} {tuple(source.shape)}"
+                            f"checkpoint tensor {descriptor.weight_key!r} has incompatible dtype or shape: expected "
+                            f"{descriptor.destination.dtype} {descriptor.source_shape}, "
+                            f"found {source.dtype} {tuple(source.shape)}"
                         )
-                    projected = source
-                    if descriptor.narrow_dimension is not None:
-                        projected = source.narrow(
-                            descriptor.narrow_dimension,
-                            descriptor.narrow_start,
-                            descriptor.narrow_length,
-                        )
+                    projected = source.view(descriptor.view_shape)
+                    if descriptor.selection is not None:
+                        projected = projected[descriptor.selection.indices()]
                     if tuple(projected.shape) != descriptor.staged_shape:
                         raise ValueError(f"checkpoint tensor {descriptor.weight_key!r} local TP shape is invalid")
                     descriptor.slot_view(slot).copy_(projected)

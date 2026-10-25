@@ -326,9 +326,11 @@ experiment definition. Synthetic specifications declare FFN semantics directly,
 without loading checkpoints or selecting real source architectures. The snapshot
 describes the complete configured fleet; an experiment instance's attention
 membership belongs to its Instance Plan and may use a subset of that fleet.
-Fresh repeated worlds supply fit observations and a disjoint held-out placement
-checks the candidate. Equal feature rows retain their largest residual rather
-than an average. The fitter adds one empirically derived Device
+For a Fleet of `N` FfnAgents, independent packed fitting experiments cover the
+distinct TP widths `min(N, 2)` and `min(N, 4)`. Fresh repeated worlds supply fit
+observations and a disjoint mixed held-out placement checks the candidate.
+Equal feature rows retain their largest residual rather than an average.
+The fitter adds one empirically derived Device
 Observation Quantum to each grouped residual target and finds nonnegative,
 quantized coefficients minimizing total overprediction, with a canonical
 coefficient tie-break. The quantum is absorbed into the fitted coefficients;

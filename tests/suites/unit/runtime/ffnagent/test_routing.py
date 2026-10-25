@@ -3,20 +3,20 @@ from __future__ import annotations
 import pytest
 import torch
 
-from xpool.ffn import RouterPrecision
+from xpool.ffn import RouterProjectionPrecision
 from xpool.runtime.ffnagent import execution
 
 
 @pytest.mark.parametrize(
     "precision, expected_dtype, expected_bytes",
     (
-        (RouterPrecision.PAYLOAD, torch.bfloat16, 16),
-        (RouterPrecision.FP32_LOGITS, torch.bfloat16, 32),
-        (RouterPrecision.FP32, torch.float32, 96),
+        (RouterProjectionPrecision.PAYLOAD, torch.bfloat16, 16),
+        (RouterProjectionPrecision.FP32_LOGITS, torch.bfloat16, 32),
+        (RouterProjectionPrecision.FP32, torch.float32, 96),
     ),
 )
 def test_router_resources_follow_execution_semantics(
-    precision: RouterPrecision, expected_dtype: torch.dtype, expected_bytes: int
+    precision: RouterProjectionPrecision, expected_dtype: torch.dtype, expected_bytes: int
 ) -> None:
     assert precision.weight_dtype(payload_dtype=torch.bfloat16) is expected_dtype
     assert (

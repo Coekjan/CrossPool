@@ -7,10 +7,8 @@ from typing import cast
 
 import pytest
 import torch
-import xpool.native
-from xpool.native import RuntimeRole
-from xpool.native.ffn import LayerKind
 
+import xpool.native
 import xpool.runtime.agent
 import xpool.runtime.ffnagent.agent
 from xpool.config import XpoolConfig
@@ -31,6 +29,8 @@ from xpool.fabric import (
     InstanceRankTopology,
 )
 from xpool.ffn import FfnModelSpec
+from xpool.native import RuntimeRole
+from xpool.native.ffn import LayerKind
 from xpool.runtime.agent import AgentError
 from xpool.runtime.atnagent import AtnAgent
 from xpool.runtime.ffnagent import FfnAgent

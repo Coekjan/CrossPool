@@ -75,6 +75,7 @@ class FakeModelConfig:
     hf_config: PretrainedConfig | None = field(default_factory=fake_hf_config)
     model_path: str = "/tmp/xpool/fake-model"
     dtype: torch.dtype = torch.float16
+    quantization: str | None = None
 
 
 @dataclass(slots=True)

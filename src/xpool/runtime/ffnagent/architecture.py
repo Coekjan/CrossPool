@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TypeVar, cast
 
-from xpool import ffn
+from xpool import ffn, quantization
 from xpool.model import ModelId
 from xpool.runtime.ffnagent import checkpoint
 from xpool.utils.discovery import discover_concrete_subclasses
@@ -102,6 +102,26 @@ class FfnSourceConfig:
         if self.get(dtype_field, str) not in ("bfloat16", "float16"):
             raise ValueError(f"{dtype_field} must be 'bfloat16' or 'float16'")
 
+    def projection(self, module_name: str) -> ffn.ProjectionSpec:
+        """Compile an ordinary weight source with its source-config exclusions."""
+
+        return ffn.ProjectionSpec(
+            quantization=quantization.resolve(
+                self.optional("quantization_config", dict, allow_none=True),
+                module_name=module_name,
+            ),
+            values_key=f"{module_name}.weight",
+        )
+
+    def gated_projections(self, prefix: str) -> ffn.GatedProjectionSpec:
+        """Compile the separate gate/up/down sources below an FFN prefix."""
+
+        return ffn.GatedProjectionSpec(
+            gate=self.projection(f"{prefix}.gate_proj"),
+            up=self.projection(f"{prefix}.up_proj"),
+            down=self.projection(f"{prefix}.down_proj"),
+        )
+
 
 class FfnModelAdapter(ABC):
     """Compile one strict model-family configuration into FFN semantics."""
@@ -178,13 +198,3 @@ def load(*, model_id: ModelId, model_path: pathlib.Path) -> ffn.FfnModelSpec:
         return spec
     except Exception as error:
         raise RuntimeError(f"failed to compile FFN model {model_id!r} at {model_path}: {error}") from error
-
-
-def gated_checkpoint_keys(prefix: str) -> ffn.GatedFfnCheckpointKeys:
-    """Construct the canonical gated projection triplet below one FFN prefix."""
-
-    return ffn.GatedFfnCheckpointKeys(
-        gate_weight_key=f"{prefix}.gate_proj.weight",
-        up_weight_key=f"{prefix}.up_proj.weight",
-        down_weight_key=f"{prefix}.down_proj.weight",
-    )

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
 
 import xpool.native
 from xpool import ffn
+from xpool.quantization import TensorLayout
 
 
 def validate_tensor(
@@ -33,12 +35,13 @@ def validate_weight_tensor(
     tensor: torch.Tensor,
     *,
     name: str,
-    dtype: torch.dtype,
-    dimensions: int,
 ) -> None:
-    """Validate one exact, independently owned canonical weight allocation."""
+    """Validate intrinsic storage ownership, independent of the prepared layout."""
 
-    validate_tensor(tensor, name=name, dtype=dtype, dimensions=dimensions)
+    if tensor.device.type != "cuda":
+        raise ValueError(f"{name} must be CUDA-resident")
+    if not tensor.is_contiguous() or any(size <= 0 for size in tensor.shape):
+        raise ValueError(f"{name} must have contiguous positive dimensions")
     storage = tensor.untyped_storage()
     if tensor.storage_offset() != 0 or tensor.data_ptr() != storage.data_ptr() or tensor.nbytes != storage.nbytes():
         raise ValueError(f"{name} must own its exact CUDA storage")
@@ -47,225 +50,273 @@ def validate_weight_tensor(
 
 
 @dataclass(frozen=True, slots=True)
-class DenseFfnWeights:
-    """One canonical local gated-Dense shard.
+class ProjectionLayout:
+    """Final physical allocation order and neutral initialization for a projection.
 
-    Attributes:
-        gate_up_weight: Gate-then-up payload tensor shaped ``[2 * I_r, H]``.
-        down_weight: Down-projection payload tensor shaped ``[H, I_r]``.
+    Values, optional scales and optional additive bias are independent storages.
+    The selected operation determines the bias dtype; the encoding determines
+    value/scale layouts. This description retains no Tensor or device state.
     """
 
-    gate_up_weight: torch.Tensor
-    down_weight: torch.Tensor
+    values: TensorLayout
+    scales: TensorLayout | None
+    bias: TensorLayout | None
 
-    @classmethod
-    def allocate(
-        cls,
-        *,
-        hidden_size: int,
-        local_intermediate_size: int,
-        payload_dtype: torch.dtype,
-        device: torch.device,
-    ) -> DenseFfnWeights:
-        """Own empty canonical shards, ready for checkpoint or synthetic filling."""
+    def allocate(self, device: torch.device) -> ProjectionWeights:
+        """Allocate uninitialized values, scales and bias in their declared order.
 
-        return cls(
-            gate_up_weight=torch.empty((2 * local_intermediate_size, hidden_size), dtype=payload_dtype, device=device),
-            down_weight=torch.empty((hidden_size, local_intermediate_size), dtype=payload_dtype, device=device),
+        The loading owner fills every source and neutral padding region before
+        execution. These storages stay alive under the layer's weight owner.
+        """
+
+        return ProjectionWeights(
+            values=torch.empty(self.values.shape, dtype=self.values.dtype, device=device),
+            scales=None
+            if self.scales is None
+            else torch.empty(self.scales.shape, dtype=self.scales.dtype, device=device),
+            bias=None if self.bias is None else torch.empty(self.bias.shape, dtype=self.bias.dtype, device=device),
         )
 
-    def binding_projection(self) -> xpool.native.ffnagent.DenseBindingResourceProjection:
-        """Expose retained addresses without transferring Tensor ownership."""
+    def zero_probe(self, device: torch.device) -> ProjectionWeights:
+        """Allocate shape-equivalent, encoding-correct zero resources for capture."""
 
-        return xpool.native.ffnagent.DenseBindingResourceProjection(
-            gate_up_weight=self.gate_up_weight,
-            down_weight=self.down_weight,
+        return ProjectionWeights(
+            values=torch.full(self.values.shape, self.values.zero_value, dtype=self.values.dtype, device=device),
+            scales=None
+            if self.scales is None
+            else torch.full(
+                self.scales.shape,
+                self.scales.zero_value,
+                dtype=self.scales.dtype,
+                device=device,
+            ),
+            bias=None
+            if self.bias is None
+            else torch.full(
+                self.bias.shape,
+                self.bias.zero_value,
+                dtype=self.bias.dtype,
+                device=device,
+            ),
         )
 
-    def zeros_like(self) -> DenseFfnWeights:
-        """Allocate zero-valued weights with the same shape, dtype and device."""
+    def allocation_bytes(self) -> tuple[int, ...]:
+        """Return positive Tensor byte requests in the actual allocation order."""
 
-        return DenseFfnWeights(
-            gate_up_weight=torch.zeros_like(self.gate_up_weight),
-            down_weight=torch.zeros_like(self.down_weight),
+        return tuple(
+            math.prod(layout.shape) * layout.dtype.itemsize
+            for layout in (self.values, self.scales, self.bias)
+            if layout is not None
         )
-
-    def __post_init__(self) -> None:
-        """Validate canonical Dense ranks, dimensions, storage, and device."""
-
-        payload_dtype = self.gate_up_weight.dtype
-        if payload_dtype not in (torch.bfloat16, torch.float16):
-            raise ValueError("Dense weights require BF16 or FP16 payloads")
-        validate_weight_tensor(self.gate_up_weight, name="gate_up_weight", dtype=payload_dtype, dimensions=2)
-        validate_weight_tensor(self.down_weight, name="down_weight", dtype=payload_dtype, dimensions=2)
-        local_intermediate_twice, hidden_size = self.gate_up_weight.shape
-        if local_intermediate_twice % 2 != 0:
-            raise ValueError("gate_up_weight first dimension must be even")
-        local_intermediate_size = local_intermediate_twice // 2
-        if self.down_weight.shape != (hidden_size, local_intermediate_size):
-            raise ValueError("Dense down_weight dimensions disagree with gate_up_weight")
-        if self.down_weight.device != self.gate_up_weight.device:
-            raise ValueError("Dense weights must share one device")
 
 
 @dataclass(frozen=True, slots=True)
-class MoeRouterWeights:
-    """Router-owner-only canonical MoE weights.
+class ProjectionWeights:
+    """Independently owned projection storages borrowed by native binding views."""
 
-    Attributes:
-        weight: Routed-Expert Router tensor shaped ``[E_r, H]`` with model-owned precision.
-        correction_bias: Optional corrected-routing FP32 tensor shaped
-            ``[E_r]``.
-    """
-
-    weight: torch.Tensor
-    correction_bias: torch.Tensor | None
+    values: torch.Tensor
+    scales: torch.Tensor | None
+    bias: torch.Tensor | None
 
     def __post_init__(self) -> None:
-        """Validate Router weight and optional correction bias."""
+        validate_weight_tensor(self.values, name="projection values")
+        for name, tensor in (("scales", self.scales), ("bias", self.bias)):
+            if tensor is None:
+                continue
+            validate_weight_tensor(tensor, name=f"projection {name}")
+            if tensor.device != self.values.device:
+                raise ValueError("projection resources must share one device")
 
-        router_dtype = self.weight.dtype
-        if router_dtype not in (torch.bfloat16, torch.float16, torch.float32):
-            raise ValueError("Router weights require BF16, FP16, or FP32")
-        validate_weight_tensor(self.weight, name="router weight", dtype=router_dtype, dimensions=2)
-        if self.correction_bias is None:
-            return
-        validate_weight_tensor(
-            self.correction_bias,
-            name="router correction bias",
-            dtype=torch.float32,
-            dimensions=1,
-        )
-        if self.correction_bias.shape[0] != self.weight.shape[0]:
-            raise ValueError("Router correction bias cardinality disagrees with Router weight")
-        if self.correction_bias.device != self.weight.device:
-            raise ValueError("Router weights must share one device")
+    def validate(self, layout: ProjectionLayout) -> None:
+        """Require exact resource presence, shape and dtype against preparation."""
+
+        for name, tensor, expected in (
+            ("values", self.values, layout.values),
+            ("scales", self.scales, layout.scales),
+            ("bias", self.bias, layout.bias),
+        ):
+            if (tensor is None) != (expected is None):
+                raise ValueError(f"projection {name} presence disagrees with its prepared layout")
+            if tensor is not None and expected is not None:
+                if tuple(tensor.shape) != expected.shape or tensor.dtype != expected.dtype:
+                    raise ValueError(f"projection {name} shape or dtype disagrees with its prepared layout")
+
+    def binding_view(self) -> xpool.native.ffnagent.ProjectionBindingView:
+        """Borrow addresses and byte extents while this owner retains the Tensors."""
+
+        return xpool.native.ffnagent.ProjectionBindingView(values=self.values, scales=self.scales, bias=self.bias)
 
 
 @dataclass(frozen=True, slots=True)
-class MoeFfnWeights:
-    """One canonical local MoE Expert shard and optional Router ownership.
+class ExpertLayout:
+    """Capacity-independent physical resources for the two Expert projections."""
 
-    Attributes:
-        expert_gate_up_weight: Routed-then-shared gate/up payload tensor shaped
-            ``[E, 2 * I_r, H]``.
-        expert_down_weight: Routed-then-shared down payload tensor shaped
-            ``[E, H, I_r]``.
-        router: Router weights on TP rank zero, otherwise ``None``.
-    """
-
-    expert_gate_up_weight: torch.Tensor
-    expert_down_weight: torch.Tensor
-    router: MoeRouterWeights | None
+    gate_up: ProjectionLayout
+    down: ProjectionLayout
 
     @classmethod
-    def allocate(
+    def from_layer(
         cls,
         layer: ffn.MoeFfnSpec,
         *,
         hidden_size: int,
         local_intermediate_size: int,
         payload_dtype: torch.dtype,
-        router_weight_dtype: torch.dtype | None,
-        device: torch.device,
-    ) -> MoeFfnWeights:
-        """Own empty Expert shards and any Router tensors in production order.
+        bias_dtype: torch.dtype,
+    ) -> ExpertLayout:
+        """Compose encoded Expert geometry with operation-owned bias storage.
 
-        A missing Router dtype selects a non-owner TP shard. The caller selects
-        precision from the declared execution policy and fills the empty tensors.
+        Sources in each group must share an encoding and its scale presence.
+        This pure construction owns no Tensor and performs no device query.
         """
 
+        gate_up_sources, down_sources = layer.expert_projection_sources()
         expert_count = layer.routed_expert_count + layer.shared_expert_count
-        expert_gate_up_weight = torch.empty(
-            (expert_count, 2 * local_intermediate_size, hidden_size), dtype=payload_dtype, device=device
-        )
-        expert_down_weight = torch.empty(
-            (expert_count, hidden_size, local_intermediate_size), dtype=payload_dtype, device=device
-        )
-        router = None
-        if router_weight_dtype is not None:
-            router_weight = torch.empty(
-                (layer.routed_expert_count, hidden_size), dtype=router_weight_dtype, device=device
-            )
-            correction_bias = (
-                torch.empty((layer.routed_expert_count,), dtype=torch.float32, device=device)
-                if layer.checkpoint.router_correction_bias_key is not None
-                else None
-            )
-            router = MoeRouterWeights(weight=router_weight, correction_bias=correction_bias)
-        return cls(
-            expert_gate_up_weight=expert_gate_up_weight,
-            expert_down_weight=expert_down_weight,
-            router=router,
-        )
-
-    def binding_projection(self) -> xpool.native.ffnagent.MoeBindingResourceProjection:
-        """Expose Expert and optional Router addresses, retaining their owners."""
-
-        router = self.router
-        return xpool.native.ffnagent.MoeBindingResourceProjection(
-            expert_gate_up_weight=self.expert_gate_up_weight,
-            expert_down_weight=self.expert_down_weight,
-            router=(
-                None
-                if router is None
-                else xpool.native.ffnagent.MoeRouterBindingResourceProjection(
-                    weight=router.weight,
-                    correction_bias=router.correction_bias,
-                )
+        projections = []
+        for sources, shape, bias_shape in (
+            (
+                gate_up_sources,
+                (expert_count, 2 * local_intermediate_size, hidden_size),
+                (expert_count, 2 * local_intermediate_size),
             ),
-        )
-
-    def zeros_like(self) -> MoeFfnWeights:
-        """Allocate zero-valued shape-equivalent weights with matching ownership."""
-
-        router = self.router
-        return MoeFfnWeights(
-            expert_gate_up_weight=torch.zeros_like(self.expert_gate_up_weight),
-            expert_down_weight=torch.zeros_like(self.expert_down_weight),
-            router=(
-                None
-                if router is None
-                else MoeRouterWeights(
-                    weight=torch.zeros_like(router.weight),
-                    correction_bias=None
-                    if router.correction_bias is None
-                    else torch.zeros_like(router.correction_bias),
+            (down_sources, (expert_count, hidden_size, local_intermediate_size), (expert_count, hidden_size)),
+        ):
+            scheme = sources[0].quantization
+            if any(source.quantization != scheme for source in sources):
+                raise ValueError("Expert projection group requires a homogeneous encoding")
+            encoded = scheme.weight_layout(logical_shape=shape, dtype=payload_dtype)
+            if any((source.scales_key is not None) != (encoded.scales is not None) for source in sources):
+                raise ValueError("Expert projection scale keys disagree with the encoding")
+            projections.append(
+                ProjectionLayout(
+                    values=encoded.values,
+                    scales=encoded.scales,
+                    bias=TensorLayout(bias_shape, bias_dtype, 0)
+                    if any(source.bias_key is not None for source in sources)
+                    else None,
                 )
-            ),
-        )
+            )
+        return cls(gate_up=projections[0], down=projections[1])
+
+
+@dataclass(frozen=True, slots=True)
+class DenseFfnWeights:
+    """Retained gate/up and down resources for one local Dense shard."""
+
+    gate_up: ProjectionWeights
+    down: ProjectionWeights
+
+    @classmethod
+    def allocate(
+        cls,
+        *,
+        gate_up: ProjectionLayout,
+        down: ProjectionLayout,
+        device: torch.device,
+    ) -> DenseFfnWeights:
+        """Allocate neutral resources in the prepared projection order.
+
+        Neutral initialization also covers missing source biases and padding.
+        Loading overwrites the valid source intervals without another weight copy.
+        """
+
+        return cls(gate_up=gate_up.zero_probe(device), down=down.zero_probe(device))
 
     def __post_init__(self) -> None:
-        """Validate canonical Expert ranks, dimensions, storage, and device."""
+        if self.gate_up.values.ndim != 2 or self.down.values.ndim != 2:
+            raise ValueError("Dense projections require matrix values")
+        if self.down.values.device != self.gate_up.values.device:
+            raise ValueError("Dense projections must share one device")
 
-        payload_dtype = self.expert_gate_up_weight.dtype
-        if payload_dtype not in (torch.bfloat16, torch.float16):
-            raise ValueError("MoE Expert weights require BF16 or FP16 payloads")
-        validate_weight_tensor(
-            self.expert_gate_up_weight,
-            name="expert_gate_up_weight",
-            dtype=payload_dtype,
-            dimensions=3,
+    def binding_view(self) -> xpool.native.ffnagent.DenseBindingView:
+        """Borrow complete projection addresses while this owner retains storage."""
+
+        return xpool.native.ffnagent.DenseBindingView(
+            gate_up=self.gate_up.binding_view(),
+            down=self.down.binding_view(),
         )
-        validate_weight_tensor(
-            self.expert_down_weight,
-            name="expert_down_weight",
-            dtype=payload_dtype,
-            dimensions=3,
+
+
+@dataclass(frozen=True, slots=True)
+class MoeRouterWeights:
+    """Retained Router projection and separate selection-only correction."""
+
+    projection: ProjectionWeights
+    correction_bias: torch.Tensor | None
+
+    def __post_init__(self) -> None:
+        if self.projection.values.ndim != 2:
+            raise ValueError("Router projection requires matrix values")
+        if self.correction_bias is not None:
+            validate_weight_tensor(self.correction_bias, name="router correction bias")
+            if self.correction_bias.dtype is not torch.float32 or self.correction_bias.ndim != 1:
+                raise ValueError("Router correction bias requires a one-dimensional FP32 Tensor")
+            if self.correction_bias.shape != self.projection.values.shape[:1]:
+                raise ValueError("Router correction bias cardinality disagrees with its projection")
+            if self.correction_bias.device != self.projection.values.device:
+                raise ValueError("Router resources must share one device")
+
+
+@dataclass(frozen=True, slots=True)
+class MoeFfnWeights:
+    """Retained Expert projections and optional TP Router ownership."""
+
+    gate_up: ProjectionWeights
+    down: ProjectionWeights
+    router: MoeRouterWeights | None
+
+    @classmethod
+    def allocate(
+        cls,
+        *,
+        gate_up: ProjectionLayout,
+        down: ProjectionLayout,
+        router: ProjectionLayout | None,
+        correction_bias: TensorLayout | None,
+        device: torch.device,
+    ) -> MoeFfnWeights:
+        """Allocate neutral Expert and Router storages in prepared ledger order."""
+
+        if router is None and correction_bias is not None:
+            raise ValueError("Router correction requires an owned Router projection")
+        gate_up_weights = gate_up.zero_probe(device)
+        down_weights = down.zero_probe(device)
+        router_weights = None
+        if router is not None:
+            projection = router.zero_probe(device)
+            correction = (
+                torch.full(
+                    correction_bias.shape, correction_bias.zero_value, dtype=correction_bias.dtype, device=device
+                )
+                if correction_bias is not None
+                else None
+            )
+            router_weights = MoeRouterWeights(projection=projection, correction_bias=correction)
+        return cls(gate_up=gate_up_weights, down=down_weights, router=router_weights)
+
+    def __post_init__(self) -> None:
+        if self.gate_up.values.ndim != 3 or self.down.values.ndim != 3:
+            raise ValueError("Expert projections require Expert-major matrix values")
+        if self.gate_up.values.shape[0] != self.down.values.shape[0]:
+            raise ValueError("Expert projections must have matching cardinality")
+        if self.down.values.device != self.gate_up.values.device:
+            raise ValueError("Expert projections must share one device")
+        if self.router is not None and self.router.projection.values.device != self.gate_up.values.device:
+            raise ValueError("Expert and Router resources must share one device")
+
+    def binding_view(self) -> xpool.native.ffnagent.MoeBindingView:
+        """Borrow complete Expert and Router addresses without transferring owners."""
+
+        return xpool.native.ffnagent.MoeBindingView(
+            gate_up=self.gate_up.binding_view(),
+            down=self.down.binding_view(),
+            router=None
+            if self.router is None
+            else xpool.native.ffnagent.MoeRouterBindingView(
+                projection=self.router.projection.binding_view(),
+                correction_bias=self.router.correction_bias,
+            ),
         )
-        expert_count, local_intermediate_twice, hidden_size = self.expert_gate_up_weight.shape
-        if local_intermediate_twice % 2 != 0:
-            raise ValueError("expert_gate_up_weight intermediate dimension must be even")
-        expected_down_shape = (expert_count, hidden_size, local_intermediate_twice // 2)
-        if self.expert_down_weight.shape != expected_down_shape:
-            raise ValueError("MoE expert_down_weight dimensions disagree with expert_gate_up_weight")
-        if self.expert_down_weight.device != self.expert_gate_up_weight.device:
-            raise ValueError("MoE Expert weights must share one device")
-        if self.router is not None:
-            if self.router.weight.device != self.expert_gate_up_weight.device:
-                raise ValueError("MoE Expert and Router weights must share one device")
-            if self.router.weight.shape[1] != hidden_size or self.router.weight.shape[0] > expert_count:
-                raise ValueError("MoE Router dimensions disagree with Expert weights")
 
 
 type FfnLayerWeights = DenseFfnWeights | MoeFfnWeights

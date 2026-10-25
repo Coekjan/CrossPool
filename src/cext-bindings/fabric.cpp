@@ -98,52 +98,59 @@ void bind_fabric(py::module_ &module) {
            py::arg("generation_high"), py::arg("generation_low"), py::arg("uid"), py::arg("atnagent_count"),
            py::arg("ffnagent_count"), py::arg("executor_lane_count"), py::arg("scheduler"), py::arg("instances"));
 
-  py::class_<xpool::ffnagent::DenseBindingResourceProjection>(ffnagent, "DenseBindingResourceProjection",
-                                                              "Non-owning Dense weight addresses.")
-      .def(py::init([](const at::Tensor &gate_up_weight, const at::Tensor &down_weight) {
-             return xpool::ffnagent::DenseBindingResourceProjection{
-                 .gate_up_weight_address = require_cuda_address(gate_up_weight, "Dense gate/up weight"),
-                 .down_weight_address = require_cuda_address(down_weight, "Dense down weight"),
+  py::class_<xpool::ffnagent::ProjectionBindingView>(ffnagent, "ProjectionBindingView",
+                                                     "Non-owning projection addresses and Tensor byte extents.")
+      .def(py::init([](const at::Tensor &values, const std::optional<at::Tensor> &scales,
+                       const std::optional<at::Tensor> &bias) {
+             return xpool::ffnagent::ProjectionBindingView{
+                 .values = require_cuda_address(values, "projection values"),
+                 .values_bytes = values.nbytes(),
+                 .scales = scales.has_value() ? std::optional{require_cuda_address(*scales, "projection scales")}
+                                              : std::nullopt,
+                 .scales_bytes = scales.has_value() ? scales->nbytes() : 0,
+                 .bias =
+                     bias.has_value() ? std::optional{require_cuda_address(*bias, "projection bias")} : std::nullopt,
+                 .bias_bytes = bias.has_value() ? bias->nbytes() : 0,
              };
            }),
-           py::arg("gate_up_weight"), py::arg("down_weight"));
+           py::arg("values"), py::arg("scales"), py::arg("bias"));
 
-  py::class_<xpool::ffnagent::MoeRouterBindingResourceProjection>(ffnagent, "MoeRouterBindingResourceProjection",
-                                                                  "Non-owning Router weight addresses.")
-      .def(py::init([](const at::Tensor &weight, const std::optional<at::Tensor> &correction_bias) {
-             return xpool::ffnagent::MoeRouterBindingResourceProjection{
-                 .weight_address = require_cuda_address(weight, "MoE Router weight"),
-                 .correction_bias_address =
-                     correction_bias.has_value()
-                         ? std::optional{require_cuda_address(*correction_bias, "MoE Router correction bias")}
-                         : std::nullopt,
-             };
+  py::class_<xpool::ffnagent::DenseBindingView>(ffnagent, "DenseBindingView", "Non-owning Dense resources.")
+      .def(py::init([](xpool::ffnagent::ProjectionBindingView gate_up, xpool::ffnagent::ProjectionBindingView down) {
+             return xpool::ffnagent::DenseBindingView{.gate_up = gate_up, .down = down};
            }),
-           py::arg("weight"), py::arg("correction_bias"));
+           py::arg("gate_up"), py::arg("down"));
 
-  py::class_<xpool::ffnagent::MoeBindingResourceProjection>(ffnagent, "MoeBindingResourceProjection",
-                                                            "Non-owning MoE weight addresses.")
-      .def(py::init([](const at::Tensor &expert_gate_up_weight, const at::Tensor &expert_down_weight,
-                       std::optional<xpool::ffnagent::MoeRouterBindingResourceProjection> router) {
-             return xpool::ffnagent::MoeBindingResourceProjection{
-                 .expert_gate_up_weight_address =
-                     require_cuda_address(expert_gate_up_weight, "MoE Expert gate/up weights"),
-                 .expert_down_weight_address = require_cuda_address(expert_down_weight, "MoE Expert down weights"),
-                 .router = std::move(router),
-             };
+  py::class_<xpool::ffnagent::MoeRouterBindingView>(ffnagent, "MoeRouterBindingView", "Non-owning Router resources.")
+      .def(py::init(
+               [](xpool::ffnagent::ProjectionBindingView projection, const std::optional<at::Tensor> &correction_bias) {
+                 return xpool::ffnagent::MoeRouterBindingView{
+                     .projection = projection,
+                     .correction_bias_address =
+                         correction_bias.has_value()
+                             ? std::optional{require_cuda_address(*correction_bias, "MoE Router correction bias")}
+                             : std::nullopt,
+                     .correction_bias_bytes = correction_bias.has_value() ? correction_bias->nbytes() : 0,
+                 };
+               }),
+           py::arg("projection"), py::arg("correction_bias"));
+
+  py::class_<xpool::ffnagent::MoeBindingView>(ffnagent, "MoeBindingView", "Non-owning MoE resources.")
+      .def(py::init([](xpool::ffnagent::ProjectionBindingView gate_up, xpool::ffnagent::ProjectionBindingView down,
+                       std::optional<xpool::ffnagent::MoeRouterBindingView> router) {
+             return xpool::ffnagent::MoeBindingView{.gate_up = gate_up, .down = down, .router = std::move(router)};
            }),
-           py::arg("expert_gate_up_weight"), py::arg("expert_down_weight"), py::arg("router"));
+           py::arg("gate_up"), py::arg("down"), py::arg("router"));
 
-  py::class_<xpool::ffnagent::DenseExecutionSignatureProjection>(ffnagent, "DenseExecutionSignatureProjection",
-                                                                 "Captured Dense execution signature.")
+  py::class_<xpool::ffnagent::DenseCaptureDescriptor>(ffnagent, "DenseCaptureDescriptor",
+                                                      "Captured Dense execution signature.")
       .def(py::init([](const py::object &payload_dtype, std::size_t payload_row_capacity, std::size_t hidden_size,
                        std::size_t local_intermediate_size, std::uintptr_t primary_graph_address,
                        std::uintptr_t control_graph_address, const at::Tensor &capture_input,
                        const at::Tensor &capture_partial, const at::Tensor &capture_workspace,
-                       std::size_t compute_workspace_bytes,
-                       xpool::ffnagent::DenseBindingResourceProjection primary_capture_resources,
-                       xpool::ffnagent::DenseBindingResourceProjection control_capture_resources) {
-             return xpool::ffnagent::DenseExecutionSignatureProjection{
+                       std::size_t compute_workspace_bytes, xpool::ffnagent::DenseBindingView primary_capture_resources,
+                       xpool::ffnagent::DenseBindingView control_capture_resources) {
+             return xpool::ffnagent::DenseCaptureDescriptor{
                  .payload_dtype = require_payload_dtype(payload_dtype, "FFN"),
                  .payload_row_capacity = payload_row_capacity,
                  .hidden_size = hidden_size,
@@ -164,8 +171,8 @@ void bind_fabric(py::module_ &module) {
            py::arg("compute_workspace_bytes"), py::arg("primary_capture_resources"),
            py::arg("control_capture_resources"));
 
-  py::class_<xpool::ffnagent::MoeExecutionSignatureProjection>(ffnagent, "MoeExecutionSignatureProjection",
-                                                               "Captured MoE execution signature.")
+  py::class_<xpool::ffnagent::MoeCaptureDescriptor>(ffnagent, "MoeCaptureDescriptor",
+                                                    "Captured MoE execution signature.")
       .def(py::init([](const py::object &payload_dtype, std::size_t payload_row_capacity, std::size_t hidden_size,
                        std::size_t local_intermediate_size, std::size_t expert_count, std::size_t effective_topk,
                        std::optional<std::size_t> routed_expert_count, std::uintptr_t primary_graph_address,
@@ -173,9 +180,9 @@ void bind_fabric(py::module_ &module) {
                        const at::Tensor &capture_partial, const at::Tensor &capture_workspace,
                        std::size_t compute_workspace_bytes, const at::Tensor &capture_routing_metadata,
                        const std::optional<at::Tensor> &capture_payload_rows,
-                       xpool::ffnagent::MoeBindingResourceProjection primary_capture_resources,
-                       xpool::ffnagent::MoeBindingResourceProjection control_capture_resources) {
-             return xpool::ffnagent::MoeExecutionSignatureProjection{
+                       xpool::ffnagent::MoeBindingView primary_capture_resources,
+                       xpool::ffnagent::MoeBindingView control_capture_resources) {
+             return xpool::ffnagent::MoeCaptureDescriptor{
                  .payload_dtype = require_payload_dtype(payload_dtype, "FFN"),
                  .payload_row_capacity = payload_row_capacity,
                  .hidden_size = hidden_size,
@@ -206,12 +213,12 @@ void bind_fabric(py::module_ &module) {
            py::arg("compute_workspace_bytes"), py::arg("capture_routing_metadata"), py::arg("capture_payload_rows"),
            py::arg("primary_capture_resources"), py::arg("control_capture_resources"));
 
-  py::class_<xpool::ffnagent::LayerExecutionProjection>(ffnagent, "LayerExecutionProjection",
+  py::class_<xpool::ffnagent::LayerExecutionDescriptor>(ffnagent, "LayerExecutionDescriptor",
                                                         "One Plan-addressed local FFN layer.")
       .def(py::init([](std::size_t instance_index, std::size_t layer_ordinal,
                        std::vector<std::size_t> execution_signature_indices,
-                       xpool::ffnagent::BindingResourceProjection layer_resource_targets) {
-             return xpool::ffnagent::LayerExecutionProjection{
+                       xpool::ffnagent::BindingView layer_resource_targets) {
+             return xpool::ffnagent::LayerExecutionDescriptor{
                  .instance_index = instance_index,
                  .layer_ordinal = layer_ordinal,
                  .execution_signature_indices = std::move(execution_signature_indices),
@@ -221,11 +228,11 @@ void bind_fabric(py::module_ &module) {
            py::arg("instance_index"), py::arg("layer_ordinal"), py::arg("execution_signature_indices"),
            py::arg("layer_resource_targets"));
 
-  py::class_<xpool::ffnagent::ExecutionProjection>(ffnagent, "ExecutionProjection",
-                                                   "Complete one-time native FFN installation input.")
-      .def(py::init([](std::vector<xpool::ffnagent::ExecutionSignatureProjection> signatures,
-                       std::vector<xpool::ffnagent::LayerExecutionProjection> layers) {
-             auto projection = xpool::ffnagent::ExecutionProjection{
+  py::class_<xpool::ffnagent::ExecutionInstallDescriptor>(ffnagent, "ExecutionInstallDescriptor",
+                                                          "Complete one-time native FFN installation input.")
+      .def(py::init([](std::vector<xpool::ffnagent::CaptureDescriptor> signatures,
+                       std::vector<xpool::ffnagent::LayerExecutionDescriptor> layers) {
+             auto projection = xpool::ffnagent::ExecutionInstallDescriptor{
                  .signatures = std::move(signatures),
                  .layers = std::move(layers),
              };
@@ -283,7 +290,7 @@ void bind_fabric(py::module_ &module) {
                py::arg("executor_lane_count"), "Return exact retained FfnAgent execution-state allocation bytes.");
   ffnagent.def(
       "install_execution",
-      [](const xpool::ffnagent::ExecutionProjection &projection) {
+      [](const xpool::ffnagent::ExecutionInstallDescriptor &projection) {
         xpool::RuntimeState::singleton().require_role(xpool::RuntimeRole::FfnAgent,
                                                       "xpool.native.ffnagent.install_execution");
         xpool::fabric::Runtime::singleton().install_ffnagent_execution(projection);

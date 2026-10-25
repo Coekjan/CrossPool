@@ -6,12 +6,12 @@ import os
 from collections.abc import Callable, Iterator
 
 import pytest
-from xpool.native import ABI_VERSION
 
 import xpool.runtime.agent
 import xpool.runtime.atnagent
 from xpool.config import XpoolConfig
 from xpool.model import ModelId
+from xpool.native import ABI_VERSION
 from xpool.runtime.agent import (
     Agent,
     AgentHeartbeat,

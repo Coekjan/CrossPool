@@ -59,71 +59,64 @@ void validate_cuda_address(std::uintptr_t address, int expected_device, const ch
               " is not Device memory on device ", expected_device);
 }
 
-LayerBindingValues materialize_binding_values(const BindingResourceProjection &resources) {
+LayerBindingValues materialize_binding_values(const BindingView &resources) {
   return std::visit(
       [](const auto &value) {
-        using Resource = std::remove_cvref_t<decltype(value)>;
-        if constexpr (std::is_same_v<Resource, DenseBindingResourceProjection>) {
-          return LayerBindingValues{
-              .gate_up_weight_address = value.gate_up_weight_address,
-              .down_weight_address = value.down_weight_address,
-              .router_weight_address = 0,
-              .router_correction_bias_address = 0,
-          };
-        } else {
-          return LayerBindingValues{
-              .gate_up_weight_address = value.expert_gate_up_weight_address,
-              .down_weight_address = value.expert_down_weight_address,
-              .router_weight_address = value.router.has_value() ? value.router->weight_address : 0,
-              .router_correction_bias_address =
-                  value.router.has_value() && value.router->correction_bias_address.has_value()
-                      ? *value.router->correction_bias_address
-                      : 0,
-          };
+        auto result = LayerBindingValues{};
+        result.gate_up_values_address = value.gate_up.values;
+        result.gate_up_scales_address = value.gate_up.scales.value_or(0);
+        result.gate_up_bias_address = value.gate_up.bias.value_or(0);
+        result.down_values_address = value.down.values;
+        result.down_scales_address = value.down.scales.value_or(0);
+        result.down_bias_address = value.down.bias.value_or(0);
+        if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>, MoeBindingView>) {
+          if (value.router.has_value()) {
+            result.router_values_address = value.router->projection.values;
+            result.router_scales_address = value.router->projection.scales.value_or(0);
+            result.router_bias_address = value.router->projection.bias.value_or(0);
+            result.router_correction_bias_address = value.router->correction_bias_address.value_or(0);
+          }
         }
+        return result;
       },
       resources);
 }
 
-std::vector<ResourceReplacement> make_resource_replacements(const ExecutionSignatureProjection &signature) {
+void append_projection_replacements(std::vector<ResourceReplacement> &result, const ProjectionBindingView &primary,
+                                    const ProjectionBindingView &control, std::size_t values_offset,
+                                    std::size_t scales_offset, std::size_t bias_offset) {
+  result.push_back(ResourceReplacement{primary.values, control.values, primary.values, values_offset});
+  if (primary.scales.has_value()) {
+    result.push_back(ResourceReplacement{*primary.scales, *control.scales, *primary.scales, scales_offset});
+  }
+  if (primary.bias.has_value()) {
+    result.push_back(ResourceReplacement{*primary.bias, *control.bias, *primary.bias, bias_offset});
+  }
+}
+
+std::vector<ResourceReplacement> make_resource_replacements(const CaptureDescriptor &signature) {
   return std::visit(
-      [&](const auto &value) {
-        using Signature = std::remove_cvref_t<decltype(value)>;
+      [](const auto &value) {
+        const auto &primary = value.primary_capture_resources;
+        const auto &control = value.control_capture_resources;
         auto result = std::vector<ResourceReplacement>{};
-        if constexpr (std::is_same_v<Signature, DenseExecutionSignatureProjection>) {
-          result = {
-              ResourceReplacement{value.primary_capture_resources.gate_up_weight_address,
-                                  value.control_capture_resources.gate_up_weight_address,
-                                  value.primary_capture_resources.gate_up_weight_address,
-                                  offsetof(LayerBindingValues, gate_up_weight_address)},
-              ResourceReplacement{value.primary_capture_resources.down_weight_address,
-                                  value.control_capture_resources.down_weight_address,
-                                  value.primary_capture_resources.down_weight_address,
-                                  offsetof(LayerBindingValues, down_weight_address)},
-          };
-        } else {
-          result = {
-              ResourceReplacement{value.primary_capture_resources.expert_gate_up_weight_address,
-                                  value.control_capture_resources.expert_gate_up_weight_address,
-                                  value.primary_capture_resources.expert_gate_up_weight_address,
-                                  offsetof(LayerBindingValues, gate_up_weight_address)},
-              ResourceReplacement{value.primary_capture_resources.expert_down_weight_address,
-                                  value.control_capture_resources.expert_down_weight_address,
-                                  value.primary_capture_resources.expert_down_weight_address,
-                                  offsetof(LayerBindingValues, down_weight_address)},
-          };
-          if (value.primary_capture_resources.router.has_value()) {
-            result.push_back(ResourceReplacement{
-                value.primary_capture_resources.router->weight_address,
-                value.control_capture_resources.router->weight_address,
-                value.primary_capture_resources.router->weight_address,
-                offsetof(LayerBindingValues, router_weight_address),
-            });
-            if (value.primary_capture_resources.router->correction_bias_address.has_value()) {
+        append_projection_replacements(
+            result, primary.gate_up, control.gate_up, offsetof(LayerBindingValues, gate_up_values_address),
+            offsetof(LayerBindingValues, gate_up_scales_address), offsetof(LayerBindingValues, gate_up_bias_address));
+        append_projection_replacements(
+            result, primary.down, control.down, offsetof(LayerBindingValues, down_values_address),
+            offsetof(LayerBindingValues, down_scales_address), offsetof(LayerBindingValues, down_bias_address));
+        if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>, MoeCaptureDescriptor>) {
+          if (primary.router.has_value()) {
+            append_projection_replacements(result, primary.router->projection, control.router->projection,
+                                           offsetof(LayerBindingValues, router_values_address),
+                                           offsetof(LayerBindingValues, router_scales_address),
+                                           offsetof(LayerBindingValues, router_bias_address));
+            if (primary.router->correction_bias_address.has_value()) {
               result.push_back(ResourceReplacement{
-                  *value.primary_capture_resources.router->correction_bias_address,
-                  *value.control_capture_resources.router->correction_bias_address,
-                  *value.primary_capture_resources.router->correction_bias_address,
+                  *primary.router->correction_bias_address,
+                  *control.router->correction_bias_address,
+                  *primary.router->correction_bias_address,
                   offsetof(LayerBindingValues, router_correction_bias_address),
               });
             }
@@ -134,29 +127,30 @@ std::vector<ResourceReplacement> make_resource_replacements(const ExecutionSigna
       signature);
 }
 
-} // namespace
+void validate_projection_cuda_addresses(const ProjectionBindingView &projection, int device) {
+  validate_cuda_address(projection.values, device, "FFN projection values");
+  if (projection.scales.has_value()) {
+    validate_cuda_address(*projection.scales, device, "FFN projection scales");
+  }
+  if (projection.bias.has_value()) {
+    validate_cuda_address(*projection.bias, device, "FFN projection bias");
+  }
+}
 
-namespace {
-
-void validate_layer_resource_targets(const ExecutionProjection &projection, int device) {
+void validate_layer_resource_targets(const ExecutionInstallDescriptor &descriptor, int device) {
   const auto validate_resources = [device](const auto &resources) {
-    using Resource = std::remove_cvref_t<decltype(resources)>;
-    if constexpr (std::is_same_v<Resource, DenseBindingResourceProjection>) {
-      validate_cuda_address(resources.gate_up_weight_address, device, "Dense gate/up weight");
-      validate_cuda_address(resources.down_weight_address, device, "Dense down weight");
-    } else {
-      validate_cuda_address(resources.expert_gate_up_weight_address, device, "MoE Expert gate/up weights");
-      validate_cuda_address(resources.expert_down_weight_address, device, "MoE Expert down weights");
+    validate_projection_cuda_addresses(resources.gate_up, device);
+    validate_projection_cuda_addresses(resources.down, device);
+    if constexpr (std::is_same_v<std::remove_cvref_t<decltype(resources)>, MoeBindingView>) {
       if (resources.router.has_value()) {
-        validate_cuda_address(resources.router->weight_address, device, "MoE Router weight");
+        validate_projection_cuda_addresses(resources.router->projection, device);
         if (resources.router->correction_bias_address.has_value()) {
           validate_cuda_address(*resources.router->correction_bias_address, device, "MoE Router correction bias");
         }
       }
     }
   };
-
-  for (const auto &layer : projection.layers) {
+  for (const auto &layer : descriptor.layers) {
     std::visit(validate_resources, layer.layer_resource_targets);
   }
 }
@@ -638,7 +632,7 @@ ExecutionRuntime::~ExecutionRuntime() {
                   !lanes_.empty());
 }
 
-void ExecutionRuntime::materialize_shared_tables(const ExecutionProjection &projection,
+void ExecutionRuntime::materialize_shared_tables(const ExecutionInstallDescriptor &projection,
                                                  const xpool::fabric::ArenaProjection &fabric_projection,
                                                  std::size_t ffnagent_index) {
   auto host_layers = std::vector<LayerExecutionEntry>{};
@@ -668,7 +662,7 @@ void ExecutionRuntime::materialize_shared_tables(const ExecutionProjection &proj
         std::visit(
             [&](const auto &value) {
               using Signature = std::remove_cvref_t<decltype(value)>;
-              constexpr auto moe = std::is_same_v<Signature, MoeExecutionSignatureProjection>;
+              constexpr auto moe = std::is_same_v<Signature, MoeCaptureDescriptor>;
               TORCH_CHECK(value.payload_dtype == instance.payload_dtype && value.hidden_size == instance.hidden_size,
                           "xpool Execution Signature payload geometry disagrees with Fabric");
               TORCH_CHECK(moe == (fabric_layer.kind == xpool::ffn::LayerKind::Moe),
@@ -712,7 +706,7 @@ void ExecutionRuntime::materialize_shared_tables(const ExecutionProjection &proj
   }
 }
 
-void ExecutionRuntime::materialize_lane(const ExecutionProjection &projection, xpool::fabric::ArenaView arena,
+void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projection, xpool::fabric::ArenaView arena,
                                         const xpool::fabric::ArenaLayout &layout,
                                         const xpool::fabric::ArenaProjection &fabric_projection,
                                         std::size_t ffnagent_index, std::size_t executor_lane_index, int device,
@@ -822,7 +816,7 @@ void ExecutionRuntime::materialize_lane(const ExecutionProjection &projection, x
               },
           };
           using Signature = std::remove_cvref_t<decltype(value)>;
-          if constexpr (std::is_same_v<Signature, MoeExecutionSignatureProjection>) {
+          if constexpr (std::is_same_v<Signature, MoeCaptureDescriptor>) {
             const auto route_elements = xpool::utils::checked::prod(value.payload_row_capacity, value.effective_topk);
             const auto route_bytes =
                 xpool::utils::checked::prod(route_elements, std::size_t{sizeof(std::int32_t) + sizeof(float)});
@@ -853,7 +847,7 @@ void ExecutionRuntime::materialize_lane(const ExecutionProjection &projection, x
     const auto capture_routing_metadata_address = std::visit(
         [](const auto &value) -> std::uintptr_t {
           using Signature = std::remove_cvref_t<decltype(value)>;
-          if constexpr (std::is_same_v<Signature, MoeExecutionSignatureProjection>) {
+          if constexpr (std::is_same_v<Signature, MoeCaptureDescriptor>) {
             return value.capture_routing_metadata_address;
           }
           return 0;
@@ -862,7 +856,7 @@ void ExecutionRuntime::materialize_lane(const ExecutionProjection &projection, x
     const auto capture_payload_rows_address = std::visit(
         [](const auto &value) -> std::uintptr_t {
           using Signature = std::remove_cvref_t<decltype(value)>;
-          if constexpr (std::is_same_v<Signature, MoeExecutionSignatureProjection>) {
+          if constexpr (std::is_same_v<Signature, MoeCaptureDescriptor>) {
             return value.capture_payload_rows_address.value_or(0);
           }
           return 0;
@@ -872,7 +866,7 @@ void ExecutionRuntime::materialize_lane(const ExecutionProjection &projection, x
     auto parameterization = parameterize_graph(embedded_graph, reinterpret_cast<cudaGraph_t>(control_graph), resources,
                                                lane_replacements, capture_routing_metadata_address,
                                                capture_routing_weights_address, capture_payload_rows_address);
-    const auto *moe = std::get_if<MoeExecutionSignatureProjection>(&signature);
+    const auto *moe = std::get_if<MoeCaptureDescriptor>(&signature);
     const auto has_router = moe != nullptr && moe->routed_expert_count.has_value();
     TORCH_CHECK(parameterization.routing_finalization.has_value() == has_router,
                 "xpool Primary Graph Routing Finalization disagrees with Signature");
@@ -1035,7 +1029,7 @@ void ExecutionRuntime::materialize_lane(const ExecutionProjection &projection, x
   C10_CUDA_CHECK(cudaStreamSynchronize(lane.stream.get()));
 }
 
-void ExecutionRuntime::materialize(const ExecutionProjection &projection, xpool::fabric::ArenaView arena,
+void ExecutionRuntime::materialize(const ExecutionInstallDescriptor &projection, xpool::fabric::ArenaView arena,
                                    const xpool::fabric::ArenaLayout &layout,
                                    const xpool::fabric::ArenaProjection &fabric_projection, std::size_t ffnagent_index,
                                    std::uint32_t *activation_count) {
@@ -1066,7 +1060,7 @@ void ExecutionRuntime::materialize(const ExecutionProjection &projection, xpool:
   }
 }
 
-void ExecutionRuntime::install(const ExecutionProjection &projection, xpool::fabric::ArenaView arena,
+void ExecutionRuntime::install(const ExecutionInstallDescriptor &projection, xpool::fabric::ArenaView arena,
                                const xpool::fabric::ArenaLayout &layout,
                                const xpool::fabric::ArenaProjection &fabric_projection, std::size_t ffnagent_index,
                                std::uint32_t *activation_count) {

@@ -25,12 +25,24 @@ struct BindingSite {
 
 /// Complete layer-resource address assignment shared across lanes.
 struct LayerBindingValues {
-  /// Device address of Dense or expert gate/up weights.
-  std::uintptr_t gate_up_weight_address;
-  /// Device address of Dense or expert down weights.
-  std::uintptr_t down_weight_address;
-  /// Device address of router weights, or zero for non-owning layers.
-  std::uintptr_t router_weight_address;
+  /// Device address of Dense or Expert gate/up values.
+  std::uintptr_t gate_up_values_address;
+  /// Gate/up scale address, or zero when absent.
+  std::uintptr_t gate_up_scales_address;
+  /// Gate/up additive-bias address, or zero when absent.
+  std::uintptr_t gate_up_bias_address;
+  /// Device address of Dense or Expert down values.
+  std::uintptr_t down_values_address;
+  /// Down scale address, or zero when absent.
+  std::uintptr_t down_scales_address;
+  /// Down additive-bias address, or zero when absent.
+  std::uintptr_t down_bias_address;
+  /// Router values address, or zero for non-owning layers.
+  std::uintptr_t router_values_address;
+  /// Router scale address, or zero when absent.
+  std::uintptr_t router_scales_address;
+  /// Router additive-bias address, or zero when absent.
+  std::uintptr_t router_bias_address;
   /// Device address of router correction bias, or zero when absent.
   std::uintptr_t router_correction_bias_address;
 };

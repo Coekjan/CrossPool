@@ -15,7 +15,6 @@ from pathlib import Path
 
 import safetensors.torch
 import torch
-from xpool.native import ABI_VERSION, RuntimeRole
 
 from xkit.child import PythonChildFailure, PythonChildProcess
 from xkit.network import TcpEndpointReservation
@@ -25,6 +24,7 @@ from xkit.task import get_task_root
 from xpool import bootstrap, devkit
 from xpool.config import XpoolConfig, init_global_config
 from xpool.model import ModelId
+from xpool.native import ABI_VERSION, RuntimeRole
 from xpool.ops import ffn_shim
 from xpool.runtime.instance import InstanceRankRuntime
 from xpool.service.client import XpoolClient

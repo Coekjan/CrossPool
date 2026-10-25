@@ -23,6 +23,7 @@ from xpool.fabric import (
     InstanceRankTopology,
     place_ffn_layer,
 )
+from xpool.runtime.ffnagent import preparation
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +41,20 @@ class CalibrationModel:
         group = tuple(range(self.ffn_tp_size))
         return FfnModelPlan(
             model_spec_digest=self.spec.digest(),
-            layers=tuple(place_ffn_layer(layer, group) for layer in self.spec.layers),
+            layers=tuple(
+                place_ffn_layer(
+                    layer,
+                    group,
+                    local_intermediate_size=preparation.prepare_ffn_layer(
+                        self.spec,
+                        layer_ordinal=ordinal,
+                        payload_dtype=torch.bfloat16,
+                        tp_size=self.ffn_tp_size,
+                        tp_rank=0,
+                    ).local_intermediate_size,
+                )
+                for ordinal, layer in enumerate(self.spec.layers)
+            ),
         )
 
     def instance_plan(self) -> FabricInstancePlan:

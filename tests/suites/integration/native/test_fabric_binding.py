@@ -56,12 +56,16 @@ def isolated_fabric_binding_validation() -> None:
 
     primary_tensors = (torch.empty(1, device="cuda"), torch.empty(1, device="cuda"))
     control_tensors = (torch.empty(1, device="cuda"), torch.empty(1, device="cuda"))
-    primary_weights = xpool.native.ffnagent.DenseBindingResourceProjection(*primary_tensors)
-    control_weights = xpool.native.ffnagent.DenseBindingResourceProjection(*control_tensors)
+    primary_weights = xpool.native.ffnagent.DenseBindingView(
+        *(xpool.native.ffnagent.ProjectionBindingView(tensor, None, None) for tensor in primary_tensors)
+    )
+    control_weights = xpool.native.ffnagent.DenseBindingView(
+        *(xpool.native.ffnagent.ProjectionBindingView(tensor, None, None) for tensor in control_tensors)
+    )
     capture_input = torch.empty((1, 1), device="cuda", dtype=torch.bfloat16)
     capture_partial = torch.empty_like(capture_input)
     capture_workspace = torch.empty(1, device="cuda", dtype=torch.uint8)
-    signature = xpool.native.ffnagent.DenseExecutionSignatureProjection(
+    signature = xpool.native.ffnagent.DenseCaptureDescriptor(
         torch.bfloat16,
         1,
         1,
@@ -75,11 +79,11 @@ def isolated_fabric_binding_validation() -> None:
         primary_weights,
         control_weights,
     )
-    layer = xpool.native.ffnagent.LayerExecutionProjection(0, 0, (0,), primary_weights)
-    projection = xpool.native.ffnagent.ExecutionProjection((signature,), (layer,))
+    layer = xpool.native.ffnagent.LayerExecutionDescriptor(0, 0, (0,), primary_weights)
+    projection = xpool.native.ffnagent.ExecutionInstallDescriptor((signature,), (layer,))
     assert not hasattr(projection, "signatures")
     with pytest.raises(RuntimeError, match="must be a CUDA Tensor"):
-        xpool.native.ffnagent.DenseBindingResourceProjection(torch.empty(1), torch.empty(1, device="cuda"))
+        xpool.native.ffnagent.ProjectionBindingView(torch.empty(1), None, None)
 
 
 def isolated_fabric_role_guard() -> None:

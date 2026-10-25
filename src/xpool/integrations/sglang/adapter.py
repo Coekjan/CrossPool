@@ -21,7 +21,7 @@ from xpool.config import get_global_config
 from xpool.integrations.sglang.ecs.capacity import CapacityReconciler
 from xpool.integrations.sglang.ecs.state import SglangElasticContextState
 from xpool.integrations.sglang.hooks.registry import SglangHook
-from xpool.integrations.sglang.shim import FfnShimModule, iter_ffn_shims
+from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError, iter_ffn_shims
 from xpool.integrations.sglang.topology import SglangAttentionTopology, SglangModelMetadata
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
@@ -318,6 +318,9 @@ class SglangShimAdapter(ABC):
         Raises:
             RuntimeError: If adapter-specific preconditions are not met.
         """
+
+        if model_runner.model_config.quantization is not None:
+            raise ShimUnavailableError(f"xpool {self.name} adapter requires an unquantized SGLang model")
 
     def bind_runtime(self, model_runner: ModelRunner) -> None:
         """Bind CrossPool runtime metadata to the SGLang model runner before load.
