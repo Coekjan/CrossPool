@@ -22,8 +22,10 @@ additive projection bias and selection-only Router correction bias have separate
 declarations. A representable declaration does not establish operator support
 or qualify a concrete model.
 
-Family adapters check the model type, SiLU activation and BF16 or FP16 source
-dtype. `InstanceFfnProfile` independently requires BF16 or FP16 payloads. See [checkpoint qualification](qualification.md#numerical-and-graph-evidence).
+Family adapters check the model type and SiLU activation. Where the adapter
+names a source dtype field, the checkpoint must declare BF16 or FP16. Original
+GPT-OSS configs omit that field. `InstanceFfnProfile` independently requires
+BF16 or FP16 payloads. See [checkpoint qualification](qualification.md#numerical-and-graph-evidence).
 
 Before checkpoint I/O the loader checks Model/Instance identity and ordered
 layer geometry. Weights are read from explicit safetensors keys. The bounded
@@ -71,7 +73,8 @@ parameters, and any model-defined correction bias. `SiluActivation` declares
 the positive slope `alpha`, optional positive clipping `limit`, and `up_offset`.
 Projection bias is applied first. Clipping bounds Gate above and Up on both
 sides before computing `g * sigmoid(alpha * g) * (u + up_offset)`. Ordinary
-gated SiLU uses `(1.0, None, 0.0)`. Model adapters resolve source parameters; execution supplies
+gated SiLU uses `(1.0, None, 0.0)`; the qualified GPT-OSS checkpoints use
+`(1.702, 7.0, 1.0)`. Model adapters resolve source parameters; execution supplies
 no model-specific defaults. Up offset is part of activation, not projection bias.
 
 Checkpoint loading and synthetic calibration share canonical empty-weight
@@ -122,7 +125,8 @@ The [Router implementation](../../src/xpool/runtime/ffnagent/operators/routing.p
 projection, TopK and final Routing Metadata construction. Source compilers select
 the admitted Algorithm/Precision pairs: Qwen3-MoE uses Softmax with `PAYLOAD`,
 DeepSeek-V2 uses Softmax with `FP32_LOGITS`, and GLM uses Sigmoid with `FP32`.
-The Spec
+GPT-OSS uses Softmax with `PAYLOAD`, additive projection bias and
+`LOGITS_DTYPE` weight rounding; the existing families use `NONE`. The Spec
 validates these combinations and normalization; execution consumes the admitted
 semantics directly.
 

@@ -92,14 +92,18 @@ class FfnSourceConfig:
             raise ValueError(f"{field_name} must be a JSON {expected_name}")
         return self.get(field_name, expected_type)
 
-    def validate_family_profile(self, *, model_type: str, dtype_field: str) -> None:
-        """Validate common model type, activation, and source dtype fields."""
+    def validate_family_profile(self, *, model_type: str, dtype_field: str | None) -> None:
+        """Validate model semantics and the family's declared source dtype field.
+
+        A named dtype field remains required; None denotes no source declaration.
+        Effective execution precision is checked during preparation.
+        """
 
         if self.get("model_type", str) != model_type:
             raise ValueError(f"model_type must equal {model_type!r}")
         if self.get("hidden_act", str) != "silu":
             raise ValueError("hidden_act must equal 'silu'")
-        if self.get(dtype_field, str) not in ("bfloat16", "float16"):
+        if dtype_field is not None and self.get(dtype_field, str) not in ("bfloat16", "float16"):
             raise ValueError(f"{dtype_field} must be 'bfloat16' or 'float16'")
 
     def projection(self, module_name: str) -> ffn.ProjectionSpec:
