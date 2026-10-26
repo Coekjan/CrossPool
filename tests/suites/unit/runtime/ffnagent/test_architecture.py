@@ -9,10 +9,14 @@ import pytest
 from xpool.ffn import (
     DenseFfnSpec,
     FfnModelSpec,
+    GateUpOrder,
     MoeFfnSpec,
     RouterAlgorithm,
     RouterProjectionPrecision,
+    SiluActivation,
+    StackedExpertSource,
     TopKWeightRounding,
+    ValuesSourceLayout,
 )
 from xpool.quantization import Mxfp4, Unquantized
 from xpool.runtime.ffnagent import architecture
@@ -111,6 +115,13 @@ def test_family_profile_accepts_admitted_dtypes(dtype_field: str, dtype: str) ->
     config.validate_family_profile(model_type="llama", dtype_field=dtype_field)
 
 
+@pytest.mark.parametrize(("field", "value"), (("model_type", "qwen3"), ("hidden_act", "relu")))
+def test_family_profile_without_source_dtype_still_checks_model_semantics(field: str, value: str) -> None:
+    config = architecture.FfnSourceConfig({"model_type": "gpt_oss", "hidden_act": "silu", field: value})
+    with pytest.raises(ValueError, match=field):
+        config.validate_family_profile(model_type="gpt_oss", dtype_field=None)
+
+
 @pytest.mark.parametrize("dtype", ("float32", "half", "torch.float16", "int8", None, 16))
 def test_family_profile_rejects_other_dtypes(dtype: object) -> None:
     config = architecture.FfnSourceConfig({"model_type": "llama", "hidden_act": "silu", "torch_dtype": dtype})
@@ -153,6 +164,58 @@ def test_source_config_binds_quantization_exclusions_to_individual_projections()
     assert projections.up.quantization == Mxfp4()
     assert projections.down.quantization == Unquantized()
     assert projections.tensor_keys() == dense_keys(0)
+
+
+def test_load_compiles_original_gpt_oss_sources_and_parameterized_activation(tmp_path: Path) -> None:
+    config = {
+        "architectures": ["GptOssForCausalLM"],
+        "model_type": "gpt_oss",
+        "hidden_act": "silu",
+        "hidden_act_alpha": 1.5,
+        "swiglu_limit": 6.0,
+        "hidden_size": 64,
+        "intermediate_size": 96,
+        "num_hidden_layers": 2,
+        "num_local_experts": 4,
+        "num_experts_per_tok": 2,
+        "quantization_config": {
+            "quant_method": "mxfp4",
+            "modules_to_not_convert": ["model.layers.*.mlp.router"],
+        },
+    }
+    keys = tuple(
+        f"model.layers.{layer_id}.mlp.{suffix}"
+        for layer_id in range(2)
+        for suffix in (
+            "router.weight",
+            "router.bias",
+            "experts.gate_up_proj_blocks",
+            "experts.gate_up_proj_scales",
+            "experts.gate_up_proj_bias",
+            "experts.down_proj_blocks",
+            "experts.down_proj_scales",
+            "experts.down_proj_bias",
+        )
+    )
+    model_path = tmp_path / "model"
+    write_indexed_model(model_path, config, keys)
+
+    spec = architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
+
+    assert spec.hidden_size == 64
+    assert spec.activation == SiluActivation(alpha=1.5, limit=6.0, up_offset=1.0)
+    assert tuple(key for layer in spec.layers for key in layer.tensor_keys()) == keys
+    for layer in spec.layers:
+        assert isinstance(layer, MoeFfnSpec)
+        assert layer.router_projection_precision is RouterProjectionPrecision.PAYLOAD
+        assert layer.topk_weight_rounding is TopKWeightRounding.LOGITS_DTYPE
+        assert layer.router.quantization == Unquantized()
+        assert layer.routed_expert_count == 4 and layer.routed_topk == 2
+        assert isinstance(layer.routed_experts, StackedExpertSource)
+        assert layer.routed_experts.gate_up.quantization == layer.routed_experts.down.quantization == Mxfp4()
+        assert layer.routed_experts.gate_up_order is GateUpOrder.INTERLEAVED
+        assert layer.routed_experts.gate_up.values_layout is ValuesSourceLayout.SCALE_BLOCKED
+        assert layer.routed_experts.down.values_layout is ValuesSourceLayout.SCALE_BLOCKED
 
 
 @pytest.mark.parametrize(
