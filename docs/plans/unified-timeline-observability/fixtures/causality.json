@@ -1,5 +1,5 @@
 {
-  "contract_version": 3,
+  "contract_version": 4,
   "case_identity_notation": {
     "operation": [
       "endpoint_owner",
@@ -905,11 +905,11 @@
             }
           },
           {
-            "producer": 2,
+            "producer": 5,
             "record": {
-              "event_sequence": 12,
+              "event_sequence": 1,
               "raw_time_ns": 155,
-              "clock_domain_id": 3,
+              "clock_domain_id": 4,
               "kind": 300,
               "presence": 140577,
               "generation": 1,
@@ -925,7 +925,7 @@
               "lease_sequence": 0,
               "attachment_owner": 0,
               "attachment_sequence": 0,
-              "local_trace_id": 2,
+              "local_trace_id": 1,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -938,7 +938,7 @@
               "result_code": 0,
               "role": 3,
               "instance_rank": 0,
-              "pe": 0,
+              "pe": 1,
               "data0": 0,
               "data1": 0,
               "data2": 0,
@@ -947,11 +947,11 @@
             }
           },
           {
-            "producer": 2,
+            "producer": 5,
             "record": {
-              "event_sequence": 13,
+              "event_sequence": 2,
               "raw_time_ns": 160,
-              "clock_domain_id": 3,
+              "clock_domain_id": 4,
               "kind": 301,
               "presence": 140641,
               "generation": 1,
@@ -967,7 +967,7 @@
               "lease_sequence": 1,
               "attachment_owner": 0,
               "attachment_sequence": 0,
-              "local_trace_id": 2,
+              "local_trace_id": 1,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -980,7 +980,7 @@
               "result_code": 0,
               "role": 3,
               "instance_rank": 0,
-              "pe": 0,
+              "pe": 1,
               "data0": 0,
               "data1": 0,
               "data2": 0,
@@ -989,11 +989,11 @@
             }
           },
           {
-            "producer": 2,
+            "producer": 5,
             "record": {
-              "event_sequence": 14,
+              "event_sequence": 3,
               "raw_time_ns": 165,
-              "clock_domain_id": 3,
+              "clock_domain_id": 4,
               "kind": 302,
               "presence": 140641,
               "generation": 1,
@@ -1009,7 +1009,7 @@
               "lease_sequence": 1,
               "attachment_owner": 0,
               "attachment_sequence": 0,
-              "local_trace_id": 2,
+              "local_trace_id": 1,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -1022,7 +1022,7 @@
               "result_code": 0,
               "role": 3,
               "instance_rank": 0,
-              "pe": 0,
+              "pe": 1,
               "data0": 0,
               "data1": 0,
               "data2": 0,
@@ -1031,11 +1031,11 @@
             }
           },
           {
-            "producer": 2,
+            "producer": 5,
             "record": {
-              "event_sequence": 15,
+              "event_sequence": 4,
               "raw_time_ns": 190,
-              "clock_domain_id": 3,
+              "clock_domain_id": 4,
               "kind": 303,
               "presence": 140641,
               "generation": 1,
@@ -1051,7 +1051,7 @@
               "lease_sequence": 1,
               "attachment_owner": 0,
               "attachment_sequence": 0,
-              "local_trace_id": 2,
+              "local_trace_id": 1,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -1064,7 +1064,7 @@
               "result_code": 0,
               "role": 3,
               "instance_rank": 0,
-              "pe": 0,
+              "pe": 1,
               "data0": 0,
               "data1": 0,
               "data2": 0,
@@ -1073,11 +1073,11 @@
             }
           },
           {
-            "producer": 2,
+            "producer": 5,
             "record": {
-              "event_sequence": 16,
+              "event_sequence": 12,
               "raw_time_ns": 260,
-              "clock_domain_id": 3,
+              "clock_domain_id": 4,
               "kind": 304,
               "presence": 140641,
               "generation": 1,
@@ -1093,7 +1093,7 @@
               "lease_sequence": 1,
               "attachment_owner": 0,
               "attachment_sequence": 0,
-              "local_trace_id": 2,
+              "local_trace_id": 1,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -1106,7 +1106,7 @@
               "result_code": 0,
               "role": 3,
               "instance_rank": 0,
-              "pe": 0,
+              "pe": 1,
               "data0": 0,
               "data1": 0,
               "data2": 0,
@@ -1115,11 +1115,11 @@
             }
           },
           {
-            "producer": 2,
+            "producer": 5,
             "record": {
-              "event_sequence": 17,
+              "event_sequence": 13,
               "raw_time_ns": 270,
-              "clock_domain_id": 3,
+              "clock_domain_id": 4,
               "kind": 305,
               "presence": 140641,
               "generation": 1,
@@ -1135,7 +1135,7 @@
               "lease_sequence": 1,
               "attachment_owner": 0,
               "attachment_sequence": 0,
-              "local_trace_id": 2,
+              "local_trace_id": 1,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -1148,7 +1148,7 @@
               "result_code": 0,
               "role": 3,
               "instance_rank": 0,
-              "pe": 0,
+              "pe": 1,
               "data0": 0,
               "data1": 0,
               "data2": 0,
@@ -1157,11 +1157,11 @@
             }
           },
           {
-            "producer": 2,
+            "producer": 5,
             "record": {
-              "event_sequence": 18,
+              "event_sequence": 14,
               "raw_time_ns": 286,
-              "clock_domain_id": 3,
+              "clock_domain_id": 4,
               "kind": 306,
               "presence": 140641,
               "generation": 1,
@@ -1177,7 +1177,7 @@
               "lease_sequence": 1,
               "attachment_owner": 0,
               "attachment_sequence": 0,
-              "local_trace_id": 2,
+              "local_trace_id": 1,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -1190,7 +1190,7 @@
               "result_code": 0,
               "role": 3,
               "instance_rank": 0,
-              "pe": 0,
+              "pe": 1,
               "data0": 0,
               "data1": 0,
               "data2": 0,
@@ -1199,11 +1199,11 @@
             }
           },
           {
-            "producer": 2,
+            "producer": 5,
             "record": {
-              "event_sequence": 19,
+              "event_sequence": 15,
               "raw_time_ns": 287,
-              "clock_domain_id": 3,
+              "clock_domain_id": 4,
               "kind": 307,
               "presence": 140641,
               "generation": 1,
@@ -1219,7 +1219,7 @@
               "lease_sequence": 1,
               "attachment_owner": 0,
               "attachment_sequence": 0,
-              "local_trace_id": 2,
+              "local_trace_id": 1,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -1232,7 +1232,7 @@
               "result_code": 0,
               "role": 3,
               "instance_rank": 0,
-              "pe": 0,
+              "pe": 1,
               "data0": 0,
               "data1": 0,
               "data2": 0,
@@ -1243,7 +1243,7 @@
           {
             "producer": 5,
             "record": {
-              "event_sequence": 1,
+              "event_sequence": 5,
               "raw_time_ns": 200,
               "clock_domain_id": 4,
               "kind": 400,
@@ -1261,175 +1261,7 @@
               "lease_sequence": 1,
               "attachment_owner": 0,
               "attachment_sequence": 0,
-              "local_trace_id": 1,
-              "layer_ordinal": 0,
-              "payload_rows": 2,
-              "dp_rank_payload_rows": 0,
-              "payload_row_capacity": 16,
-              "ready_ticket": 0,
-              "forward_mode": 0,
-              "output_requirement": 1,
-              "dp_row_layout": 0,
-              "delivery": 1,
-              "result_code": 0,
-              "role": 4,
-              "instance_rank": 0,
-              "pe": 1,
-              "data0": 0,
-              "data1": 0,
-              "data2": 0,
-              "data3": 0,
-              "data4": 0
-            }
-          },
-          {
-            "producer": 5,
-            "record": {
-              "event_sequence": 2,
-              "raw_time_ns": 210,
-              "clock_domain_id": 4,
-              "kind": 401,
-              "presence": 152929,
-              "generation": 1,
-              "endpoint_owner": 0,
-              "endpoint_sequence": 0,
-              "operation_sequence": 0,
-              "graph_owner": 0,
-              "graph_template": 0,
-              "graph_execution": 0,
-              "instance_index": 0,
-              "invocation_sequence": 1,
-              "lane_index": 0,
-              "lease_sequence": 1,
-              "attachment_owner": 0,
-              "attachment_sequence": 0,
-              "local_trace_id": 1,
-              "layer_ordinal": 0,
-              "payload_rows": 2,
-              "dp_rank_payload_rows": 0,
-              "payload_row_capacity": 16,
-              "ready_ticket": 0,
-              "forward_mode": 0,
-              "output_requirement": 1,
-              "dp_row_layout": 0,
-              "delivery": 1,
-              "result_code": 0,
-              "role": 4,
-              "instance_rank": 0,
-              "pe": 1,
-              "data0": 0,
-              "data1": 0,
-              "data2": 0,
-              "data3": 0,
-              "data4": 0
-            }
-          },
-          {
-            "producer": 5,
-            "record": {
-              "event_sequence": 3,
-              "raw_time_ns": 220,
-              "clock_domain_id": 4,
-              "kind": 404,
-              "presence": 152929,
-              "generation": 1,
-              "endpoint_owner": 0,
-              "endpoint_sequence": 0,
-              "operation_sequence": 0,
-              "graph_owner": 0,
-              "graph_template": 0,
-              "graph_execution": 0,
-              "instance_index": 0,
-              "invocation_sequence": 1,
-              "lane_index": 0,
-              "lease_sequence": 1,
-              "attachment_owner": 0,
-              "attachment_sequence": 0,
-              "local_trace_id": 1,
-              "layer_ordinal": 0,
-              "payload_rows": 2,
-              "dp_rank_payload_rows": 0,
-              "payload_row_capacity": 16,
-              "ready_ticket": 0,
-              "forward_mode": 0,
-              "output_requirement": 1,
-              "dp_row_layout": 0,
-              "delivery": 1,
-              "result_code": 0,
-              "role": 4,
-              "instance_rank": 0,
-              "pe": 1,
-              "data0": 0,
-              "data1": 0,
-              "data2": 0,
-              "data3": 0,
-              "data4": 0
-            }
-          },
-          {
-            "producer": 5,
-            "record": {
-              "event_sequence": 4,
-              "raw_time_ns": 240,
-              "clock_domain_id": 4,
-              "kind": 405,
-              "presence": 152929,
-              "generation": 1,
-              "endpoint_owner": 0,
-              "endpoint_sequence": 0,
-              "operation_sequence": 0,
-              "graph_owner": 0,
-              "graph_template": 0,
-              "graph_execution": 0,
-              "instance_index": 0,
-              "invocation_sequence": 1,
-              "lane_index": 0,
-              "lease_sequence": 1,
-              "attachment_owner": 0,
-              "attachment_sequence": 0,
-              "local_trace_id": 1,
-              "layer_ordinal": 0,
-              "payload_rows": 2,
-              "dp_rank_payload_rows": 0,
-              "payload_row_capacity": 16,
-              "ready_ticket": 0,
-              "forward_mode": 0,
-              "output_requirement": 1,
-              "dp_row_layout": 0,
-              "delivery": 1,
-              "result_code": 0,
-              "role": 4,
-              "instance_rank": 0,
-              "pe": 1,
-              "data0": 0,
-              "data1": 0,
-              "data2": 0,
-              "data3": 0,
-              "data4": 0
-            }
-          },
-          {
-            "producer": 5,
-            "record": {
-              "event_sequence": 5,
-              "raw_time_ns": 255,
-              "clock_domain_id": 4,
-              "kind": 408,
-              "presence": 152929,
-              "generation": 1,
-              "endpoint_owner": 0,
-              "endpoint_sequence": 0,
-              "operation_sequence": 0,
-              "graph_owner": 0,
-              "graph_template": 0,
-              "graph_execution": 0,
-              "instance_index": 0,
-              "invocation_sequence": 1,
-              "lane_index": 0,
-              "lease_sequence": 1,
-              "attachment_owner": 0,
-              "attachment_sequence": 0,
-              "local_trace_id": 1,
+              "local_trace_id": 2,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -1454,6 +1286,174 @@
             "producer": 5,
             "record": {
               "event_sequence": 6,
+              "raw_time_ns": 210,
+              "clock_domain_id": 4,
+              "kind": 401,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 7,
+              "raw_time_ns": 220,
+              "clock_domain_id": 4,
+              "kind": 404,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 9,
+              "raw_time_ns": 240,
+              "clock_domain_id": 4,
+              "kind": 405,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 11,
+              "raw_time_ns": 255,
+              "clock_domain_id": 4,
+              "kind": 408,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 8,
               "raw_time_ns": 220,
               "clock_domain_id": 4,
               "kind": 507,
@@ -1471,7 +1471,7 @@
               "lease_sequence": 1,
               "attachment_owner": 0,
               "attachment_sequence": 0,
-              "local_trace_id": 1,
+              "local_trace_id": 2,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -1495,7 +1495,7 @@
           {
             "producer": 5,
             "record": {
-              "event_sequence": 7,
+              "event_sequence": 10,
               "raw_time_ns": 240,
               "clock_domain_id": 4,
               "kind": 508,
@@ -1513,7 +1513,7 @@
               "lease_sequence": 1,
               "attachment_owner": 0,
               "attachment_sequence": 0,
-              "local_trace_id": 1,
+              "local_trace_id": 2,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -2891,6 +2891,17 @@
               },
               "process_creation_id": "88888888-8888-4888-8888-888888888888",
               "clock_domain_id": 6
+            },
+            {
+              "id": 10,
+              "source": "host",
+              "process": {
+                "creation_id": "77777777-7777-4777-8777-777777777777",
+                "pid": 105,
+                "runtime_role": "atnagent"
+              },
+              "process_creation_id": "77777777-7777-4777-8777-777777777777",
+              "clock_domain_id": 1
             }
           ],
           "clock_domains_add": [
@@ -2951,6 +2962,23 @@
                 {
                   "instance_index": 0,
                   "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 1,
+                  "host_producer": 10,
+                  "device_producer": 7
+                },
+                {
+                  "pe": 2,
+                  "host_producer": 4,
+                  "device_producer": 5
                 }
               ]
             }
@@ -3159,38 +3187,6 @@
             11
           ],
           [
-            2,
-            12
-          ],
-          [
-            2,
-            13
-          ],
-          [
-            2,
-            14
-          ],
-          [
-            2,
-            15
-          ],
-          [
-            2,
-            16
-          ],
-          [
-            2,
-            17
-          ],
-          [
-            2,
-            18
-          ],
-          [
-            2,
-            19
-          ],
-          [
             5,
             1
           ],
@@ -3208,6 +3204,22 @@
           ],
           [
             5,
+            12
+          ],
+          [
+            5,
+            13
+          ],
+          [
+            5,
+            14
+          ],
+          [
+            5,
+            15
+          ],
+          [
+            5,
             5
           ],
           [
@@ -3217,6 +3229,22 @@
           [
             5,
             7
+          ],
+          [
+            5,
+            9
+          ],
+          [
+            5,
+            11
+          ],
+          [
+            5,
+            8
+          ],
+          [
+            5,
+            10
           ],
           [
             1,
@@ -3935,6 +3963,17 @@
               },
               "process_creation_id": "88888888-8888-4888-8888-888888888888",
               "clock_domain_id": 6
+            },
+            {
+              "id": 10,
+              "source": "host",
+              "process": {
+                "creation_id": "77777777-7777-4777-8777-777777777777",
+                "pid": 105,
+                "runtime_role": "atnagent"
+              },
+              "process_creation_id": "77777777-7777-4777-8777-777777777777",
+              "clock_domain_id": 1
             }
           ],
           "clock_domains_add": [
@@ -3995,6 +4034,23 @@
                 {
                   "instance_index": 0,
                   "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 1,
+                  "host_producer": 10,
+                  "device_producer": 7
+                },
+                {
+                  "pe": 2,
+                  "host_producer": 4,
+                  "device_producer": 5
                 }
               ]
             }
@@ -4363,6 +4419,17 @@
               },
               "process_creation_id": "88888888-8888-4888-8888-888888888888",
               "clock_domain_id": 6
+            },
+            {
+              "id": 10,
+              "source": "host",
+              "process": {
+                "creation_id": "77777777-7777-4777-8777-777777777777",
+                "pid": 105,
+                "runtime_role": "atnagent"
+              },
+              "process_creation_id": "77777777-7777-4777-8777-777777777777",
+              "clock_domain_id": 1
             }
           ],
           "clock_domains_add": [
@@ -4423,6 +4490,23 @@
                 {
                   "instance_index": 0,
                   "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 1,
+                  "host_producer": 10,
+                  "device_producer": 7
+                },
+                {
+                  "pe": 2,
+                  "host_producer": 4,
+                  "device_producer": 5
                 }
               ]
             }
@@ -4587,20 +4671,20 @@
             11
           ],
           [
-            2,
-            16
+            5,
+            12
           ],
           [
-            2,
-            17
+            5,
+            13
           ],
           [
-            2,
-            18
+            5,
+            14
           ],
           [
-            2,
-            19
+            5,
+            15
           ],
           [
             3,
@@ -4616,15 +4700,15 @@
           ],
           [
             5,
-            4
+            9
           ],
           [
             5,
-            5
+            11
           ],
           [
             5,
-            7
+            10
           ]
         ]
       },
@@ -4679,20 +4763,20 @@
             11
           ],
           [
-            2,
-            16
+            5,
+            12
           ],
           [
-            2,
-            17
+            5,
+            13
           ],
           [
-            2,
-            18
+            5,
+            14
           ],
           [
-            2,
-            19
+            5,
+            15
           ],
           [
             3,
@@ -4708,15 +4792,15 @@
           ],
           [
             5,
-            4
+            9
           ],
           [
             5,
-            5
+            11
           ],
           [
             5,
-            7
+            10
           ]
         ],
         "append_events": [
@@ -4982,6 +5066,23 @@
                 {
                   "instance_index": 0,
                   "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 1,
+                  "host_producer": 4,
+                  "device_producer": 5
+                },
+                {
+                  "pe": 2,
+                  "host_producer": 6,
+                  "device_producer": 7
                 }
               ]
             }

@@ -1,5 +1,5 @@
 {
-  "contract_version": 3,
+  "contract_version": 4,
   "cases": [
     {
       "id": "allocation_000",
@@ -216,6 +216,1187 @@
         "current_snapshot": null,
         "previously_collected_evidence_available": true,
         "tail": "unknown"
+      }
+    },
+    {
+      "id": "host_device_membership",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "membership_queries": [
+          {
+            "generation": 1,
+            "producer": 9
+          },
+          {
+            "generation": 1,
+            "producer": 2
+          },
+          {
+            "generation": 1,
+            "producer": 4
+          },
+          {
+            "generation": 1,
+            "producer": 5
+          },
+          {
+            "generation": 1,
+            "producer": 1
+          },
+          {
+            "generation": 1,
+            "producer": 3
+          }
+        ]
+      },
+      "expected": {
+        "pes": [
+          0,
+          0,
+          1,
+          1,
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "id": "generation_scoped_pe_reassignment",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "producers_add": [
+            {
+              "id": 10,
+              "source": "host",
+              "process": {
+                "creation_id": "77777777-7777-4777-8777-777777777777",
+                "pid": 105,
+                "runtime_role": "atnagent"
+              },
+              "process_creation_id": "77777777-7777-4777-8777-777777777777",
+              "clock_domain_id": 1
+            },
+            {
+              "id": 7,
+              "source": "device",
+              "process": {
+                "creation_id": "77777777-7777-4777-8777-777777777777",
+                "pid": 105,
+                "runtime_role": "atnagent"
+              },
+              "process_creation_id": "77777777-7777-4777-8777-777777777777",
+              "clock_domain_id": 5
+            }
+          ],
+          "generations_add": [
+            {
+              "id": 2,
+              "fabric_generation": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "atnagent_count": 2,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 1,
+                  "host_producer": 10,
+                  "device_producer": 7
+                },
+                {
+                  "pe": 2,
+                  "host_producer": 4,
+                  "device_producer": 5
+                }
+              ]
+            }
+          ],
+          "clock_domains_add": [
+            {
+              "id": 5,
+              "kind": "device_globaltimer",
+              "process_creation_id": "77777777-7777-4777-8777-777777777777",
+              "physical_device_uuid": "GPU-fixture-attention-rank1",
+              "logical_device": 0,
+              "raw_epoch": 1,
+              "unit": "ns"
+            }
+          ]
+        },
+        "membership_queries": [
+          {
+            "generation": 1,
+            "producer": 5
+          },
+          {
+            "generation": 2,
+            "producer": 5
+          },
+          {
+            "generation": 2,
+            "producer": 2
+          },
+          {
+            "generation": 2,
+            "producer": 7
+          }
+        ]
+      },
+      "expected": {
+        "pes": [
+          1,
+          2,
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "id": "membership_generation_unknown",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "membership_queries": [
+          {
+            "generation": null,
+            "producer": 5
+          }
+        ]
+      },
+      "expected": {
+        "pes": [
+          null
+        ]
+      }
+    },
+    {
+      "id": "membership_missing",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "invalid_event"
+      }
+    },
+    {
+      "id": "membership_uncovered_pe",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "invalid_event"
+      }
+    },
+    {
+      "id": "membership_duplicate_pe",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 0,
+                  "host_producer": 4,
+                  "device_producer": 5
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "identity_conflict"
+      }
+    },
+    {
+      "id": "membership_duplicate_producer",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 1,
+                  "host_producer": 9,
+                  "device_producer": 5
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "identity_conflict"
+      }
+    },
+    {
+      "id": "membership_unresolved_producer",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 1,
+                  "host_producer": 4,
+                  "device_producer": 99
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "invalid_event"
+      }
+    },
+    {
+      "id": "membership_wrong_source_kind",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 1,
+                  "host_producer": 5,
+                  "device_producer": 4
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "invalid_event"
+      }
+    },
+    {
+      "id": "membership_process_mismatch",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 1,
+                  "host_producer": 1,
+                  "device_producer": 5
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "invalid_event"
+      }
+    },
+    {
+      "id": "membership_device_clock_mismatch",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "producers_replace": [
+            {
+              "id": 5,
+              "source": "device",
+              "process": {
+                "creation_id": "44444444-4444-4444-8444-444444444444",
+                "pid": 103,
+                "runtime_role": "ffnagent"
+              },
+              "process_creation_id": "44444444-4444-4444-8444-444444444444",
+              "clock_domain_id": 3
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "invalid_event"
+      }
+    },
+    {
+      "id": "membership_instance_is_not_pe",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 1,
+                  "device_producer": 3
+                },
+                {
+                  "pe": 1,
+                  "host_producer": 4,
+                  "device_producer": 5
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "invalid_event"
+      }
+    },
+    {
+      "id": "membership_out_of_range",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 2,
+                  "host_producer": 4,
+                  "device_producer": 5
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "invalid_event"
+      }
+    },
+    {
+      "id": "membership_unsorted",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 1,
+                  "host_producer": 4,
+                  "device_producer": 5
+                },
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "invalid_event"
+      }
+    },
+    {
+      "id": "membership_revision_redefined",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "producers_add": [
+            {
+              "id": 6,
+              "source": "host",
+              "process": {
+                "creation_id": "66666666-6666-4666-8666-666666666666",
+                "pid": 104,
+                "runtime_role": "ffnagent"
+              },
+              "process_creation_id": "66666666-6666-4666-8666-666666666666",
+              "clock_domain_id": 1
+            },
+            {
+              "id": 7,
+              "source": "device",
+              "process": {
+                "creation_id": "66666666-6666-4666-8666-666666666666",
+                "pid": 104,
+                "runtime_role": "ffnagent"
+              },
+              "process_creation_id": "66666666-6666-4666-8666-666666666666",
+              "clock_domain_id": 5
+            }
+          ],
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 1,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 1,
+                  "host_producer": 6,
+                  "device_producer": 7
+                }
+              ]
+            }
+          ],
+          "clock_domains_add": [
+            {
+              "id": 5,
+              "kind": "device_globaltimer",
+              "process_creation_id": "66666666-6666-4666-8666-666666666666",
+              "physical_device_uuid": "GPU-fixture-ffn-peer",
+              "logical_device": 0,
+              "raw_epoch": 1,
+              "unit": "ns"
+            }
+          ],
+          "revision": 2
+        },
+        "prior_metadata": "metadata.json"
+      },
+      "expected": {
+        "error": "identity_conflict"
+      }
+    },
+    {
+      "id": "coordinator_ffn_shared_member",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "events": [
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 155,
+              "clock_domain_id": 4,
+              "kind": 300,
+              "presence": 140577,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 7,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 3,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          },
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 5,
+              "raw_time_ns": 200,
+              "clock_domain_id": 4,
+              "kind": 400,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "event_membership_valid": true,
+        "pe": 1,
+        "producer": 5,
+        "local_trace_ids": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "id": "event_pe_membership_conflict",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "events": [
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 5,
+              "raw_time_ns": 200,
+              "clock_domain_id": 4,
+              "kind": 400,
+              "presence": 152929,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 16,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 1,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "identity_conflict",
+        "producer": 5,
+        "event_sequence": 5
+      }
+    },
+    {
+      "id": "coordinator_wrong_process",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "events": [
+          {
+            "producer": 2,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 155,
+              "clock_domain_id": 3,
+              "kind": 300,
+              "presence": 140577,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 7,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 3,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "invalid_event"
+      }
+    },
+    {
+      "id": "coordinator_wrong_ffn_member",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "producers_add": [
+            {
+              "id": 6,
+              "source": "host",
+              "process": {
+                "creation_id": "66666666-6666-4666-8666-666666666666",
+                "pid": 104,
+                "runtime_role": "ffnagent"
+              },
+              "process_creation_id": "66666666-6666-4666-8666-666666666666",
+              "clock_domain_id": 1
+            },
+            {
+              "id": 7,
+              "source": "device",
+              "process": {
+                "creation_id": "66666666-6666-4666-8666-666666666666",
+                "pid": 104,
+                "runtime_role": "ffnagent"
+              },
+              "process_creation_id": "66666666-6666-4666-8666-666666666666",
+              "clock_domain_id": 5
+            }
+          ],
+          "generations_replace": [
+            {
+              "id": 1,
+              "fabric_generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "atnagent_count": 1,
+              "ffnagent_count": 2,
+              "model_topologies": [
+                {
+                  "atn_tp_size": 1,
+                  "atn_dp_size": 1
+                }
+              ],
+              "scheduler": "fifo",
+              "models": [
+                {
+                  "instance_index": 0,
+                  "model_id": "test/test-model"
+                }
+              ],
+              "pe_members": [
+                {
+                  "pe": 0,
+                  "host_producer": 9,
+                  "device_producer": 2
+                },
+                {
+                  "pe": 1,
+                  "host_producer": 4,
+                  "device_producer": 5
+                },
+                {
+                  "pe": 2,
+                  "host_producer": 6,
+                  "device_producer": 7
+                }
+              ]
+            }
+          ],
+          "clock_domains_add": [
+            {
+              "id": 5,
+              "kind": "device_globaltimer",
+              "process_creation_id": "66666666-6666-4666-8666-666666666666",
+              "physical_device_uuid": "GPU-fixture-ffn-peer",
+              "logical_device": 0,
+              "raw_epoch": 1,
+              "unit": "ns"
+            }
+          ]
+        },
+        "events": [
+          {
+            "producer": 7,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 155,
+              "clock_domain_id": 5,
+              "kind": 300,
+              "presence": 140577,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 7,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 3,
+              "instance_rank": 0,
+              "pe": 2,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "invalid_event"
+      }
+    },
+    {
+      "id": "graph_pe_from_own_membership",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "events": [
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 8,
+              "raw_time_ns": 220,
+              "clock_domain_id": 4,
+              "kind": 507,
+              "presence": 1401,
+              "generation": 1,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 4,
+              "graph_template": 1,
+              "graph_execution": 9223372036854775809,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 1,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 2,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 0,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 4,
+              "instance_rank": 0,
+              "pe": 0,
+              "data0": 3,
+              "data1": 3,
+              "data2": 0,
+              "data3": 1,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "event_membership_valid": true,
+        "resolved_pes": [
+          1
+        ]
+      }
+    },
+    {
+      "id": "daemon_not_an_observation_source",
+      "input": {
+        "membership_metadata": "metadata.json"
+      },
+      "expected": {
+        "registered_process_roles": [
+          "instance",
+          "atnagent",
+          "ffnagent"
+        ],
+        "daemon_host_producer": null,
+        "daemon_collector_writer": false,
+        "daemon_collection_budget_bytes": 0,
+        "missing_daemon_artifact_is_gap": false
+      }
+    },
+    {
+      "id": "event_pe_without_generation",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "events": [
+          {
+            "producer": 5,
+            "record": {
+              "event_sequence": 1,
+              "raw_time_ns": 155,
+              "clock_domain_id": 4,
+              "kind": 300,
+              "presence": 140576,
+              "generation": 0,
+              "endpoint_owner": 0,
+              "endpoint_sequence": 0,
+              "operation_sequence": 0,
+              "graph_owner": 0,
+              "graph_template": 0,
+              "graph_execution": 0,
+              "instance_index": 0,
+              "invocation_sequence": 1,
+              "lane_index": 0,
+              "lease_sequence": 0,
+              "attachment_owner": 0,
+              "attachment_sequence": 0,
+              "local_trace_id": 1,
+              "layer_ordinal": 0,
+              "payload_rows": 2,
+              "dp_rank_payload_rows": 0,
+              "payload_row_capacity": 0,
+              "ready_ticket": 7,
+              "forward_mode": 0,
+              "output_requirement": 1,
+              "dp_row_layout": 0,
+              "delivery": 0,
+              "result_code": 0,
+              "role": 3,
+              "instance_rank": 0,
+              "pe": 1,
+              "data0": 0,
+              "data1": 0,
+              "data2": 0,
+              "data3": 0,
+              "data4": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "error": "invalid_event"
+      }
+    },
+    {
+      "id": "daemon_producer_rejected",
+      "input": {
+        "membership_metadata": "metadata.json",
+        "metadata_overrides": {
+          "producers_add": [
+            {
+              "id": 11,
+              "source": "host",
+              "process": {
+                "creation_id": "99999999-9999-4999-8999-999999999999",
+                "pid": 106,
+                "runtime_role": "daemon"
+              },
+              "process_creation_id": "99999999-9999-4999-8999-999999999999",
+              "clock_domain_id": 1
+            }
+          ]
+        }
+      },
+      "expected": {
+        "error": "invalid_event"
       }
     }
   ]

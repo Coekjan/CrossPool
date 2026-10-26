@@ -1,12 +1,14 @@
-# Shared Observability Contract v3
+# Shared Observability Contract v4
 
-This is the target contract linked from the [task plan](README.md). Version 3
-supersedes versions 1 and 2 as one coordinated specification/fixture revision. Readers
-and participants accept only version 3; no compatibility interpretation is
-provided. This revision specifies field availability, per-snapshot evidence
-reports, and path-dependent completeness, and corrects the DirectPartial fixture
-boundaries. The 256-byte Event layout, IPC field layout, and calibration
-mathematics are unchanged; versioned artifacts and IPC descriptors use version 3.
+This is the target contract linked from the [task plan](README.md). Version 4
+supersedes versions 1, 2, and 3 as one coordinated specification/fixture revision.
+Readers and participants accept only version 4; no compatibility interpretation is
+provided. This revision defines Generation-scoped Producer-to-PE membership,
+limits Producer registration to observed runtime processes, and places Coordinator
+evidence in its actual FfnAgent process. Field availability, per-snapshot evidence
+reports, and path-dependent completeness remain explicit. The 256-byte Event
+layout, IPC field layout, and calibration mathematics are unchanged; versioned
+artifacts and IPC descriptors use version 4.
 All integers on disk are little-endian except opaque UUID bytes. Native struct padding,
 `size_t`, pointers, CUDA handles, and enum ordinals inferred from C++ layout are
 never wire representations. Fixture JSON uses exact integer tokens; consumers
@@ -18,7 +20,7 @@ must not round them through IEEE-754 doubles.
 | --- | --- | --- |
 | Run | 16-byte UUID | New launch Attempt; never PID or wall time alone |
 | Process creation | 16-byte UUID | New OS process creation, even after PID reuse |
-| Producer | Positive u64 within Run | Launcher registers one Host source per process and one Device source per process/Device; retries never reuse IDs |
+| Producer | Positive u64 within Run | Launcher registers one Host source per observed Instance Rank, AtnAgent, or FfnAgent process, and one Device source per such process/Device; retries never reuse IDs |
 | Generation | Positive u64 metadata reference within Run | Resolves to the exact production FabricGenerationId string |
 | Endpoint | `(owner_producer, endpoint_sequence)` | `owner_producer` is the AtnAgent process's Device Producer; the AtnAgent Device source allocates a positive sequence for each new IPC observation region. One region is exported per Transport Arena pairing, matching the existing one-Arena-per-Instance-rank export granularity; it is never shared across TP/DP ranks |
 | Operation | `(Run, Endpoint, operation_sequence)` | Positive Device counter after successful Mailbox Claim; independent of event reservations |
@@ -38,9 +40,19 @@ one process can have several Producers. Physical UUIDs, process creation,
 logical-device mapping, model IDs, Instance topology, scheduler policy,
 capabilities, and artifact references live in metadata.
 
+The Daemon allocates and distributes observation identities and brokers IPC
+descriptors; it is not an event source in this contract. It registers no Host
+Producer for itself and owns no observation Collector/Writer or associated
+collection budget. An absent Daemon Producer artifact is not an evidence gap.
+Run-level missing-process checks range only over registered observation sources.
+`coordinator` and `collector` are Event roles, not additional process roles:
+the Coordinator executes in the first FfnAgent PE, and calibration collection
+uses the observed process's Host Producer. Future Daemon control-plane events
+require a separately specified contract extension.
+
 The launcher distributes one Run and the registered Producer/Generation/clock
 IDs through the existing preparation/bootstrap path. IPC exports add optional
-`observation_region` with exactly version:u32=3, owner_producer:u64,
+`observation_region` with exactly version:u32=4, owner_producer:u64,
 endpoint_sequence:u64, generation:u64, allocation_bytes:u64, and handle.
 Handle uses the existing canonical hexadecimal CUDA IPC handle representation;
 it is never persisted in raw timeline metadata. Disabled related observation
@@ -245,7 +257,8 @@ Each immutable `metadata.<producer>.<revision>.json` contains exactly:
 `clock_domain_id`, `producers`, `generations`, `clock_domains`, `endpoints`,
 `graph_templates`, `artifacts`, `capabilities`, and `configuration`.
 UUIDs use lowercase canonical text. Process contains `creation_id`, `pid`, and
-`runtime_role`. Producer entries include their complete Process, source kind,
+`runtime_role`, restricted to `instance`, `atnagent`, or `ffnagent`.
+Producer entries include their complete Process, source kind,
 and clock domain so remote roles can reconstruct their own snapshots. Array
 entries use positive integer `id` keys where applicable;
 Endpoint and template entries use their composite identities. References are
@@ -262,8 +275,56 @@ its final newline; chunk headers contain the first 16 bytes of SHA-256.
 Metadata is published before its chunks. Revision updates are bounded by Host
 and disk budgets. If metadata cannot be published, do not publish undecodable
 chunks; report `metadata_unavailable` and stop the affected collection source.
-An entirely absent process artifact is a run-level evidence gap. A present chunk
+An entirely absent registered observation-source process artifact is a run-level
+evidence gap; the Daemon is excluded. A present chunk
 with missing/mismatched required metadata is a structured parse error.
+
+### Fabric membership
+
+Every Generation entry has a required `pe_members` array in ascending PE order.
+Each member contains exactly `pe:i32`, `host_producer:u64`, and
+`device_producer:u64`. PE is nonnegative; both Producer references are positive.
+The array covers exactly `0 .. atnagent_count + ffnagent_count - 1`, without
+duplicates or gaps. Members before `atnagent_count` belong to AtnAgent processes;
+the remaining members belong to FfnAgent processes. The Coordinator executes on
+PE `atnagent_count`, the first FfnAgent PE; it has no separate Producer or PE.
+
+Member references resolve to registered Host and Device sources, respectively,
+with identical complete Process identity. The Device clock domain belongs to
+that same process creation. A Producer may appear in only one member of a
+Generation. Instance sources never directly own Fabric PEs: an Endpoint's
+AtnAgent peer is not the Instance's own PE. Membership identifies process owners,
+not physical Device UUIDs or process-local Device indices.
+
+Preparation derives membership from the Daemon's authoritative Fabric Plan and
+the registered process owners, never from observed event order. Publish the
+complete member table and imported Producer/clock definitions before any chunk
+references that Generation. The table is immutable across metadata revisions
+for an existing Generation. A new Generation may assign a different PE to the
+same Producer, without changing that Producer's process/source/clock identity;
+lookup is always `(Run, Generation, Producer)`, never Producer alone.
+
+Snapshot Generation/PE/topology come from this metadata. An Event's present PE
+must agree with the member containing its recording Producer in its Generation.
+Fabric AtnAgent/FfnAgent roles require the corresponding process role;
+Coordinator events require the first FfnAgent member. Graph and other events
+without PE may resolve membership only when their own Generation and recording
+Producer identify a member; an Instance event remains a nonmember. No missing
+Generation or membership is repaired by timestamps, logical Device numbers,
+other events, or an associated remote owner.
+
+Missing required membership, an uncovered PE, out-of-range PE, unresolved
+references, wrong source kinds, mismatched process/clock ownership, or invalid
+role placement fail with `invalid_event`. Duplicate PE or Producer bindings,
+redefinition of an existing Generation's table, and a present Event PE conflicting
+with membership fail with `identity_conflict`. Validate table shape/coverage,
+references/ownership, then Event membership, in that order; duplicate bindings
+are checked before coverage. Errors include the metadata field path and
+Generation, Producer, and PE when available, in addition to ordinary parse
+context. These checks are part of metadata semantic validation after identity/hash
+verification and before payload semantic decoding; Event checks follow ordinary
+width/presence/enum/reference validation. Missing membership is malformed
+metadata, not missing normal evidence.
 
 ## Event Vocabulary and Boundaries
 
@@ -384,6 +445,7 @@ Presence bits group fields:
 | 11–17 | dp_rank_payload_rows, payload_row_capacity, ready_ticket, delivery, result_code, instance_rank, pe, respectively |
 
 Bit 9 implies bit 10; both bits are set in the canonical request encoding.
+Bit 17 requires bit 0: PE is meaningful only in an explicit Generation.
 Shared fields such as graph_owner are absent only when every containing group
 is absent. Identity components are positive except the explicitly zero-based
 Instance/Lane/rank/PE indices. Domain references must match the Event's Producer.
@@ -531,8 +593,8 @@ is represented by metadata/quality only. Chunk sequences start at one.
 
 | Offset | Header field | Type/value |
 | --- | --- | --- |
-| 0 | magic | Eight bytes `XPOOLC03` |
-| 8, 10, 12, 14 | version, header_bytes, event_bytes, flags | u16: 3, 128, 256, 0 |
+| 0 | magic | Eight bytes `XPOOLC04` |
+| 8, 10, 12, 14 | version, header_bytes, event_bytes, flags | u16: 4, 128, 256, 0 |
 | 16, 24, 32, 40 | producer, chunk_sequence, metadata_revision, event_count | u64 each |
 | 48, 56 | first_event_sequence, last_event_sequence | u64, minimum/maximum |
 | 64, 72 | host_window_begin_ns, host_window_end_ns | u64 CLOCK_MONOTONIC collection window |
@@ -558,8 +620,9 @@ outputs go to an explicit separate directory and quota.
 
 Strict parsing rejects the first failing stage in this order: header length;
 magic/version/layout/flags; header CRC; declared sizes and file length; metadata
-identity/hash; payload CRC; event widths/presence/enums/references/order.
-Unknown event kinds fail v3; unsupported versions fail rather than falling back.
+identity/hash and membership semantics; payload CRC; event widths, presence,
+enums, references, order, and membership agreement.
+Unknown event kinds fail v4; unsupported versions fail rather than falling back.
 Errors use codes `header_truncated`, `bad_magic`, `unsupported_version`,
 `invalid_layout`, `header_checksum`, `invalid_length`, `metadata_unavailable`,
 `metadata_checksum`, `payload_checksum`, `invalid_event`, `unknown_kind`,
@@ -627,7 +690,7 @@ host_bytes=33554432, chunk_bytes=1048576, collection_interval_ms=100,
 disk_bytes=1073741824, metadata_reserve_bytes=8388608, shutdown_wait_ms=5000,
 calibration_block_attempts=10, device_event_slot_capacity=16384,
 endpoint_capacity=8, context_slot_capacity=64, and sampler_slot_capacity=1. Enable and outdir must be set together.
-Block attempts is fixed to ten in v3. `device_event_slot_capacity`,
+Block attempts is fixed to ten in v4. `device_event_slot_capacity`,
 `endpoint_capacity`, `context_slot_capacity`, and `sampler_slot_capacity` are positive; startup first evaluates the device
 collection budget composition formula against `device_bytes` using these
 four values, then validates each remaining positive resource value against
@@ -683,7 +746,7 @@ Endpoint recreation starts a new snapshot domain; offline queries retain both.
 | Coordinator ready_ticket and scheduler | Repeated FIFO ticket plus immutable scheduler policy |
 | FfnAgent Lane/Lease, payload_row_capacity, delivery | Repeated LaneExecution/selection facts |
 | Fabric role event timestamps | Corresponding retained kind; absent getters/JSON entries are zero |
-| Fabric generation/pe/counts/model_topologies | Generation and Producer metadata |
+| Fabric generation/pe/counts/model_topologies | Generation metadata and its pe_members entry for the recording Producer; Event PE must agree |
 
 If required scalar facts for a legacy Record are absent, retain the raw evidence
 and omit that Record with `legacy_fact_missing` quality. In particular, FIFO
@@ -739,7 +802,7 @@ Apply the following rules after strict Event validation and equal-fact merging:
 | Transport Instance timestamps | RequestStagingStarted, RequestStagingCompleted, RequestPublished, ResultObserved, OutputCopied, ResultAcknowledged, Closed, each at its own Hook | Zero for an unobserved or inapplicable boundary; distinguish them in the evidence report |
 | Transport AtnAgent timestamps | RequestObserved, ExecutionStarted, ExecutionCompleted, ResultPublished, each at its own Hook | Zero for an unobserved or inapplicable boundary |
 | Transport other-site timestamps | AtnAgent boundaries at Instance and Instance boundaries at AtnAgent are inapplicable | Zero, with `not_applicable_fields`; never copy the other site's timestamp |
-| Fabric common scalars | Own local trace ID, Invocation, layer, rows and output requirement; Generation/PE/topology from metadata | Omit the Record if a required scalar is unknown |
+| Fabric common scalars | Own local trace ID, Invocation, layer, rows and output requirement; Generation/PE/topology from Generation metadata and its pe_members entry for the recording Producer | Omit the Record if a required scalar is unknown; malformed or conflicting membership fails validation |
 | Fabric AtnAgent facts | Repeated request forward mode, DP layout and DP-local rows | Omit the Record if unknown; these facts are inapplicable to Coordinator/FfnAgent |
 | Fabric AtnAgent/Coordinator Lane and Lease | Own AdmissionObserved/Scheduled or later own repeated Lease | Both nullable values remain null and unknown until evidence exists; null does not prove assignment never happened |
 | Fabric Coordinator scheduler | Metadata policy; repeated ready ticket required only for FIFO | Missing FIFO ticket omits the Record; random has no ready_ticket member and marks it inapplicable |

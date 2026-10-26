@@ -1,5 +1,5 @@
 {
-  "contract_version": 3,
+  "contract_version": 4,
   "event_bytes": 256,
   "header_bytes": 128,
   "byte_order": "little",

@@ -1,5 +1,5 @@
 {
-  "contract_version": 3,
+  "contract_version": 4,
   "cases": [
     {
       "id": "routing_published",
@@ -30,7 +30,7 @@
               "lease_sequence": 1,
               "attachment_owner": 5,
               "attachment_sequence": 1,
-              "local_trace_id": 1,
+              "local_trace_id": 2,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -58,7 +58,7 @@
             "sequence": 1,
             "status": "published",
             "path": "routing.safetensors",
-            "sha256": "44967050cf7dd6dfbf64c7b14fb318a41000a2f6478d62f765657b65039634da",
+            "sha256": "21fb1506a63ad8017ecb9ae007d14579909092e6dace0264f8f34af6b2934ebf",
             "tensor_keys": [
               "records.0.topk_ids",
               "records.0.topk_weights"
@@ -125,7 +125,7 @@
               "lease_sequence": 1,
               "attachment_owner": 5,
               "attachment_sequence": 1,
-              "local_trace_id": 1,
+              "local_trace_id": 2,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -222,7 +222,7 @@
               "lease_sequence": 1,
               "attachment_owner": 5,
               "attachment_sequence": 1,
-              "local_trace_id": 1,
+              "local_trace_id": 2,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -319,7 +319,7 @@
               "lease_sequence": 1,
               "attachment_owner": 5,
               "attachment_sequence": 1,
-              "local_trace_id": 1,
+              "local_trace_id": 2,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -416,7 +416,7 @@
               "lease_sequence": 1,
               "attachment_owner": 5,
               "attachment_sequence": 1,
-              "local_trace_id": 1,
+              "local_trace_id": 2,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -513,7 +513,7 @@
               "lease_sequence": 1,
               "attachment_owner": 5,
               "attachment_sequence": 1,
-              "local_trace_id": 1,
+              "local_trace_id": 2,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -591,7 +591,7 @@
             "sequence": 1,
             "status": "published",
             "path": "routing.safetensors",
-            "sha256": "44967050cf7dd6dfbf64c7b14fb318a41000a2f6478d62f765657b65039634da",
+            "sha256": "21fb1506a63ad8017ecb9ae007d14579909092e6dace0264f8f34af6b2934ebf",
             "tensor_keys": [
               "records.0.topk_ids",
               "records.0.topk_weights"
@@ -651,7 +651,7 @@
               "lease_sequence": 1,
               "attachment_owner": 5,
               "attachment_sequence": 1,
-              "local_trace_id": 1,
+              "local_trace_id": 2,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,

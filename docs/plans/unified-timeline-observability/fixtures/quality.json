@@ -1,5 +1,5 @@
 {
-  "contract_version": 3,
+  "contract_version": 4,
   "cases": [
     {
       "id": "active_checkpoint",
@@ -178,7 +178,7 @@
     }
   ],
   "checkpoint": {
-    "contract_version": 3,
+    "contract_version": 4,
     "run_id": "11111111-1111-4111-8111-111111111111",
     "producer_id": 3,
     "revision": 1,
