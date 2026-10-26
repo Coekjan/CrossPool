@@ -22,9 +22,12 @@ additive projection bias and selection-only Router correction bias have separate
 declarations. A representable declaration does not establish operator support
 or qualify a concrete model.
 
-Shared family-profile validation admits BF16 and FP16 checkpoint declarations
-alongside the expected model type and SiLU activation. The Llama adapter reuses
-this validation rather than restricting the family to one checkpoint's dtype.
+Shared family-profile validation checks the model type and SiLU activation.
+Adapters naming a source dtype field require its BF16 or FP16 declaration.
+Original GPT-OSS configurations omit that field and explicitly select the
+common no-source-dtype case. Effective payload precision is checked separately
+by preparation and the selected operation. The Llama adapter admits both
+checkpoint dtypes through the shared check.
 Family admission is distinct from
 [qualification of a concrete checkpoint](qualification.md#numerical-and-graph-evidence).
 
@@ -73,7 +76,8 @@ parameters, and any model-defined correction bias. `SiluActivation` declares
 the positive slope `alpha`, optional positive clipping `limit`, and `up_offset`.
 Projection bias is applied first. Clipping bounds Gate above and Up on both
 sides before computing `g * sigmoid(alpha * g) * (u + up_offset)`. Ordinary
-gated SiLU uses `(1.0, None, 0.0)`. Model adapters resolve source parameters; execution supplies
+gated SiLU uses `(1.0, None, 0.0)`; the qualified GPT-OSS checkpoints use
+`(1.702, 7.0, 1.0)`. Model adapters resolve source parameters; execution supplies
 no model-specific defaults. Up offset is part of activation, not projection bias.
 
 Checkpoint loading and synthetic calibration share canonical empty-weight
@@ -131,7 +135,8 @@ The [Router implementation](../../src/xpool/runtime/ffnagent/operators/routing.p
 projection, TopK and final Routing Metadata construction. Source compilers select
 the admitted Algorithm/Precision pairs: Qwen3-MoE uses Softmax with `PAYLOAD`,
 DeepSeek-V2 uses Softmax with `FP32_LOGITS`, and GLM uses Sigmoid with `FP32`.
-The Spec
+GPT-OSS uses Softmax with `PAYLOAD`, additive projection bias and
+`LOGITS_DTYPE` weight rounding; the existing families use `NONE`. The Spec
 validates these combinations and normalization; execution consumes the admitted
 semantics directly.
 
