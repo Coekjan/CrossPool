@@ -14,8 +14,6 @@ from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.sglang.catalog import E2eServingCase
 from xtest.harness.support.environment import qualification_environment
 
-SERVING_OBSERVER_RECORD_CAPACITY = 32768
-
 
 def prepare(
     case: E2eServingCase,
@@ -104,10 +102,11 @@ def runtime_environment(
             "XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR": str(observer_outdir),
             "XPOOL_DEBUG_TRANSPORT_OBSERVER_ENABLE": "1",
             "XPOOL_DEBUG_TRANSPORT_OBSERVER_OUTDIR": str(observer_outdir),
-            "XPOOL_DEBUG_TRANSPORT_OBSERVER_RECORD_CAPACITY": str(SERVING_OBSERVER_RECORD_CAPACITY),
+            "XPOOL_DEBUG_TRANSPORT_OBSERVER_RECORD_CAPACITY": "32768",
             "XPOOL_DEBUG_FABRIC_OBSERVER_ENABLE": "1",
             "XPOOL_DEBUG_FABRIC_OBSERVER_OUTDIR": str(observer_outdir),
-            "XPOOL_DEBUG_FABRIC_OBSERVER_RECORD_CAPACITY": str(SERVING_OBSERVER_RECORD_CAPACITY),
+            # The Coordinator and first FfnAgent share one Fabric trace buffer.
+            "XPOOL_DEBUG_FABRIC_OBSERVER_RECORD_CAPACITY": "65536",
         }
     )
     if prefill_logit_observer:

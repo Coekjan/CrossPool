@@ -68,7 +68,7 @@ def run_numerical_case(
     tmp_path: Path,
     task_artifact_dir: Path | None,
 ) -> None:
-    """Compare installed true-TP2 FFN outputs with isolated original SGLang."""
+    """Compare every attention rank's FFN outputs with isolated original SGLang."""
 
     if case.timeout_seconds <= FFN_NUMERICAL_HARNESS_RESERVE_SECONDS:
         raise ValueError("FFN numerical timeout must exceed its exceptional cleanup reserve")
@@ -92,6 +92,8 @@ def run_numerical_case(
         },
     )
     model = config.model_by_id[case.model_id]
+    if model.atn_dp_size != 1:
+        raise ValueError("FFN numerical qualification requires attention DP 1")
     ffn_tp_size = model.ffn_tp_size if model.ffn_tp_size is not None else len(config.ffn.devices)
     model_path = config.model_path_of(case.model_id)
     model_spec = architecture.load(model_id=case.model_id, model_path=model_path)
@@ -137,25 +139,6 @@ def run_numerical_case(
         input_paths[row_count] = input_path
 
     layer_ordinal_by_id = {layer.layer_id: ordinal for ordinal, layer in enumerate(model_spec.layers)}
-    output_paths: dict[str, Path] = {}
-    invocations: list[FfnInvocationSpec] = []
-    for layer_id in case.layer_ids:
-        for row_count in case.input_matrix.row_counts:
-            case_id = sample_id(layer_id, row_count)
-            output_path = exchange_directory / f"output-{case_id}.safetensors"
-            output_paths[case_id] = output_path
-            invocations.append(
-                FfnInvocationSpec(
-                    case_id=case_id,
-                    input_path=input_paths[row_count],
-                    output_path=output_path,
-                    layer_ordinal=layer_ordinal_by_id[layer_id],
-                    forward_mode=ForwardMode.DECODE if row_count == 1 else ForwardMode.PREFILL,
-                    output_requirement=OutputRequirement.PER_RANK_COMPLETE,
-                    dp_row_layout=DpRowLayout.NONE,
-                    dp_rank_payload_rows=None,
-                )
-            )
     ffn_profile = InstanceFfnProfile(
         payload_dtype=payload_dtype,
         hidden_size=model_spec.hidden_size,
@@ -164,52 +147,61 @@ def run_numerical_case(
         prefill_payload_row_capacity=case.input_matrix.row_counts[-1],
         group_sum_complete_admitted=False,
     )
-    instance_spec = FfnInstanceSpec(
-        environment=dict(launch.environment),
-        model_id=case.model_id,
-        rank=0,
-        ffn_tp_size=ffn_tp_size,
-        ffn_profile=ffn_profile,
-        transport=InstanceRankTransportProfile(
-            hidden_size=model_spec.hidden_size,
-            payload_row_capacity=case.input_matrix.row_counts[-1],
-            atn_tp_rank=0,
-            atn_tp_size=config.atn_tp_size_of(case.model_id),
-            atn_dp_rank=0,
-            atn_dp_size=model.atn_dp_size,
-        ),
-        invocations=tuple(invocations),
-    )
-    (ready,) = run_ffn_topology(
+    instance_specs: list[FfnInstanceSpec] = []
+    for rank in range(config.atn_world_size):
+        invocations: list[FfnInvocationSpec] = []
+        for layer_id in case.layer_ids:
+            for row_count in case.input_matrix.row_counts:
+                case_id = sample_id(layer_id, row_count)
+                invocations.append(
+                    FfnInvocationSpec(
+                        case_id=case_id,
+                        input_path=input_paths[row_count],
+                        output_path=exchange_directory / f"output-rank-{rank}-{case_id}.safetensors",
+                        layer_ordinal=layer_ordinal_by_id[layer_id],
+                        forward_mode=ForwardMode.DECODE if row_count == 1 else ForwardMode.PREFILL,
+                        output_requirement=OutputRequirement.PER_RANK_COMPLETE,
+                        dp_row_layout=DpRowLayout.NONE,
+                        dp_rank_payload_rows=None,
+                    )
+                )
+        instance_specs.append(
+            FfnInstanceSpec(
+                environment=dict(launch.environment),
+                model_id=case.model_id,
+                rank=rank,
+                ffn_tp_size=ffn_tp_size,
+                ffn_profile=ffn_profile,
+                transport=InstanceRankTransportProfile(
+                    hidden_size=model_spec.hidden_size,
+                    payload_row_capacity=case.input_matrix.row_counts[-1],
+                    atn_tp_rank=rank,
+                    atn_tp_size=config.atn_tp_size_of(case.model_id),
+                    atn_dp_rank=0,
+                    atn_dp_size=model.atn_dp_size,
+                ),
+                invocations=tuple(invocations),
+            )
+        )
+    ready = run_ffn_topology(
         launch=launch,
         endpoint=endpoint,
-        instance_specs=(instance_spec,),
+        instance_specs=tuple(instance_specs),
         workdir=production_workdir,
         timeout_seconds=remaining_seconds(deadline, "FFN numerical Production"),
     )
 
-    observed_routing = read_ffn_routing_records(production_workdir / "observers", ready.generation)
-    samples: list[FfnNumericalSampleEvidence] = []
+    observed_routing = read_ffn_routing_records(production_workdir / "observers", ready[0].generation)
+    samples_by_rank: list[list[FfnNumericalSampleEvidence]] = [[] for _ in instance_specs]
     reference_by_id = {result.case_id: result for result in reference_results}
-    for invocation_sequence, invocation in enumerate(invocations, start=1):
+    for invocation_index, invocation in enumerate(instance_specs[0].invocations):
         reference = reference_by_id[invocation.case_id]
-        actual_tensors = safetensors.torch.load_file(output_paths[invocation.case_id], device="cpu")
-        if set(actual_tensors) != {"hidden_states"}:
-            raise AssertionError(f"FFN production output has invalid tensor keys: {sorted(actual_tensors)}")
-        output_comparison = compare_ffn_outputs(
-            reference.output,
-            actual_tensors["hidden_states"],
-            atol=FFN_OUTPUT_ATOL,
-            rtol=FFN_OUTPUT_RTOL,
-            normalized_rmse_limit=FFN_OUTPUT_NORMALIZED_RMSE_LIMIT,
-            maximum_scaled_error_limit=FFN_OUTPUT_MAXIMUM_SCALED_ERROR_LIMIT,
-        )
         layer = model_spec.layers[invocation.layer_ordinal]
         routing_comparison = None
         if isinstance(layer, MoeFfnSpec):
             if reference.routing is None:
                 raise AssertionError("MoE Reference omitted Routing evidence")
-            routing_key = (ready.instance_index, invocation_sequence, invocation.layer_ordinal)
+            routing_key = (ready[0].instance_index, invocation_index + 1, invocation.layer_ordinal)
             try:
                 actual_ids, actual_weights = observed_routing.pop(routing_key)
             except KeyError as error:
@@ -225,26 +217,46 @@ def run_numerical_case(
             )
         elif reference.routing is not None:
             raise AssertionError("Dense Reference unexpectedly returned Routing evidence")
-        samples.append(
-            FfnNumericalSampleEvidence(
-                layer_id=layer.layer_id,
-                row_count=reference.output.shape[0],
-                output=output_comparison,
-                routing=routing_comparison,
+        for spec, samples in zip(instance_specs, samples_by_rank, strict=True):
+            output_path = spec.invocations[invocation_index].output_path
+            actual_tensors = safetensors.torch.load_file(output_path, device="cpu")
+            if set(actual_tensors) != {"hidden_states"}:
+                raise AssertionError(
+                    f"FFN production rank {spec.rank} output has invalid tensor keys: {sorted(actual_tensors)}"
+                )
+            output_comparison = compare_ffn_outputs(
+                reference.output,
+                actual_tensors["hidden_states"],
+                atol=FFN_OUTPUT_ATOL,
+                rtol=FFN_OUTPUT_RTOL,
+                normalized_rmse_limit=FFN_OUTPUT_NORMALIZED_RMSE_LIMIT,
+                maximum_scaled_error_limit=FFN_OUTPUT_MAXIMUM_SCALED_ERROR_LIMIT,
             )
-        )
+            samples.append(
+                FfnNumericalSampleEvidence(
+                    layer_id=layer.layer_id,
+                    row_count=reference.output.shape[0],
+                    output=output_comparison,
+                    routing=routing_comparison,
+                )
+            )
     if observed_routing:
         raise AssertionError(f"production returned unexpected FFN Routing records: {tuple(observed_routing)}")
-    evidence = FfnNumericalEvidence(
-        model_id=case.model_id,
-        model_spec_digest=model_spec.digest(),
-        generation=ready.generation,
-        payload_dtype=case.input_matrix.payload_dtype,
-        samples=tuple(samples),
-    )
-    evidence.write((task_artifact_dir or tmp_path) / FFN_NUMERICAL_ARTIFACT_FILENAME)
-    assert all(sample.output.passed for sample in samples)
-    assert all(sample.routing is None or sample.routing.passed for sample in samples)
+    for rank, samples in enumerate(samples_by_rank):
+        evidence = FfnNumericalEvidence(
+            model_id=case.model_id,
+            model_spec_digest=model_spec.digest(),
+            generation=ready[0].generation,
+            payload_dtype=case.input_matrix.payload_dtype,
+            samples=tuple(samples),
+        )
+        filename = FFN_NUMERICAL_ARTIFACT_FILENAME if rank == 0 else f"ffn-numerical-rank-{rank}.json"
+        evidence.write((task_artifact_dir or tmp_path) / filename)
+    for rank, samples in enumerate(samples_by_rank):
+        assert all(sample.output.passed for sample in samples), (
+            f"FFN numerical output mismatch on attention rank {rank}"
+        )
+    assert all(sample.routing is None or sample.routing.passed for sample in samples_by_rank[0])
 
 
 def representative_layer_ids(layers: tuple[FfnLayerSpec, ...]) -> tuple[int, ...]:

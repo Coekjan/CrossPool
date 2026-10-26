@@ -18,6 +18,10 @@ realization, with an independent SGLang FFN reference. Shared native topology
 cases exercise other TP cardinalities with the same topology-test logic and an
 unsharded reference. These evidence surfaces are orthogonal: model suites own
 model semantics while shared topology suites own delivery cardinalities.
+The numerical harness starts every attention TP rank and compares each complete
+output with the independent reference. Attention DP is one for these cases.
+Rank zero writes `ffn-numerical.json`; additional ranks write
+`ffn-numerical-rank-<rank>.json`. Routing evidence is shared by the invocation.
 FFN qualification stops new invocations after observing a retained failure.
 Its owning harness remains responsible for participant retirement.
 

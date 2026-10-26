@@ -11,7 +11,7 @@ from xkit.serving.sglang.graph import SglangGraphMode, SglangGraphSettings
 from xpool.config import XpoolConfig
 from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.sglang.catalog import TestCatalog
-from xtest.harness.sglang.serving.launch import SERVING_OBSERVER_RECORD_CAPACITY, prepare
+from xtest.harness.sglang.serving.launch import prepare
 
 
 def test_prepare_applies_deployment_policy_and_sanitizes_environment(
@@ -53,8 +53,8 @@ def test_prepare_applies_deployment_policy_and_sanitizes_environment(
     assert launch.config.ffn.device_memory_calibration == base_config.config.ffn.device_memory_calibration
     assert launch.environment["CUDA_MODULE_LOADING"] == "EAGER"
     assert "SGLANG_GRPC_PORT" not in launch.environment
-    assert launch.config.debug.transport_observer.record_capacity == SERVING_OBSERVER_RECORD_CAPACITY
-    assert launch.config.debug.fabric_observer.record_capacity == SERVING_OBSERVER_RECORD_CAPACITY
+    assert launch.config.debug.transport_observer.record_capacity == 32_768
+    assert launch.config.debug.fabric_observer.record_capacity == 65_536
     assert launch.config.debug.prefill_logit_observer.enable is (case.elastic_kv is not None)
     assert ("XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE" in launch.environment) is (case.elastic_kv is not None)
 
