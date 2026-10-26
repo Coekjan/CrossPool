@@ -1,5 +1,5 @@
 {
-  "contract_version": 3,
+  "contract_version": 4,
   "run_id": "11111111-1111-4111-8111-111111111111",
   "producer_id": 3,
   "revision": 1,
@@ -64,6 +64,17 @@
       },
       "process_creation_id": "44444444-4444-4444-8444-444444444444",
       "clock_domain_id": 4
+    },
+    {
+      "id": 9,
+      "source": "host",
+      "process": {
+        "creation_id": "33333333-3333-4333-8333-333333333333",
+        "pid": 102,
+        "runtime_role": "atnagent"
+      },
+      "process_creation_id": "33333333-3333-4333-8333-333333333333",
+      "clock_domain_id": 1
     }
   ],
   "generations": [
@@ -83,6 +94,18 @@
         {
           "instance_index": 0,
           "model_id": "test/test-model"
+        }
+      ],
+      "pe_members": [
+        {
+          "pe": 0,
+          "host_producer": 9,
+          "device_producer": 2
+        },
+        {
+          "pe": 1,
+          "host_producer": 4,
+          "device_producer": 5
         }
       ]
     }

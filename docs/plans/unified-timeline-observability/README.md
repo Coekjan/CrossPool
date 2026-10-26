@@ -47,6 +47,12 @@ authoritative only when implemented.
 
 ## Accepted Changes
 
+- Register observation sources only for Instance Rank, AtnAgent, and FfnAgent
+  processes. The Daemon distributes identities and brokers descriptors without
+  becoming a Producer. Each Generation publishes its immutable `pe_members`
+  mapping from PE to the member's Host/Device Producers before referencing
+  chunks. Coordinator events belong to the first FfnAgent PE and share its
+  Producer and local Fabric trace-ID space.
 - Replace mutable Device observation Records with immutable fixed-size events.
   Carry the operation facts known at each Hook; distinguish absent facts from
   valid zero values. Keep production RequestMetadata unchanged.
@@ -121,16 +127,21 @@ Both Native and offline implementations must independently read and write the
 valid binary vector, reject the invalid vectors by structured code, reconstruct
 the same legacy projections, and produce the exact calibration expectations.
 Fixture changes require a coordinated contract version update; never support
-two conflicting interpretations of v3.
+two conflicting interpretations of v4.
 
-Contract and fixture version 3 supersedes versions 1 and 2 without a compatibility
-mode. Update the raw vectors, metadata hashes and fixture checksums together.
+Contract and fixture version 4 supersedes versions 1, 2, and 3 without a
+compatibility mode. Update raw vectors, metadata hashes and fixture checksums together.
 The Event record remains 256 bytes and calibration mathematics is unchanged.
-Version 3 freezes per-snapshot evidence reports and field availability. The
-ordinary Dense DirectPartial fixture excludes partial-publication and peer-wait
+Version 4 adds explicit Generation-scoped Fabric membership and the observed
+process boundary, and corrects Coordinator fixture ownership. It retains
+per-snapshot evidence reports and field availability. The ordinary Dense
+DirectPartial fixture excludes partial-publication and peer-wait
 Hooks, matching the actual production branch.
 
 Focused tests must cover independent-observer IPC allocation and policy mismatch,
+Generation-scoped PE reassignment, Host/Device member ownership, malformed and
+conflicting member maps, event/metadata PE disagreement, Coordinator placement,
+Daemon exclusion from collection and missing-artifact checks,
 actual Graph-owner isolation, entry association retained after failure or absent
 return, rejection before Submission preparation, diagnostic read preconditions,
 and concurrent reservation/commit/reclamation, multiple

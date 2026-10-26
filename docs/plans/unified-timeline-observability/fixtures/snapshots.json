@@ -1,5 +1,5 @@
 {
-  "contract_version": 3,
+  "contract_version": 4,
   "input_case": "causality.json#normal_dense",
   "phase_pairs": {
     "transport": [
@@ -260,7 +260,7 @@
           "atn_dp_size": 1
         }
       ],
-      "sequence": 2,
+      "sequence": 1,
       "dropped": 0,
       "records": [
         {
@@ -291,9 +291,25 @@
             "output_wait": 110,
             "total": 139
           }
-        },
+        }
+      ]
+    },
+    {
+      "generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "pe": 1,
+      "atnagent_count": 1,
+      "ffnagent_count": 1,
+      "model_topologies": [
         {
-          "local_trace_id": 2,
+          "atn_tp_size": 1,
+          "atn_dp_size": 1
+        }
+      ],
+      "sequence": 2,
+      "dropped": 0,
+      "records": [
+        {
+          "local_trace_id": 1,
           "instance_index": 0,
           "invocation_sequence": 1,
           "layer_ordinal": 0,
@@ -325,25 +341,9 @@
             "active_total": 127,
             "total": 132
           }
-        }
-      ]
-    },
-    {
-      "generation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "pe": 1,
-      "atnagent_count": 1,
-      "ffnagent_count": 1,
-      "model_topologies": [
+        },
         {
-          "atn_tp_size": 1,
-          "atn_dp_size": 1
-        }
-      ],
-      "sequence": 1,
-      "dropped": 0,
-      "records": [
-        {
-          "local_trace_id": 1,
+          "local_trace_id": 2,
           "instance_index": 0,
           "invocation_sequence": 1,
           "layer_ordinal": 0,
@@ -1258,7 +1258,7 @@
           "local_trace_id": 1
         },
         "operation_counts": {
-          "sequence": 2,
+          "sequence": 1,
           "capacity": 8192
         },
         "remove_events": [
@@ -1436,16 +1436,16 @@
         "select": {
           "observer": "fabric",
           "producer": 5,
-          "local_trace_id": 1
+          "local_trace_id": 2
         },
         "operation_counts": {
-          "sequence": 1,
+          "sequence": 2,
           "capacity": 8192
         }
       },
       "expected": {
         "legacy_record": {
-          "local_trace_id": 1,
+          "local_trace_id": 2,
           "instance_index": 0,
           "invocation_sequence": 1,
           "layer_ordinal": 0,
@@ -1477,7 +1477,7 @@
           }
         },
         "evidence_entry": {
-          "local_trace_id": 1,
+          "local_trace_id": 2,
           "role": "ffnagent",
           "operation": null,
           "invocation": {
@@ -1503,7 +1503,7 @@
               "field": "boundary.PartialReadyPublished",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -1511,7 +1511,7 @@
               "field": "boundary.PeerPartialsReadyObserved",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -1537,7 +1537,7 @@
               "field": "events_ns.completion_published",
               "event": {
                 "producer": 5,
-                "event_sequence": 5
+                "event_sequence": 11
               },
               "metadata": null
             },
@@ -1545,7 +1545,7 @@
               "field": "events_ns.compute_completed",
               "event": {
                 "producer": 5,
-                "event_sequence": 4
+                "event_sequence": 9
               },
               "metadata": null
             },
@@ -1553,7 +1553,7 @@
               "field": "events_ns.compute_started",
               "event": {
                 "producer": 5,
-                "event_sequence": 3
+                "event_sequence": 7
               },
               "metadata": null
             },
@@ -1561,7 +1561,7 @@
               "field": "events_ns.input_ready_observed",
               "event": {
                 "producer": 5,
-                "event_sequence": 2
+                "event_sequence": 6
               },
               "metadata": null
             },
@@ -1569,7 +1569,7 @@
               "field": "events_ns.lane_execution_observed",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -1577,7 +1577,7 @@
               "field": "facts.delivery",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -1585,7 +1585,7 @@
               "field": "facts.executor_lane_index",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -1593,7 +1593,7 @@
               "field": "facts.executor_lease_sequence",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -1601,7 +1601,7 @@
               "field": "facts.payload_row_capacity",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -1609,7 +1609,7 @@
               "field": "instance_index",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -1617,7 +1617,7 @@
               "field": "invocation_sequence",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -1625,7 +1625,7 @@
               "field": "layer_ordinal",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -1633,7 +1633,7 @@
               "field": "local_trace_id",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -1641,7 +1641,7 @@
               "field": "output_requirement",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -1649,7 +1649,7 @@
               "field": "payload_rows",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             }
@@ -1664,39 +1664,39 @@
         "select": {
           "observer": "fabric",
           "producer": 5,
-          "local_trace_id": 1
+          "local_trace_id": 2
         },
         "operation_counts": {
-          "sequence": 1,
+          "sequence": 2,
           "capacity": 8192
         },
         "remove_events": [
           [
             5,
-            1
-          ],
-          [
-            5,
-            2
-          ],
-          [
-            5,
-            3
-          ],
-          [
-            5,
-            4
-          ],
-          [
-            5,
             5
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            5,
+            7
+          ],
+          [
+            5,
+            9
+          ],
+          [
+            5,
+            11
           ]
         ]
       },
       "expected": {
         "legacy_record": null,
         "evidence_entry": {
-          "local_trace_id": 1,
+          "local_trace_id": 2,
           "role": "ffnagent",
           "operation": null,
           "invocation": {
@@ -1761,7 +1761,7 @@
               "field": "facts.executor_lane_index",
               "event": {
                 "producer": 5,
-                "event_sequence": 6
+                "event_sequence": 8
               },
               "metadata": null
             },
@@ -1769,7 +1769,7 @@
               "field": "facts.executor_lease_sequence",
               "event": {
                 "producer": 5,
-                "event_sequence": 6
+                "event_sequence": 8
               },
               "metadata": null
             },
@@ -1777,7 +1777,7 @@
               "field": "instance_index",
               "event": {
                 "producer": 5,
-                "event_sequence": 6
+                "event_sequence": 8
               },
               "metadata": null
             },
@@ -1785,7 +1785,7 @@
               "field": "invocation_sequence",
               "event": {
                 "producer": 5,
-                "event_sequence": 6
+                "event_sequence": 8
               },
               "metadata": null
             },
@@ -1793,7 +1793,7 @@
               "field": "layer_ordinal",
               "event": {
                 "producer": 5,
-                "event_sequence": 6
+                "event_sequence": 8
               },
               "metadata": null
             },
@@ -1801,7 +1801,7 @@
               "field": "local_trace_id",
               "event": {
                 "producer": 5,
-                "event_sequence": 6
+                "event_sequence": 8
               },
               "metadata": null
             },
@@ -1809,7 +1809,7 @@
               "field": "output_requirement",
               "event": {
                 "producer": 5,
-                "event_sequence": 6
+                "event_sequence": 8
               },
               "metadata": null
             },
@@ -1817,7 +1817,7 @@
               "field": "payload_rows",
               "event": {
                 "producer": 5,
-                "event_sequence": 6
+                "event_sequence": 8
               },
               "metadata": null
             }
@@ -2294,7 +2294,7 @@
       "expected": {
         "legacy_records": [],
         "evidence_report": {
-          "contract_version": 3,
+          "contract_version": 4,
           "run_id": "11111111-1111-4111-8111-111111111111",
           "producer_id": 3,
           "observer": "transport",
@@ -2336,36 +2336,36 @@
         "base_case": "normal_dense",
         "select": {
           "observer": "fabric",
-          "producer": 2
+          "producer": 5
         },
         "remove_events": [
           [
-            2,
+            5,
             5
           ],
           [
-            2,
+            5,
             6
           ],
           [
-            2,
+            5,
             7
           ],
           [
-            2,
-            8
-          ],
-          [
-            2,
+            5,
             9
           ],
           [
-            2,
-            10
+            5,
+            11
           ],
           [
-            2,
-            11
+            5,
+            8
+          ],
+          [
+            5,
+            10
           ]
         ],
         "operation_counts": {
@@ -2376,7 +2376,7 @@
       "expected": {
         "legacy_records": [
           {
-            "local_trace_id": 2,
+            "local_trace_id": 1,
             "instance_index": 0,
             "invocation_sequence": 1,
             "layer_ordinal": 0,
@@ -2411,9 +2411,9 @@
           }
         ],
         "evidence_report": {
-          "contract_version": 3,
+          "contract_version": 4,
           "run_id": "11111111-1111-4111-8111-111111111111",
-          "producer_id": 2,
+          "producer_id": 5,
           "observer": "fabric",
           "generation": 1,
           "endpoint": null,
@@ -2426,22 +2426,6 @@
           "entries": [
             {
               "local_trace_id": 1,
-              "role": null,
-              "operation": null,
-              "invocation": null,
-              "projection_status": "unobserved",
-              "evidence_status": "unavailable",
-              "unknown_fields": [],
-              "not_applicable_fields": [],
-              "missing_boundaries": [],
-              "unknown_applicability": [],
-              "quality": [
-                "operation_unobserved"
-              ],
-              "sources": []
-            },
-            {
-              "local_trace_id": 2,
               "role": "coordinator",
               "operation": null,
               "invocation": {
@@ -2462,80 +2446,80 @@
                 {
                   "field": "events_ns.admission_published",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 14
+                    "producer": 5,
+                    "event_sequence": 3
                   },
                   "metadata": null
                 },
                 {
                   "field": "events_ns.enqueued",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 12
+                    "producer": 5,
+                    "event_sequence": 1
                   },
                   "metadata": null
                 },
                 {
                   "field": "events_ns.ffnagent_completions_observed",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 16
+                    "producer": 5,
+                    "event_sequence": 12
                   },
                   "metadata": null
                 },
                 {
                   "field": "events_ns.lane_execution_published",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 15
+                    "producer": 5,
+                    "event_sequence": 4
                   },
                   "metadata": null
                 },
                 {
                   "field": "events_ns.lane_released",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 19
+                    "producer": 5,
+                    "event_sequence": 15
                   },
                   "metadata": null
                 },
                 {
                   "field": "events_ns.output_acknowledgements_observed",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 18
+                    "producer": 5,
+                    "event_sequence": 14
                   },
                   "metadata": null
                 },
                 {
                   "field": "events_ns.output_commit_published",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 17
+                    "producer": 5,
+                    "event_sequence": 13
                   },
                   "metadata": null
                 },
                 {
                   "field": "events_ns.scheduled",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 13
+                    "producer": 5,
+                    "event_sequence": 2
                   },
                   "metadata": null
                 },
                 {
                   "field": "facts.executor_lane_index",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 13
+                    "producer": 5,
+                    "event_sequence": 2
                   },
                   "metadata": null
                 },
                 {
                   "field": "facts.executor_lease_sequence",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 13
+                    "producer": 5,
+                    "event_sequence": 2
                   },
                   "metadata": null
                 },
@@ -2551,60 +2535,76 @@
                 {
                   "field": "facts.scheduler.ready_ticket",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 12
+                    "producer": 5,
+                    "event_sequence": 1
                   },
                   "metadata": null
                 },
                 {
                   "field": "instance_index",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 12
+                    "producer": 5,
+                    "event_sequence": 1
                   },
                   "metadata": null
                 },
                 {
                   "field": "invocation_sequence",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 12
+                    "producer": 5,
+                    "event_sequence": 1
                   },
                   "metadata": null
                 },
                 {
                   "field": "layer_ordinal",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 12
+                    "producer": 5,
+                    "event_sequence": 1
                   },
                   "metadata": null
                 },
                 {
                   "field": "local_trace_id",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 12
+                    "producer": 5,
+                    "event_sequence": 1
                   },
                   "metadata": null
                 },
                 {
                   "field": "output_requirement",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 12
+                    "producer": 5,
+                    "event_sequence": 1
                   },
                   "metadata": null
                 },
                 {
                   "field": "payload_rows",
                   "event": {
-                    "producer": 2,
-                    "event_sequence": 12
+                    "producer": 5,
+                    "event_sequence": 1
                   },
                   "metadata": null
                 }
               ]
+            },
+            {
+              "local_trace_id": 2,
+              "role": null,
+              "operation": null,
+              "invocation": null,
+              "projection_status": "unobserved",
+              "evidence_status": "unavailable",
+              "unknown_fields": [],
+              "not_applicable_fields": [],
+              "missing_boundaries": [],
+              "unknown_applicability": [],
+              "quality": [
+                "operation_unobserved"
+              ],
+              "sources": []
             }
           ]
         }
@@ -2657,7 +2657,7 @@
         ],
         "legacy_snapshot_available": false,
         "evidence_report": {
-          "contract_version": 3,
+          "contract_version": 4,
           "run_id": "11111111-1111-4111-8111-111111111111",
           "producer_id": 3,
           "observer": "transport",
@@ -3312,7 +3312,7 @@
           {
             "producer": 5,
             "record": {
-              "event_sequence": 1,
+              "event_sequence": 5,
               "raw_time_ns": 200,
               "clock_domain_id": 4,
               "kind": 400,
@@ -3330,7 +3330,7 @@
               "lease_sequence": 1,
               "attachment_owner": 0,
               "attachment_sequence": 0,
-              "local_trace_id": 1,
+              "local_trace_id": 2,
               "layer_ordinal": 0,
               "payload_rows": 2,
               "dp_rank_payload_rows": 0,
@@ -3361,7 +3361,7 @@
   ],
   "expected_evidence_reports": [
     {
-      "contract_version": 3,
+      "contract_version": 4,
       "run_id": "11111111-1111-4111-8111-111111111111",
       "producer_id": 3,
       "observer": "transport",
@@ -3517,7 +3517,7 @@
       ]
     },
     {
-      "contract_version": 3,
+      "contract_version": 4,
       "run_id": "11111111-1111-4111-8111-111111111111",
       "producer_id": 2,
       "observer": "transport",
@@ -3651,7 +3651,7 @@
       ]
     },
     {
-      "contract_version": 3,
+      "contract_version": 4,
       "run_id": "11111111-1111-4111-8111-111111111111",
       "producer_id": 2,
       "observer": "fabric",
@@ -3660,7 +3660,7 @@
       "site": null,
       "snapshot_sha256": null,
       "capacity": 8192,
-      "sequence": 2,
+      "sequence": 1,
       "dropped": 0,
       "unobserved_operations": 0,
       "entries": [
@@ -3818,9 +3818,25 @@
               "metadata": null
             }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "contract_version": 4,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "producer_id": 5,
+      "observer": "fabric",
+      "generation": 1,
+      "endpoint": null,
+      "site": null,
+      "snapshot_sha256": null,
+      "capacity": 8192,
+      "sequence": 2,
+      "dropped": 0,
+      "unobserved_operations": 0,
+      "entries": [
         {
-          "local_trace_id": 2,
+          "local_trace_id": 1,
           "role": "coordinator",
           "operation": null,
           "invocation": {
@@ -3841,80 +3857,80 @@
             {
               "field": "events_ns.admission_published",
               "event": {
-                "producer": 2,
-                "event_sequence": 14
+                "producer": 5,
+                "event_sequence": 3
               },
               "metadata": null
             },
             {
               "field": "events_ns.enqueued",
               "event": {
-                "producer": 2,
-                "event_sequence": 12
+                "producer": 5,
+                "event_sequence": 1
               },
               "metadata": null
             },
             {
               "field": "events_ns.ffnagent_completions_observed",
               "event": {
-                "producer": 2,
-                "event_sequence": 16
+                "producer": 5,
+                "event_sequence": 12
               },
               "metadata": null
             },
             {
               "field": "events_ns.lane_execution_published",
               "event": {
-                "producer": 2,
-                "event_sequence": 15
+                "producer": 5,
+                "event_sequence": 4
               },
               "metadata": null
             },
             {
               "field": "events_ns.lane_released",
               "event": {
-                "producer": 2,
-                "event_sequence": 19
+                "producer": 5,
+                "event_sequence": 15
               },
               "metadata": null
             },
             {
               "field": "events_ns.output_acknowledgements_observed",
               "event": {
-                "producer": 2,
-                "event_sequence": 18
+                "producer": 5,
+                "event_sequence": 14
               },
               "metadata": null
             },
             {
               "field": "events_ns.output_commit_published",
               "event": {
-                "producer": 2,
-                "event_sequence": 17
+                "producer": 5,
+                "event_sequence": 13
               },
               "metadata": null
             },
             {
               "field": "events_ns.scheduled",
               "event": {
-                "producer": 2,
-                "event_sequence": 13
+                "producer": 5,
+                "event_sequence": 2
               },
               "metadata": null
             },
             {
               "field": "facts.executor_lane_index",
               "event": {
-                "producer": 2,
-                "event_sequence": 13
+                "producer": 5,
+                "event_sequence": 2
               },
               "metadata": null
             },
             {
               "field": "facts.executor_lease_sequence",
               "event": {
-                "producer": 2,
-                "event_sequence": 13
+                "producer": 5,
+                "event_sequence": 2
               },
               "metadata": null
             },
@@ -3930,79 +3946,63 @@
             {
               "field": "facts.scheduler.ready_ticket",
               "event": {
-                "producer": 2,
-                "event_sequence": 12
+                "producer": 5,
+                "event_sequence": 1
               },
               "metadata": null
             },
             {
               "field": "instance_index",
               "event": {
-                "producer": 2,
-                "event_sequence": 12
+                "producer": 5,
+                "event_sequence": 1
               },
               "metadata": null
             },
             {
               "field": "invocation_sequence",
               "event": {
-                "producer": 2,
-                "event_sequence": 12
+                "producer": 5,
+                "event_sequence": 1
               },
               "metadata": null
             },
             {
               "field": "layer_ordinal",
               "event": {
-                "producer": 2,
-                "event_sequence": 12
+                "producer": 5,
+                "event_sequence": 1
               },
               "metadata": null
             },
             {
               "field": "local_trace_id",
               "event": {
-                "producer": 2,
-                "event_sequence": 12
+                "producer": 5,
+                "event_sequence": 1
               },
               "metadata": null
             },
             {
               "field": "output_requirement",
               "event": {
-                "producer": 2,
-                "event_sequence": 12
+                "producer": 5,
+                "event_sequence": 1
               },
               "metadata": null
             },
             {
               "field": "payload_rows",
               "event": {
-                "producer": 2,
-                "event_sequence": 12
+                "producer": 5,
+                "event_sequence": 1
               },
               "metadata": null
             }
           ]
-        }
-      ]
-    },
-    {
-      "contract_version": 3,
-      "run_id": "11111111-1111-4111-8111-111111111111",
-      "producer_id": 5,
-      "observer": "fabric",
-      "generation": 1,
-      "endpoint": null,
-      "site": null,
-      "snapshot_sha256": null,
-      "capacity": 8192,
-      "sequence": 1,
-      "dropped": 0,
-      "unobserved_operations": 0,
-      "entries": [
+        },
         {
-          "local_trace_id": 1,
+          "local_trace_id": 2,
           "role": "ffnagent",
           "operation": null,
           "invocation": {
@@ -4028,7 +4028,7 @@
               "field": "boundary.PartialReadyPublished",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -4036,7 +4036,7 @@
               "field": "boundary.PeerPartialsReadyObserved",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -4062,7 +4062,7 @@
               "field": "events_ns.completion_published",
               "event": {
                 "producer": 5,
-                "event_sequence": 5
+                "event_sequence": 11
               },
               "metadata": null
             },
@@ -4070,7 +4070,7 @@
               "field": "events_ns.compute_completed",
               "event": {
                 "producer": 5,
-                "event_sequence": 4
+                "event_sequence": 9
               },
               "metadata": null
             },
@@ -4078,7 +4078,7 @@
               "field": "events_ns.compute_started",
               "event": {
                 "producer": 5,
-                "event_sequence": 3
+                "event_sequence": 7
               },
               "metadata": null
             },
@@ -4086,7 +4086,7 @@
               "field": "events_ns.input_ready_observed",
               "event": {
                 "producer": 5,
-                "event_sequence": 2
+                "event_sequence": 6
               },
               "metadata": null
             },
@@ -4094,7 +4094,7 @@
               "field": "events_ns.lane_execution_observed",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -4102,7 +4102,7 @@
               "field": "facts.delivery",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -4110,7 +4110,7 @@
               "field": "facts.executor_lane_index",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -4118,7 +4118,7 @@
               "field": "facts.executor_lease_sequence",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -4126,7 +4126,7 @@
               "field": "facts.payload_row_capacity",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -4134,7 +4134,7 @@
               "field": "instance_index",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -4142,7 +4142,7 @@
               "field": "invocation_sequence",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -4150,7 +4150,7 @@
               "field": "layer_ordinal",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -4158,7 +4158,7 @@
               "field": "local_trace_id",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -4166,7 +4166,7 @@
               "field": "output_requirement",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             },
@@ -4174,7 +4174,7 @@
               "field": "payload_rows",
               "event": {
                 "producer": 5,
-                "event_sequence": 1
+                "event_sequence": 5
               },
               "metadata": null
             }

@@ -1,4 +1,4 @@
-# Reference Fixtures v3
+# Reference Fixtures v4
 
 These immutable inputs and expected outputs implement the
 [shared contract](../shared-contract.md) and [calibration algorithm](../calibration.md).
@@ -12,7 +12,7 @@ starts from a fresh Run state; identical IDs across scenarios never join them.
 | --- | --- |
 | [layout.json](layout.json) | Complete 256-byte field table, presence groups, event IDs, and FFN enums |
 | [metadata.json](metadata.json) | Immutable metadata revision used by valid raw encoding; SHA-256 is over its exact bytes |
-| [identity-lifecycle.json](identity-lifecycle.json) | Independent-mode allocation matrix, policy failures, and diagnostic read preconditions |
+| [identity-lifecycle.json](identity-lifecycle.json) | Allocation/policy and diagnostic preconditions, Generation-scoped PE membership, and observed-process registration boundary |
 | [encoding.json](encoding.json) | Full one-event chunk hex and malformed variants with exact structured errors |
 | [causality.json](causality.json) | Complete/partial events, explicit associations, Replay/Eager, identity isolation, Context, tokens, quota, and tail cases |
 | [snapshots.json](snapshots.json) | Complete legacy projections and evidence reports, exact phase pairs, and Event-based loss/applicability cases |
@@ -29,7 +29,7 @@ updates version, bytes, semantic expectations, and checksums together.
 
 ## Case Interpretation
 
-JSON top-level contract_version is 3. Each `cases` entry has a unique `id`,
+JSON top-level contract_version is 4. Each `cases` entry has a unique `id`,
 `input`, and `expected`. Expected dictionaries are assertions on the named
 properties, not a license to discard other quality evidence. The complete
 `normal_dense` case and snapshot projections specify full ordinary behavior.
@@ -56,15 +56,31 @@ definitions; generations_replace replaces the matching Generation by ID. Scenari
 overrides replace the named capabilities for that scenario.
 Independent scenario IDs are not serialized into the production format.
 
+Membership cases in identity-lifecycle.json use `membership_metadata` to name
+their base metadata file. Their `metadata_overrides` also permit
+`generations_add`, `producers_replace`, and `clock_domains_replace`, keyed by
+registered `id`; `revision` replaces the document revision. Replacements must
+match one base definition, and additions must have fresh IDs. `prior_metadata`
+names an earlier immutable revision for cross-revision membership validation.
+`membership_queries` contains `{generation, producer}` lookups; expected `pes`
+is the ordered result, with null for a nonmember or absent Generation evidence.
+An unresolved positive Generation reference is an error, not a null result.
+`events` checks recording-source membership and, when present, the Event's PE.
+Malformed metadata errors precede event validation. The raw vectors reject both
+a v3 header version and a complete v3 chunk without compatibility decoding.
+Daemon registration
+expectations describe launcher behavior, not an additional serialized Event role.
+
 `normal_dense` retains one Instance operation, its AtnAgent observation,
 Fabric entry, three Fabric role observations, one SGLang Replay, and one native
 FFN activity. The Host return at 350 is distinct from the FFN compute completion
 at raw Device 240; clocks in this example have no implicit cross-domain mapping.
 Same-domain intervals in snapshots remain calculable without calibration.
 
-Snapshot input_case references that case. Fabric has two local operations in
-Producer 2 (AtnAgent local trace 1 and Coordinator local trace 2), and one in
-Producer 5. These local trace IDs are not the common Invocation sequence.
+Snapshot input_case references that case. Fabric has one local operation in
+Producer 2 (AtnAgent local trace 1), and two in Producer 5 (Coordinator local
+trace 1 and FfnAgent local trace 2). Producer 9 is the registered AtnAgent Host
+source. These local trace IDs are not the common Invocation sequence.
 Transport snapshots classify completed using the legacy site rule. Missing
 events/facts are asserted in separate cases; do not apply the complete-vector
 len(records) equation to partial evidence. The golden phase pairs match the
@@ -72,13 +88,18 @@ existing writers, including AtnAgent total beginning at SubmissionPrepared.
 
 `expected_evidence_reports` freezes complete Native-read report shapes for these
 four snapshot domains (two Transport, two Fabric), including the shared local
-ID sequence of AtnAgent and Coordinator. snapshot_sha256 is null for Native-only
+ID sequence of Coordinator and FfnAgent. snapshot_sha256 is null for Native-only
 reads. The Dense routing capability is not_applicable evidence for these synthetic
 layers, not a rule equating a disabled Routing observer with a Dense model.
 DirectPartial has no PartialReadyPublished/PeerPartialsReadyObserved Hook. Its
 legacy times are zero, and the report marks these stages inapplicable. Producer 5
-now has protocol sequences 1..5 and Graph activity sequences 6..7; derived cases
-use those same identities rather than introducing artificial sequence holes.
+has Coordinator sequences 1..4 and 12..15, FfnAgent protocol sequences
+5, 6, 7, 9, 11, and Graph activity sequences 8 and 10. These are ordered by raw
+time, with original Producer/sequence as tie breakers. Derived cases use those
+same identities rather than introducing artificial sequence holes. Moving the
+synthetic Coordinator times into the FfnAgent domain establishes no measured
+cross-domain calibration; only the explicitly supplied local boundaries and
+protocol identities support durations and causality.
 
 Snapshot cases with base_case=normal_dense expand against causality.json using
 the same remove/replace/append rules above. `select` chooses an observer domain,
@@ -128,15 +149,15 @@ Its final attachment index uses the fixture-relative routing.safetensors path.
 The event's artifact_id is zero because runtime file publication occurs later;
 the exact attachment identity resolves the final index. Not-collected, pool
 capacity, payload oversize, I/O failure, missing file, and unknown crashed tail
-are different expected outcomes. Safetensors metadata records preserves its
-baseline Invocation fields and adds the association fields defined by v3.
+are different expected outcomes. Safetensors metadata records preserve their
+baseline Invocation fields and adds the association fields defined by v4.
 
 The identity-lifecycle cases describe preparation and diagnostic interfaces:
 allocation is required by Unified Timeline, Transport Observer, or an explicitly
 identity-dependent consumer, rather than by Graph/Routing enablement alone.
 Diagnostic availability is a precondition result; equal Context generations do
 not validate live mutable storage. The stale graph field in the live-peek case
-is deliberately invalid diagnostic input, not part of the version 3 IPC layout.
+is deliberately invalid diagnostic input, not part of the version 4 IPC layout.
 The causal cases execution_never_returns and execution_returns_failure retain
 the entry edge without inventing FFN completion. invocation_multiple_graph_owners
 preserves separate FfnAgent executions under one Invocation. Attributed SGLang
