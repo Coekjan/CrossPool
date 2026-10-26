@@ -21,7 +21,6 @@ from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
 from sglang.srt.mem_cache.unified_cache.components import ComponentType
 from sglang.srt.mem_cache.unified_radix_cache import UnifiedRadixCache
 from sglang.srt.sampling.sampling_params import SamplingParams
-from xpool.native.ecs import InstanceControlChannel
 
 import xtest
 from xpool.config import LatencySloConfig
@@ -33,6 +32,7 @@ from xpool.integrations.sglang.ecs.allocator import (
 from xpool.integrations.sglang.ecs.capacity import CapacityReconciler, capacity_reconciler_scope
 from xpool.integrations.sglang.ecs.state import SglangElasticContextState
 from xpool.integrations.sglang.hooks.ecs import complete_allocation
+from xpool.native.ecs import InstanceControlChannel
 from xpool.runtime.instance import InstanceRankRuntime
 from xpool.utils.cuda import CudaDriverError
 from xtest.harness.support.sglang.runtime import published_sglang_config

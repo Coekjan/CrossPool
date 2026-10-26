@@ -35,12 +35,6 @@ from sglang.srt.runtime_context import get_context, get_parallel
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from tests.suites.integration.sglang.ecs.support import full_swa_pool_scope, install_vmm_driver
-from xpool.native.ecs import (
-    InstanceControlChannel,
-    QuotaCommand,
-    QuotaCompletion,
-    QuotaDemand,
-)
 
 import xtest
 from xpool import ecs
@@ -64,6 +58,12 @@ from xpool.integrations.sglang.hooks.ecs import (
     around_alloc_req_slots,
     around_evict_from_tree_cache,
     complete_allocation,
+)
+from xpool.native.ecs import (
+    InstanceControlChannel,
+    QuotaCommand,
+    QuotaCompletion,
+    QuotaDemand,
 )
 from xpool.runtime.instance import InstanceRankRuntime
 from xtest.harness.support.sglang.fakes import server_args

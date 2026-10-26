@@ -12,7 +12,6 @@ from sglang.srt.mem_cache.kv_cache_configurator import KVCacheConfigurator
 from sglang.srt.mem_cache.unified_radix_cache import UnifiedRadixCache
 from sglang.srt.observability.scheduler_stage_metrics import SchedulerStageMetricsRecorder
 from sglang.srt.runtime_context import get_context
-from xpool.native.ecs import InstanceControlChannel
 
 import xpool.integrations.sglang.hooks.ecs
 from xpool.config import LatencySloConfig, XpoolConfig
@@ -24,6 +23,7 @@ from xpool.integrations.sglang.ecs.allocator import (
 from xpool.integrations.sglang.ecs.capacity import CapacityReconciler, capacity_reconciler_scope
 from xpool.integrations.sglang.ecs.state import SglangElasticContextState
 from xpool.integrations.sglang.hooks.ecs import after_pool_stats, around_check_full_pool
+from xpool.native.ecs import InstanceControlChannel
 from xpool.runtime.instance import InstanceRankRuntime
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
 from xtest.harness.support.sglang.runtime import published_sglang_config
