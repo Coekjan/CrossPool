@@ -189,7 +189,7 @@ def run_numerical_case(
         raise AssertionError("FFN numerical Instance ranks observed different Instance indexes")
 
     observed_routing = read_ffn_routing_records(production_workdir / "observers", ready[0].generation)
-    samples: list[FfnNumericalSampleEvidence] = []
+    samples_by_rank: tuple[list[FfnNumericalSampleEvidence], ...] = tuple([] for _ in range(config.atn_world_size))
     reference_by_id = {result.case_id: result for result in reference_results}
     for invocation_sequence, invocation in enumerate(invocations_by_rank[0], start=1):
         reference = reference_by_id[invocation.case_id]
@@ -210,9 +210,6 @@ def run_numerical_case(
                     maximum_scaled_error_limit=FFN_OUTPUT_MAXIMUM_SCALED_ERROR_LIMIT,
                 )
             )
-        if not all(comparison.passed for comparison in output_comparisons):
-            raise AssertionError(f"FFN production ranks failed numerical comparison for {invocation.case_id}")
-        output_comparison = output_comparisons[0]
         layer = model_spec.layers[invocation.layer_ordinal]
         routing_comparison = None
         if isinstance(layer, MoeFfnSpec):
@@ -234,26 +231,36 @@ def run_numerical_case(
             )
         elif reference.routing is not None:
             raise AssertionError("Dense Reference unexpectedly returned Routing evidence")
-        samples.append(
-            FfnNumericalSampleEvidence(
-                layer_id=layer.layer_id,
-                row_count=reference.output.shape[0],
-                output=output_comparison,
-                routing=routing_comparison,
+        for samples, output_comparison in zip(samples_by_rank, output_comparisons, strict=True):
+            samples.append(
+                FfnNumericalSampleEvidence(
+                    layer_id=layer.layer_id,
+                    row_count=reference.output.shape[0],
+                    output=output_comparison,
+                    routing=routing_comparison,
+                )
             )
-        )
     if observed_routing:
         raise AssertionError(f"production returned unexpected FFN Routing records: {tuple(observed_routing)}")
-    evidence = FfnNumericalEvidence(
-        model_id=case.model_id,
-        model_spec_digest=model_spec.digest(),
-        generation=ready[0].generation,
-        payload_dtype=case.input_matrix.payload_dtype,
-        samples=tuple(samples),
+    # Retain every rank's measurements before rejecting numerical mismatches.
+    for rank, samples in enumerate(samples_by_rank):
+        evidence = FfnNumericalEvidence(
+            model_id=case.model_id,
+            model_spec_digest=model_spec.digest(),
+            generation=ready[0].generation,
+            payload_dtype=case.input_matrix.payload_dtype,
+            samples=tuple(samples),
+        )
+        filename = FFN_NUMERICAL_ARTIFACT_FILENAME if rank == 0 else f"ffn-numerical-rank-{rank}.json"
+        evidence.write((task_artifact_dir or tmp_path) / filename)
+    failed_samples = tuple(
+        f"rank {rank} {sample_id(sample.layer_id, sample.row_count)}"
+        for rank, samples in enumerate(samples_by_rank)
+        for sample in samples
+        if not sample.output.passed
     )
-    evidence.write((task_artifact_dir or tmp_path) / FFN_NUMERICAL_ARTIFACT_FILENAME)
-    assert all(sample.output.passed for sample in samples)
-    assert all(sample.routing is None or sample.routing.passed for sample in samples)
+    assert not failed_samples, f"FFN production outputs failed numerical comparison: {', '.join(failed_samples)}"
+    assert all(sample.routing is None or sample.routing.passed for sample in samples_by_rank[0])
 
 
 def materialize_numerical_instance_specs(

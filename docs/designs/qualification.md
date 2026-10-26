@@ -20,9 +20,13 @@ unsharded reference. These evidence surfaces are orthogonal: model suites own
 model semantics while shared topology suites own delivery cardinalities.
 The controlled production side starts every rank in the model's attention TP
 group and requires one consistent Instance identity. Each rank receives the same
-deterministic input and its complete output must pass the reference comparison;
-the retained sample records the canonical rank after every rank passes. Model
-numerical qualification currently requires attention DP 1.
+deterministic input and its complete output must pass the reference comparison.
+Completed comparisons, including failed numerical metrics, are retained for
+every rank before asserting the numerical verdict. Rank 0 owns the canonical
+`ffn-numerical.json`; additional ranks use `ffn-numerical-rank-<rank>.json` with
+the same evidence schema. A passing canonical sample does not substitute for
+the all-rank verdict. Failure diagnostics identify the rank, layer and row count.
+Model numerical qualification currently requires attention DP 1.
 FFN qualification stops new invocations after observing a retained failure.
 Its owning harness remains responsible for participant retirement.
 
