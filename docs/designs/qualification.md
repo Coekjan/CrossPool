@@ -18,6 +18,11 @@ realization, with an independent SGLang FFN reference. Shared native topology
 cases exercise other TP cardinalities with the same topology-test logic and an
 unsharded reference. These evidence surfaces are orthogonal: model suites own
 model semantics while shared topology suites own delivery cardinalities.
+The controlled production side starts every rank in the model's attention TP
+group and requires one consistent Instance identity. Each rank receives the same
+deterministic input and its complete output must pass the reference comparison;
+the retained sample records the canonical rank after every rank passes. Model
+numerical qualification currently requires attention DP 1.
 FFN qualification stops new invocations after observing a retained failure.
 Its owning harness remains responsible for participant retirement.
 
