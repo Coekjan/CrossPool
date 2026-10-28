@@ -678,6 +678,14 @@ relative artifact path, SHA-256, tensor keys, Invocation, Lane/Lease, layer,
 publisher, clock domain, raw publication time, and shape/dtypes. Only published
 has a usable path/hash. An event whose reserved attachment has no final outcome
 is unknown after truncation and missing after a complete closing index.
+An event's nonzero Routing artifact_id resolves in the referencing metadata
+revision to kind `routing`, status `published`, and a nonempty relative path
+and SHA-256. If a final attachment entry is supplied, it must be published and
+its path and SHA-256 must match that artifact declaration exactly. Wrong kinds,
+incomplete publication declarations and disagreement with the final entry are
+identity conflicts; an unregistered artifact_id is an invalid event. A nonzero
+reference alone does not replace the final attachment index or establish tensor
+availability. Zero continues to resolve through the attachment identity.
 Do not map by tensor-slot position. Safetensors retains existing generation,
 pe, sequence, dropped, records metadata, and adds contract_version, run_id,
 producer_id, and per-record identity/time/lease fields inside records. IDs and
