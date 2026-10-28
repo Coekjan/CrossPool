@@ -90,3 +90,41 @@ controlled qualification request on TP rank zero. Each EXTEND replaces that
 request's snapshot, so completion exposes the final Prefill chunk. Files identify
 the process and URI-encoded request ID; metadata retains the original request ID.
 Serving-graph and Elastic Context State qualification share this observation.
+
+## Offline event artifacts
+
+`xpool.observability` reads explicitly supplied version-six Event chunks,
+metadata revisions, quality checkpoints and Routing attachment indices. These
+artifacts use `XPOOLC06` chunks with 256-byte Events. The offline format is
+separate from the runtime Observer snapshots described above; the existing
+Observers continue to publish their own formats. The offline library does not
+install runtime collection or convert those snapshots into Event artifacts.
+
+Call `read_artifacts(ArtifactInputs(...))` with published file paths and an
+attachment root, then pass the returned `ArtifactSet` to `reconstruct()`.
+`parse_chunk()` and `encode_chunk()` expose the strict binary boundary directly.
+Readers validate checksums, registered identities, Generation-scoped PE
+membership, presence groups, reserved bytes, enum values and attachment facts.
+Unsupported versions and malformed or conflicting evidence raise
+`ObservationError` with a typed code and available path, offset, Producer,
+Event and conflicting-source context.
+
+Reconstruction retains local observations, explicit causal edges, raw intervals,
+calibration samples and aggregate quality. Transport anomalies retain received
+request values under `raw_forward_mode`, `raw_output_requirement` and
+`raw_dp_row_layout`, plus an `invalid_fields` mask. Their actual protocol
+boundary comes from `EventRecord.boundary`; their wire kind remains
+TransportAnomaly. A local terminal Event supplies its actual result and time,
+including zero. Missing boundaries remain unknown. Repeated scalar facts
+cannot supply missing timestamps, and Producer loss counters cannot identify
+a missing Operation. The anomalous Operation count is an observed lower bound.
+
+Identical Event identities are retained once with all input locations. Local
+protocol boundaries also deduplicate equivalent facts under different Event
+identities. Conflicting boundary evidence and conflicting repeated facts have
+separate structured error codes. Derived durations require retained endpoints,
+a common raw clock domain and nondecreasing times. Cross-domain calibration
+fitting and legacy snapshot projections are outside this library. Offline
+identity and provenance inventories grow with input size rather than using the
+runtime collection budgets. Reference artifacts live under
+`tests/resources/observability/`.
