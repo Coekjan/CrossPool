@@ -1,0 +1,55 @@
+{
+  "algorithm": "sha256",
+  "files": [
+    {
+      "path": "calibration.json",
+      "bytes": 65560,
+      "sha256": "26c7ce55afba2c7b91d6588cc422de216fcc66f0aaac096b9a9c7321a3c37ec8"
+    },
+    {
+      "path": "causality.json",
+      "bytes": 156106,
+      "sha256": "93aada19fb230a17bbf292c6fc11cef770604cfe58c1266a2c8aa8a824c5d4d8"
+    },
+    {
+      "path": "encoding.json",
+      "bytes": 64080,
+      "sha256": "3aec28665f28f3f10f0958be1b9ee897864504eb162b369b957b4b3beefed5dd"
+    },
+    {
+      "path": "identity-lifecycle.json",
+      "bytes": 38887,
+      "sha256": "6164fe1b7e6a2cb6a3550a3d35b6dc6005fae6a6c3ebd1c53f7404f459861c2c"
+    },
+    {
+      "path": "layout.json",
+      "bytes": 9124,
+      "sha256": "df6de36aeee69fae142190f13459b10d759d98577e09e5445db76c23b279e843"
+    },
+    {
+      "path": "metadata-atnagent.json",
+      "bytes": 5106,
+      "sha256": "9a4732916df8791812d5c238057dfffb59f2a0b4a8a8a3fb71fc2e91836f4e06"
+    },
+    {
+      "path": "metadata.json",
+      "bytes": 5106,
+      "sha256": "f44449a8e4d3c51bbb4f1e26d145d56565fa9d1659d54c5db3a64d249ba69007"
+    },
+    {
+      "path": "quality.json",
+      "bytes": 4233,
+      "sha256": "7fd2966df6a7c360312721bcb214adc77460e0cfe5f3e944e5e06d65634c9712"
+    },
+    {
+      "path": "routing.json",
+      "bytes": 18727,
+      "sha256": "7e4a78920c4968d63f3d3150a747ad043d93a41104a80e9b654368d3f36dfb3b"
+    },
+    {
+      "path": "routing.safetensors",
+      "bytes": 584,
+      "sha256": "c3c7ca991b9b52e0bacd5c98db3bad4c9a36169135a65d2ded617506ef7f5053"
+    }
+  ]
+}
