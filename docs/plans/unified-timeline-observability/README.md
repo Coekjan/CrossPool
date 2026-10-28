@@ -1,0 +1,177 @@
+# Unified Timeline Observability: Shared Contract
+
+## Goal
+
+Define the versioned artifact contract that allows bounded runtime collection and offline
+reconstruction to be implemented independently. The target is one single-Host
+Transport/Fabric/Graph/Routing timeline with protocol-derived causality,
+paired Host/Device clock sampling, and explicit uncertainty and data quality.
+
+The independently usable contracts are:
+
+- [Shared contract](shared-contract.md): events, identities, Native interfaces,
+  encoding, configuration, lifecycle, attachments, and legacy snapshots.
+- [Calibration](calibration.md): deterministic model and numerical contract.
+- [Reference fixtures](fixtures/README.md): fixed inputs, byte vectors, expected
+  reconstruction, legacy projections, and calibration outputs.
+
+## Baseline
+
+Current implementation owners are [Devkit](../../designs/devkit.md),
+[Transport](../../designs/transport.md), [Fabric](../../designs/fabric.md),
+[FFN Execution](../../designs/ffn-execution.md), and
+[Control Plane](../../designs/control-plane.md).
+
+Transport and Fabric mutate one bounded Record per local operation and read
+snapshots after quiescence or synchronization. Their local trace identifiers
+are not cross-process identities. The concrete correlation seam is
+`transport::execute_request()` calling
+`fabric::atnagent::execute(fabric_arena, transport_arena)`; the Fabric call
+constructs the actual InvocationKey before Submission publication.
+The InvocationKey comment attributing its sequence to an Instance rank must
+be corrected when that path is instrumented; its allocation algorithm remains
+production-owned.
+
+Native Graph snapshots describe installed structure. SGLang Graph events use
+Host `monotonic_ns()` and currently append and flush each event synchronously.
+Routing snapshots expose InvocationKey, layer, and tensors; their internal
+headers also retain Lane/Lease. Routing payload overflow currently returns
+without a quality counter. These are collection changes required by the target,
+not facilities already provided by the baseline.
+
+Current retirement additionally queues PE-wide outbound NVSHMEM quiet after
+local producer completion. Collector teardown must respect that boundary, as
+well as Instance IPC detach and CUDA completion. Source declarations remain
+authoritative for implemented interfaces; proposed declarations below become
+authoritative only when implemented.
+
+## Accepted Changes
+
+- Register observation sources only for Instance Rank, AtnAgent, and FfnAgent
+  processes. The Daemon distributes identities and brokers descriptors without
+  becoming a Producer. Each Generation publishes its immutable `pe_members`
+  mapping from PE to the member's Host/Device Producers before referencing
+  chunks. Coordinator events belong to the first FfnAgent PE and share its
+  Producer and local Fabric trace-ID space.
+- Replace mutable Device observation Records with immutable fixed-size events.
+  Carry the operation facts known at each Hook; distinguish absent facts from
+  valid zero values. Keep production RequestMetadata unchanged.
+- Allocate a fresh shared Transport operation identity after every successful
+  Mailbox Claim, independently of event capacity. Publish the association at
+  actual entry into Fabric Submission preparation, then observe publication
+  separately. Preserve rank-local many-to-one and Graph one-to-many relations.
+- Add fresh Graph execution identities and bounded, Stream-ordered dynamic
+  Context. Separate Host calls, Device activity, templates, and long-lived Lane
+  service Graphs. Attach Routing evidence by exact attachment identity.
+  Dynamic Context storage is process-wide in the actual Graph owner:
+  Instance Rank for SGLang, FfnAgent for native FFN. The IPC region carries only
+  Operation identity and is allocated whenever an enabled consumer needs it,
+  including independent Transport observation. Diagnostics consume committed
+  events; direct mutable-storage reads require quiescence or synchronization.
+- Provide one bounded Collector/Writer per process, shared by independently
+  enabled observers and unified mode. A process-local background collection
+  thread periodically drives asynchronous Device-to-Host event transfer and
+  completion checks, reclaiming Device slots after complete transfer without
+  waiting for file publication. Writer file I/O must not block this thread.
+  Add `debug.timeline` through
+  `xpool.config`; collection policy is immutable before native initialization
+  and Graph Capture.
+- Preserve existing Transport/Fabric snapshot APIs and JSON shapes through
+  bounded Host reconstruction of the earliest N operations. Report missing
+  facts and snapshot-capacity loss in separate quality metadata. Add a bounded
+  per-snapshot evidence report with field-level provenance and explicit unknown
+  and inapplicable fields. Legacy terminal classification remains independent
+  of path-dependent evidence completeness; repeated facts recover scalars,
+  never missing boundary timestamps. Publish the report and legacy JSON as a
+  hash-matched pair at the same read cutoff.
+- Use ten-attempt calibration blocks and a positive-slope affine feasible
+  region, with two held-out validation attempts. Preserve raw clocks, model
+  assumptions, unavailable intervals, and numerical uncertainty.
+- Downstream export uses standard native Perfetto protobufs and Trace Processor.
+  ClockSnapshot represents an accepted mapping; it supplies no calibration
+  evidence by itself. Uncalibrated domains retain separate timing artifacts.
+
+## Resource and Lifecycle Contract
+
+| Resource | Default and accounting |
+| --- | --- |
+| Device collection | 8 MiB per process/Device, split by formula into the event ring, per-Endpoint `observation_region`s, process-wide Graph Context, and per-process calibration sampler storage; see [the device collection budget composition](shared-contract.md#device-collection-budget-composition) |
+| Host collection | 32 MiB per process, including queues, staging, Writer-held blocks, metadata, and snapshot views |
+| Raw chunk | At most 1 MiB including the 128-byte header |
+| Collection and periodic sampling | 100 ms; at most one in-flight sample per sampler |
+| Runtime disk | 1 GiB per process, including metadata, temporary files, snapshots, and attachments; reserve 8 MiB for metadata |
+| Additional shutdown wait | At most 5 seconds, bounded by the remaining production shutdown deadline |
+
+Routing tensor pools and Graph structural artifacts keep their independent
+memory capacities. Added identity fields enter their sizing and admission.
+The event budget is not a bound on all Observer memory. Startup rejects a
+configuration whose minimum allocations or metadata reserve exceed its budget;
+it never silently expands a budget. Report each allocation category separately.
+
+Hooks perform no file I/O and never wait for the Writer, a free slot, or disk
+quota. Full collection storage drops new events and counts the loss. Disk
+exhaustion stops collection, preserves published files, and records the stop
+reason. Atomic same-directory publication provides a recoverable complete-file
+prefix under a healthy filesystem; it does not promise power-loss durability.
+Timed-out CUDA or IPC users retain their resources until production retirement
+proves safe release. Crashed or unpublished tails remain unknown.
+
+## Implementation and Validation
+
+Downstream work starts from the same versioned fixtures: strict raw parsing and
+causal reconstruction; deterministic calibration; runtime collection and
+snapshot reconstruction; protocol/Graph identities; Routing attachments; paired
+sampling; finally native Perfetto/query integration.
+
+Both Native and offline implementations must independently read and write the
+valid binary vector, reject the invalid vectors by structured code, reconstruct
+the same legacy projections, and produce the exact calibration expectations.
+Fixture changes require a coordinated contract version update; never support
+two conflicting interpretations of v4.
+
+Contract and fixture version 4 supersedes versions 1, 2, and 3 without a
+compatibility mode. Update raw vectors, metadata hashes and fixture checksums together.
+The Event record remains 256 bytes and calibration mathematics is unchanged.
+Version 4 adds explicit Generation-scoped Fabric membership and the observed
+process boundary, and corrects Coordinator fixture ownership. It retains
+per-snapshot evidence reports and field availability. The ordinary Dense
+DirectPartial fixture excludes partial-publication and peer-wait
+Hooks, matching the actual production branch.
+
+Focused tests must cover independent-observer IPC allocation and policy mismatch,
+Generation-scoped PE reassignment, Host/Device member ownership, malformed and
+conflicting member maps, event/metadata PE disagreement, Coordinator placement,
+Daemon exclusion from collection and missing-artifact checks,
+actual Graph-owner isolation, entry association retained after failure or absent
+return, rejection before Submission preparation, diagnostic read preconditions,
+and concurrent reservation/commit/reclamation, multiple
+CTAs/Streams, IPC identity lifetime, repeated Replay and Context isolation,
+partial events, opening/middle/terminal loss, repeated-fact recovery, completed
+operations with partial evidence, unknown versus inapplicable fields, omitted
+and entirely unobserved records, field-level provenance, unknown final counts,
+report/snapshot hash mismatch, report resource admission, periodic background
+transfer during serving, Device slot
+reclamation before file publication, slow Writer isolation, bounded Host
+exhaustion, I/O failure, quota exhaustion, and background-thread shutdown.
+Follow [test conventions](../../../tests/README.md), repository-managed Ruff,
+type, and clang-format checks. Native Host tests attempt ASAN/UBSAN with the
+required execution approval.
+
+Real acceptance follows [Qualification](../../designs/qualification.md).
+Prepare a two-Device batch for user execution: Qwen3-0.6B Dense followed by
+DeepSeek-V2-Lite-Chat MoE, Prefill/Decode/Replay, actual attention MPS and direct
+FFN processes, idle/serving/stress sampling, bounded-capacity runs, and
+observation-disabled comparisons. Retain separate Attempts, physical Device
+mapping, configurations, raw events/samples/attachments, checksums, and losses.
+Report measured coverage, drift, uncertainty, and overhead without an invented
+accuracy or performance threshold. Fixtures cannot substitute for these runs.
+
+## Out of Scope
+
+This contract specification contains documents and fixed machine-readable data.
+It adds no runtime implementation, parser, generator, or persistent test code.
+Full user Request/Batch/Step context, KV causal chains, exact per-participant
+observations derived from aggregate conditions, per-CUDA-node profiling,
+cross-Host support, other platforms, continuous monitoring, and alerts remain
+outside this workstream. Current design documents will absorb implemented
+behavior after subsequent runtime implementation and acceptance.
