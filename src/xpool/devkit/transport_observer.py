@@ -13,6 +13,7 @@ from typing import Literal, TypedDict
 import xpool.native
 from xpool.bootstrap import get_runtime_role
 from xpool.config import get_global_config
+from xpool.devkit import phases
 from xpool.model import ModelId
 from xpool.native import RuntimeRole
 from xpool.runtime.atnagent import AtnAgentTransportRuntime
@@ -23,16 +24,6 @@ runtime_roles = frozenset({RuntimeRole.INSTANCE, RuntimeRole.ATNAGENT})
 logger = logging.getLogger(__name__)
 install_lock = Lock()
 installed = False
-transport_phases = (
-    ("request_staging", "request_staging_started", "request_staging_completed"),
-    ("request_publication", "request_staging_completed", "request_published"),
-    ("request_processing", "request_observed", "result_published"),
-    ("execution", "execution_started", "execution_completed"),
-    ("output_copy", "result_observed", "output_copied"),
-    ("result_acknowledgement", "output_copied", "result_acknowledged"),
-    ("result_acknowledged_total", "request_staging_started", "result_acknowledged"),
-    ("closed_total", "request_staging_started", "closed"),
-)
 
 
 class TransportRecordJson(TypedDict):
@@ -247,11 +238,11 @@ def write_transport_snapshot(
             continue
         # The phase table names integer timestamp getters on the native record.
         timestamps: dict[str, int] = {
-            field: getattr(record, field) for _, start, end in transport_phases for field in (start, end)
+            field: getattr(record, field) for _, start, end in phases.transport_phases for field in (start, end)
         }
         durations = {
             name: timestamps[end] - timestamps[start]
-            for name, start, end in transport_phases
+            for name, start, end in phases.transport_phases
             if timestamps[start] != 0 and timestamps[end] != 0 and timestamps[end] >= timestamps[start]
         }
         values: TransportRecordJson = {
