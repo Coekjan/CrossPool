@@ -334,6 +334,12 @@ creation and Device-issued operation sequence, independently of collection
 capacity or local trace IDs.
 _Avoid_: Local trace ID, InvocationKey
 
+**Snapshot Evidence Report**:
+The evidence available for one legacy observer snapshot domain at one read
+cutoff, distinguishing field availability, path applicability and local source
+provenance. Evidence completeness is independent of legacy terminal status.
+_Avoid_: Atomic production-state image, Producer-wide loss checkpoint
+
 **Graph Execution Observation**:
 A fresh identity for one actual Graph or Eager execution activity, distinct
 from its captured template and from Host call or Device completion evidence.
