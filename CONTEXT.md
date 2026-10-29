@@ -351,6 +351,13 @@ reference under an explicit model, with fitting samples, held-out validation,
 and conditional uncertainty.
 _Avoid_: ClockSnapshot, independently measured timing truth
 
+**Paired Clock Sample**:
+One attempted Host-before/Device/Host-after observation from a registered
+process-owned clock sampler, retaining its Epoch, outcome and source evidence.
+The observability value is named PairedClockSample. It is distinct from a
+synthetic FFN Calibration Sample used for resource sizing.
+_Avoid_: Calibrated timestamp, independent timing truth
+
 **Fabric Coordinator**:
 The generation-scoped progress owner that forms Invocations, leases Executor
 Lanes, commits outputs, and releases acknowledged work.

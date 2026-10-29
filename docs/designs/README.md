@@ -18,7 +18,7 @@ current architecture while workflow history remains in version control.
   KV storage, logical admission, physical capacity coordination, and
   reclamation.
 - [Devkit](devkit.md) defines Hook Points, observer evidence, and offline raw
-  artifact reconstruction.
+  artifact reconstruction, deterministic clock calibration and coverage reports.
 - [Test and Benchmark Tooling](tooling.md) defines installed harness ownership,
   configuration, catalogues, shared resource lifecycle and test evidence.
 - [Serving Benchmarks](benchmark.md) defines workloads, measurements,
