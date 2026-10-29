@@ -1,6 +1,8 @@
 """Independent version-four observation wire values; no Native imports required."""
 
-from enum import IntEnum, unique
+from __future__ import annotations
+
+from enum import IntEnum, StrEnum, auto, unique
 
 __all__ = [
     "AttachmentState",
@@ -16,6 +18,7 @@ __all__ = [
     "PresenceBit",
     "ResultCode",
     "SampleFailure",
+    "SampleFailureCode",
     "device_execution_boundary",
     "known_presence_mask",
 ]
@@ -206,6 +209,26 @@ class SampleFailure(IntEnum):
     COMPLETION_FAILED = 2
     TIMED_OUT = 3
     SHUTDOWN = 4
+
+    @property
+    def code(self) -> SampleFailureCode:
+        """Return the stable JSON code corresponding to this wire outcome."""
+        return SampleFailureCode[self.name]
+
+
+@unique
+class SampleFailureCode(StrEnum):
+    """Closed JSON outcomes sharing names with the fixed numeric wire enum."""
+
+    ENQUEUE_FAILED = auto()
+    COMPLETION_FAILED = auto()
+    TIMED_OUT = auto()
+    SHUTDOWN = auto()
+
+    @property
+    def wire(self) -> SampleFailure:
+        """Return the fixed wire outcome for encoding this semantic failure."""
+        return SampleFailure[self.name]
 
 
 known_presence_mask = sum(1 << bit for bit in PresenceBit)

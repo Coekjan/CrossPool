@@ -122,6 +122,7 @@ class FieldEvidence(StrictModel):
 
     @model_validator(mode="after")
     def validate_source(self) -> Self:
+        """Require exactly one Event or metadata source for a field's evidence."""
         if (self.event is None) == (self.metadata is None):
             raise ValueError("field evidence requires exactly one Event or metadata source")
         return self
@@ -145,6 +146,7 @@ class SnapshotEvidenceEntry(StrictModel):
 
     @model_validator(mode="after")
     def validate_lists(self) -> Self:
+        """Reject duplicate/unsorted evidence and fields classified as both unknown and inapplicable."""
         for values in (
             self.unknown_fields,
             self.not_applicable_fields,
@@ -179,6 +181,7 @@ class SnapshotEvidenceReport(StrictModel):
 
     @model_validator(mode="after")
     def validate_domain(self) -> Self:
+        """Validate canonical Run identity, observer scope and eligible IDs against the read cutoff."""
         if str(UUID(self.run_id)) != self.run_id:
             raise ValueError("report Run UUID must be canonical")
         transport = self.observer == SnapshotObserver.TRANSPORT
