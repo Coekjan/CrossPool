@@ -3,7 +3,6 @@
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Literal
 
 from xpool.observability.applicability import boundary_applicability
 from xpool.observability.artifacts import ArtifactSet, AttachmentEvidence, resolve_attachments
@@ -27,7 +26,7 @@ from xpool.observability.intervals import (
     protocol_temporal_conflicts,
     transport_pairs,
 )
-from xpool.observability.models import CalibrationSample, Event, Finding, Metadata, QualityCheckpoint
+from xpool.observability.models import Event, Finding, Metadata, PairedClockSample, QualityCheckpoint
 from xpool.observability.provenance import EventIdentity, Source
 from xpool.observability.quality import QualityReport, summarize_quality
 from xpool.observability.wire import (
@@ -54,7 +53,7 @@ class Reconstruction:
     quality: QualityReport
     calibration_events: tuple[Event, ...]
     attachments: tuple[AttachmentEvidence, ...]
-    calibration_samples: tuple[CalibrationSample, ...]
+    calibration_samples: tuple[PairedClockSample, ...]
 
     def of_kind(self, kind: EntityKind) -> tuple[Entity, ...]:
         """Return all retained identities of a contract entity family."""
@@ -168,24 +167,18 @@ def retain_events(events: Iterable[Event], metadata: Iterable[Metadata], finding
     return EventInventory(retained, locations, check_metadata_revisions(documents))
 
 
-def calibration_samples(samples: Iterable[Event]) -> tuple[CalibrationSample, ...]:
+def calibration_samples(samples: Iterable[Event]) -> tuple[PairedClockSample, ...]:
     """Project validated sample Events while retaining raw domains and failed reads."""
-    result: list[CalibrationSample] = []
+    result: list[PairedClockSample] = []
     for event in samples:
         r = event.record
         domain = next(domain for domain in event.metadata.clock_domains if domain.id == r.data3)
         # validate_event established a Device domain with a positive Epoch.
         if domain.raw_epoch is None:
             raise event.error(ErrorCode.INVALID_EVENT, "sample Device Epoch unavailable")
-        failures: dict[int, Literal["enqueue_failed", "completion_failed", "timed_out", "shutdown"]] = {
-            SampleFailure.ENQUEUE_FAILED: "enqueue_failed",
-            SampleFailure.COMPLETION_FAILED: "completion_failed",
-            SampleFailure.TIMED_OUT: "timed_out",
-            SampleFailure.SHUTDOWN: "shutdown",
-        }
         succeeded = r.kind == EventKind.CALIBRATION_SAMPLE_SUCCEEDED
         result.append(
-            CalibrationSample(
+            PairedClockSample(
                 event.source,
                 r.data4,
                 r.data3,
@@ -194,7 +187,7 @@ def calibration_samples(samples: Iterable[Event]) -> tuple[CalibrationSample, ..
                 r.data1 if succeeded else None,
                 r.data2 if succeeded else None,
                 "succeeded" if succeeded else "failed",
-                None if succeeded else failures[r.data2],
+                None if succeeded else SampleFailure(r.data2).code,
             )
         )
     return tuple(result)

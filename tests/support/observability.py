@@ -9,9 +9,10 @@ from pydantic import TypeAdapter
 
 from xpool.observability.models import Event, EventRecord, Metadata
 from xpool.observability.provenance import EventIdentity, Source
-from xpool.observability.wire import PresenceBit
+from xpool.observability.wire import PresenceBit, SampleFailureCode
 
 fixture_root = Path(__file__).resolve().parents[2] / "docs/plans/unified-timeline-observability/fixtures"
+
 
 # Fixed fixtures use a heterogeneous test-only DSL. Production payloads cross
 # their strict Pydantic model boundary in events_for() and the public readers.
@@ -103,3 +104,37 @@ def events_for(data: FixtureData) -> tuple[Event, ...]:
         )
         events.append(Event(record, source, document))
     return tuple(events)
+
+
+def calibration_events(
+    data: "FixtureData",
+    *,
+    host_producer: int = 1,
+    device_clock_domain_id: int = 2,
+    event_sequence_base: int = 0,
+) -> tuple[Event, ...]:
+    """Encode fixed numerical samples as independent canonical wire events."""
+    template = fixture("calibration")["wire_sample_cases"][0]["input"]["event"]
+    items = []
+    for sample in data["samples"]:
+        item = copy.deepcopy(template)
+        item["producer"] = host_producer
+        record = item["record"]
+        record.update(
+            event_sequence=sample["attempt_sequence"] + event_sequence_base,
+            raw_time_ns=sample.get("H_after", sample["H_before"]),
+            data0=sample["H_before"],
+            data1=sample.get("G", 0),
+            data2=sample.get("H_after", 0),
+            data4=sample["attempt_sequence"],
+            data3=device_clock_domain_id,
+        )
+        if sample["outcome"] == "failed":
+            failed = fixture("calibration")["wire_sample_cases"][1]["input"]["event"]
+            record.update(
+                kind=failed["record"]["kind"],
+                data1=0,
+                data2=SampleFailureCode(sample["failure_code"]).wire.value,
+            )
+        items.append(item)
+    return events_for({"events": items, "metadata_overrides": data.get("metadata_overrides", {})})
