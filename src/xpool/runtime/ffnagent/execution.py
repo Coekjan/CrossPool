@@ -29,14 +29,21 @@ def dense_workspace_bytes(
     payload_dtype: torch.dtype,
     row_capacity: int,
     local_intermediate_size: int,
+    activation: ffn.ActivationSpec,
 ) -> int:
-    """Return gate/up plus activated-up workspace bytes for one Dense branch."""
+    """Return activation input plus output workspace bytes for one Dense branch.
+
+    Gated SiLU needs a ``2 x width`` gate/up projection result and one width of
+    activated output. Unary ReLU needs one width of pre-activation and one width
+    of activated output.
+    """
 
     if payload_dtype not in (torch.bfloat16, torch.float16):
         raise ValueError("Dense workspace requires BF16 or FP16 payloads")
     if row_capacity <= 0 or local_intermediate_size <= 0:
         raise ValueError("Dense workspace dimensions must be positive")
-    return row_capacity * 3 * local_intermediate_size * payload_dtype.itemsize
+    widths = 2 if isinstance(activation, ffn.ReluActivation) else 3
+    return row_capacity * widths * local_intermediate_size * payload_dtype.itemsize
 
 
 def moe_alignment_workspace_shapes(
@@ -60,7 +67,7 @@ def moe_alignment_workspace_shapes(
 
 @dataclass(frozen=True, slots=True)
 class DenseFfnExecutionSignature:
-    """Complete reusable gated-Dense Graph identity."""
+    """Complete reusable Dense Graph identity."""
 
     payload_dtype: torch.dtype
     payload_row_capacity: int
@@ -115,7 +122,7 @@ class MoeFfnExecutionSignature:
     local_intermediate_size: int
     expert_count: int
     effective_topk: int
-    activation: ffn.ActivationSpec
+    activation: ffn.SiluActivation
     routed_scaling_factor: float
     router: MoeRouterExecutionSignature | None
     operation: ExpertOperationKind

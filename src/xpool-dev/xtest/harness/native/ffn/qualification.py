@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn.functional
+from xpool.native.ffn import LayerKind, OutputRequirement
 
 from xpool import ffn
 from xpool.fabric import (
@@ -22,7 +23,6 @@ from xpool.fabric import (
     MoeFfnLayerPlan,
 )
 from xpool.model import ModelId
-from xpool.native.ffn import LayerKind, OutputRequirement
 from xpool.quantization import Unquantized
 from xpool.runtime.ffnagent.weights import DenseFfnWeights, MoeFfnWeights, MoeRouterWeights, ProjectionWeights
 
@@ -49,7 +49,7 @@ def packed_moe_reference(
     down: ProjectionWeights,
     ids: torch.Tensor,
     probabilities: torch.Tensor,
-    activation: ffn.ActivationSpec,
+    activation: ffn.SiluActivation,
     routed_scaling_factor: float,
 ) -> torch.Tensor:
     """Evaluate isolated packed Experts without the production decoder or kernels."""

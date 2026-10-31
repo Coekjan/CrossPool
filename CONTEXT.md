@@ -256,6 +256,12 @@ and Up offset. It is distinct from the runtime startup transition called
 Execution Activation.
 _Avoid_: Source activation string, Execution Activation
 
+**Biased Unary FFN**:
+A Dense FFN with one input projection followed by ReLU and a second output
+projection, with both projections carrying model-owned biases and no gate. It
+is a distinct Dense projection form from the gated FFN.
+_Avoid_: Unary MLP, non-gated FFN, two-layer MLP
+
 **FFN Gate/Up Order**:
 The arrangement of Gate and Up projection rows in an FFN weight representation,
 with checkpoint order describing stored sources and execution order describing

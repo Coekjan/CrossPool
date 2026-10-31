@@ -44,7 +44,7 @@ class MoeFfnLayerLayout:
     layer: ffn.MoeFfnSpec
     hidden_size: int
     payload_dtype: torch.dtype
-    activation: ffn.ActivationSpec
+    activation: ffn.SiluActivation
     tp_size: int
     tp_rank: int
     source_start: int
@@ -143,12 +143,47 @@ def prepare_ffn_layer(
 
     if isinstance(layer, ffn.DenseFfnSpec):
         projections = layer.projections
+        local_width = intermediate_size // tp_size
+        if isinstance(projections, ffn.UnaryProjectionSpec):
+            if any(
+                not isinstance(projection.quantization, Unquantized) or projection.scales_key is not None
+                for projection in (projections.fc1, projections.fc2)
+            ):
+                raise ValueError("Unary Dense execution requires unquantized projections without scales")
+            if projections.fc1.bias_key is None or projections.fc2.bias_key is None:
+                raise ValueError("Unary Dense execution requires fc1 and fc2 biases")
+            fc1 = projections.fc1.quantization.weight_layout(
+                logical_shape=(local_width, hidden_size), dtype=payload_dtype
+            )
+            fc2 = projections.fc2.quantization.weight_layout(
+                logical_shape=(hidden_size, local_width), dtype=payload_dtype
+            )
+            return DenseFfnLayerLayout(
+                layer=layer,
+                hidden_size=hidden_size,
+                payload_dtype=payload_dtype,
+                activation=model_spec.activation,
+                tp_size=tp_size,
+                tp_rank=tp_rank,
+                source_start=tp_rank * local_width,
+                source_length=local_width,
+                local_intermediate_size=local_width,
+                gate_up=weights.ProjectionLayout(
+                    values=fc1.values,
+                    scales=fc1.scales,
+                    bias=TensorLayout((local_width,), payload_dtype, 0),
+                ),
+                down=weights.ProjectionLayout(
+                    values=fc2.values,
+                    scales=fc2.scales,
+                    bias=TensorLayout((hidden_size,), payload_dtype, 0),
+                ),
+            )
         if any(
             not isinstance(projection.quantization, Unquantized) or projection.scales_key is not None
             for projection in (projections.gate, projections.up, projections.down)
         ):
             raise ValueError("Dense execution requires unquantized projections without scales")
-        local_width = intermediate_size // tp_size
         gate_up = projections.gate.quantization.weight_layout(
             logical_shape=(2 * local_width, hidden_size), dtype=payload_dtype
         )
@@ -179,6 +214,8 @@ def prepare_ffn_layer(
             ),
         )
 
+    if not isinstance(model_spec.activation, ffn.SiluActivation):
+        raise ValueError("MoE FFN execution requires SiLU activation")
     operation = moe.select_expert_operation(layer, payload_dtype=payload_dtype)
     operation_type = moe.expert_operation_type(operation)
     source = layer.routed_experts
@@ -329,6 +366,7 @@ def compute_workspace_bytes(signature: execution.ExecutionSignature) -> int:
             payload_dtype=signature.payload_dtype,
             row_capacity=signature.payload_row_capacity,
             local_intermediate_size=signature.local_intermediate_size,
+            activation=signature.activation,
         )
     return MoeWorkspaceLayout.from_signature(signature).nbytes
 
