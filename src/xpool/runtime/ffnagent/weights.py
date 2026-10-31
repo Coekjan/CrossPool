@@ -201,7 +201,12 @@ class ExpertLayout:
 
 @dataclass(frozen=True, slots=True)
 class DenseFfnWeights:
-    """Retained gate/up and down resources for one local Dense shard."""
+    """Retained input and output projection resources for one local Dense shard.
+
+    Gated layers store the fused gate/up projection in ``gate_up`` and the down
+    projection in ``down``. Unary layers store fc1 in ``gate_up`` and fc2 in
+    ``down``. Both forms use the same projection resource contract.
+    """
 
     gate_up: ProjectionWeights
     down: ProjectionWeights

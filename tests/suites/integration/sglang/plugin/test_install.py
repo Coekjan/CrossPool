@@ -41,6 +41,7 @@ def test_hook_discovery_collects_kv_lifecycle_and_model_hooks() -> None:
 
     assert "sglang.srt.mem_cache.memory_pool.MHATokenToKVPool" in targets
     assert "sglang.srt.model_executor.model_runner.ModelRunner.load_model" in targets
+    assert "sglang.srt.models.opt.OPTDecoderLayer" in targets
     assert "sglang.srt.models.qwen3.Qwen3MLP" in targets
     assert "sglang.srt.runtime_context.publish" in targets
     assert "sglang.srt.entrypoints.engine.Engine._launch_subprocesses" in targets
