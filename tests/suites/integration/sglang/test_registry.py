@@ -9,6 +9,7 @@ from sglang.srt.model_executor.model_runner import ModelRunner
 from xpool.integrations.sglang.adapter import SglangShimAdapter
 from xpool.integrations.sglang.hooks.registry import SglangHook
 from xpool.integrations.sglang.models.deepseek_v2 import DeepseekV2ShimAdapter
+from xpool.integrations.sglang.models.opt import OPTShimAdapter
 from xpool.integrations.sglang.models.qwen3 import Qwen3ShimAdapter
 from xpool.integrations.sglang.registry import (
     MODELS_PACKAGE,
@@ -21,6 +22,7 @@ def test_registry_discovers_deepseek_adapter() -> None:
     adapters = discover_sglang_model_adapters(MODELS_PACKAGE)
 
     assert any(isinstance(adapter, DeepseekV2ShimAdapter) for adapter in adapters)
+    assert any(isinstance(adapter, OPTShimAdapter) for adapter in adapters)
     assert any(isinstance(adapter, Qwen3ShimAdapter) for adapter in adapters)
 
 

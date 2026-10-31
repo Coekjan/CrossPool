@@ -10,10 +10,15 @@ from xpool.ffn import (
     DenseFfnSpec,
     FfnModelSpec,
     MoeFfnSpec,
+    ProjectionSpec,
+    ReluActivation,
     RouterAlgorithm,
     RouterProjectionPrecision,
+    SiluActivation,
     TopKWeightRounding,
+    UnaryProjectionSpec,
 )
+from xpool.native.ffn import LayerKind
 from xpool.quantization import Mxfp4, Unquantized
 from xpool.runtime.ffnagent import architecture
 from xpool.runtime.ffnagent.models.deepseek_v2 import DeepseekV2Adapter
@@ -25,6 +30,16 @@ from xtest.harness.support.config import TEST_MODEL_ID
 def dense_keys(layer_id: int) -> tuple[str, ...]:
     prefix = f"model.layers.{layer_id}.mlp"
     return tuple(f"{prefix}.{projection}_proj.weight" for projection in ("gate", "up", "down"))
+
+
+def opt_keys(layer_id: int) -> tuple[str, ...]:
+    prefix = f"model.decoder.layers.{layer_id}"
+    return (
+        f"{prefix}.fc1.weight",
+        f"{prefix}.fc1.bias",
+        f"{prefix}.fc2.weight",
+        f"{prefix}.fc2.bias",
+    )
 
 
 def write_indexed_model(path: Path, config: Mapping[str, object], keys: tuple[str, ...]) -> None:
@@ -67,6 +82,137 @@ def test_load_rejects_duplicate_config_member(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="duplicate JSON member 'architectures'"):
         architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
+
+
+def opt_config(*, layer_count: int = 2, **overrides: object) -> dict[str, object]:
+    config: dict[str, object] = {
+        "architectures": ["OPTForCausalLM"],
+        "model_type": "opt",
+        "activation_function": "relu",
+        "torch_dtype": "float16",
+        "hidden_size": 16,
+        "ffn_dim": 32,
+        "num_hidden_layers": layer_count,
+        "enable_bias": True,
+    }
+    config.update(overrides)
+    return config
+
+
+def test_load_compiles_biased_unary_opt_layers(tmp_path: Path) -> None:
+    layer_count = 2
+    keys = tuple(
+        key
+        for layer_id in range(layer_count)
+        for key in (*opt_keys(layer_id), f"model.decoder.layers.{layer_id}.self_attn.q_proj.weight")
+    )
+    model_path = tmp_path / "model"
+    write_indexed_model(model_path, opt_config(layer_count=layer_count), keys)
+
+    spec = architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
+
+    assert isinstance(spec.activation, ReluActivation)
+    assert spec.checkpoint_namespace == "model.decoder.layers.{layer_id}"
+    assert len(spec.layers) == layer_count
+    for layer_id, layer in enumerate(spec.layers):
+        assert isinstance(layer, DenseFfnSpec)
+        assert isinstance(layer.projections, UnaryProjectionSpec)
+        assert layer.layer_id == layer_id
+        assert layer.intermediate_size == 32
+        assert layer.tensor_keys() == opt_keys(layer_id)
+
+
+def test_load_accepts_opt_checkpoint_without_model_prefix(tmp_path: Path) -> None:
+    layer_count = 2
+    keys = tuple(
+        key.removeprefix("model.")
+        for layer_id in range(layer_count)
+        for key in (*opt_keys(layer_id), f"decoder.layers.{layer_id}.self_attn.q_proj.weight")
+    )
+    model_path = tmp_path / "model"
+    write_indexed_model(model_path, opt_config(layer_count=layer_count), keys)
+
+    spec = architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
+
+    assert spec.checkpoint_namespace == "decoder.layers.{layer_id}"
+    assert len(spec.layers) == layer_count
+    for layer_id, layer in enumerate(spec.layers):
+        assert isinstance(layer, DenseFfnSpec)
+        assert layer.tensor_keys() == tuple(key.removeprefix("model.") for key in opt_keys(layer_id))
+
+
+def test_load_rejects_opt_without_ffn_bias(tmp_path: Path) -> None:
+    keys = tuple(key for layer_id in range(2) for key in opt_keys(layer_id))
+    missing_fc1_bias = tuple(key for key in keys if key != "model.decoder.layers.0.fc1.bias")
+    model_path = tmp_path / "model"
+    write_indexed_model(model_path, opt_config(), missing_fc1_bias)
+
+    with pytest.raises(RuntimeError, match=r"missing=.*fc1\.bias"):
+        architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    (
+        ({"enable_bias": False}, "enable_bias=true"),
+        ({"activation_function": "gelu"}, "activation_function"),
+        ({"torch_dtype": "bfloat16"}, "torch_dtype"),
+    ),
+)
+def test_load_rejects_unsupported_opt_profiles(tmp_path: Path, overrides: dict[str, object], message: str) -> None:
+    keys = tuple(key for layer_id in range(2) for key in opt_keys(layer_id))
+    model_path = tmp_path / "model"
+    config = opt_config()
+    config.update(overrides)
+    write_indexed_model(model_path, config, keys)
+
+    with pytest.raises(RuntimeError, match=message):
+        architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
+
+
+def test_unary_model_spec_round_trips_through_json() -> None:
+    spec = FfnModelSpec(
+        model_id=TEST_MODEL_ID,
+        hidden_size=16,
+        activation=ReluActivation(),
+        checkpoint_namespace="model.decoder.layers.{layer_id}",
+        layers=(
+            DenseFfnSpec(
+                kind=LayerKind.DENSE,
+                layer_id=0,
+                intermediate_size=32,
+                projections=UnaryProjectionSpec(
+                    fc1=ProjectionSpec(quantization=Unquantized(), values_key="fc1.weight", bias_key="fc1.bias"),
+                    fc2=ProjectionSpec(quantization=Unquantized(), values_key="fc2.weight", bias_key="fc2.bias"),
+                ),
+            ),
+        ),
+    )
+
+    assert FfnModelSpec.model_validate(spec.model_dump(mode="json")) == spec
+
+
+def test_model_spec_requires_matching_activation_and_projection_form() -> None:
+    unary_layer = DenseFfnSpec(
+        kind=LayerKind.DENSE,
+        layer_id=0,
+        intermediate_size=8,
+        projections=UnaryProjectionSpec(
+            fc1=ProjectionSpec(quantization=Unquantized(), values_key="fc1.weight", bias_key="fc1.bias"),
+            fc2=ProjectionSpec(quantization=Unquantized(), values_key="fc2.weight", bias_key="fc2.bias"),
+        ),
+    )
+    with pytest.raises(ValueError, match="projections must match"):
+        FfnModelSpec(model_id=TEST_MODEL_ID, hidden_size=16, activation=SiluActivation(), layers=(unary_layer,))
+
+    gated_layer = DenseFfnSpec(
+        kind=LayerKind.DENSE,
+        layer_id=0,
+        intermediate_size=8,
+        projections=architecture.FfnSourceConfig({}).gated_projections("model.layers.0.mlp"),
+    )
+    with pytest.raises(ValueError, match="projections must match"):
+        FfnModelSpec(model_id=TEST_MODEL_ID, hidden_size=16, activation=ReluActivation(), layers=(gated_layer,))
 
 
 @pytest.mark.parametrize(

@@ -1,13 +1,13 @@
-"""Gated Dense execution into caller-owned storage."""
+"""Gated and unary Dense execution into caller-owned storage."""
 
 from __future__ import annotations
 
 import torch
 
-from xpool.ffn import ActivationSpec, GateUpOrder
+from xpool import ffn
 from xpool.runtime.ffnagent import execution, weights
 from xpool.runtime.ffnagent.operators import linear
-from xpool.runtime.ffnagent.operators.activation import apply_into
+from xpool.runtime.ffnagent.operators.activation import apply_into, apply_relu_into
 
 
 def compute_dense_partial(
@@ -16,9 +16,13 @@ def compute_dense_partial(
     layer_weights: weights.DenseFfnWeights,
     workspace: torch.Tensor,
     output: torch.Tensor,
-    activation: ActivationSpec,
+    activation: ffn.ActivationSpec,
 ) -> torch.Tensor:
-    """Compute one fixed-Capacity rank-local gated Dense Partial.
+    """Compute one fixed-Capacity rank-local Dense Partial.
+
+    Gated SiLU consumes a fused gate/up projection and writes the activated Up
+    product. Unary ReLU consumes the ``fc1`` projection stored in ``gate_up``
+    and the ``fc2`` projection stored in ``down``.
 
     Args:
         hidden_states: Caller-owned contiguous payload input shaped ``[C, H]``.
@@ -26,7 +30,7 @@ def compute_dense_partial(
         workspace: Caller-owned contiguous CUDA byte tensor with the exact
         result of :func:`execution.dense_workspace_bytes`.
         output: Caller-owned contiguous payload destination shaped ``[C, H]``.
-        activation: Startup-selected gated activation semantic.
+        activation: Startup-selected Dense activation semantic.
 
     Returns:
         The exact ``output`` object after all Capacity rows are evaluated.
@@ -49,11 +53,15 @@ def compute_dense_partial(
     weights.validate_tensor(workspace, name="Dense workspace", dtype=torch.uint8, dimensions=1)
 
     row_capacity, hidden_size = hidden_states.shape
-    local_intermediate_twice, weight_hidden_size = layer_weights.gate_up.values.shape
-    local_intermediate_size = local_intermediate_twice // 2
+    unary = isinstance(activation, ffn.ReluActivation)
+    local_intermediate_size = (
+        layer_weights.gate_up.values.shape[0] if unary else layer_weights.gate_up.values.shape[0] // 2
+    )
     if (
-        weight_hidden_size != hidden_size
+        layer_weights.gate_up.values.shape[1] != hidden_size
         or layer_weights.gate_up.values.dtype is not payload_dtype
+        or layer_weights.down.values.shape != (hidden_size, local_intermediate_size)
+        or layer_weights.down.values.dtype is not payload_dtype
         or output.shape != hidden_states.shape
     ):
         raise ValueError("Dense input, output, and weight dimensions disagree")
@@ -63,6 +71,7 @@ def compute_dense_partial(
         payload_dtype=payload_dtype,
         row_capacity=row_capacity,
         local_intermediate_size=local_intermediate_size,
+        activation=activation,
     )
     if workspace.numel() != expected_workspace_bytes:
         raise ValueError(f"Dense workspace must contain exactly {expected_workspace_bytes} bytes")
@@ -78,24 +87,41 @@ def compute_dense_partial(
     ):
         if tensor.data_ptr() % execution.OPERATOR_ALIGNMENT_BYTES != 0:
             raise ValueError(f"{name} must be 16-byte aligned")
-    if local_intermediate_twice * payload_dtype.itemsize % execution.OPERATOR_ALIGNMENT_BYTES != 0:
+    row_width = layer_weights.gate_up.values.shape[0]
+    if not unary and row_width != 2 * local_intermediate_size:
+        raise ValueError("Gated Dense gate/up rows must be twice the local intermediate width")
+    if row_width * payload_dtype.itemsize % execution.OPERATOR_ALIGNMENT_BYTES != 0:
         raise ValueError("Dense gate/up rows must be 16-byte aligned")
+    if unary:
+        if (
+            layer_weights.gate_up.bias is None
+            or layer_weights.down.bias is None
+            or tuple(layer_weights.gate_up.bias.shape) != (local_intermediate_size,)
+            or tuple(layer_weights.down.bias.shape) != (hidden_size,)
+        ):
+            raise ValueError("Unary Dense execution requires matching fc1 and fc2 biases")
 
     workspace_values = workspace.view(payload_dtype)
-    gate_up_elements = row_capacity * local_intermediate_twice
-    gate_up = workspace_values[:gate_up_elements].view(row_capacity, local_intermediate_twice)
-    activated_up = workspace_values[gate_up_elements:].view(row_capacity, local_intermediate_size)
+    activation_input_elements = row_capacity * row_width
+    activation_input = workspace_values[:activation_input_elements].view(row_capacity, row_width)
 
     linear.compute_projection(
         linear.LinearOperationKind.TORCH,
         hidden_states=hidden_states,
         projection=layer_weights.gate_up,
-        output=gate_up,
+        output=activation_input,
     )
-    apply_into(activation, inputs=gate_up, output=activated_up, order=GateUpOrder.CONCATENATED)
+    if unary:
+        activated = workspace_values[activation_input_elements:].view(row_capacity, local_intermediate_size)
+        apply_relu_into(inputs=activation_input, output=activated)
+    else:
+        if not isinstance(activation, ffn.SiluActivation):
+            raise ValueError(f"unsupported Dense activation {activation!r}")
+        activated = workspace_values[activation_input_elements:].view(row_capacity, local_intermediate_size)
+        apply_into(activation, inputs=activation_input, output=activated, order=ffn.GateUpOrder.CONCATENATED)
     linear.compute_projection(
         linear.LinearOperationKind.TORCH,
-        hidden_states=activated_up,
+        hidden_states=activated,
         projection=layer_weights.down,
         output=output,
     )
