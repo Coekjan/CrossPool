@@ -30,11 +30,15 @@ from xpool.runtime.instance import InstanceRankRuntime
 DECODER_FFN_WEIGHT_PATTERN = re.compile(r"^model\.layers\.\d+\.mlp(?:\.|$)")
 
 
-def filter_decoder_ffn_weights[W](weights: Iterable[tuple[str, W]]) -> Iterator[tuple[str, W]]:
-    """Yield checkpoint tensors outside canonical decoder FFN subtrees."""
+def filter_decoder_ffn_weights[W](
+    weights: Iterable[tuple[str, W]],
+    *,
+    pattern: re.Pattern[str] = DECODER_FFN_WEIGHT_PATTERN,
+) -> Iterator[tuple[str, W]]:
+    """Yield checkpoint tensors outside the selected decoder FFN subtrees."""
 
     for name, tensor in weights:
-        if DECODER_FFN_WEIGHT_PATTERN.match(name) is None:
+        if pattern.match(name) is None:
             yield name, tensor
 
 
@@ -399,6 +403,34 @@ class SglangShimAdapter(ABC):
             raise RuntimeError(f"xpool {self.name} adapter found mismatched FFN layer kinds ({details})")
         return shims
 
+    def require_mlp_ownership(
+        self,
+        model: nn.Module,
+        shims: Sequence[FfnShimModule],
+    ) -> dict[int, tuple[str, nn.Module]]:
+        """Require one owning decoder layer for every FFN shim.
+
+        Args:
+            model: Loaded SGLang model containing decoder layers and FFN shims.
+            shims: Complete shim set already validated by ``require_ffn_shims``.
+
+        Returns:
+            Shim identity to owning module-name and layer mapping.
+
+        Raises:
+            RuntimeError: If a shim has no owning decoder layer.
+        """
+
+        owners = {
+            id(mlp): (name, module)
+            for name, module in model.named_modules()
+            if isinstance((mlp := getattr(module, "mlp", None)), FfnShimModule)
+        }
+        for shim in shims:
+            if owners.get(id(shim)) is None:
+                raise RuntimeError(f"xpool {self.name} adapter cannot locate the decoder layer for FFN {shim.layer_id}")
+        return owners
+
     def require_full_mlp_boundaries(
         self,
         model: nn.Module,
@@ -420,16 +452,9 @@ class SglangShimAdapter(ABC):
                 reduce-scatter capability differs from adapter policy.
         """
 
-        owners = {
-            id(mlp): (name, module)
-            for name, module in model.named_modules()
-            if isinstance((mlp := getattr(module, "mlp", None)), FfnShimModule)
-        }
+        owners = self.require_mlp_ownership(model, shims)
         for shim in shims:
-            owner = owners.get(id(shim))
-            if owner is None:
-                raise RuntimeError(f"xpool {self.name} adapter cannot locate the decoder layer for FFN {shim.layer_id}")
-            module_name, layer = owner
+            module_name, layer = owners[id(shim)]
             scatter_modes = getattr(layer, "layer_scatter_modes", None)
             if not isinstance(scatter_modes, LayerScatterModes):
                 raise RuntimeError(f"xpool {self.name} adapter found no SGLang scatter metadata on {module_name}")
