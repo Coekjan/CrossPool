@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 import torch
 from sglang.srt.model_executor.model_runner import ModelRunner
 from torch import nn
+from xpool.native.ffn import LayerKind
 
 from xpool.integrations.sglang.adapter import SglangShimAdapter, filter_decoder_ffn_weights
 from xpool.integrations.sglang.hooks.registry import SglangHook
 from xpool.integrations.sglang.shim import FfnShimModule
-from xpool.native.ffn import LayerKind
 
 
 class CommonShim(FfnShimModule):
@@ -43,6 +45,30 @@ def test_decoder_ffn_weight_filter_is_lazy_and_path_exact() -> None:
         "model.layers.0.self_attn.mlp_probe.weight",
         "draft.model.layers.0.mlp.gate_proj.weight",
     ]
+
+
+def test_decoder_ffn_weight_filter_accepts_a_custom_pattern() -> None:
+    pattern = re.compile(r"^(?:model\.)?decoder\.layers\.\d+\.(?:fc1|fc2)(?:\.|$)")
+    weights = iter(
+        [
+            ("model.decoder.layers.0.fc1.weight", torch.empty(1)),
+            ("model.decoder.layers.0.self_attn.q_proj.weight", torch.empty(1)),
+            ("decoder.layers.1.fc2.bias", torch.empty(1)),
+        ]
+    )
+
+    filtered = filter_decoder_ffn_weights(weights, pattern=pattern)
+
+    assert [name for name, _ in filtered] == ["model.decoder.layers.0.self_attn.q_proj.weight"]
+
+
+def test_require_mlp_ownership_rejects_an_unowned_shim() -> None:
+    model = nn.Module()
+    shim = CommonShim(layer_id=0, hidden_size=4, layer_kind=LayerKind.DENSE)
+    model.add_module("not_an_mlp", shim)
+
+    with pytest.raises(RuntimeError, match="cannot locate the decoder layer"):
+        CommonAdapter().require_mlp_ownership(model, (shim,))
 
 
 def test_require_ffn_shims_validates_exact_ids_and_kinds() -> None:
