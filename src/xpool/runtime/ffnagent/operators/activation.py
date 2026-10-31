@@ -50,13 +50,48 @@ def gated_silu_kernel(
 
 
 @triton.jit
+def relu_kernel(
+    inputs,
+    output,
+    ELEMENTS: language.constexpr,
+    BLOCK: language.constexpr,
+):
+    index = language.program_id(0) * BLOCK + language.arange(0, BLOCK)
+    values = language.load(inputs + index, index < ELEMENTS, other=0.0)
+    language.store(output + index, language.maximum(values, 0.0), index < ELEMENTS)
+
+
+def apply_relu_into(*, inputs: torch.Tensor, output: torch.Tensor) -> None:
+    """Write elementwise ReLU into the caller's existing activation buffer.
+
+    The operation owner supplies checked contiguous payload resources with equal
+    shapes on the same device. No Tensor is allocated. Projection rounding and
+    the fc1 bias have already occurred at the input boundary.
+    """
+
+    if inputs.shape != output.shape or inputs.dtype is not output.dtype or inputs.device != output.device:
+        raise ValueError("ReLU input and output must share shape, dtype and device")
+    element_count = output.numel()
+    if element_count == 0:
+        return
+    relu_kernel.run(
+        inputs,
+        output,
+        element_count,
+        BLOCK=256,
+        grid=(triton.cdiv(element_count, 256),),
+        warmup=False,
+    )
+
+
+@triton.jit
 def fused_gated_silu(inputs, alpha, limit, up_offset):
     gate, up = language.split(language.reshape(inputs, (inputs.shape[0], inputs.shape[1] // 2, 2)))
     return compute_gated_silu(gate, up, alpha, limit, up_offset)
 
 
 def apply_into(
-    spec: ffn.ActivationSpec,
+    spec: ffn.SiluActivation,
     *,
     inputs: torch.Tensor,
     output: torch.Tensor,
@@ -92,7 +127,7 @@ def apply_into(
     )
 
 
-def fused(spec: ffn.ActivationSpec) -> matmul.FusedActivation:
+def fused(spec: ffn.SiluActivation) -> matmul.FusedActivation:
     """Describe activation before the packed GEMM's payload conversion.
 
     The upstream function keeps its qualified arithmetic for a unit Up offset.

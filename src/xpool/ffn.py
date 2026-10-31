@@ -26,20 +26,23 @@ __all__ = [
     "MoeFfnSpec",
     "PerExpertSource",
     "ProjectionSpec",
+    "ReluActivation",
     "RoutedExpertSource",
     "RouterAlgorithm",
     "RouterProjectionPrecision",
     "SiluActivation",
     "StackedExpertSource",
     "TopKWeightRounding",
+    "UnaryProjectionSpec",
     "ValuesSourceLayout",
 ]
 
 
 class ActivationKind(IntEnum):
-    """Gated FFN activation semantics."""
+    """Dense FFN activation semantics."""
 
     SILU = 1
+    RELU = 2
 
 
 class GateUpOrder(IntEnum):
@@ -123,7 +126,17 @@ class SiluActivation(FfnModel):
     up_offset: float = Field(default=0.0, strict=True, allow_inf_nan=False)
 
 
-type ActivationSpec = SiluActivation
+class ReluActivation(FfnModel):
+    """Apply an elementwise ReLU to the biased fc1 projection result.
+
+    This is the unary Dense FFN activation: one input projection, one
+    nonlinearity and one output projection. It consumes no gate/up pair.
+    """
+
+    kind: Literal[ActivationKind.RELU] = ActivationKind.RELU
+
+
+type ActivationSpec = SiluActivation | ReluActivation
 
 
 class ProjectionSpec(FfnModel):
@@ -162,6 +175,23 @@ class GatedProjectionSpec(FfnModel):
         return self.gate.tensor_keys() + self.up.tensor_keys() + self.down.tensor_keys()
 
 
+class UnaryProjectionSpec(FfnModel):
+    """Separate input and output projection sources for one unary FFN.
+
+    The input projection is executed as ``fc1`` and the output projection as
+    ``fc2``. Both projections carry their own optional additive bias.
+    """
+
+    kind: Literal["unary"] = "unary"
+    fc1: ProjectionSpec
+    fc2: ProjectionSpec
+
+    def tensor_keys(self) -> tuple[str, ...]:
+        """Return each projection's physical keys in fc1, fc2 order."""
+
+        return self.fc1.tensor_keys() + self.fc2.tensor_keys()
+
+
 class PerExpertSource(FfnModel):
     """Independent projection keys in routed Expert-id order."""
 
@@ -192,14 +222,20 @@ type RoutedExpertSource = Annotated[PerExpertSource | StackedExpertSource, Field
 
 
 class DenseFfnSpec(FfnModel):
-    """Intrinsic semantics and checkpoint identity of one gated Dense layer."""
+    """Intrinsic semantics and checkpoint identity of one Dense layer.
+
+    Gated layers declare gate/up/down sources. Unary layers declare fc1/fc2
+    sources and are the biased unary Dense form.
+    """
 
     kind: Literal[xpool.native.ffn.LayerKind.DENSE] = Field(  # ty: ignore[invalid-type-form]
         description="Dense layer discriminator."
     )
     layer_id: int = Field(strict=True, ge=0, description="Model-local decoder layer identity.")
     intermediate_size: int = Field(strict=True, ge=1, description="Full Dense intermediate width.")
-    projections: GatedProjectionSpec = Field(description="Checkpoint projections consumed by this layer.")
+    projections: GatedProjectionSpec | UnaryProjectionSpec = Field(
+        description="Checkpoint projections consumed by this layer."
+    )
 
     def tensor_keys(self) -> tuple[str, ...]:
         """Return all physical checkpoint keys owned by this layer."""
@@ -307,15 +343,23 @@ class FfnModelSpec(FfnModel):
 
     model_id: ModelId = Field(description="Canonical configured model identity.")
     hidden_size: int = Field(strict=True, ge=1, description="Model hidden-state width in elements.")
-    activation: ActivationSpec = Field(description="Gated activation shared by all model FFN layers.")
+    activation: ActivationSpec = Field(description="Activation shared by all model FFN layers.")
     layers: tuple[FfnLayerSpec, ...] = Field(
         min_length=1,
         description="Ordered decoder FFN layer specifications.",
     )
+    checkpoint_namespace: str | None = Field(
+        default=None,
+        strict=True,
+        description=(
+            "Layer-relative checkpoint namespace template containing exactly one {layer_id} placeholder. "
+            "None selects the default model.layers.{layer_id}.mlp FFN namespace."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_model_semantics(self) -> FfnModelSpec:
-        """Require unique layer identities and checkpoint keys."""
+        """Require unique layer identities, checkpoint keys and layer semantics."""
 
         layer_ids = tuple(layer.layer_id for layer in self.layers)
         if len(set(layer_ids)) != len(layer_ids):
@@ -323,6 +367,19 @@ class FfnModelSpec(FfnModel):
         keys = tuple(key for layer in self.layers for key in layer.tensor_keys())
         if len(set(keys)) != len(keys):
             raise ValueError("FFN Model Spec checkpoint keys must be globally unique")
+        namespace = self.checkpoint_namespace
+        if namespace is not None:
+            if not namespace or namespace.count("{layer_id}") != 1:
+                raise ValueError("checkpoint_namespace must contain exactly one {layer_id} placeholder")
+            if "{" in namespace.replace("{layer_id}", "") or "}" in namespace.replace("{layer_id}", ""):
+                raise ValueError("checkpoint_namespace must not contain other placeholders")
+        unary = isinstance(self.activation, ReluActivation)
+        for layer in self.layers:
+            if isinstance(layer, DenseFfnSpec):
+                if isinstance(layer.projections, UnaryProjectionSpec) != unary:
+                    raise ValueError("Dense FFN projections must match the model activation")
+            elif unary:
+                raise ValueError("ReluActivation is only supported by unary Dense FFNs")
         return self
 
     def digest(self) -> str:
