@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import typing
+from collections.abc import Callable
 from multiprocessing.connection import Connection
 
 import torch
@@ -17,11 +18,35 @@ SUPPORTED_MODEL_CLASSES = frozenset(
         "DeepseekV2ForCausalLM",
         "Glm4MoeLiteForCausalLM",
         "LlamaForCausalLM",
+        "OPTForCausalLM",
         "Qwen2ForCausalLM",
         "Qwen3ForCausalLM",
         "Qwen3MoeForCausalLM",
     }
 )
+
+
+def reference_layers_and_ffn(
+    model: object,
+) -> tuple[object, Callable[[object], Callable[[torch.Tensor], torch.Tensor]]]:
+    """Return the model's decoder layers and a per-layer FFN reference callable."""
+
+    typed_model = typing.cast(typing.Any, model)
+    if type(model).__name__ == "OPTForCausalLM":
+        layers = typed_model.model.decoder.layers
+
+        def opt_ffn(layer: object) -> Callable[[torch.Tensor], torch.Tensor]:
+            typed_layer = typing.cast(typing.Any, layer)
+
+            def run(hidden_states: torch.Tensor) -> torch.Tensor:
+                hidden_states = typed_layer.fc1(hidden_states)[0]
+                hidden_states = typed_layer.activation_fn(hidden_states)
+                return typed_layer.fc2(hidden_states)[0]
+
+            return run
+
+        return layers, opt_ffn
+    return typed_model.model.layers, lambda layer: typing.cast(typing.Any, layer).mlp
 
 
 def read_routing_output(output: object) -> tuple[torch.Tensor, torch.Tensor]:
@@ -198,16 +223,18 @@ def run_ffn_reference_rank(
         # The pinned loader returns unrelated concrete model classes.
         typed_model = typing.cast(typing.Any, model)
 
+        layers, ffn_for_layer = reference_layers_and_ffn(typed_model)
+        typed_layers = typing.cast(typing.Any, layers)
         for case in job.cases:
-            if case.layer_id >= len(typed_model.model.layers):
+            if case.layer_id >= len(typed_layers):
                 raise RuntimeError(f"FFN reference layer {case.layer_id} is outside the model layer range")
-            layer = typed_model.model.layers[case.layer_id]
+            layer = typed_layers[case.layer_id]
             if isinstance(layer, sglang.srt.layers.utils.PPMissingLayer):
                 raise RuntimeError(f"FFN reference TP rank {tensor_parallel_rank} does not own layer {case.layer_id}")
             execute_ffn_reference_case(
                 hidden_size=model_config.hidden_size,
                 model_dtype=model_config.dtype,
-                mlp=layer.mlp,
+                mlp=ffn_for_layer(layer),
                 case=case,
                 persist_result=tensor_parallel_rank == 0,
             )
@@ -235,7 +262,7 @@ def execute_ffn_reference_case(
     *,
     hidden_size: int,
     model_dtype: torch.dtype,
-    mlp: torch.nn.Module,
+    mlp: Callable[[torch.Tensor], torch.Tensor],
     case: ffn_protocol.FfnReferenceCaseSpec,
     persist_result: bool,
 ) -> None:

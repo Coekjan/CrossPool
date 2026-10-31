@@ -7,8 +7,7 @@ import torch
 import torch.nn.functional
 
 import xtest
-from xpool import ffn
-from xpool.ffn import SiluActivation
+from xpool.ffn import ReluActivation, SiluActivation
 from xpool.quantization import TensorLayout
 from xpool.runtime.ffnagent import execution, weights
 from xpool.runtime.ffnagent.operators import dense, sglang_moe
@@ -49,12 +48,130 @@ def dense_values(
             payload_dtype=payload_dtype,
             row_capacity=ROW_CAPACITY,
             local_intermediate_size=LOCAL_INTERMEDIATE_SIZE,
+            activation=SiluActivation(),
         ),
         device="cuda",
         dtype=torch.uint8,
     )
     output = torch.empty_like(hidden_states)
     return hidden_states, layer_weights, workspace, output
+
+
+def unary_dense_values(
+    payload_dtype: torch.dtype,
+    *,
+    down_bias: bool = True,
+) -> tuple[torch.Tensor, weights.DenseFfnWeights, torch.Tensor, torch.Tensor]:
+    """Allocate one small valid biased unary Dense component input."""
+
+    hidden_states = torch.randn((ROW_CAPACITY, HIDDEN_SIZE), device="cuda", dtype=payload_dtype) / 4
+    layer_weights = weights.DenseFfnWeights(
+        gate_up=weights.ProjectionWeights(
+            values=torch.randn((LOCAL_INTERMEDIATE_SIZE, HIDDEN_SIZE), device="cuda", dtype=payload_dtype) / 4,
+            scales=None,
+            bias=torch.randn((LOCAL_INTERMEDIATE_SIZE,), device="cuda", dtype=payload_dtype) / 4,
+        ),
+        down=weights.ProjectionWeights(
+            values=torch.randn((HIDDEN_SIZE, LOCAL_INTERMEDIATE_SIZE), device="cuda", dtype=payload_dtype) / 4,
+            scales=None,
+            bias=(
+                torch.randn((HIDDEN_SIZE,), device="cuda", dtype=payload_dtype) / 4
+                if down_bias
+                else torch.zeros((HIDDEN_SIZE,), device="cuda", dtype=payload_dtype)
+            ),
+        ),
+    )
+    workspace = torch.empty(
+        execution.dense_workspace_bytes(
+            payload_dtype=payload_dtype,
+            row_capacity=ROW_CAPACITY,
+            local_intermediate_size=LOCAL_INTERMEDIATE_SIZE,
+            activation=ReluActivation(),
+        ),
+        device="cuda",
+        dtype=torch.uint8,
+    )
+    output = torch.empty_like(hidden_states)
+    return hidden_states, layer_weights, workspace, output
+
+
+@pytest.mark.parametrize("payload_dtype", (torch.bfloat16, torch.float16), ids=("bfloat16", "float16"))
+@xtest.requirements(device_count=1)
+def test_compute_unary_dense_partial_matches_biased_reference_without_steady_allocation(
+    payload_dtype: torch.dtype,
+) -> None:
+    torch.manual_seed(23)
+    hidden_states, layer_weights, workspace, output = unary_dense_values(payload_dtype)
+
+    returned = dense.compute_dense_partial(
+        hidden_states=hidden_states,
+        layer_weights=layer_weights,
+        workspace=workspace,
+        output=output,
+        activation=ReluActivation(),
+    )
+    torch.cuda.synchronize()
+    allocated_before = torch.cuda.memory_allocated()
+    dense.compute_dense_partial(
+        hidden_states=hidden_states,
+        layer_weights=layer_weights,
+        workspace=workspace,
+        output=output,
+        activation=ReluActivation(),
+    )
+    torch.cuda.synchronize()
+    assert torch.cuda.memory_allocated() == allocated_before
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        dense.compute_dense_partial(
+            hidden_states=hidden_states,
+            layer_weights=layer_weights,
+            workspace=workspace,
+            output=output,
+            activation=ReluActivation(),
+        )
+    hidden_states.fill_(3)
+    graph.replay()
+    torch.cuda.synchronize()
+
+    assert layer_weights.gate_up.bias is not None
+    assert layer_weights.down.bias is not None
+    expected = torch.addmm(
+        layer_weights.gate_up.bias,
+        hidden_states,
+        layer_weights.gate_up.values.t(),
+    )
+    expected = torch.relu(expected)
+    expected = torch.addmm(layer_weights.down.bias, expected, layer_weights.down.values.t())
+    assert returned is output
+    torch.testing.assert_close(output, expected, rtol=0.02, atol=0.1)
+
+
+@xtest.requirements(device_count=1)
+def test_compute_unary_dense_partial_accepts_neutral_fc2_bias() -> None:
+    torch.manual_seed(29)
+    hidden_states, layer_weights, workspace, output = unary_dense_values(torch.bfloat16, down_bias=False)
+    assert layer_weights.down.bias is not None
+    assert torch.count_nonzero(layer_weights.down.bias) == 0
+
+    dense.compute_dense_partial(
+        hidden_states=hidden_states,
+        layer_weights=layer_weights,
+        workspace=workspace,
+        output=output,
+        activation=ReluActivation(),
+    )
+    torch.cuda.synchronize()
+
+    assert layer_weights.gate_up.bias is not None
+    expected = torch.addmm(
+        layer_weights.gate_up.bias,
+        hidden_states,
+        layer_weights.gate_up.values.t(),
+    )
+    expected = torch.relu(expected)
+    expected = torch.mm(expected, layer_weights.down.values.t())
+    torch.testing.assert_close(output, expected, rtol=0.02, atol=0.1)
 
 
 @pytest.mark.parametrize("payload_dtype", (torch.bfloat16, torch.float16), ids=("bfloat16", "float16"))
@@ -131,7 +248,7 @@ def test_compute_dense_partial_rejects_misaligned_workspace() -> None:
 def test_floating_experts_match_reference_with_overlapped_workspace_and_graph(
     payload_dtype: torch.dtype,
     with_bias: bool,
-    activation: ffn.ActivationSpec,
+    activation: SiluActivation,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     torch.manual_seed(31)

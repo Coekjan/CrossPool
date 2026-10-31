@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from xpool import ffn
-from xpool.ffn import RouterAlgorithm, RouterProjectionPrecision, SiluActivation
+from xpool.ffn import ReluActivation, RouterAlgorithm, RouterProjectionPrecision, SiluActivation
 from xpool.quantization import TensorLayout
 from xpool.runtime.ffnagent import execution, preparation, weights
 
@@ -27,8 +27,18 @@ def test_dense_workspace_bytes_is_exact_and_rejects_empty_geometry() -> None:
             payload_dtype=torch.bfloat16,
             row_capacity=4,
             local_intermediate_size=8,
+            activation=SiluActivation(),
         )
         == 192
+    )
+    assert (
+        execution.dense_workspace_bytes(
+            payload_dtype=torch.float16,
+            row_capacity=4,
+            local_intermediate_size=8,
+            activation=ReluActivation(),
+        )
+        == 128
     )
     signature = execution.DenseFfnExecutionSignature(
         payload_dtype=torch.bfloat16,
@@ -45,6 +55,7 @@ def test_dense_workspace_bytes_is_exact_and_rejects_empty_geometry() -> None:
             payload_dtype=torch.bfloat16,
             row_capacity=0,
             local_intermediate_size=8,
+            activation=SiluActivation(),
         )
 
     fp16_signature = execution.DenseFfnExecutionSignature(
@@ -57,6 +68,25 @@ def test_dense_workspace_bytes_is_exact_and_rejects_empty_geometry() -> None:
         down=weights.ProjectionLayout(values=TensorLayout((16, 8), torch.float16, 0), scales=None, bias=None),
     )
     assert preparation.compute_workspace_bytes(fp16_signature) == 192
+
+    unary_signature = execution.DenseFfnExecutionSignature(
+        payload_dtype=torch.float16,
+        payload_row_capacity=4,
+        hidden_size=16,
+        local_intermediate_size=8,
+        activation=ReluActivation(),
+        gate_up=weights.ProjectionLayout(
+            values=TensorLayout((8, 16), torch.float16, 0),
+            scales=None,
+            bias=TensorLayout((8,), torch.float16, 0),
+        ),
+        down=weights.ProjectionLayout(
+            values=TensorLayout((16, 8), torch.float16, 0),
+            scales=None,
+            bias=TensorLayout((16,), torch.float16, 0),
+        ),
+    )
+    assert preparation.compute_workspace_bytes(unary_signature) == 128
 
 
 def test_capture_source_shares_only_capacity_independent_weights() -> None:
