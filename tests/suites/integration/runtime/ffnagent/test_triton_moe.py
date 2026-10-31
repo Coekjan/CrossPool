@@ -4,10 +4,10 @@ import pytest
 import torch
 from triton_kernels import matmul
 from triton_kernels.matmul_details import opt_flags
+from xpool.native.ffn import LayerKind
 
 import xtest
 from xpool import ffn
-from xpool.native.ffn import LayerKind
 from xpool.quantization import Mxfp4, Unquantized
 from xpool.runtime.ffnagent import execution, weights
 from xpool.runtime.ffnagent.operators.triton_moe import TritonKernelsExperts
@@ -65,7 +65,7 @@ def test_packed_experts_keep_dynamic_routes_and_capacity_tails_without_capture_a
     hidden_size: int,
     intermediate_size: int,
     experts: int,
-    activation: ffn.ActivationSpec,
+    activation: ffn.SiluActivation,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     torch.manual_seed(73)

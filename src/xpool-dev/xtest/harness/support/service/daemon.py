@@ -11,9 +11,10 @@ from http import HTTPStatus
 import httpx
 import psutil
 import pytest
-from fastapi import FastAPI
-
 import xpool.native
+from fastapi import FastAPI
+from xpool.native import ABI_VERSION
+
 import xpool.service.daemon.app
 import xpool.service.daemon.control
 import xpool.service.daemon.ecs
@@ -21,7 +22,6 @@ from xpool import ffn
 from xpool.config import XpoolConfig, get_global_config
 from xpool.fabric import FabricGenerationId, FabricParticipantPhase, FabricPlan, FabricRole
 from xpool.model import ModelId
-from xpool.native import ABI_VERSION
 from xpool.quantization import Unquantized
 from xpool.service.daemon.app import create_daemon
 from xpool.service.wire import ElasticContextStateControlChannelRef
@@ -224,6 +224,36 @@ def ffn_model_spec(*, model_id: str = str(TEST_MODEL_ID), hidden_size: int = 4) 
                     up=ffn.ProjectionSpec(quantization=Unquantized(), values_key="model.layers.0.mlp.up_proj.weight"),
                     down=ffn.ProjectionSpec(
                         quantization=Unquantized(), values_key="model.layers.0.mlp.down_proj.weight"
+                    ),
+                ),
+            ),
+        ),
+    ).model_dump(mode="json")
+
+
+def biased_ffn_model_spec(*, model_id: str = str(TEST_MODEL_ID), hidden_size: int = 4) -> dict[str, object]:
+    """Return one valid generation-independent biased unary Dense FFN Model Spec."""
+
+    return ffn.FfnModelSpec(
+        model_id=ModelId(model_id),
+        hidden_size=hidden_size,
+        activation=ffn.ReluActivation(),
+        checkpoint_namespace="model.decoder.layers.{layer_id}",
+        layers=(
+            ffn.DenseFfnSpec(
+                kind=xpool.native.ffn.LayerKind.DENSE,
+                layer_id=0,
+                intermediate_size=8,
+                projections=ffn.UnaryProjectionSpec(
+                    fc1=ffn.ProjectionSpec(
+                        quantization=Unquantized(),
+                        values_key="model.decoder.layers.0.fc1.weight",
+                        bias_key="model.decoder.layers.0.fc1.bias",
+                    ),
+                    fc2=ffn.ProjectionSpec(
+                        quantization=Unquantized(),
+                        values_key="model.decoder.layers.0.fc2.weight",
+                        bias_key="model.decoder.layers.0.fc2.bias",
                     ),
                 ),
             ),

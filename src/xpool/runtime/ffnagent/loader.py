@@ -294,16 +294,28 @@ def prepare_layer_weight_request(
     torch_device = torch.device("cuda", device)
     if isinstance(layout, preparation.DenseFfnLayerLayout):
         materialized = weights.DenseFfnWeights.allocate(gate_up=layout.gate_up, down=layout.down, device=torch_device)
-        descriptors = gated_descriptors(
-            key_view,
-            projections=layout.layer.projections,
-            layout=layout,
-            source_intermediate_size=layout.layer.intermediate_size,
-            source_start=layout.source_start,
-            expert_id=None,
-            gate_up=materialized.gate_up,
-            down=materialized.down,
-            read_down_bias=layout.tp_rank == 0,
+        projections = layout.layer.projections
+        descriptors = (
+            unary_descriptors(
+                key_view,
+                projections=projections,
+                layout=layout,
+                gate_up=materialized.gate_up,
+                down=materialized.down,
+                read_down_bias=layout.tp_rank == 0,
+            )
+            if isinstance(projections, ffn.UnaryProjectionSpec)
+            else gated_descriptors(
+                key_view,
+                projections=projections,
+                layout=layout,
+                source_intermediate_size=layout.layer.intermediate_size,
+                source_start=layout.source_start,
+                expert_id=None,
+                gate_up=materialized.gate_up,
+                down=materialized.down,
+                read_down_bias=layout.tp_rank == 0,
+            )
         )
         return materialized, descriptors
 
@@ -439,6 +451,51 @@ def prepare_layer_weight_request(
                 )
             )
     return materialized, tuple(descriptors)
+
+
+def unary_descriptors(
+    key_view: dict[str, Path],
+    *,
+    projections: ffn.UnaryProjectionSpec,
+    layout: preparation.DenseFfnLayerLayout,
+    gate_up: weights.ProjectionWeights,
+    down: weights.ProjectionWeights,
+    read_down_bias: bool,
+) -> tuple[TensorReadDescriptor, ...]:
+    """Bind fc1/fc2 sources into the prepared unary Dense destinations.
+
+    fc1 rows and bias follow the intermediate-axis TP slice. fc2 values follow
+    the intermediate-axis column slice while its bias is only read by the TP
+    owner; non-owner bias storages remain neutrally zero.
+    """
+
+    descriptors = list(
+        projection_descriptors(
+            key_view,
+            projection=projections.fc1,
+            logical_shape=(layout.layer.intermediate_size, layout.hidden_size),
+            selection=TensorSlice(0, layout.source_start, layout.source_length),
+            dtype=layout.payload_dtype,
+            values=gate_up.values,
+            scales=gate_up.scales,
+            bias=gate_up.bias,
+            read_bias=True,
+        )
+    )
+    descriptors.extend(
+        projection_descriptors(
+            key_view,
+            projection=projections.fc2,
+            logical_shape=(layout.hidden_size, layout.layer.intermediate_size),
+            selection=TensorSlice(1, layout.source_start, layout.source_length),
+            dtype=layout.payload_dtype,
+            values=down.values,
+            scales=down.scales,
+            bias=down.bias,
+            read_bias=read_down_bias,
+        )
+    )
+    return tuple(descriptors)
 
 
 def gated_descriptors(
