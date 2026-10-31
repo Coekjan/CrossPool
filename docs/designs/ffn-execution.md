@@ -22,8 +22,9 @@ additive projection bias and selection-only Router correction bias have separate
 declarations. A representable declaration does not establish operator support
 or qualify a concrete model.
 
-Shared family-profile validation admits BF16 and FP16 checkpoint declarations
-alongside the expected model type and SiLU activation. The Llama adapter reuses
+Shared family-profile validation admits the source activation and dtype set
+declared by each model family. Gated families use SiLU with BF16 or FP16
+checkpoints; the OPT family declares ReLU with FP16. The Llama adapter reuses
 this validation rather than restricting the family to one checkpoint's dtype.
 Family admission is distinct from
 [qualification of a concrete checkpoint](qualification.md#numerical-and-graph-evidence).
@@ -67,14 +68,19 @@ FP32 selected weights. `LOGITS_DTYPE` rounds them through the logits dtype after
 optional normalization, then publishes FP32 Routing Metadata. Shared-Expert
 assembly and model-declared scaling follow that boundary.
 
-Dense layers retain packed gate/up and down shards in two owned storages.
+Dense layers retain an input projection and an output projection in two owned
+storages. A gated layer stores the fused gate/up projection as its input and
+the down projection as its output. A biased unary layer stores fc1 as its
+input and fc2 as its output; both projections carry their declared bias.
 MoE layers additionally retain Router weights, expert tensors, top-k routing
 parameters, and any model-defined correction bias. `SiluActivation` declares
 the positive slope `alpha`, optional positive clipping `limit`, and `up_offset`.
 Projection bias is applied first. Clipping bounds Gate above and Up on both
 sides before computing `g * sigmoid(alpha * g) * (u + up_offset)`. Ordinary
-gated SiLU uses `(1.0, None, 0.0)`. Model adapters resolve source parameters; execution supplies
-no model-specific defaults. Up offset is part of activation, not projection bias.
+gated SiLU uses `(1.0, None, 0.0)`. `ReluActivation` applies an elementwise
+ReLU after the biased input projection. Model adapters resolve source
+parameters; execution supplies no model-specific defaults. Up offset is part of
+activation, not projection bias.
 
 Checkpoint loading and synthetic calibration share canonical empty-weight
 allocation factories, preserving shape, dtype, allocation order, and ownership.
@@ -97,11 +103,10 @@ before weight reads or device work. The same closed operation mapping serves
 preparation, workspace sizing and capture.
 
 The shared [activation module](../../src/xpool/runtime/ffnagent/operators/activation.py)
-supplies `apply_into` for caller-owned Dense and floating-Expert outputs and
-`fused` descriptors for packed Expert GEMMs. Both consume the same activation
-declaration while preserving each operation's qualified fusion and
-payload-rounding boundaries. Selection follows parameters and row layout,
-not model identity.
+supplies gated `apply_into`, unary `apply_relu_into`, and `fused` descriptors
+for packed Expert GEMMs. They consume the same activation declarations while
+preserving each operation's qualified fusion and payload-rounding boundaries.
+Selection follows activation semantics and row layout, not model identity.
 The unit Up-offset path retains upstream `swiglu_fn`; other offsets use the
 local `fused_gated_silu`. Fused descriptors preserve each implementation's
 function identity so specialization caches distinguish them.

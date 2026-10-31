@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 import safetensors.torch
 import torch
+from xpool.native.ffn import LayerKind
 
 import xtest
 from xpool import ffn
@@ -24,7 +25,6 @@ from xpool.ffn import (
     RouterProjectionPrecision,
     SiluActivation,
 )
-from xpool.native.ffn import LayerKind
 from xpool.quantization import Mxfp4, QuantizationSpec, TensorLayout, TensorSlice, Unquantized
 from xpool.runtime.ffnagent import architecture, execution, loader, preparation, weights
 from xpool.runtime.ffnagent.operators.triton_moe import TritonKernelsExperts
@@ -72,6 +72,17 @@ def dense_spec() -> DenseFfnSpec:
         layer_id=0,
         intermediate_size=6,
         projections=architecture.FfnSourceConfig({}).gated_projections("model.layers.0.mlp"),
+    )
+
+
+def unary_spec() -> DenseFfnSpec:
+    """Return one small canonical biased unary Dense layer."""
+
+    return DenseFfnSpec(
+        kind=LayerKind.DENSE,
+        layer_id=0,
+        intermediate_size=6,
+        projections=architecture.FfnSourceConfig({}).unary_projections("model.decoder.layers.0"),
     )
 
 
@@ -147,12 +158,14 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     install_loader_config()
     hidden_size = 4
     dense = dense_spec()
+    dense_projections = dense.projections
+    assert isinstance(dense_projections, ffn.GatedProjectionSpec)
     correction_bias_key = "model.layers.1.mlp.gate.e_score_correction_bias"
     moe = moe_spec(correction_bias_key)
     dense_tensors = {
-        dense.projections.gate.values_key: tensor_values((6, hidden_size), 0),
-        dense.projections.up.values_key: tensor_values((6, hidden_size), 100),
-        dense.projections.down.values_key: tensor_values((hidden_size, 6), 200),
+        dense_projections.gate.values_key: tensor_values((6, hidden_size), 0),
+        dense_projections.up.values_key: tensor_values((6, hidden_size), 100),
+        dense_projections.down.values_key: tensor_values((hidden_size, 6), 200),
     }
     moe_tensors: dict[str, torch.Tensor] = {
         moe.router.values_key: torch.linspace(0.101, 0.909, 2 * hidden_size).reshape(2, hidden_size),
@@ -214,12 +227,15 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     torch.testing.assert_close(
         dense_weights.gate_up.values.cpu(),
         torch.cat(
-            (dense_tensors[dense.projections.gate.values_key][3:], dense_tensors[dense.projections.up.values_key][3:])
+            (
+                dense_tensors[dense_projections.gate.values_key][3:],
+                dense_tensors[dense_projections.up.values_key][3:],
+            )
         ).to(torch.float16),
     )
     torch.testing.assert_close(
         dense_weights.down.values.cpu(),
-        dense_tensors[dense.projections.down.values_key][:, 3:].to(torch.float16),
+        dense_tensors[dense_projections.down.values_key][:, 3:].to(torch.float16),
     )
     assert moe_weights.router is not None
     torch.testing.assert_close(moe_weights.router.projection.values.cpu(), moe_tensors[moe.router.values_key])
@@ -254,6 +270,79 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     ):
         assert probe.data_ptr() != source.data_ptr()
         torch.testing.assert_close(probe, torch.zeros_like(source), rtol=0, atol=0)
+
+
+@xtest.requirements(device_count=1)
+def test_materialize_slices_biased_unary_dense_true_tp_weights_and_output_bias(tmp_path: Path) -> None:
+    install_loader_config()
+    hidden_size = 4
+    layer = unary_spec()
+    projections = layer.projections
+    assert isinstance(projections, ffn.UnaryProjectionSpec)
+    fc1_bias_key = projections.fc1.bias_key
+    fc2_bias_key = projections.fc2.bias_key
+    assert fc1_bias_key is not None
+    assert fc2_bias_key is not None
+    tensors = {
+        projections.fc1.values_key: tensor_values((6, hidden_size), 0),
+        fc1_bias_key: torch.arange(100, 106, dtype=torch.float32).to(torch.bfloat16),
+        projections.fc2.values_key: tensor_values((hidden_size, 6), 200),
+        fc2_bias_key: torch.arange(300, 304, dtype=torch.float32).to(torch.bfloat16),
+    }
+    model_path = tmp_path / "model"
+    write_checkpoint(model_path, (tensors,))
+    spec = FfnModelSpec(
+        model_id=TEST_MODEL_ID,
+        hidden_size=hidden_size,
+        activation=ffn.ReluActivation(),
+        checkpoint_namespace="model.decoder.layers.{layer_id}",
+        layers=(layer,),
+    )
+    layouts = tuple(
+        preparation.prepare_ffn_layer(
+            spec,
+            layer_ordinal=0,
+            payload_dtype=torch.float16,
+            tp_size=2,
+            tp_rank=tp_rank,
+        )
+        for tp_rank in range(2)
+    )
+    assert all(isinstance(layout, preparation.DenseFfnLayerLayout) for layout in layouts)
+    for layout in layouts:
+        assert isinstance(layout, preparation.DenseFfnLayerLayout)
+        assert layout.local_intermediate_size == 3
+        assert layout.gate_up.values.shape == (3, hidden_size)
+        assert layout.down.values.shape == (hidden_size, 3)
+
+    materialized = loader.materialize_local_layer_weights(
+        requests=tuple(loader.LocalLayerWeightRequest(model_path=model_path, layer_layout=layout) for layout in layouts)
+    )
+
+    for tp_rank, layer_weights in enumerate(materialized):
+        assert isinstance(layer_weights, weights.DenseFfnWeights)
+        columns = slice(tp_rank * 3, (tp_rank + 1) * 3)
+        torch.testing.assert_close(
+            layer_weights.gate_up.values.cpu(),
+            tensors[projections.fc1.values_key][columns].to(torch.float16),
+        )
+        assert layer_weights.gate_up.bias is not None
+        torch.testing.assert_close(
+            layer_weights.gate_up.bias.cpu(),
+            tensors[fc1_bias_key][columns].to(torch.float16),
+        )
+        torch.testing.assert_close(
+            layer_weights.down.values.cpu(),
+            tensors[projections.fc2.values_key][:, columns].to(torch.float16),
+        )
+        assert layer_weights.down.bias is not None
+        if tp_rank == 0:
+            torch.testing.assert_close(
+                layer_weights.down.bias.cpu(),
+                tensors[fc2_bias_key].to(torch.float16),
+            )
+        else:
+            torch.testing.assert_close(layer_weights.down.bias.cpu(), torch.zeros_like(layer_weights.down.bias.cpu()))
 
 
 @xtest.requirements(device_count=1)

@@ -53,7 +53,7 @@ wrappers. Model ID links point to the checkpoint configuration.
 | [facebook/opt-1.3b](https://huggingface.co/facebook/opt-1.3b/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
 | [facebook/opt-2.7b](https://huggingface.co/facebook/opt-2.7b/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
 | [facebook/opt-6.7b](https://huggingface.co/facebook/opt-6.7b/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
-| [facebook/opt-13b](https://huggingface.co/facebook/opt-13b/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
+| [facebook/opt-13b](https://huggingface.co/facebook/opt-13b/blob/main/config.json) | `OPTForCausalLM` | ✅ Supported |
 | [facebook/opt-30b](https://huggingface.co/facebook/opt-30b/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
 | [facebook/opt-66b](https://huggingface.co/facebook/opt-66b/blob/main/config.json) | `OPTForCausalLM` | ❌ Not supported |
 | [tiiuae/falcon-7b](https://huggingface.co/tiiuae/falcon-7b/blob/main/config.json) | `FalconForCausalLM` | ❌ Not supported |

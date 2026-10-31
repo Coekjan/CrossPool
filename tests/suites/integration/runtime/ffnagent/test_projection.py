@@ -125,7 +125,12 @@ def test_dense_projection_bias_preserves_fused_rounding_without_capture_allocati
     hidden = torch.randn((4, 16), dtype=torch.bfloat16, device=device)
     output = torch.empty_like(hidden)
     workspace = torch.empty(
-        execution.dense_workspace_bytes(payload_dtype=hidden.dtype, row_capacity=4, local_intermediate_size=8),
+        execution.dense_workspace_bytes(
+            payload_dtype=hidden.dtype,
+            row_capacity=4,
+            local_intermediate_size=8,
+            activation=SiluActivation(),
+        ),
         dtype=torch.uint8,
         device=device,
     )

@@ -92,17 +92,30 @@ class FfnSourceConfig:
             raise ValueError(f"{field_name} must be a JSON {expected_name}")
         return self.get(field_name, expected_type)
 
-    def validate_family_profile(self, *, model_type: str, dtype_field: str) -> None:
-        """Validate common model type, activation, and source dtype fields."""
+    def validate_family_profile(
+        self,
+        *,
+        model_type: str,
+        dtype_field: str,
+        activation_field: str = "hidden_act",
+        allowed_activations: tuple[str, ...] = ("silu",),
+        allowed_dtypes: tuple[str, ...] = ("bfloat16", "float16"),
+    ) -> None:
+        """Validate model type, activation and source dtype fields."""
 
         if self.get("model_type", str) != model_type:
             raise ValueError(f"model_type must equal {model_type!r}")
-        if self.get("hidden_act", str) != "silu":
-            raise ValueError("hidden_act must equal 'silu'")
-        if self.get(dtype_field, str) not in ("bfloat16", "float16"):
-            raise ValueError(f"{dtype_field} must be 'bfloat16' or 'float16'")
+        activation = self.get(activation_field, str)
+        if activation not in allowed_activations:
+            if allowed_activations == ("silu",):
+                raise ValueError(f"{activation_field} must equal 'silu'")
+            raise ValueError(f"{activation_field} must be one of {allowed_activations}")
+        if self.get(dtype_field, str) not in allowed_dtypes:
+            if allowed_dtypes == ("bfloat16", "float16"):
+                raise ValueError(f"{dtype_field} must be 'bfloat16' or 'float16'")
+            raise ValueError(f"{dtype_field} must be one of {allowed_dtypes}")
 
-    def projection(self, module_name: str) -> ffn.ProjectionSpec:
+    def projection(self, module_name: str, *, bias: bool = False) -> ffn.ProjectionSpec:
         """Compile an ordinary weight source with its source-config exclusions."""
 
         return ffn.ProjectionSpec(
@@ -111,6 +124,7 @@ class FfnSourceConfig:
                 module_name=module_name,
             ),
             values_key=f"{module_name}.weight",
+            bias_key=f"{module_name}.bias" if bias else None,
         )
 
     def gated_projections(self, prefix: str) -> ffn.GatedProjectionSpec:
@@ -120,6 +134,14 @@ class FfnSourceConfig:
             gate=self.projection(f"{prefix}.gate_proj"),
             up=self.projection(f"{prefix}.up_proj"),
             down=self.projection(f"{prefix}.down_proj"),
+        )
+
+    def unary_projections(self, prefix: str) -> ffn.UnaryProjectionSpec:
+        """Compile the biased fc1/fc2 sources below an unary FFN prefix."""
+
+        return ffn.UnaryProjectionSpec(
+            fc1=self.projection(f"{prefix}.fc1", bias=True),
+            fc2=self.projection(f"{prefix}.fc2", bias=True),
         )
 
 
@@ -190,6 +212,7 @@ def load(*, model_id: ModelId, model_path: pathlib.Path) -> ffn.FfnModelSpec:
             raise ValueError("FFN Architecture Adapter returned inconsistent model identity")
 
         key_view = checkpoint.read_checkpoint_key_view(model_path)
+        spec = checkpoint.resolve_checkpoint_namespace(spec, key_view)
         checkpoint.validate_ffn_coverage(
             spec,
             key_view,
