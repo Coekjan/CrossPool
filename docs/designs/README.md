@@ -17,7 +17,8 @@ current architecture while workflow history remains in version control.
 - [Elastic Context State](elastic-context-state.md) defines stable attention-side
   KV storage, logical admission, physical capacity coordination, and
   reclamation.
-- [Devkit](devkit.md) defines Hook Points and observer evidence.
+- [Devkit](devkit.md) defines Hook Points, observer evidence, and offline raw
+  artifact reconstruction, deterministic clock calibration and coverage reports.
 - [Test and Benchmark Tooling](tooling.md) defines installed harness ownership,
   configuration, catalogues, shared resource lifecycle and test evidence.
 - [Serving Benchmarks](benchmark.md) defines workloads, measurements,

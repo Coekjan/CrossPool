@@ -323,6 +323,41 @@ A neutral extension seam named after the production event it exposes rather
 than the observer that consumes it.
 _Avoid_: Callback site, plugin branch
 
+**Observation Producer**:
+A registered Host or Device event source within one Run and process creation,
+with its own attempted-event sequence and one raw clock domain.
+_Avoid_: PID, event buffer slot
+
+**Observation Operation**:
+One successful Transport Mailbox Claim identified by its shared Endpoint
+creation and Device-issued operation sequence, independently of collection
+capacity or local trace IDs.
+_Avoid_: Local trace ID, InvocationKey
+
+**Snapshot Evidence Report**:
+The evidence available for one legacy observer snapshot domain at one read
+cutoff, distinguishing field availability, path applicability and local source
+provenance. Evidence completeness is independent of legacy terminal status.
+_Avoid_: Atomic production-state image, Producer-wide loss checkpoint
+
+**Graph Execution Observation**:
+A fresh identity for one actual Graph or Eager execution activity, distinct
+from its captured template and from Host call or Device completion evidence.
+_Avoid_: Capture ID, Graph handle
+
+**Calibration Segment**:
+A supported interval of one raw clock domain mapped to the common Host
+reference under an explicit model, with fitting samples, held-out validation,
+and conditional uncertainty.
+_Avoid_: ClockSnapshot, independently measured timing truth
+
+**Paired Clock Sample**:
+One attempted Host-before/Device/Host-after observation from a registered
+process-owned clock sampler, retaining its Epoch, outcome and source evidence.
+The observability value is named PairedClockSample. It is distinct from a
+synthetic FFN Calibration Sample used for resource sizing.
+_Avoid_: Calibrated timestamp, independent timing truth
+
 **Fabric Coordinator**:
 The generation-scoped progress owner that forms Invocations, leases Executor
 Lanes, commits outputs, and releases acknowledged work.
