@@ -1,0 +1,1437 @@
+{
+  "algorithm_version": 1,
+  "assumption": "segment_affine_bracketing",
+  "contract_version": 4,
+  "domains": [
+    {
+      "covered_time_ns": 900,
+      "domain": {
+        "host_creation_id": null,
+        "id": 2,
+        "kind": "device_globaltimer",
+        "logical_device": 0,
+        "physical_device_uuid": "GPU-fixture-attention",
+        "process_creation_id": "22222222-2222-4222-8222-222222222222",
+        "raw_epoch": 1,
+        "unit": "ns"
+      },
+      "host_creation_id": "55555555-5555-4555-8555-555555555555",
+      "mapped_events": 6,
+      "mapping_counts": [
+        {
+          "count": 6,
+          "status": "mapped"
+        },
+        {
+          "count": 0,
+          "status": "outside_support"
+        },
+        {
+          "count": 0,
+          "status": "ambiguous_model"
+        },
+        {
+          "count": 0,
+          "status": "uncalibrated"
+        }
+      ],
+      "observation_interval": [
+        0,
+        1200
+      ],
+      "observation_time_ns": 1200,
+      "retained_event_coverage": {
+        "denominator": "1",
+        "numerator": "1"
+      },
+      "retained_events": 6,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "spans": [
+        {
+          "endpoints_inclusive": true,
+          "lower_ns": 0,
+          "model_count": 0,
+          "upper_ns": 0
+        },
+        {
+          "endpoints_inclusive": false,
+          "lower_ns": 0,
+          "model_count": 0,
+          "upper_ns": 100
+        },
+        {
+          "endpoints_inclusive": true,
+          "lower_ns": 100,
+          "model_count": 1,
+          "upper_ns": 100
+        },
+        {
+          "endpoints_inclusive": false,
+          "lower_ns": 100,
+          "model_count": 1,
+          "upper_ns": 1000
+        },
+        {
+          "endpoints_inclusive": true,
+          "lower_ns": 1000,
+          "model_count": 1,
+          "upper_ns": 1000
+        },
+        {
+          "endpoints_inclusive": false,
+          "lower_ns": 1000,
+          "model_count": 0,
+          "upper_ns": 1200
+        },
+        {
+          "endpoints_inclusive": true,
+          "lower_ns": 1200,
+          "model_count": 0,
+          "upper_ns": 1200
+        }
+      ],
+      "support_intervals": [
+        [
+          100,
+          1000
+        ]
+      ],
+      "time_coverage": {
+        "denominator": "4",
+        "numerator": "3"
+      },
+      "uncertainty": {
+        "count": 6,
+        "maximum_ns": {
+          "denominator": "1",
+          "numerator": "0"
+        },
+        "mean_ns": {
+          "denominator": "1",
+          "numerator": "0"
+        },
+        "minimum_ns": {
+          "denominator": "1",
+          "numerator": "0"
+        }
+      }
+    },
+    {
+      "covered_time_ns": null,
+      "domain": {
+        "host_creation_id": null,
+        "id": 3,
+        "kind": "device_globaltimer",
+        "logical_device": 0,
+        "physical_device_uuid": "GPU-fixture-attention",
+        "process_creation_id": "33333333-3333-4333-8333-333333333333",
+        "raw_epoch": 1,
+        "unit": "ns"
+      },
+      "host_creation_id": "55555555-5555-4555-8555-555555555555",
+      "mapped_events": 0,
+      "mapping_counts": [
+        {
+          "count": 0,
+          "status": "mapped"
+        },
+        {
+          "count": 0,
+          "status": "outside_support"
+        },
+        {
+          "count": 0,
+          "status": "ambiguous_model"
+        },
+        {
+          "count": 11,
+          "status": "uncalibrated"
+        }
+      ],
+      "observation_interval": null,
+      "observation_time_ns": null,
+      "retained_event_coverage": {
+        "denominator": "1",
+        "numerator": "0"
+      },
+      "retained_events": 11,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "spans": [],
+      "support_intervals": [],
+      "time_coverage": null,
+      "uncertainty": {
+        "count": 0,
+        "maximum_ns": null,
+        "mean_ns": null,
+        "minimum_ns": null
+      }
+    },
+    {
+      "covered_time_ns": null,
+      "domain": {
+        "host_creation_id": null,
+        "id": 4,
+        "kind": "device_globaltimer",
+        "logical_device": 0,
+        "physical_device_uuid": "GPU-fixture-ffn",
+        "process_creation_id": "44444444-4444-4444-8444-444444444444",
+        "raw_epoch": 1,
+        "unit": "ns"
+      },
+      "host_creation_id": "55555555-5555-4555-8555-555555555555",
+      "mapped_events": 0,
+      "mapping_counts": [
+        {
+          "count": 0,
+          "status": "mapped"
+        },
+        {
+          "count": 0,
+          "status": "outside_support"
+        },
+        {
+          "count": 0,
+          "status": "ambiguous_model"
+        },
+        {
+          "count": 16,
+          "status": "uncalibrated"
+        }
+      ],
+      "observation_interval": null,
+      "observation_time_ns": null,
+      "retained_event_coverage": {
+        "denominator": "1",
+        "numerator": "0"
+      },
+      "retained_events": 16,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "spans": [],
+      "support_intervals": [],
+      "time_coverage": null,
+      "uncertainty": {
+        "count": 0,
+        "maximum_ns": null,
+        "mean_ns": null,
+        "minimum_ns": null
+      }
+    }
+  ],
+  "drift": [],
+  "limitations": [
+    "Conditional affine bracketing; held-out validation is not independent hardware ground truth.",
+    "Time coverage uses declared raw-domain intervals; event coverage covers retained Device events only.",
+    "Sampler diagnostics require caller measurements; process counters are not apportioned to Epochs.",
+    "Synthetic agreement does not establish loaded, MPS or multiprocess hardware precision."
+  ],
+  "quality_checkpoints": [],
+  "quality_findings": [
+    {
+      "code": "applicability_unknown",
+      "detail": "conditional protocol path unresolved",
+      "producer": null,
+      "run_id": null,
+      "sources": [
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 5,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 7424,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 6,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 7680,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 7,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 7936,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 8,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 8704,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 9,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 8192,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 10,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 8960,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 11,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 8448,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        }
+      ]
+    },
+    {
+      "code": "event_missing",
+      "detail": "attempted sequence gaps; cause not inferred",
+      "producer": 1,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "sources": [
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 0,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 2,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 256,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 3,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 512,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 4,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 768,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 5,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 9216,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1001,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 0,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1002,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 256,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1003,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 512,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1004,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 768,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1005,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 1024,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1006,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 1280,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1007,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 1536,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1008,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 1792,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1009,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 2048,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        },
+        {
+          "clock_domain_id": 1,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1010,
+            "producer": 1,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 2304,
+          "path": "synthetic/producer-1.xpool",
+          "pe": null,
+          "process_creation_id": "22222222-2222-4222-8222-222222222222"
+        }
+      ]
+    },
+    {
+      "code": "tail_unknown",
+      "detail": "no complete closing checkpoint",
+      "producer": 1,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "sources": []
+    },
+    {
+      "code": "tail_unknown",
+      "detail": "no complete closing checkpoint",
+      "producer": 2,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "sources": []
+    },
+    {
+      "code": "tail_unknown",
+      "detail": "no complete closing checkpoint",
+      "producer": 3,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "sources": []
+    },
+    {
+      "code": "process_artifact_missing",
+      "detail": "no events or checkpoint for registered Producer",
+      "producer": 4,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "sources": []
+    },
+    {
+      "code": "tail_unknown",
+      "detail": "no complete closing checkpoint",
+      "producer": 4,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "sources": []
+    },
+    {
+      "code": "attachment_not_collected",
+      "detail": "Routing attachment unavailable",
+      "producer": 5,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "sources": [
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1000,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 9472,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        }
+      ]
+    },
+    {
+      "code": "event_missing",
+      "detail": "attempted sequence gaps; cause not inferred",
+      "producer": 5,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "sources": [
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 5376,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 2,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 5632,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 3,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 5888,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 4,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 6144,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 5,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 7424,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 6,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 7680,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 7,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 7936,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 8,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 8704,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 9,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 8192,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 10,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 8960,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 11,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 8448,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 12,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 6400,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 13,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 6656,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 14,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 6912,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 15,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 7168,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        },
+        {
+          "clock_domain_id": 4,
+          "endpoint": null,
+          "identity": {
+            "event_sequence": 1000,
+            "producer": 5,
+            "run_id": "11111111-1111-4111-8111-111111111111"
+          },
+          "instance_rank": null,
+          "offset": 9472,
+          "path": "synthetic/producer-5.xpool",
+          "pe": 1,
+          "process_creation_id": "44444444-4444-4444-8444-444444444444"
+        }
+      ]
+    },
+    {
+      "code": "tail_unknown",
+      "detail": "no complete closing checkpoint",
+      "producer": 5,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "sources": []
+    },
+    {
+      "code": "process_artifact_missing",
+      "detail": "no events or checkpoint for registered Producer",
+      "producer": 9,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "sources": []
+    },
+    {
+      "code": "tail_unknown",
+      "detail": "no complete closing checkpoint",
+      "producer": 9,
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "sources": []
+    }
+  ],
+  "samplers": [
+    {
+      "declaration": {
+        "declared_attempt_range": [
+          1,
+          10
+        ],
+        "diagnostics": {
+          "attempted": null,
+          "failed": null,
+          "provenance": [],
+          "sampling_overhead_ns": null,
+          "skipped_busy": null
+        },
+        "load_phases": [],
+        "observation_interval": [
+          0,
+          1200
+        ],
+        "provenance": [],
+        "sampler": {
+          "device_clock_domain_id": 2,
+          "host_producer": 1,
+          "raw_epoch": 1,
+          "run_id": "11111111-1111-4111-8111-111111111111"
+        }
+      },
+      "duplicate_sample_count": 0,
+      "host_before_intervals": {
+        "count": 9,
+        "maximum_ns": 100,
+        "mean_ns": {
+          "denominator": "1",
+          "numerator": "100"
+        },
+        "minimum_ns": 100,
+        "values_ns": [
+          100,
+          100,
+          100,
+          100,
+          100,
+          100,
+          100,
+          100,
+          100
+        ]
+      },
+      "models": [
+        {
+          "G0": 100,
+          "a": {
+            "denominator": "1",
+            "numerator": "1"
+          },
+          "algorithm_version": 1,
+          "b": {
+            "denominator": "1",
+            "numerator": "100"
+          },
+          "block": {
+            "block_index": 0,
+            "clock_jump": false,
+            "declared_attempt_range": [
+              1,
+              10
+            ],
+            "host_creation_id": "55555555-5555-4555-8555-555555555555",
+            "load_phases": [],
+            "provenance": [],
+            "sampler": {
+              "device_clock_domain_id": 2,
+              "host_producer": 1,
+              "raw_epoch": 1,
+              "run_id": "11111111-1111-4111-8111-111111111111"
+            },
+            "samples": [
+              {
+                "attempt_sequence": 1,
+                "device_clock_domain_id": 2,
+                "device_time_ns": 100,
+                "failure_code": null,
+                "host_after_ns": 200,
+                "host_before_ns": 200,
+                "outcome": "succeeded",
+                "raw_epoch": 1,
+                "source": {
+                  "clock_domain_id": 1,
+                  "endpoint": null,
+                  "identity": {
+                    "event_sequence": 1001,
+                    "producer": 1,
+                    "run_id": "11111111-1111-4111-8111-111111111111"
+                  },
+                  "instance_rank": null,
+                  "offset": 0,
+                  "path": "synthetic/producer-1.xpool",
+                  "pe": null,
+                  "process_creation_id": "22222222-2222-4222-8222-222222222222"
+                }
+              },
+              {
+                "attempt_sequence": 2,
+                "device_clock_domain_id": 2,
+                "device_time_ns": 200,
+                "failure_code": null,
+                "host_after_ns": 300,
+                "host_before_ns": 300,
+                "outcome": "succeeded",
+                "raw_epoch": 1,
+                "source": {
+                  "clock_domain_id": 1,
+                  "endpoint": null,
+                  "identity": {
+                    "event_sequence": 1002,
+                    "producer": 1,
+                    "run_id": "11111111-1111-4111-8111-111111111111"
+                  },
+                  "instance_rank": null,
+                  "offset": 256,
+                  "path": "synthetic/producer-1.xpool",
+                  "pe": null,
+                  "process_creation_id": "22222222-2222-4222-8222-222222222222"
+                }
+              },
+              {
+                "attempt_sequence": 3,
+                "device_clock_domain_id": 2,
+                "device_time_ns": 300,
+                "failure_code": null,
+                "host_after_ns": 400,
+                "host_before_ns": 400,
+                "outcome": "succeeded",
+                "raw_epoch": 1,
+                "source": {
+                  "clock_domain_id": 1,
+                  "endpoint": null,
+                  "identity": {
+                    "event_sequence": 1003,
+                    "producer": 1,
+                    "run_id": "11111111-1111-4111-8111-111111111111"
+                  },
+                  "instance_rank": null,
+                  "offset": 512,
+                  "path": "synthetic/producer-1.xpool",
+                  "pe": null,
+                  "process_creation_id": "22222222-2222-4222-8222-222222222222"
+                }
+              },
+              {
+                "attempt_sequence": 4,
+                "device_clock_domain_id": 2,
+                "device_time_ns": 400,
+                "failure_code": null,
+                "host_after_ns": 500,
+                "host_before_ns": 500,
+                "outcome": "succeeded",
+                "raw_epoch": 1,
+                "source": {
+                  "clock_domain_id": 1,
+                  "endpoint": null,
+                  "identity": {
+                    "event_sequence": 1004,
+                    "producer": 1,
+                    "run_id": "11111111-1111-4111-8111-111111111111"
+                  },
+                  "instance_rank": null,
+                  "offset": 768,
+                  "path": "synthetic/producer-1.xpool",
+                  "pe": null,
+                  "process_creation_id": "22222222-2222-4222-8222-222222222222"
+                }
+              },
+              {
+                "attempt_sequence": 5,
+                "device_clock_domain_id": 2,
+                "device_time_ns": 500,
+                "failure_code": null,
+                "host_after_ns": 600,
+                "host_before_ns": 600,
+                "outcome": "succeeded",
+                "raw_epoch": 1,
+                "source": {
+                  "clock_domain_id": 1,
+                  "endpoint": null,
+                  "identity": {
+                    "event_sequence": 1005,
+                    "producer": 1,
+                    "run_id": "11111111-1111-4111-8111-111111111111"
+                  },
+                  "instance_rank": null,
+                  "offset": 1024,
+                  "path": "synthetic/producer-1.xpool",
+                  "pe": null,
+                  "process_creation_id": "22222222-2222-4222-8222-222222222222"
+                }
+              },
+              {
+                "attempt_sequence": 6,
+                "device_clock_domain_id": 2,
+                "device_time_ns": 600,
+                "failure_code": null,
+                "host_after_ns": 700,
+                "host_before_ns": 700,
+                "outcome": "succeeded",
+                "raw_epoch": 1,
+                "source": {
+                  "clock_domain_id": 1,
+                  "endpoint": null,
+                  "identity": {
+                    "event_sequence": 1006,
+                    "producer": 1,
+                    "run_id": "11111111-1111-4111-8111-111111111111"
+                  },
+                  "instance_rank": null,
+                  "offset": 1280,
+                  "path": "synthetic/producer-1.xpool",
+                  "pe": null,
+                  "process_creation_id": "22222222-2222-4222-8222-222222222222"
+                }
+              },
+              {
+                "attempt_sequence": 7,
+                "device_clock_domain_id": 2,
+                "device_time_ns": 700,
+                "failure_code": null,
+                "host_after_ns": 800,
+                "host_before_ns": 800,
+                "outcome": "succeeded",
+                "raw_epoch": 1,
+                "source": {
+                  "clock_domain_id": 1,
+                  "endpoint": null,
+                  "identity": {
+                    "event_sequence": 1007,
+                    "producer": 1,
+                    "run_id": "11111111-1111-4111-8111-111111111111"
+                  },
+                  "instance_rank": null,
+                  "offset": 1536,
+                  "path": "synthetic/producer-1.xpool",
+                  "pe": null,
+                  "process_creation_id": "22222222-2222-4222-8222-222222222222"
+                }
+              },
+              {
+                "attempt_sequence": 8,
+                "device_clock_domain_id": 2,
+                "device_time_ns": 800,
+                "failure_code": null,
+                "host_after_ns": 900,
+                "host_before_ns": 900,
+                "outcome": "succeeded",
+                "raw_epoch": 1,
+                "source": {
+                  "clock_domain_id": 1,
+                  "endpoint": null,
+                  "identity": {
+                    "event_sequence": 1008,
+                    "producer": 1,
+                    "run_id": "11111111-1111-4111-8111-111111111111"
+                  },
+                  "instance_rank": null,
+                  "offset": 1792,
+                  "path": "synthetic/producer-1.xpool",
+                  "pe": null,
+                  "process_creation_id": "22222222-2222-4222-8222-222222222222"
+                }
+              },
+              {
+                "attempt_sequence": 9,
+                "device_clock_domain_id": 2,
+                "device_time_ns": 900,
+                "failure_code": null,
+                "host_after_ns": 1000,
+                "host_before_ns": 1000,
+                "outcome": "succeeded",
+                "raw_epoch": 1,
+                "source": {
+                  "clock_domain_id": 1,
+                  "endpoint": null,
+                  "identity": {
+                    "event_sequence": 1009,
+                    "producer": 1,
+                    "run_id": "11111111-1111-4111-8111-111111111111"
+                  },
+                  "instance_rank": null,
+                  "offset": 2048,
+                  "path": "synthetic/producer-1.xpool",
+                  "pe": null,
+                  "process_creation_id": "22222222-2222-4222-8222-222222222222"
+                }
+              },
+              {
+                "attempt_sequence": 10,
+                "device_clock_domain_id": 2,
+                "device_time_ns": 1000,
+                "failure_code": null,
+                "host_after_ns": 1100,
+                "host_before_ns": 1100,
+                "outcome": "succeeded",
+                "raw_epoch": 1,
+                "source": {
+                  "clock_domain_id": 1,
+                  "endpoint": null,
+                  "identity": {
+                    "event_sequence": 1010,
+                    "producer": 1,
+                    "run_id": "11111111-1111-4111-8111-111111111111"
+                  },
+                  "instance_rank": null,
+                  "offset": 2304,
+                  "path": "synthetic/producer-1.xpool",
+                  "pe": null,
+                  "process_creation_id": "22222222-2222-4222-8222-222222222222"
+                }
+              }
+            ],
+            "source_locations": [
+              {
+                "clock_domain_id": 1,
+                "endpoint": null,
+                "identity": {
+                  "event_sequence": 1001,
+                  "producer": 1,
+                  "run_id": "11111111-1111-4111-8111-111111111111"
+                },
+                "instance_rank": null,
+                "offset": 0,
+                "path": "synthetic/producer-1.xpool",
+                "pe": null,
+                "process_creation_id": "22222222-2222-4222-8222-222222222222"
+              },
+              {
+                "clock_domain_id": 1,
+                "endpoint": null,
+                "identity": {
+                  "event_sequence": 1002,
+                  "producer": 1,
+                  "run_id": "11111111-1111-4111-8111-111111111111"
+                },
+                "instance_rank": null,
+                "offset": 256,
+                "path": "synthetic/producer-1.xpool",
+                "pe": null,
+                "process_creation_id": "22222222-2222-4222-8222-222222222222"
+              },
+              {
+                "clock_domain_id": 1,
+                "endpoint": null,
+                "identity": {
+                  "event_sequence": 1003,
+                  "producer": 1,
+                  "run_id": "11111111-1111-4111-8111-111111111111"
+                },
+                "instance_rank": null,
+                "offset": 512,
+                "path": "synthetic/producer-1.xpool",
+                "pe": null,
+                "process_creation_id": "22222222-2222-4222-8222-222222222222"
+              },
+              {
+                "clock_domain_id": 1,
+                "endpoint": null,
+                "identity": {
+                  "event_sequence": 1004,
+                  "producer": 1,
+                  "run_id": "11111111-1111-4111-8111-111111111111"
+                },
+                "instance_rank": null,
+                "offset": 768,
+                "path": "synthetic/producer-1.xpool",
+                "pe": null,
+                "process_creation_id": "22222222-2222-4222-8222-222222222222"
+              },
+              {
+                "clock_domain_id": 1,
+                "endpoint": null,
+                "identity": {
+                  "event_sequence": 1005,
+                  "producer": 1,
+                  "run_id": "11111111-1111-4111-8111-111111111111"
+                },
+                "instance_rank": null,
+                "offset": 1024,
+                "path": "synthetic/producer-1.xpool",
+                "pe": null,
+                "process_creation_id": "22222222-2222-4222-8222-222222222222"
+              },
+              {
+                "clock_domain_id": 1,
+                "endpoint": null,
+                "identity": {
+                  "event_sequence": 1006,
+                  "producer": 1,
+                  "run_id": "11111111-1111-4111-8111-111111111111"
+                },
+                "instance_rank": null,
+                "offset": 1280,
+                "path": "synthetic/producer-1.xpool",
+                "pe": null,
+                "process_creation_id": "22222222-2222-4222-8222-222222222222"
+              },
+              {
+                "clock_domain_id": 1,
+                "endpoint": null,
+                "identity": {
+                  "event_sequence": 1007,
+                  "producer": 1,
+                  "run_id": "11111111-1111-4111-8111-111111111111"
+                },
+                "instance_rank": null,
+                "offset": 1536,
+                "path": "synthetic/producer-1.xpool",
+                "pe": null,
+                "process_creation_id": "22222222-2222-4222-8222-222222222222"
+              },
+              {
+                "clock_domain_id": 1,
+                "endpoint": null,
+                "identity": {
+                  "event_sequence": 1008,
+                  "producer": 1,
+                  "run_id": "11111111-1111-4111-8111-111111111111"
+                },
+                "instance_rank": null,
+                "offset": 1792,
+                "path": "synthetic/producer-1.xpool",
+                "pe": null,
+                "process_creation_id": "22222222-2222-4222-8222-222222222222"
+              },
+              {
+                "clock_domain_id": 1,
+                "endpoint": null,
+                "identity": {
+                  "event_sequence": 1009,
+                  "producer": 1,
+                  "run_id": "11111111-1111-4111-8111-111111111111"
+                },
+                "instance_rank": null,
+                "offset": 2048,
+                "path": "synthetic/producer-1.xpool",
+                "pe": null,
+                "process_creation_id": "22222222-2222-4222-8222-222222222222"
+              },
+              {
+                "clock_domain_id": 1,
+                "endpoint": null,
+                "identity": {
+                  "event_sequence": 1010,
+                  "producer": 1,
+                  "run_id": "11111111-1111-4111-8111-111111111111"
+                },
+                "instance_rank": null,
+                "offset": 2304,
+                "path": "synthetic/producer-1.xpool",
+                "pe": null,
+                "process_creation_id": "22222222-2222-4222-8222-222222222222"
+              }
+            ]
+          },
+          "duplicate_sample_count": 0,
+          "fit_sequences": [
+            1,
+            2,
+            3,
+            5,
+            6,
+            7,
+            8,
+            10
+          ],
+          "h": 200,
+          "model_id": {
+            "block_index": 0,
+            "sampler": [
+              "11111111-1111-4111-8111-111111111111",
+              1,
+              2
+            ]
+          },
+          "rate_lower_ppm": {
+            "denominator": "1",
+            "numerator": "0"
+          },
+          "rate_ppm": {
+            "denominator": "1",
+            "numerator": "0"
+          },
+          "rate_upper_ppm": {
+            "denominator": "1",
+            "numerator": "0"
+          },
+          "reasons": [],
+          "status": "valid",
+          "valid_G": [
+            100,
+            1000
+          ],
+          "validation_pass": [
+            true,
+            true
+          ],
+          "validation_sequences": [
+            4,
+            9
+          ],
+          "vertices": [
+            {
+              "a": {
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "c": {
+                "denominator": "1",
+                "numerator": "0"
+              }
+            }
+          ]
+        }
+      ],
+      "phase_windows": [
+        {
+          "phase": "unspecified",
+          "widths": {
+            "count": 10,
+            "maximum_ns": 0,
+            "mean_ns": {
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "minimum_ns": 0,
+            "values_ns": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "retained_attempts": 10,
+      "retained_failed_attempts": 0,
+      "sampling_overhead": null,
+      "window_widths": {
+        "count": 10,
+        "maximum_ns": 0,
+        "mean_ns": {
+          "denominator": "1",
+          "numerator": "0"
+        },
+        "minimum_ns": 0,
+        "values_ns": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  ]
+}

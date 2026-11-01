@@ -538,3 +538,50 @@ mapped = map_event(index, event)
 report_json = build_calibration_report(index, view).to_json()
 # The caller explicitly selects where to write report_json; raw files stay intact.
 ```
+
+## Perfetto export and trace queries
+
+`xpool.observability.trace` consumes verified reconstruction and calibration
+indices. The `xpool trace` CLI supplies explicit input inventories and separate,
+new output directories. Offline commands resolve the existing cache policy
+without installing a model deployment configuration. Raw files remain
+authoritative, and derived artifacts stay outside runtime recording quotas.
+
+A completed Trace Bundle contains standard protobuf files, calibration and
+quality reports, input references and hashes, and a final `bundle.json` index.
+Unified files partition Events by Run and evidenced common Host reference. Raw
+files retain each domain independently, including complete local intervals
+that cross mapping boundaries. Evidence identities connect these views; built-in
+queries deduplicate equivalent representations.
+
+The exporter maps display timestamps through the calibration consumer, retaining
+raw integers, units, display origins, Epochs, model versions, exact estimates,
+uncertainty and concrete source endpoints. ClockSnapshots record evidenced
+correspondences at retained mapped Device Events. They do not replace calibration
+or authorize interpolation through unsupported spans. Unmapped Events remain
+in raw files with explicit gap records. Complete intervals with mapped endpoints
+can remain visible across a calibration gap, with incomplete coverage recorded
+in their arguments. Uncertainty-aware queries retain that distinction.
+
+Semantic tracks group local roles, Lane identities and activity phases. Reusable
+overlap slots prevent unrelated activities from becoming nested slices. Missing,
+conflicting and failed boundaries remain explicit instant evidence. Concrete
+protocol endpoints support visual flows when both occur in one file with
+compatible display ordering; other evidenced relations remain queryable without
+invented endpoint times. Graph structure and Routing tensors remain referenced
+artifacts. Cumulative counters retain checkpoint scope and Host observation
+time; values outside the exact display range remain in checkpoint evidence with
+an explicit display limitation.
+
+The query interface uses the qualified local Trace Processor. Explicit setup
+owns downloading and checksum verification; queries verify the prepared tool
+and never download or update it. Built-in queries cover Graph, Transport,
+Invocation, Lane/Lease, Routing, calibration and quality evidence. User SQL runs
+independently on each file. JSON results preserve source files, integer values,
+nulls, and structured duration estimates. Scalar Perfetto durations remain
+display values rather than precision guarantees.
+
+See [Observation traces](../tutorials/observation-traces.md) for dependency setup,
+input schemas, output lifecycle, examples and error behavior. CPU fixtures with
+a real Trace Processor qualify the offline consumer; they do not establish
+measured hardware calibration accuracy or serving acceptance.

@@ -5,6 +5,12 @@ computation while retaining one generation-scoped data plane.
 
 ## Language
 
+**Trace Bundle**:
+A derived offline observation artifact containing independently referenced
+Perfetto traces and their calibration, quality and source-evidence index.
+Unified and raw-domain views retain the same protocol evidence identities.
+_Avoid_: Raw recording, runtime buffer, calibration proof
+
 **CrossPool**:
 The resource-disaggregated multi-model serving system described by this glossary.
 

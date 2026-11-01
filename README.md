@@ -83,6 +83,10 @@ MPS endpoints use a private per-user root at `/tmp/xpool-mps-<uid>/`.
 
 ## Configuration
 
+For offline observation validation, Perfetto export and trace queries, see
+[Observation traces](docs/tutorials/observation-traces.md). These commands use
+explicit artifact inputs and a prepared, pinned Trace Processor.
+
 For the complete user-facing reference, see
 [Configuration](docs/configuration.md). Start from
 [`configs/xpool.example.toml`](configs/xpool.example.toml) and

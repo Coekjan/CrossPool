@@ -264,6 +264,13 @@ cloning, artifact IDs and report exports.
 
 ## Verification And Commit Hooks
 
+Offline observation export/query acceptance uses the repository-pinned Perfetto
+Python package and a prepared Trace Processor. Run `uv run xpool trace setup`
+before `uv run pytest tests/suites/integration/observability/test_trace.py`.
+These integration cases need no device or model weights. A missing processor
+skips them with explicit preparation instructions; acceptance requires executing
+them after setup. See the [trace tutorial](../docs/tutorials/observation-traces.md).
+
 Use affected focused checks during iteration. The installed hooks run normally
 during commit; their complete-suite run is resource-eligible and is not proof
 of strict final acceptance. Follow
