@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.12.*"
 resolution-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'linux'",
@@ -1694,6 +1694,18 @@ wheels = [
 ]
 
 [[package]]
+name = "perfetto"
+version = "0.58.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b9/42/faefb17f233dd2dfcc604c0ccec401fefa50513ac5ae97fd5e91f3d7335e/perfetto-0.58.2.tar.gz", hash = "sha256:54e0e8616dcd9fc1e087914d747370375aeb2f8dacf68ae7ead8c3c5e596a0c7", size = 326047, upload-time = "2026-08-24T22:25:54.288Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/47/ec/0763833e57af5cb135e7485e2d4c0ab15df78e36f4b81eb31446ea053ec5/perfetto-0.58.2-py3-none-any.whl", hash = "sha256:024d37db3e1938a0247311337daf419c7204af757fb303cdc1dca46fa8d83cfe", size = 344338, upload-time = "2026-08-24T22:25:52.752Z" },
+]
+
+[[package]]
 name = "pexpect"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2786,6 +2798,7 @@ dependencies = [
     { name = "httpx" },
     { name = "nvidia-nvshmem-cu13" },
     { name = "ortools" },
+    { name = "perfetto" },
     { name = "psutil" },
     { name = "pydantic" },
     { name = "safetensors" },
@@ -2822,6 +2835,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "nvidia-nvshmem-cu13", specifier = "==3.7.2" },
     { name = "ortools", specifier = "==9.15.6755" },
+    { name = "perfetto", specifier = "==0.58.2" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "safetensors", specifier = ">=0.8.0" },
