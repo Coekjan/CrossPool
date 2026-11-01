@@ -307,3 +307,17 @@ def test_wire_constants_match_independent_reference_layout_and_schema() -> None:
     schema = Metadata.model_json_schema()
     # The named Literal alias retains an exact-version JSON schema, not a general integer.
     assert schema["$defs"]["ContractVersion"]["const"] == layout["contract_version"]
+
+
+@pytest.mark.parametrize("value", [111, 206, 520, 551, 602, 2**32 - 1])
+def test_unknown_event_kind_keeps_structured_source_context(value: int) -> None:
+    event = events_for(scenario("normal_dense"))[0]
+    event = replace(event, record=event.record.model_copy(update={"kind": value}))
+    with pytest.raises(ObservationError) as caught:
+        validate_event(event)
+    assert caught.value.code == ErrorCode.UNKNOWN_KIND
+    assert caught.value.path == event.source.path
+    assert caught.value.offset == event.source.offset
+    assert caught.value.producer == event.source.identity.producer
+    assert caught.value.event_sequence == event.record.event_sequence
+    assert isinstance(caught.value.__cause__, ValueError)

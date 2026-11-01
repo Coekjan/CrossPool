@@ -15,9 +15,9 @@ from xpool.observability.wire import (
     CONTRACT_VERSION,
     SHA256_HEX_LENGTH,
     ContractVersion,
-    EventKind,
     PresenceBit,
     SampleFailureCode,
+    TransportEventKind,
 )
 
 __all__ = [
@@ -561,7 +561,7 @@ class EventRecord(StrictModel):
     @property
     def boundary(self) -> int:
         """Original protocol boundary for anomaly evidence; kind otherwise."""
-        return self.data0 if self.kind == EventKind.TRANSPORT_ANOMALY else self.kind
+        return self.data0 if self.kind == TransportEventKind.TRANSPORT_ANOMALY else self.kind
 
     def present_facts(self) -> dict[str, int]:
         """Return fields whose semantic presence is established by recorded group bits."""

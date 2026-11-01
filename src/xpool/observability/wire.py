@@ -18,25 +18,32 @@ __all__ = [
     "MIN_EVENTS_PER_CHUNK",
     "SHA256_HEX_LENGTH",
     "AttachmentState",
+    "CalibrationEventKind",
     "ChunkHeaderOffset",
     "ContractVersion",
     "Delivery",
     "DpRowLayout",
+    "EventFamily",
     "EventKind",
     "EventOffset",
     "EventRole",
+    "FabricEventKind",
     "ForwardMode",
     "GraphError",
+    "GraphEventKind",
     "GraphMode",
     "GraphPhase",
     "InvalidRequestField",
     "OutputRequirement",
     "PresenceBit",
     "ResultCode",
+    "RoutingEventKind",
     "SampleFailure",
     "SampleFailureCode",
+    "TransportEventKind",
     "device_execution_boundary",
     "known_presence_mask",
+    "parse_event_kind",
 ]
 
 
@@ -112,8 +119,19 @@ class InvalidRequestField(IntFlag):
 
 
 @unique
-class EventKind(IntEnum):
-    """Version-seven event kind wire values."""
+class EventFamily(StrEnum):
+    """Semantic event categories, independent of wire-number allocation."""
+
+    TRANSPORT = "transport"
+    FABRIC = "fabric"
+    GRAPH = "graph"
+    ROUTING = "routing"
+    CALIBRATION = "calibration"
+
+
+@unique
+class TransportEventKind(IntEnum):
+    """Version-seven Transport event wire values."""
 
     REQUEST_STAGING_STARTED = 100
     REQUEST_STAGING_COMPLETED = 101
@@ -127,6 +145,17 @@ class EventKind(IntEnum):
     RESULT_ACKNOWLEDGED = 109
     CLOSED = 110
     TRANSPORT_ANOMALY = 150
+
+    @property
+    def family(self) -> EventFamily:
+        """Return the semantic category shared by this event enum."""
+        return EventFamily.TRANSPORT
+
+
+@unique
+class FabricEventKind(IntEnum):
+    """Version-seven Fabric event wire values."""
+
     SUBMISSION_PREPARED = 200
     SUBMISSION_PUBLISHED = 201
     ADMISSION_OBSERVED = 202
@@ -150,6 +179,18 @@ class EventKind(IntEnum):
     PARTIAL_READY_PUBLISHED = 406
     PEER_PARTIALS_READY_OBSERVED = 407
     COMPLETION_PUBLISHED = 408
+    TRANSPORT_FABRIC_ASSOCIATED = 450
+
+    @property
+    def family(self) -> EventFamily:
+        """Return the semantic category shared by this event enum."""
+        return EventFamily.FABRIC
+
+
+@unique
+class GraphEventKind(IntEnum):
+    """Version-seven Graph event wire values."""
+
     GRAPH_CAPTURE_BEGIN = 500
     GRAPH_CAPTURE_END = 501
     GRAPH_CAPTURE_ERROR = 502
@@ -163,10 +204,59 @@ class EventKind(IntEnum):
     GRAPH_INSTALL_BEGIN = 510
     GRAPH_INSTALL_END = 511
     GRAPH_INSTALL_ERROR = 512
-    TRANSPORT_FABRIC_ASSOCIATED = 450
+
+    @property
+    def family(self) -> EventFamily:
+        """Return the semantic category shared by this event enum."""
+        return EventFamily.GRAPH
+
+
+@unique
+class RoutingEventKind(IntEnum):
+    """Version-seven Routing event wire values."""
+
     ROUTING_PUBLISHED = 550
+
+    @property
+    def family(self) -> EventFamily:
+        """Return the semantic category shared by this event enum."""
+        return EventFamily.ROUTING
+
+
+@unique
+class CalibrationEventKind(IntEnum):
+    """Version-seven Calibration event wire values."""
+
     CALIBRATION_SAMPLE_SUCCEEDED = 600
     CALIBRATION_SAMPLE_FAILED = 601
+
+    @property
+    def family(self) -> EventFamily:
+        """Return the semantic category shared by this event enum."""
+        return EventFamily.CALIBRATION
+
+
+type EventKind = TransportEventKind | FabricEventKind | GraphEventKind | RoutingEventKind | CalibrationEventKind
+
+
+# Raw wire number -> concrete family member; enum declarations own the values.
+event_kinds: dict[int, EventKind] = {
+    int(kind): kind
+    for enum in (TransportEventKind, FabricEventKind, GraphEventKind, RoutingEventKind, CalibrationEventKind)
+    for kind in enum
+}
+
+
+def parse_event_kind(value: int) -> EventKind:
+    """Resolve a wire number to its family-specific enum; reject unknown values.
+
+    Raises:
+        ValueError: The wire number does not name a declared Event kind.
+    """
+    try:
+        return event_kinds[value]
+    except KeyError as exc:
+        raise ValueError(f"unknown event kind {value}") from exc
 
 
 @unique

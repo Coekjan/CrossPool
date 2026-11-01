@@ -48,6 +48,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 2
     try:
+        if args.command == "trace":
+            # Offline artifacts require only the existing cache-path resolver;
+            # model deployment configuration belongs to runtime commands.
+            return args.trace_handler(args)
         arg_values = vars(args)
         config = init_global_config(
             cli={

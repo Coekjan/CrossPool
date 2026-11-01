@@ -9,7 +9,16 @@ from xpool.observability.entities import EntityIdentity, EntityKind
 from xpool.observability.errors import ObservationError
 from xpool.observability.intervals import phase_interval, protocol_temporal_conflicts
 from xpool.observability.reconstruction import reconstruct
-from xpool.observability.wire import EventKind, EventRole, GraphError, PresenceBit, ResultCode
+from xpool.observability.wire import (
+    EventKind,
+    EventRole,
+    FabricEventKind,
+    GraphError,
+    GraphEventKind,
+    PresenceBit,
+    ResultCode,
+    TransportEventKind,
+)
 
 event_cases = [
     case for case in fixture("causality")["cases"] if "events" in case["input"] or "base_case" in case["input"]
@@ -19,11 +28,21 @@ event_cases = [
 @pytest.mark.parametrize(
     "entity_kind,role,begin_kind,end_kind",
     [
-        ("operation", EventRole.INSTANCE, EventKind.REQUEST_STAGING_STARTED, EventKind.REQUEST_STAGING_COMPLETED),
-        ("operation", EventRole.ATNAGENT, EventKind.REQUEST_OBSERVED, EventKind.EXECUTION_STARTED),
-        ("invocation", EventRole.ATNAGENT, EventKind.SUBMISSION_PREPARED, EventKind.SUBMISSION_PUBLISHED),
-        ("invocation", EventRole.COORDINATOR, EventKind.ENQUEUED, EventKind.SCHEDULED),
-        ("invocation", EventRole.FFNAGENT, EventKind.LANE_EXECUTION_OBSERVED, EventKind.INPUT_READY_OBSERVED),
+        (
+            "operation",
+            EventRole.INSTANCE,
+            TransportEventKind.REQUEST_STAGING_STARTED,
+            TransportEventKind.REQUEST_STAGING_COMPLETED,
+        ),
+        ("operation", EventRole.ATNAGENT, TransportEventKind.REQUEST_OBSERVED, TransportEventKind.EXECUTION_STARTED),
+        ("invocation", EventRole.ATNAGENT, FabricEventKind.SUBMISSION_PREPARED, FabricEventKind.SUBMISSION_PUBLISHED),
+        ("invocation", EventRole.COORDINATOR, FabricEventKind.ENQUEUED, FabricEventKind.SCHEDULED),
+        (
+            "invocation",
+            EventRole.FFNAGENT,
+            FabricEventKind.LANE_EXECUTION_OBSERVED,
+            FabricEventKind.INPUT_READY_OBSERVED,
+        ),
     ],
 )
 def test_each_protocol_role_detects_reversed_local_boundaries(
@@ -103,7 +122,7 @@ def test_causal_fixtures(case: FixtureData) -> None:
             any(edge.relation == "operation_to_invocation" for edge in result.edges) == expected["fabric_entry_proven"]
         )
     if expected.get("submission_publication") == "unknown":
-        assert not any(event.record.kind == EventKind.SUBMISSION_PUBLISHED for event in result.events.values())
+        assert not any(event.record.kind == FabricEventKind.SUBMISSION_PUBLISHED for event in result.events.values())
     if expected.get("execution_completion") == "unknown":
         execution = next(
             interval
@@ -119,9 +138,9 @@ def test_causal_fixtures(case: FixtureData) -> None:
     if expected.get("atnagent_result") == "timeout":
         operation = result.of_kind("operation")[0]
         atnagent = next(o for o in operation.observations.values() if o.identity.role == EventRole.ATNAGENT)
-        assert atnagent.transport_results[EventKind.RESULT_PUBLISHED] == ResultCode.TIMEOUT
-        assert EventKind.EXECUTION_COMPLETED in atnagent.events
-        assert EventKind.RESULT_PUBLISHED in atnagent.events
+        assert atnagent.transport_results[TransportEventKind.RESULT_PUBLISHED] == ResultCode.TIMEOUT
+        assert TransportEventKind.EXECUTION_COMPLETED in atnagent.events
+        assert TransportEventKind.RESULT_PUBLISHED in atnagent.events
     if expected.get("ffn_compute_completion") == "unknown":
         compute = next(interval for interval in result.intervals if interval.name == "compute")
         assert compute.begin is not None and compute.end is None
@@ -236,9 +255,9 @@ def test_duplicate_retains_every_location() -> None:
 def test_raw_zero_and_reversed_interval_are_not_hidden() -> None:
     events = list(events_for(scenario("normal_dense")))
     for index, event in enumerate(events):
-        if event.record.kind == EventKind.REQUEST_STAGING_STARTED:
+        if event.record.kind == TransportEventKind.REQUEST_STAGING_STARTED:
             events[index] = replace(event, record=event.record.model_copy(update={"raw_time_ns": 0}))
-        if event.record.kind == EventKind.REQUEST_STAGING_COMPLETED:
+        if event.record.kind == TransportEventKind.REQUEST_STAGING_COMPLETED:
             events[index] = replace(event, record=event.record.model_copy(update={"raw_time_ns": 500}))
     result = reconstruct(events)
     assert any(interval.name == "request_staging" and interval.duration_ns == 500 for interval in result.intervals)
@@ -247,12 +266,14 @@ def test_raw_zero_and_reversed_interval_are_not_hidden() -> None:
 
 def test_graph_failure_does_not_become_successful_execution() -> None:
     event = next(
-        event for event in events_for(scenario("normal_dense")) if event.record.kind == EventKind.GRAPH_HOST_CALL_END
+        event
+        for event in events_for(scenario("normal_dense"))
+        if event.record.kind == GraphEventKind.GRAPH_HOST_CALL_END
     )
     failed = replace(
         event,
         record=event.record.model_copy(
-            update={"kind": int(EventKind.GRAPH_HOST_CALL_ERROR), "data4": int(GraphError.HOST_CALL_FAILED)}
+            update={"kind": int(GraphEventKind.GRAPH_HOST_CALL_ERROR), "data4": int(GraphError.HOST_CALL_FAILED)}
         ),
     )
     result = reconstruct((failed,))
@@ -268,28 +289,33 @@ def test_graph_interval_accepts_raw_event_kinds(failed: bool) -> None:
     events = tuple(
         event
         for event in events_for(scenario("normal_dense"))
-        if event.record.kind in (EventKind.GRAPH_HOST_CALL_BEGIN, EventKind.GRAPH_HOST_CALL_END)
+        if event.record.kind in (GraphEventKind.GRAPH_HOST_CALL_BEGIN, GraphEventKind.GRAPH_HOST_CALL_END)
     )
     if failed:
         events = tuple(
             replace(
                 event,
                 record=event.record.model_copy(
-                    update={"kind": int(EventKind.GRAPH_HOST_CALL_ERROR), "data4": int(GraphError.HOST_CALL_FAILED)}
+                    update={
+                        "kind": int(GraphEventKind.GRAPH_HOST_CALL_ERROR),
+                        "data4": int(GraphError.HOST_CALL_FAILED),
+                    }
                 ),
             )
-            if event.record.kind == EventKind.GRAPH_HOST_CALL_END
+            if event.record.kind == GraphEventKind.GRAPH_HOST_CALL_END
             else event
             for event in events
         )
     result = reconstruct(events)
     observation = next(iter(result.of_kind("graph_execution")[0].observations.values()))
     interval = phase_interval(
-        observation, "host_call", int(EventKind.GRAPH_HOST_CALL_BEGIN), int(EventKind.GRAPH_HOST_CALL_END)
+        observation, "host_call", int(GraphEventKind.GRAPH_HOST_CALL_BEGIN), int(GraphEventKind.GRAPH_HOST_CALL_END)
     )
     assert interval.status == ("unavailable" if failed else "complete")
     assert interval.begin is not None and interval.end is not None
-    assert interval.end.record.kind == (EventKind.GRAPH_HOST_CALL_ERROR if failed else EventKind.GRAPH_HOST_CALL_END)
+    assert interval.end.record.kind == (
+        GraphEventKind.GRAPH_HOST_CALL_ERROR if failed else GraphEventKind.GRAPH_HOST_CALL_END
+    )
     assert interval.reasons == (("graph_error",) if failed else ())
 
 
@@ -297,11 +323,11 @@ def test_unavailable_graph_context_does_not_produce_normal_duration_or_edges() -
     events = tuple(
         event
         for event in events_for(scenario("normal_dense"))
-        if event.record.kind in (EventKind.GRAPH_HOST_CALL_BEGIN, EventKind.GRAPH_HOST_CALL_END)
+        if event.record.kind in (GraphEventKind.GRAPH_HOST_CALL_BEGIN, GraphEventKind.GRAPH_HOST_CALL_END)
     )
     events = tuple(
         replace(event, record=event.record.model_copy(update={"data4": int(GraphError.CONTEXT_UNAVAILABLE)}))
-        if event.record.kind == EventKind.GRAPH_HOST_CALL_END
+        if event.record.kind == GraphEventKind.GRAPH_HOST_CALL_END
         else event
         for event in events
     )
@@ -316,7 +342,7 @@ def test_semantic_duplicates_are_distinct_from_boundary_conflicts() -> None:
     event = next(
         event
         for event in events_for(scenario("normal_dense"))
-        if event.record.kind == EventKind.REQUEST_STAGING_STARTED
+        if event.record.kind == TransportEventKind.REQUEST_STAGING_STARTED
     )
     duplicate = replace(
         event,

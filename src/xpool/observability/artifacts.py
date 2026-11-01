@@ -28,7 +28,7 @@ from xpool.observability.wire import (
     CONTRACT_VERSION,
     AttachmentState,
     ChunkHeaderOffset,
-    EventKind,
+    RoutingEventKind,
 )
 
 __all__ = ["ArtifactInputs", "ArtifactSet", "AttachmentEvidence", "AttachmentIndex", "read_artifacts"]
@@ -230,7 +230,7 @@ def resolve_attachments(
 
     for event in events:
         r = event.record
-        if r.kind == EventKind.ROUTING_PUBLISHED:
+        if r.kind == RoutingEventKind.ROUTING_PUBLISHED:
             identity = (event.source.identity.run_id, r.attachment_owner, r.attachment_sequence)
             publications.setdefault(identity, []).append(event)
 

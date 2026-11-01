@@ -8,7 +8,7 @@ from typing import Literal
 
 from xpool.observability.errors import ErrorCode, ObservationError
 from xpool.observability.models import Event, Finding, Metadata, QualityCheckpoint
-from xpool.observability.wire import EventKind
+from xpool.observability.wire import TransportEventKind
 
 __all__ = ["QualityReport"]
 
@@ -133,6 +133,6 @@ def summarize_quality(
         (run_id, event.record.endpoint_owner, event.record.endpoint_sequence, event.record.operation_sequence)
         for (run_id, _), producer_events in observed.items()
         for event in producer_events
-        if event.record.kind == EventKind.TRANSPORT_ANOMALY
+        if event.record.kind == TransportEventKind.TRANSPORT_ANOMALY
     }
     return QualityReport(tuple(findings), latest, final, len(anomalous_operations))

@@ -30,11 +30,16 @@ from xpool.observability.models import Event, Finding, Metadata, PairedClockSamp
 from xpool.observability.provenance import EventIdentity, Source
 from xpool.observability.quality import QualityReport, summarize_quality
 from xpool.observability.wire import (
-    EventKind,
+    CalibrationEventKind,
     EventRole,
+    FabricEventKind,
     GraphError,
+    GraphEventKind,
     PresenceBit,
+    RoutingEventKind,
     SampleFailure,
+    TransportEventKind,
+    parse_event_kind,
 )
 
 __all__ = ["Reconstruction", "reconstruct"]
@@ -183,7 +188,7 @@ def calibration_samples(samples: Iterable[Event]) -> tuple[PairedClockSample, ..
         # validate_event established a Device domain with a positive Epoch.
         if domain.raw_epoch is None:
             raise event.error(ErrorCode.INVALID_EVENT, "sample Device Epoch unavailable")
-        succeeded = r.kind == EventKind.CALIBRATION_SAMPLE_SUCCEEDED
+        succeeded = r.kind == CalibrationEventKind.CALIBRATION_SAMPLE_SUCCEEDED
         result.append(
             PairedClockSample(
                 event.source,
@@ -208,6 +213,7 @@ def reconstruct_entities(events: Iterable[Event], findings: list[Finding]) -> tu
 
     for event in sorted(events, key=lambda item: item.source.identity):
         r = event.record
+        kind = parse_event_kind(r.kind)
         run_id = event.source.identity.run_id
         keys: dict[str, EntityIdentity] = {}
 
@@ -232,30 +238,30 @@ def reconstruct_entities(events: Iterable[Event], findings: list[Finding]) -> tu
         # remain evidence for edges and cannot manufacture a Fabric boundary.
         family = (
             "operation"
-            if EventKind.REQUEST_STAGING_STARTED <= r.kind <= EventKind.CLOSED or r.kind == EventKind.TRANSPORT_ANOMALY
+            if isinstance(kind, TransportEventKind)
             else "invocation"
-            if EventKind.SUBMISSION_PREPARED <= r.kind <= EventKind.COMPLETION_PUBLISHED
+            if isinstance(kind, FabricEventKind) and kind != FabricEventKind.TRANSPORT_FABRIC_ASSOCIATED
             else "graph_template"
             if r.kind
             in (
-                EventKind.GRAPH_CAPTURE_BEGIN,
-                EventKind.GRAPH_CAPTURE_END,
-                EventKind.GRAPH_CAPTURE_ERROR,
-                EventKind.GRAPH_TEMPLATE_INSTALLED,
-                EventKind.GRAPH_TEMPLATE_RETIRED,
-                EventKind.GRAPH_INSTALL_BEGIN,
-                EventKind.GRAPH_INSTALL_END,
-                EventKind.GRAPH_INSTALL_ERROR,
+                GraphEventKind.GRAPH_CAPTURE_BEGIN,
+                GraphEventKind.GRAPH_CAPTURE_END,
+                GraphEventKind.GRAPH_CAPTURE_ERROR,
+                GraphEventKind.GRAPH_TEMPLATE_INSTALLED,
+                GraphEventKind.GRAPH_TEMPLATE_RETIRED,
+                GraphEventKind.GRAPH_INSTALL_BEGIN,
+                GraphEventKind.GRAPH_INSTALL_END,
+                GraphEventKind.GRAPH_INSTALL_ERROR,
             )
             else "graph_execution"
-            if EventKind.GRAPH_HOST_CALL_BEGIN <= r.kind <= EventKind.GRAPH_DEVICE_ACTIVITY_END
+            if GraphEventKind.GRAPH_HOST_CALL_BEGIN <= r.kind <= GraphEventKind.GRAPH_DEVICE_ACTIVITY_END
             else None
         )
 
         if family is not None:
             entity = graph.entities[keys[family]]
             entity.observe(event, findings)
-            if r.kind == EventKind.TRANSPORT_ANOMALY:
+            if r.kind == TransportEventKind.TRANSPORT_ANOMALY:
                 findings.append(Finding("invalid_request", "observed invalid request enums", (event.source,)))
 
         for identity in keys.values():
@@ -263,28 +269,33 @@ def reconstruct_entities(events: Iterable[Event], findings: list[Finding]) -> tu
 
         # Each entry: (causal relation, origin entity kind, destination entity kind, admission condition).
         relations: tuple[tuple[CausalRelation, EntityKind, EntityKind, bool], ...] = (
-            ("operation_to_invocation", "operation", "invocation", r.kind == EventKind.TRANSPORT_FABRIC_ASSOCIATED),
+            (
+                "operation_to_invocation",
+                "operation",
+                "invocation",
+                r.kind == FabricEventKind.TRANSPORT_FABRIC_ASSOCIATED,
+            ),
             ("graph_to_operation", "graph_execution", "operation", True),
             (
                 "invocation_to_graph_activity",
                 "invocation",
                 "graph_execution",
-                r.kind in (EventKind.GRAPH_DEVICE_ACTIVITY_BEGIN, EventKind.GRAPH_DEVICE_ACTIVITY_END),
+                r.kind in (GraphEventKind.GRAPH_DEVICE_ACTIVITY_BEGIN, GraphEventKind.GRAPH_DEVICE_ACTIVITY_END),
             ),
             ("execution_of_template", "graph_execution", "graph_template", True),
             ("invocation_lease", "invocation", "lease", True),
-            ("invocation_attachment", "invocation", "attachment", r.kind == EventKind.ROUTING_PUBLISHED),
+            ("invocation_attachment", "invocation", "attachment", r.kind == RoutingEventKind.ROUTING_PUBLISHED),
         )
         for relation, left, right, condition in relations:
             if condition and left in keys and right in keys:
                 graph.link(relation, keys[left], keys[right], (event.source,))
 
-        if r.kind in (EventKind.CALIBRATION_SAMPLE_SUCCEEDED, EventKind.CALIBRATION_SAMPLE_FAILED):
+        if isinstance(kind, CalibrationEventKind):
             samples.append(event)
-            if r.kind == EventKind.CALIBRATION_SAMPLE_FAILED:
+            if r.kind == CalibrationEventKind.CALIBRATION_SAMPLE_FAILED:
                 findings.append(Finding("sample_failed", "paired sampling attempt failed", (event.source,)))
 
-        if EventKind.GRAPH_CAPTURE_BEGIN <= r.kind <= EventKind.GRAPH_INSTALL_ERROR and r.data4:
+        if isinstance(kind, GraphEventKind) and r.data4:
             findings.append(
                 Finding(GraphError(r.data4).name.lower(), "Graph evidence unavailable or failed", (event.source,))
             )
@@ -303,8 +314,14 @@ def observation_intervals(
         pairs = tuple(
             pair
             for pair in transport_pairs
-            if (role == EventRole.INSTANCE and pair[1] not in (EventKind.REQUEST_OBSERVED, EventKind.EXECUTION_STARTED))
-            or (role == EventRole.ATNAGENT and pair[1] in (EventKind.REQUEST_OBSERVED, EventKind.EXECUTION_STARTED))
+            if (
+                role == EventRole.INSTANCE
+                and pair[1] not in (TransportEventKind.REQUEST_OBSERVED, TransportEventKind.EXECUTION_STARTED)
+            )
+            or (
+                role == EventRole.ATNAGENT
+                and pair[1] in (TransportEventKind.REQUEST_OBSERVED, TransportEventKind.EXECUTION_STARTED)
+            )
         )
         if not observation.transport_results:
             findings.append(Finding("unknown_result", "site-local result unavailable", tuple(observation.sources)))
@@ -339,7 +356,7 @@ def observation_intervals(
         if (
             observation.identity.entity.kind == "operation"
             and name == "closed_total"
-            and EventKind.CLOSED not in observation.events
+            and TransportEventKind.CLOSED not in observation.events
         ):
             continue
         if observation.identity.entity.kind in ("operation", "invocation") and (
@@ -392,7 +409,9 @@ def reconstruct_intervals(
             findings.append(Finding("event_missing", "Graph activity boundaries unavailable", tuple(entity.sources)))
         if identity.kind == "operation" and identity not in associated_operations:
             # A retained explicit rejection/closure can legitimately precede Fabric.
-            rejected = any(EventKind.CLOSED in observation.events for observation in entity.observations.values())
+            rejected = any(
+                TransportEventKind.CLOSED in observation.events for observation in entity.observations.values()
+            )
             if not rejected:
                 findings.append(
                     Finding("association_missing", "no retained Fabric-entry association", tuple(entity.sources))
@@ -407,13 +426,13 @@ def link_protocol_boundaries(graph: EntityGraph) -> None:
     # Cross-role protocol edges require the exact Invocation, matching Lease
     # where both sides carry one, and both actual observed boundaries.
     protocol_pairs = (
-        (EventKind.SUBMISSION_PUBLISHED, EventKind.ENQUEUED),
-        (EventKind.ADMISSION_PUBLISHED, EventKind.ADMISSION_OBSERVED),
-        (EventKind.LANE_EXECUTION_PUBLISHED, EventKind.LANE_EXECUTION_OBSERVED),
-        (EventKind.INPUT_READY_PUBLISHED, EventKind.INPUT_READY_OBSERVED),
-        (EventKind.COMPLETION_PUBLISHED, EventKind.FFNAGENT_COMPLETIONS_OBSERVED),
-        (EventKind.OUTPUT_COMMIT_PUBLISHED, EventKind.OUTPUT_COMMIT_OBSERVED),
-        (EventKind.OUTPUT_ACKNOWLEDGEMENT_PUBLISHED, EventKind.OUTPUT_ACKNOWLEDGEMENTS_OBSERVED),
+        (FabricEventKind.SUBMISSION_PUBLISHED, FabricEventKind.ENQUEUED),
+        (FabricEventKind.ADMISSION_PUBLISHED, FabricEventKind.ADMISSION_OBSERVED),
+        (FabricEventKind.LANE_EXECUTION_PUBLISHED, FabricEventKind.LANE_EXECUTION_OBSERVED),
+        (FabricEventKind.INPUT_READY_PUBLISHED, FabricEventKind.INPUT_READY_OBSERVED),
+        (FabricEventKind.COMPLETION_PUBLISHED, FabricEventKind.FFNAGENT_COMPLETIONS_OBSERVED),
+        (FabricEventKind.OUTPUT_COMMIT_PUBLISHED, FabricEventKind.OUTPUT_COMMIT_OBSERVED),
+        (FabricEventKind.OUTPUT_ACKNOWLEDGEMENT_PUBLISHED, FabricEventKind.OUTPUT_ACKNOWLEDGEMENTS_OBSERVED),
     )
     for entity in graph.entities.values():
         if entity.identity.kind != "invocation":

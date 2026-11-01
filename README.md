@@ -53,6 +53,9 @@ for request flow and readiness.
 - **Layer-wise FFN execution:** FfnAgents retain model-specific weight shards
   and execute model-defined FFN layers through GraphTemplates based on layer
   signatures.
+- **Offline trace analysis:** `xpool trace` validates explicit Event artifacts,
+  exports Perfetto traces and queries retained evidence. See
+  [offline Perfetto traces](docs/designs/devkit.md#offline-perfetto-traces).
 
 ## Requirements
 

@@ -8,7 +8,7 @@ from typing import Literal
 from xpool.observability.errors import ErrorCode, ObservationError
 from xpool.observability.models import Event, Finding
 from xpool.observability.provenance import EventIdentity, Source
-from xpool.observability.wire import EventKind, EventRole, PresenceBit, ResultCode
+from xpool.observability.wire import EventRole, PresenceBit, ResultCode, TransportEventKind, parse_event_kind
 
 __all__ = [
     "CausalEdge",
@@ -71,13 +71,13 @@ class Observation:
     fact_sources: dict[str, Event] = field(default_factory=dict)
 
     @property
-    def transport_results(self) -> Mapping[EventKind, ResultCode]:
+    def transport_results(self) -> Mapping[TransportEventKind, ResultCode]:
         """Return actual results by retained Transport boundary, without a final-result inference."""
         if self.identity.entity.kind != "operation":
             return MappingProxyType({})
         return MappingProxyType(
             {
-                EventKind(boundary): ResultCode(event.record.result_code)
+                TransportEventKind(boundary): ResultCode(event.record.result_code)
                 for boundary, event in sorted(self.events.items())
                 if event.record.has(PresenceBit.RESULT_CODE)
             }
@@ -174,11 +174,8 @@ class Entity:
                 stable = ()
 
         facts = event.record.present_facts()
-        if (
-            EventKind.REQUEST_STAGING_STARTED <= event.record.kind <= EventKind.CLOSED
-            or event.record.kind == EventKind.TRANSPORT_ANOMALY
-        ):
-            facts["request_representation"] = int(event.record.kind == EventKind.TRANSPORT_ANOMALY)
+        if isinstance(parse_event_kind(event.record.kind), TransportEventKind):
+            facts["request_representation"] = int(event.record.kind == TransportEventKind.TRANSPORT_ANOMALY)
         for name in stable:
             if name not in facts:
                 continue

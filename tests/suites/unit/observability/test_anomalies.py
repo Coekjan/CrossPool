@@ -6,7 +6,7 @@ import pytest
 from tests.support.observability import events_for, fixture, fixture_root, scenario
 
 from xpool.observability import Event, ObservationError, QualityCheckpoint, parse_chunk, reconstruct
-from xpool.observability.wire import EventKind, EventRole, PresenceBit, ResultCode
+from xpool.observability.wire import EventRole, PresenceBit, ResultCode, TransportEventKind
 
 
 def opening() -> Event:
@@ -24,7 +24,7 @@ def terminal(event: Event, *, result: ResultCode = ResultCode.PROTOCOL_MISMATCH,
     return changed(
         event,
         event_sequence=event.record.event_sequence + 1,
-        data0=EventKind.RESULT_PUBLISHED,
+        data0=TransportEventKind.RESULT_PUBLISHED,
         raw_time_ns=time,
         presence=event.record.presence | (1 << PresenceBit.RESULT_CODE),
         result_code=result,
@@ -49,12 +49,11 @@ def test_loss_preserves_raw_request_and_only_retained_boundaries(retained: str) 
         assert "result_code" not in observation.facts
         assert "unknown_result" in result.quality.codes
     else:
-        assert observation.transport_results[EventKind.RESULT_PUBLISHED] == ResultCode.PROTOCOL_MISMATCH
+        assert observation.transport_results[TransportEventKind.RESULT_PUBLISHED] == ResultCode.PROTOCOL_MISMATCH
     processing = next(interval for interval in result.intervals if interval.name == "request_processing")
     assert processing.status == ("complete" if retained == "both" else "partial")
     assert (processing.duration_ns is not None) == (retained == "both")
     assert "invalid_request" in result.quality.codes
-    assert "legacy_fact_missing" not in result.quality.codes
     assert result.quality.anomalous_operation_count_lower_bound == 1
     assert result.quality.anomalous_operation_count_exact is False
 
@@ -63,8 +62,8 @@ def test_shutdown_and_recorded_zero_do_not_become_rejection_or_missing_time() ->
     end = terminal(opening(), result=ResultCode.SHUTDOWN, time=0)
     result = reconstruct((end,))
     (observation,) = result.of_kind("operation")[0].observations.values()
-    assert observation.transport_results[EventKind.RESULT_PUBLISHED] == ResultCode.SHUTDOWN
-    assert observation.events[EventKind.RESULT_PUBLISHED].record.raw_time_ns == 0
+    assert observation.transport_results[TransportEventKind.RESULT_PUBLISHED] == ResultCode.SHUTDOWN
+    assert observation.events[TransportEventKind.RESULT_PUBLISHED].record.raw_time_ns == 0
     assert "unknown_result" not in result.quality.codes
     assert all(interval.duration_ns is None for interval in result.intervals)
 
@@ -74,7 +73,7 @@ def test_distinct_anomaly_boundaries_are_not_semantic_duplicates() -> None:
     result = reconstruct((start, terminal(start)))
     assert "duplicate_event" not in result.quality.codes
     (observation,) = result.of_kind("operation")[0].observations.values()
-    assert set(observation.events) == {EventKind.REQUEST_OBSERVED, EventKind.RESULT_PUBLISHED}
+    assert set(observation.events) == {TransportEventKind.REQUEST_OBSERVED, TransportEventKind.RESULT_PUBLISHED}
 
 
 def test_semantic_duplicate_counts_one_boundary_and_operation() -> None:
@@ -122,7 +121,9 @@ def test_conflicting_repeated_local_result_is_rejected() -> None:
 
 
 def test_ordinary_and_anomalous_representations_of_one_operation_conflict() -> None:
-    ordinary = next(e for e in events_for(scenario("normal_dense")) if e.record.kind == EventKind.REQUEST_OBSERVED)
+    ordinary = next(
+        e for e in events_for(scenario("normal_dense")) if e.record.kind == TransportEventKind.REQUEST_OBSERVED
+    )
     anomaly = changed(opening(), event_sequence=ordinary.record.event_sequence + 100)
     with pytest.raises(ObservationError) as caught:
         reconstruct((ordinary, anomaly))
@@ -180,7 +181,9 @@ def test_raw_enum_preserves_the_complete_received_u32_pattern(raw: int) -> None:
 
 
 def test_legal_enums_with_invalid_request_geometry_remain_ordinary_evidence() -> None:
-    ordinary = next(e for e in events_for(scenario("normal_dense")) if e.record.kind == EventKind.REQUEST_OBSERVED)
+    ordinary = next(
+        e for e in events_for(scenario("normal_dense")) if e.record.kind == TransportEventKind.REQUEST_OBSERVED
+    )
     event = changed(ordinary, payload_rows=2**64 - 1)
     result = reconstruct((event,))
     assert "invalid_request" not in result.quality.codes

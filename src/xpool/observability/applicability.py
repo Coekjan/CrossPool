@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from xpool.observability.entities import Observation
 from xpool.observability.models import Metadata
-from xpool.observability.wire import Delivery, EventKind, EventRole, ResultCode
+from xpool.observability.wire import Delivery, EventRole, FabricEventKind, ResultCode, TransportEventKind
 
 
 @dataclass
@@ -28,51 +28,64 @@ def boundary_applicability(observation: Observation, documents: tuple[Metadata, 
 
     # Transport terminals exclude their alternative, never restore a lost Hook.
     if observation.identity.entity.kind == "operation":
-        instance = set(range(EventKind.REQUEST_STAGING_STARTED, EventKind.REQUEST_PUBLISHED + 1)) | {
-            EventKind.RESULT_OBSERVED,
-            EventKind.OUTPUT_COPIED,
-            EventKind.RESULT_ACKNOWLEDGED,
-            EventKind.CLOSED,
+        instance = set(range(TransportEventKind.REQUEST_STAGING_STARTED, TransportEventKind.REQUEST_PUBLISHED + 1)) | {
+            TransportEventKind.RESULT_OBSERVED,
+            TransportEventKind.OUTPUT_COPIED,
+            TransportEventKind.RESULT_ACKNOWLEDGED,
+            TransportEventKind.CLOSED,
         }
-        agent = set(range(EventKind.REQUEST_OBSERVED, EventKind.RESULT_PUBLISHED + 1))
+        agent = set(range(TransportEventKind.REQUEST_OBSERVED, TransportEventKind.RESULT_PUBLISHED + 1))
         own = instance if role == EventRole.INSTANCE else agent
         path.inapplicable = (instance | agent) - own
         results = observation.transport_results
         if role == EventRole.INSTANCE:
-            ack, closed = events.get(EventKind.RESULT_ACKNOWLEDGED), events.get(EventKind.CLOSED)
+            ack, closed = events.get(TransportEventKind.RESULT_ACKNOWLEDGED), events.get(TransportEventKind.CLOSED)
             if ack is not None:
-                path.required = instance - {EventKind.CLOSED}
-                path.inapplicable.add(EventKind.CLOSED)
-            elif closed is not None or results.get(EventKind.RESULT_OBSERVED) not in (None, ResultCode.OK):
-                path.unknown = instance - events.keys() - {EventKind.RESULT_ACKNOWLEDGED}
-                path.inapplicable.add(EventKind.RESULT_ACKNOWLEDGED)
+                path.required = instance - {TransportEventKind.CLOSED}
+                path.inapplicable.add(TransportEventKind.CLOSED)
+            elif closed is not None or results.get(TransportEventKind.RESULT_OBSERVED) not in (None, ResultCode.OK):
+                path.unknown = instance - events.keys() - {TransportEventKind.RESULT_ACKNOWLEDGED}
+                path.inapplicable.add(TransportEventKind.RESULT_ACKNOWLEDGED)
             else:
-                path.required = instance - {EventKind.CLOSED, EventKind.OUTPUT_COPIED, EventKind.RESULT_ACKNOWLEDGED}
-                path.unknown = {EventKind.CLOSED, EventKind.RESULT_ACKNOWLEDGED}
-                if results.get(EventKind.RESULT_OBSERVED) == ResultCode.OK:
-                    path.required.add(EventKind.OUTPUT_COPIED)
+                path.required = instance - {
+                    TransportEventKind.CLOSED,
+                    TransportEventKind.OUTPUT_COPIED,
+                    TransportEventKind.RESULT_ACKNOWLEDGED,
+                }
+                path.unknown = {TransportEventKind.CLOSED, TransportEventKind.RESULT_ACKNOWLEDGED}
+                if results.get(TransportEventKind.RESULT_OBSERVED) == ResultCode.OK:
+                    path.required.add(TransportEventKind.OUTPUT_COPIED)
                 else:
-                    path.unknown = {EventKind.CLOSED, EventKind.OUTPUT_COPIED, EventKind.RESULT_ACKNOWLEDGED}
+                    path.unknown = {
+                        TransportEventKind.CLOSED,
+                        TransportEventKind.OUTPUT_COPIED,
+                        TransportEventKind.RESULT_ACKNOWLEDGED,
+                    }
         else:
             path.required = agent.copy()
-            if results.get(EventKind.RESULT_PUBLISHED) not in (None, ResultCode.OK):
-                execution_boundaries: set[int] = {EventKind.EXECUTION_STARTED, EventKind.EXECUTION_COMPLETED}
+            if results.get(TransportEventKind.RESULT_PUBLISHED) not in (None, ResultCode.OK):
+                execution_boundaries: set[int] = {
+                    TransportEventKind.EXECUTION_STARTED,
+                    TransportEventKind.EXECUTION_COMPLETED,
+                }
                 path.unknown = execution_boundaries - events.keys()
                 path.required -= path.unknown
     elif role == EventRole.ATNAGENT:
-        path.required = set(range(EventKind.SUBMISSION_PREPARED, EventKind.OUTPUT_ACKNOWLEDGEMENT_PUBLISHED + 1))
+        path.required = set(
+            range(FabricEventKind.SUBMISSION_PREPARED, FabricEventKind.OUTPUT_ACKNOWLEDGEMENT_PUBLISHED + 1)
+        )
     elif role == EventRole.COORDINATOR:
-        path.required = set(range(EventKind.ENQUEUED, EventKind.LANE_RELEASED + 1))
+        path.required = set(range(FabricEventKind.ENQUEUED, FabricEventKind.LANE_RELEASED + 1))
     else:
         path.required = {
-            EventKind.LANE_EXECUTION_OBSERVED,
-            EventKind.INPUT_READY_OBSERVED,
-            EventKind.COMPUTE_STARTED,
-            EventKind.COMPUTE_COMPLETED,
-            EventKind.COMPLETION_PUBLISHED,
+            FabricEventKind.LANE_EXECUTION_OBSERVED,
+            FabricEventKind.INPUT_READY_OBSERVED,
+            FabricEventKind.COMPUTE_STARTED,
+            FabricEventKind.COMPUTE_COMPLETED,
+            FabricEventKind.COMPLETION_PUBLISHED,
         }
-        routing: set[int] = {EventKind.ROUTING_METADATA_PUBLISHED, EventKind.ROUTING_METADATA_OBSERVED}
-        partials: set[int] = {EventKind.PARTIAL_READY_PUBLISHED, EventKind.PEER_PARTIALS_READY_OBSERVED}
+        routing: set[int] = {FabricEventKind.ROUTING_METADATA_PUBLISHED, FabricEventKind.ROUTING_METADATA_OBSERVED}
+        partials: set[int] = {FabricEventKind.PARTIAL_READY_PUBLISHED, FabricEventKind.PEER_PARTIALS_READY_OBSERVED}
         path.unknown = routing | partials
         document = next(
             (

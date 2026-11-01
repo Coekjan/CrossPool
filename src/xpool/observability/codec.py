@@ -23,22 +23,27 @@ from xpool.observability.wire import (
     METADATA_HASH_PREFIX_BYTES,
     MIN_EVENTS_PER_CHUNK,
     AttachmentState,
+    CalibrationEventKind,
     ChunkHeaderOffset,
     Delivery,
     DpRowLayout,
-    EventKind,
     EventRole,
+    FabricEventKind,
     ForwardMode,
     GraphError,
+    GraphEventKind,
     GraphMode,
     GraphPhase,
     InvalidRequestField,
     OutputRequirement,
     PresenceBit,
     ResultCode,
+    RoutingEventKind,
     SampleFailure,
+    TransportEventKind,
     device_execution_boundary,
     known_presence_mask,
+    parse_event_kind,
 )
 
 __all__ = ["Chunk", "ChunkHeader", "encode_chunk", "parse_chunk"]
@@ -47,58 +52,58 @@ event_struct = struct.Struct("<3Q2I19Q7Ii5Q")
 header_struct = struct.Struct("<8s4H9Q2I16s16s")
 event_fields = tuple(EventRecord.model_fields)
 kind_names: dict[int, str] = {
-    EventKind.REQUEST_STAGING_STARTED: "RequestStagingStarted",
-    EventKind.REQUEST_STAGING_COMPLETED: "RequestStagingCompleted",
-    EventKind.REQUEST_PUBLISHED: "RequestPublished",
-    EventKind.REQUEST_OBSERVED: "RequestObserved",
-    EventKind.EXECUTION_STARTED: "ExecutionStarted",
-    EventKind.EXECUTION_COMPLETED: "ExecutionCompleted",
-    EventKind.RESULT_PUBLISHED: "ResultPublished",
-    EventKind.RESULT_OBSERVED: "ResultObserved",
-    EventKind.OUTPUT_COPIED: "OutputCopied",
-    EventKind.RESULT_ACKNOWLEDGED: "ResultAcknowledged",
-    EventKind.CLOSED: "Closed",
-    EventKind.TRANSPORT_ANOMALY: "TransportAnomaly",
-    EventKind.SUBMISSION_PREPARED: "SubmissionPrepared",
-    EventKind.SUBMISSION_PUBLISHED: "SubmissionPublished",
-    EventKind.ADMISSION_OBSERVED: "AdmissionObserved",
-    EventKind.INPUT_READY_PUBLISHED: "InputReadyPublished",
-    EventKind.OUTPUT_COMMIT_OBSERVED: "OutputCommitObserved",
-    EventKind.OUTPUT_ACKNOWLEDGEMENT_PUBLISHED: "OutputAcknowledgementPublished",
-    EventKind.ENQUEUED: "Enqueued",
-    EventKind.SCHEDULED: "Scheduled",
-    EventKind.ADMISSION_PUBLISHED: "AdmissionPublished",
-    EventKind.LANE_EXECUTION_PUBLISHED: "LaneExecutionPublished",
-    EventKind.FFNAGENT_COMPLETIONS_OBSERVED: "FfnAgentCompletionsObserved",
-    EventKind.OUTPUT_COMMIT_PUBLISHED: "OutputCommitPublished",
-    EventKind.OUTPUT_ACKNOWLEDGEMENTS_OBSERVED: "OutputAcknowledgementsObserved",
-    EventKind.LANE_RELEASED: "LaneReleased",
-    EventKind.LANE_EXECUTION_OBSERVED: "LaneExecutionObserved",
-    EventKind.INPUT_READY_OBSERVED: "InputReadyObserved",
-    EventKind.ROUTING_METADATA_PUBLISHED: "RoutingMetadataPublished",
-    EventKind.ROUTING_METADATA_OBSERVED: "RoutingMetadataObserved",
-    EventKind.COMPUTE_STARTED: "ComputeStarted",
-    EventKind.COMPUTE_COMPLETED: "ComputeCompleted",
-    EventKind.PARTIAL_READY_PUBLISHED: "PartialReadyPublished",
-    EventKind.PEER_PARTIALS_READY_OBSERVED: "PeerPartialsReadyObserved",
-    EventKind.COMPLETION_PUBLISHED: "CompletionPublished",
-    EventKind.GRAPH_CAPTURE_BEGIN: "GraphCaptureBegin",
-    EventKind.GRAPH_CAPTURE_END: "GraphCaptureEnd",
-    EventKind.GRAPH_CAPTURE_ERROR: "GraphCaptureError",
-    EventKind.GRAPH_TEMPLATE_INSTALLED: "GraphTemplateInstalled",
-    EventKind.GRAPH_HOST_CALL_BEGIN: "GraphHostCallBegin",
-    EventKind.GRAPH_HOST_CALL_END: "GraphHostCallEnd",
-    EventKind.GRAPH_HOST_CALL_ERROR: "GraphHostCallError",
-    EventKind.GRAPH_DEVICE_ACTIVITY_BEGIN: "GraphDeviceActivityBegin",
-    EventKind.GRAPH_DEVICE_ACTIVITY_END: "GraphDeviceActivityEnd",
-    EventKind.GRAPH_TEMPLATE_RETIRED: "GraphTemplateRetired",
-    EventKind.GRAPH_INSTALL_BEGIN: "GraphInstallBegin",
-    EventKind.GRAPH_INSTALL_END: "GraphInstallEnd",
-    EventKind.GRAPH_INSTALL_ERROR: "GraphInstallError",
-    EventKind.TRANSPORT_FABRIC_ASSOCIATED: "TransportFabricAssociated",
-    EventKind.ROUTING_PUBLISHED: "RoutingPublished",
-    EventKind.CALIBRATION_SAMPLE_SUCCEEDED: "CalibrationSampleSucceeded",
-    EventKind.CALIBRATION_SAMPLE_FAILED: "CalibrationSampleFailed",
+    TransportEventKind.REQUEST_STAGING_STARTED: "RequestStagingStarted",
+    TransportEventKind.REQUEST_STAGING_COMPLETED: "RequestStagingCompleted",
+    TransportEventKind.REQUEST_PUBLISHED: "RequestPublished",
+    TransportEventKind.REQUEST_OBSERVED: "RequestObserved",
+    TransportEventKind.EXECUTION_STARTED: "ExecutionStarted",
+    TransportEventKind.EXECUTION_COMPLETED: "ExecutionCompleted",
+    TransportEventKind.RESULT_PUBLISHED: "ResultPublished",
+    TransportEventKind.RESULT_OBSERVED: "ResultObserved",
+    TransportEventKind.OUTPUT_COPIED: "OutputCopied",
+    TransportEventKind.RESULT_ACKNOWLEDGED: "ResultAcknowledged",
+    TransportEventKind.CLOSED: "Closed",
+    TransportEventKind.TRANSPORT_ANOMALY: "TransportAnomaly",
+    FabricEventKind.SUBMISSION_PREPARED: "SubmissionPrepared",
+    FabricEventKind.SUBMISSION_PUBLISHED: "SubmissionPublished",
+    FabricEventKind.ADMISSION_OBSERVED: "AdmissionObserved",
+    FabricEventKind.INPUT_READY_PUBLISHED: "InputReadyPublished",
+    FabricEventKind.OUTPUT_COMMIT_OBSERVED: "OutputCommitObserved",
+    FabricEventKind.OUTPUT_ACKNOWLEDGEMENT_PUBLISHED: "OutputAcknowledgementPublished",
+    FabricEventKind.ENQUEUED: "Enqueued",
+    FabricEventKind.SCHEDULED: "Scheduled",
+    FabricEventKind.ADMISSION_PUBLISHED: "AdmissionPublished",
+    FabricEventKind.LANE_EXECUTION_PUBLISHED: "LaneExecutionPublished",
+    FabricEventKind.FFNAGENT_COMPLETIONS_OBSERVED: "FfnAgentCompletionsObserved",
+    FabricEventKind.OUTPUT_COMMIT_PUBLISHED: "OutputCommitPublished",
+    FabricEventKind.OUTPUT_ACKNOWLEDGEMENTS_OBSERVED: "OutputAcknowledgementsObserved",
+    FabricEventKind.LANE_RELEASED: "LaneReleased",
+    FabricEventKind.LANE_EXECUTION_OBSERVED: "LaneExecutionObserved",
+    FabricEventKind.INPUT_READY_OBSERVED: "InputReadyObserved",
+    FabricEventKind.ROUTING_METADATA_PUBLISHED: "RoutingMetadataPublished",
+    FabricEventKind.ROUTING_METADATA_OBSERVED: "RoutingMetadataObserved",
+    FabricEventKind.COMPUTE_STARTED: "ComputeStarted",
+    FabricEventKind.COMPUTE_COMPLETED: "ComputeCompleted",
+    FabricEventKind.PARTIAL_READY_PUBLISHED: "PartialReadyPublished",
+    FabricEventKind.PEER_PARTIALS_READY_OBSERVED: "PeerPartialsReadyObserved",
+    FabricEventKind.COMPLETION_PUBLISHED: "CompletionPublished",
+    GraphEventKind.GRAPH_CAPTURE_BEGIN: "GraphCaptureBegin",
+    GraphEventKind.GRAPH_CAPTURE_END: "GraphCaptureEnd",
+    GraphEventKind.GRAPH_CAPTURE_ERROR: "GraphCaptureError",
+    GraphEventKind.GRAPH_TEMPLATE_INSTALLED: "GraphTemplateInstalled",
+    GraphEventKind.GRAPH_HOST_CALL_BEGIN: "GraphHostCallBegin",
+    GraphEventKind.GRAPH_HOST_CALL_END: "GraphHostCallEnd",
+    GraphEventKind.GRAPH_HOST_CALL_ERROR: "GraphHostCallError",
+    GraphEventKind.GRAPH_DEVICE_ACTIVITY_BEGIN: "GraphDeviceActivityBegin",
+    GraphEventKind.GRAPH_DEVICE_ACTIVITY_END: "GraphDeviceActivityEnd",
+    GraphEventKind.GRAPH_TEMPLATE_RETIRED: "GraphTemplateRetired",
+    GraphEventKind.GRAPH_INSTALL_BEGIN: "GraphInstallBegin",
+    GraphEventKind.GRAPH_INSTALL_END: "GraphInstallEnd",
+    GraphEventKind.GRAPH_INSTALL_ERROR: "GraphInstallError",
+    FabricEventKind.TRANSPORT_FABRIC_ASSOCIATED: "TransportFabricAssociated",
+    RoutingEventKind.ROUTING_PUBLISHED: "RoutingPublished",
+    CalibrationEventKind.CALIBRATION_SAMPLE_SUCCEEDED: "CalibrationSampleSucceeded",
+    CalibrationEventKind.CALIBRATION_SAMPLE_FAILED: "CalibrationSampleFailed",
 }
 
 
@@ -126,8 +131,10 @@ class Chunk:
 def validate_event(event: Event) -> None:
     """Validate semantic groups, role requirements and revision-local references."""
     r, m = event.record, event.metadata
-    if r.kind not in kind_names:
-        raise event.error(ErrorCode.UNKNOWN_KIND, f"unknown event kind {r.kind}")
+    try:
+        kind = parse_event_kind(r.kind)
+    except ValueError as exc:
+        raise event.error(ErrorCode.UNKNOWN_KIND, f"unknown event kind {r.kind}") from exc
 
     def require(condition: bool, detail: str) -> None:
         if not condition:
@@ -136,7 +143,7 @@ def validate_event(event: Event) -> None:
     require(not r.presence & ~known_presence_mask, "unknown presence bits")
     require(r.reserved_zero == 0, "reserved bytes must be zero")
     require(
-        not r.has(PresenceBit.RAW_REQUEST) or r.kind == EventKind.TRANSPORT_ANOMALY,
+        not r.has(PresenceBit.RAW_REQUEST) or r.kind == TransportEventKind.TRANSPORT_ANOMALY,
         "RawRequest is only valid on TransportAnomaly",
     )
     require(not r.has(PresenceBit.OPERATION) or r.has(PresenceBit.ENDPOINT), "Operation requires Endpoint")
@@ -229,10 +236,7 @@ def validate_event(event: Event) -> None:
                 "Endpoint Instance mismatch",
             )
 
-            if EventKind.REQUEST_STAGING_STARTED <= r.kind <= EventKind.CLOSED or r.kind in (
-                EventKind.TRANSPORT_FABRIC_ASSOCIATED,
-                EventKind.TRANSPORT_ANOMALY,
-            ):
+            if isinstance(kind, TransportEventKind) or kind == FabricEventKind.TRANSPORT_FABRIC_ASSOCIATED:
                 require(
                     any(site.producer == producer.id and roles[site.site] == r.role for site in endpoint.sites),
                     "event is not from this Endpoint site",
@@ -260,7 +264,7 @@ def validate_event(event: Event) -> None:
     # Enforce the facts and role owned by each event family.
     required: tuple[PresenceBit, ...] = ()
 
-    if EventKind.REQUEST_STAGING_STARTED <= r.kind <= EventKind.CLOSED:
+    if isinstance(kind, TransportEventKind) and kind != TransportEventKind.TRANSPORT_ANOMALY:
         required = (
             PresenceBit.GENERATION,
             PresenceBit.ENDPOINT,
@@ -270,7 +274,7 @@ def validate_event(event: Event) -> None:
             PresenceBit.INSTANCE_RANK,
         )
         require(r.role in (EventRole.INSTANCE, EventRole.ATNAGENT), "Transport role mismatch")
-    elif r.kind == EventKind.TRANSPORT_ANOMALY:
+    elif r.kind == TransportEventKind.TRANSPORT_ANOMALY:
         required = (
             PresenceBit.GENERATION,
             PresenceBit.ENDPOINT,
@@ -281,7 +285,7 @@ def validate_event(event: Event) -> None:
         allowed = sum(1 << bit for bit in (*required, PresenceBit.RESULT_CODE))
         require(not r.presence & ~allowed, "unexpected anomaly presence group")
         require(r.role in (EventRole.INSTANCE, EventRole.ATNAGENT), "Transport role mismatch")
-    elif EventKind.SUBMISSION_PREPARED <= r.kind <= EventKind.COMPLETION_PUBLISHED:
+    elif isinstance(kind, FabricEventKind) and kind != FabricEventKind.TRANSPORT_FABRIC_ASSOCIATED:
         required = (
             PresenceBit.GENERATION,
             PresenceBit.INVOCATION,
@@ -290,22 +294,22 @@ def validate_event(event: Event) -> None:
         )
         expected_role = (
             EventRole.ATNAGENT
-            if r.kind < EventKind.ENQUEUED
+            if r.kind < FabricEventKind.ENQUEUED
             else EventRole.COORDINATOR
-            if r.kind < EventKind.LANE_EXECUTION_OBSERVED
+            if r.kind < FabricEventKind.LANE_EXECUTION_OBSERVED
             else EventRole.FFNAGENT
         )
         require(r.role == expected_role, "Fabric role mismatch")
 
         if r.role == EventRole.ATNAGENT:
             required += (PresenceBit.REQUEST_FACTS, PresenceBit.DP_RANK_PAYLOAD_ROWS)
-            if r.kind >= EventKind.ADMISSION_OBSERVED:
+            if r.kind >= FabricEventKind.ADMISSION_OBSERVED:
                 required += (PresenceBit.LEASE,)
-        elif r.role == EventRole.COORDINATOR and r.kind >= EventKind.SCHEDULED:
+        elif r.role == EventRole.COORDINATOR and r.kind >= FabricEventKind.SCHEDULED:
             required += (PresenceBit.LEASE,)
         elif r.role == EventRole.FFNAGENT:
             required += (PresenceBit.LEASE, PresenceBit.PAYLOAD_ROW_CAPACITY, PresenceBit.DELIVERY)
-    elif r.kind == EventKind.TRANSPORT_FABRIC_ASSOCIATED:
+    elif r.kind == FabricEventKind.TRANSPORT_FABRIC_ASSOCIATED:
         required = (
             PresenceBit.GENERATION,
             PresenceBit.ENDPOINT,
@@ -318,7 +322,7 @@ def validate_event(event: Event) -> None:
             PresenceBit.PE,
         )
         require(r.role == EventRole.ATNAGENT, "association role mismatch")
-    elif r.kind == EventKind.ROUTING_PUBLISHED:
+    elif r.kind == RoutingEventKind.ROUTING_PUBLISHED:
         required = (
             PresenceBit.GENERATION,
             PresenceBit.INVOCATION,
@@ -343,7 +347,7 @@ def validate_event(event: Event) -> None:
             raise error
 
     # Interpret family-specific payload words after common references are validated.
-    if r.kind == EventKind.TRANSPORT_ANOMALY:
+    if r.kind == TransportEventKind.TRANSPORT_ANOMALY:
         raw_forward = r.data1 & 0xFFFFFFFF
         raw_output = r.data1 >> 32
         raw_layout = r.data2 & 0xFFFFFFFF
@@ -355,29 +359,30 @@ def validate_event(event: Event) -> None:
         require(invalid_mask != 0 and r.data2 >> 32 == invalid_mask, "invalid anomaly field mask")
         allowed_boundaries = (
             {
-                EventKind.REQUEST_STAGING_STARTED,
-                EventKind.REQUEST_STAGING_COMPLETED,
-                EventKind.REQUEST_PUBLISHED,
-                EventKind.RESULT_OBSERVED,
-                EventKind.OUTPUT_COPIED,
-                EventKind.RESULT_ACKNOWLEDGED,
-                EventKind.CLOSED,
+                TransportEventKind.REQUEST_STAGING_STARTED,
+                TransportEventKind.REQUEST_STAGING_COMPLETED,
+                TransportEventKind.REQUEST_PUBLISHED,
+                TransportEventKind.RESULT_OBSERVED,
+                TransportEventKind.OUTPUT_COPIED,
+                TransportEventKind.RESULT_ACKNOWLEDGED,
+                TransportEventKind.CLOSED,
             }
             if r.role == EventRole.INSTANCE
             else {
-                EventKind.REQUEST_OBSERVED,
-                EventKind.EXECUTION_STARTED,
-                EventKind.EXECUTION_COMPLETED,
-                EventKind.RESULT_PUBLISHED,
+                TransportEventKind.REQUEST_OBSERVED,
+                TransportEventKind.EXECUTION_STARTED,
+                TransportEventKind.EXECUTION_COMPLETED,
+                TransportEventKind.RESULT_PUBLISHED,
             }
         )
         require(r.data0 in allowed_boundaries, "invalid anomaly site/boundary")
         require(
-            r.has(PresenceBit.RESULT_CODE) == (r.data0 >= EventKind.RESULT_PUBLISHED), "invalid anomaly result presence"
+            r.has(PresenceBit.RESULT_CODE) == (r.data0 >= TransportEventKind.RESULT_PUBLISHED),
+            "invalid anomaly result presence",
         )
-    elif r.kind < EventKind.GRAPH_CAPTURE_BEGIN:
+    elif isinstance(kind, (TransportEventKind, FabricEventKind)):
         require(not any((r.data0, r.data1, r.data2, r.data3, r.data4)), "unexpected protocol payload")
-    elif EventKind.GRAPH_CAPTURE_BEGIN <= r.kind <= EventKind.GRAPH_INSTALL_ERROR:
+    elif isinstance(kind, GraphEventKind):
         owner = producers.get(r.graph_owner)
         require(
             owner is not None and owner.source == "host" and owner.process_creation_id == producer.process_creation_id,
@@ -387,14 +392,14 @@ def validate_event(event: Event) -> None:
         require(r.data0 in GraphMode and r.data1 in GraphPhase and r.data4 in GraphError, "invalid Graph payload")
 
         if r.kind in (
-            EventKind.GRAPH_CAPTURE_BEGIN,
-            EventKind.GRAPH_CAPTURE_END,
-            EventKind.GRAPH_CAPTURE_ERROR,
-            EventKind.GRAPH_TEMPLATE_INSTALLED,
-            EventKind.GRAPH_TEMPLATE_RETIRED,
-            EventKind.GRAPH_INSTALL_BEGIN,
-            EventKind.GRAPH_INSTALL_END,
-            EventKind.GRAPH_INSTALL_ERROR,
+            GraphEventKind.GRAPH_CAPTURE_BEGIN,
+            GraphEventKind.GRAPH_CAPTURE_END,
+            GraphEventKind.GRAPH_CAPTURE_ERROR,
+            GraphEventKind.GRAPH_TEMPLATE_INSTALLED,
+            GraphEventKind.GRAPH_TEMPLATE_RETIRED,
+            GraphEventKind.GRAPH_INSTALL_BEGIN,
+            GraphEventKind.GRAPH_INSTALL_END,
+            GraphEventKind.GRAPH_INSTALL_ERROR,
         ):
             require(
                 r.has(PresenceBit.GRAPH_TEMPLATE) and not r.has(PresenceBit.GRAPH_EXECUTION),
@@ -405,7 +410,7 @@ def validate_event(event: Event) -> None:
             require(
                 r.data0 != GraphMode.EAGER or not r.has(PresenceBit.GRAPH_TEMPLATE), "Eager cannot reference a template"
             )
-        if r.kind in (EventKind.GRAPH_DEVICE_ACTIVITY_BEGIN, EventKind.GRAPH_DEVICE_ACTIVITY_END):
+        if r.kind in (GraphEventKind.GRAPH_DEVICE_ACTIVITY_BEGIN, GraphEventKind.GRAPH_DEVICE_ACTIVITY_END):
             require(
                 producer.source == "device" and r.graph_execution > device_execution_boundary,
                 "Device execution range/source",
@@ -417,7 +422,7 @@ def validate_event(event: Event) -> None:
                 "Host execution range",
             )
         require(r.data2 == 0 or any(item.id == r.data2 for item in m.artifacts), "unknown Graph artifact")
-    elif r.kind == EventKind.ROUTING_PUBLISHED:
+    elif r.kind == RoutingEventKind.ROUTING_PUBLISHED:
         require(r.data0 in AttachmentState and r.data1 > 0 and r.data3 == r.data4 == 0, "invalid Routing payload")
         if r.data2 != 0:
             artifact = next((item for item in m.artifacts if item.id == r.data2), None)
@@ -442,7 +447,7 @@ def validate_event(event: Event) -> None:
             ),
             "invalid sample identity/domain",
         )
-        if r.kind == EventKind.CALIBRATION_SAMPLE_SUCCEEDED:
+        if r.kind == CalibrationEventKind.CALIBRATION_SAMPLE_SUCCEEDED:
             require(r.data0 <= r.data2 <= r.raw_time_ns, "invalid sampling bracket")
         else:
             require(r.data1 == 0 and r.data2 in SampleFailure, "invalid sample failure")

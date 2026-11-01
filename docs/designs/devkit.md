@@ -128,7 +128,6 @@ identity and provenance inventories grow with input size rather than using the
 runtime collection budgets. Reference artifacts live under
 `tests/resources/observability/`.
 
-
 ## Offline clock calibration
 
 `build_calibration()` joins reconstructed paired samples with explicit sampler
@@ -152,6 +151,35 @@ Missing caller measurements remain unavailable, and process-wide counters are
 never apportioned to sampler Epochs. The library operates on immutable offline
 artifacts; synthetic agreement does not establish loaded, MPS, multiprocess or
 multi-Device hardware precision.
+
+## Offline Perfetto traces
+
+`xpool trace validate` and `xpool trace export` consume an explicit manifest of
+Event chunks, metadata, quality checkpoints, attachment indices and sampler
+declarations. Export publishes standard Perfetto protobuf traces, calibration and quality reports,
+then `bundle.json` as the completion marker. Raw inputs and Routing tensors
+remain unchanged.
+
+Each raw clock domain has its own trace; supported calibrated Events also enter
+a unified trace per Run and common Host. Perfetto clock snapshots preserve the
+evidenced correspondence. Raw Events, including TransportAnomaly payloads,
+remain queryable independently of derived slices. Missing boundaries remain
+partial evidence, and flows require explicit reconstructed causal edges.
+
+`quality.json` and the `xpool.quality_summary` query evidence retain the observed
+anomalous Operation count lower bound and its false exactness flag. The summary
+covers the complete input inventory; `run_ids` explicitly identifies that scope.
+Display partitions repeat this summary, and built-in queries deduplicate it by
+evidence identity. Loss counters never supply an exact anomalous request total.
+Every Run retains a trace for its metadata, quality and calibration evidence,
+including Runs with no retained Events in a mixed input inventory.
+
+`xpool trace setup` explicitly installs the checksum-pinned Trace Processor.
+`xpool trace query` verifies bundle digests and tool versions, then runs built-in
+identity queries or user SQL. Queries perform no implicit downloads. Built-ins
+prefer unified evidence and deduplicate its raw copies; user SQL returns each
+trace member independently. Display durations do not replace raw timestamps,
+calibration coverage or conditional uncertainty bounds in the evidence payload.
 
 
 ### Transport boundary results

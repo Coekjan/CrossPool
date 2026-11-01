@@ -8,7 +8,7 @@ from tests.support.observability import events_for, scenario
 from xpool.observability.applicability import boundary_applicability
 from xpool.observability.errors import ObservationError
 from xpool.observability.reconstruction import reconstruct
-from xpool.observability.wire import EventKind, ResultCode
+from xpool.observability.wire import ResultCode, TransportEventKind
 
 
 @pytest.mark.parametrize("retained", [(0, 1, 2), (0, 2), (1, 2), (2,)])
@@ -19,12 +19,13 @@ def test_actual_boundary_results_survive_loss_and_input_order(retained: tuple[in
     view = reconstruct(tuple(reversed(selected)) if reverse else selected)
     (observation,) = view.of_kind("operation")[0].observations.values()
     assert observation.transport_results == {
-        EventKind(events[index].record.kind): ResultCode(events[index].record.result_code) for index in retained
+        TransportEventKind(events[index].record.kind): ResultCode(events[index].record.result_code)
+        for index in retained
     }
     assert "result_code" not in observation.facts
     assert "result_code" not in observation.fact_sources
     assert "unknown_result" not in view.quality.codes
-    assert observation.transport_results[EventKind.CLOSED] == ResultCode.SHUTDOWN
+    assert observation.transport_results[TransportEventKind.CLOSED] == ResultCode.SHUTDOWN
     assert set(observation.events) == {event.record.kind for event in selected}
 
 
@@ -53,14 +54,14 @@ def test_results_are_derived_from_retained_events_without_caching() -> None:
     view = reconstruct(events_for(scenario("result_observed_then_shutdown")))
     (observation,) = view.of_kind("operation")[0].observations.values()
     before = observation.transport_results
-    observation.events.pop(EventKind.CLOSED)
-    assert EventKind.CLOSED in before
-    assert EventKind.CLOSED not in observation.transport_results
+    observation.events.pop(TransportEventKind.CLOSED)
+    assert TransportEventKind.CLOSED in before
+    assert TransportEventKind.CLOSED not in observation.transport_results
 
 
 def test_observed_success_without_terminal_keeps_shutdown_alternative() -> None:
     view = reconstruct(events_for(scenario("result_observed_then_shutdown"))[:2])
     (observation,) = view.of_kind("operation")[0].observations.values()
     path = boundary_applicability(observation, view.metadata)
-    assert {EventKind.CLOSED, EventKind.RESULT_ACKNOWLEDGED} <= path.unknown
-    assert not {EventKind.CLOSED, EventKind.RESULT_ACKNOWLEDGED} & path.inapplicable
+    assert {TransportEventKind.CLOSED, TransportEventKind.RESULT_ACKNOWLEDGED} <= path.unknown
+    assert not {TransportEventKind.CLOSED, TransportEventKind.RESULT_ACKNOWLEDGED} & path.inapplicable

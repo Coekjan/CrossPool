@@ -9,7 +9,14 @@ from xpool.observability.entities import Observation, ObservationIdentity
 from xpool.observability.errors import ErrorCode
 from xpool.observability.models import Event, Finding
 from xpool.observability.provenance import Source
-from xpool.observability.wire import EventKind, EventRole, GraphError
+from xpool.observability.wire import (
+    EventKind,
+    EventRole,
+    FabricEventKind,
+    GraphError,
+    GraphEventKind,
+    TransportEventKind,
+)
 
 __all__ = ["Interval"]
 
@@ -35,10 +42,13 @@ class Interval:
 # Phase entries are (phase name, begin Event kind, end Event kind); fabric_pairs groups them by local role.
 # Translate the shared timestamp field names into raw wire boundaries.
 transport_pairs = tuple(
-    (name, EventKind[start.upper()], EventKind[end.upper()]) for name, start, end in phases.transport_phases
+    (name, TransportEventKind[start.upper()], TransportEventKind[end.upper()])
+    for name, start, end in phases.transport_phases
 )
 fabric_pairs = {
-    role: tuple((name, EventKind[start.upper()], EventKind[end.upper()]) for name, start, end in definitions)
+    role: tuple(
+        (name, FabricEventKind[start.upper()], FabricEventKind[end.upper()]) for name, start, end in definitions
+    )
     for role, definitions in (
         (EventRole.ATNAGENT, phases.fabric_atnagent_phases),
         (EventRole.COORDINATOR, phases.fabric_coordinator_phases),
@@ -46,15 +56,15 @@ fabric_pairs = {
     )
 }
 graph_pairs = (
-    ("capture", EventKind.GRAPH_CAPTURE_BEGIN, EventKind.GRAPH_CAPTURE_END),
-    ("installation", EventKind.GRAPH_INSTALL_BEGIN, EventKind.GRAPH_INSTALL_END),
-    ("host_call", EventKind.GRAPH_HOST_CALL_BEGIN, EventKind.GRAPH_HOST_CALL_END),
-    ("device_activity", EventKind.GRAPH_DEVICE_ACTIVITY_BEGIN, EventKind.GRAPH_DEVICE_ACTIVITY_END),
+    ("capture", GraphEventKind.GRAPH_CAPTURE_BEGIN, GraphEventKind.GRAPH_CAPTURE_END),
+    ("installation", GraphEventKind.GRAPH_INSTALL_BEGIN, GraphEventKind.GRAPH_INSTALL_END),
+    ("host_call", GraphEventKind.GRAPH_HOST_CALL_BEGIN, GraphEventKind.GRAPH_HOST_CALL_END),
+    ("device_activity", GraphEventKind.GRAPH_DEVICE_ACTIVITY_BEGIN, GraphEventKind.GRAPH_DEVICE_ACTIVITY_END),
 )
 graph_failure_kinds: dict[int, EventKind] = {
-    EventKind.GRAPH_CAPTURE_END: EventKind.GRAPH_CAPTURE_ERROR,
-    EventKind.GRAPH_INSTALL_END: EventKind.GRAPH_INSTALL_ERROR,
-    EventKind.GRAPH_HOST_CALL_END: EventKind.GRAPH_HOST_CALL_ERROR,
+    GraphEventKind.GRAPH_CAPTURE_END: GraphEventKind.GRAPH_CAPTURE_ERROR,
+    GraphEventKind.GRAPH_INSTALL_END: GraphEventKind.GRAPH_INSTALL_ERROR,
+    GraphEventKind.GRAPH_HOST_CALL_END: GraphEventKind.GRAPH_HOST_CALL_ERROR,
 }
 
 
@@ -97,39 +107,39 @@ def protocol_temporal_conflicts(observation: Observation) -> tuple[Finding, ...]
     if observation.identity.entity.kind == "operation":
         order = (
             (
-                EventKind.REQUEST_STAGING_STARTED,
-                EventKind.REQUEST_STAGING_COMPLETED,
-                EventKind.REQUEST_PUBLISHED,
-                EventKind.RESULT_OBSERVED,
-                EventKind.OUTPUT_COPIED,
-                EventKind.RESULT_ACKNOWLEDGED,
-                EventKind.CLOSED,
+                TransportEventKind.REQUEST_STAGING_STARTED,
+                TransportEventKind.REQUEST_STAGING_COMPLETED,
+                TransportEventKind.REQUEST_PUBLISHED,
+                TransportEventKind.RESULT_OBSERVED,
+                TransportEventKind.OUTPUT_COPIED,
+                TransportEventKind.RESULT_ACKNOWLEDGED,
+                TransportEventKind.CLOSED,
             )
             if role == EventRole.INSTANCE
             else (
-                EventKind.REQUEST_OBSERVED,
-                EventKind.EXECUTION_STARTED,
-                EventKind.EXECUTION_COMPLETED,
-                EventKind.RESULT_PUBLISHED,
+                TransportEventKind.REQUEST_OBSERVED,
+                TransportEventKind.EXECUTION_STARTED,
+                TransportEventKind.EXECUTION_COMPLETED,
+                TransportEventKind.RESULT_PUBLISHED,
             )
         )
     elif role == EventRole.ATNAGENT:
-        order = tuple(range(EventKind.SUBMISSION_PREPARED, EventKind.OUTPUT_ACKNOWLEDGEMENT_PUBLISHED + 1))
+        order = tuple(range(FabricEventKind.SUBMISSION_PREPARED, FabricEventKind.OUTPUT_ACKNOWLEDGEMENT_PUBLISHED + 1))
     elif role == EventRole.COORDINATOR:
-        order = tuple(range(EventKind.ENQUEUED, EventKind.LANE_RELEASED + 1))
+        order = tuple(range(FabricEventKind.ENQUEUED, FabricEventKind.LANE_RELEASED + 1))
     else:
         # The publisher releases routing from inside compute; peers observe it
         # before compute. Enum ordinals alone do not express this partial order.
         order = (
-            EventKind.LANE_EXECUTION_OBSERVED,
-            EventKind.INPUT_READY_OBSERVED,
-            EventKind.ROUTING_METADATA_OBSERVED,
-            EventKind.COMPUTE_STARTED,
-            EventKind.ROUTING_METADATA_PUBLISHED,
-            EventKind.COMPUTE_COMPLETED,
-            EventKind.PARTIAL_READY_PUBLISHED,
-            EventKind.PEER_PARTIALS_READY_OBSERVED,
-            EventKind.COMPLETION_PUBLISHED,
+            FabricEventKind.LANE_EXECUTION_OBSERVED,
+            FabricEventKind.INPUT_READY_OBSERVED,
+            FabricEventKind.ROUTING_METADATA_OBSERVED,
+            FabricEventKind.COMPUTE_STARTED,
+            FabricEventKind.ROUTING_METADATA_PUBLISHED,
+            FabricEventKind.COMPUTE_COMPLETED,
+            FabricEventKind.PARTIAL_READY_PUBLISHED,
+            FabricEventKind.PEER_PARTIALS_READY_OBSERVED,
+            FabricEventKind.COMPLETION_PUBLISHED,
         )
     retained = [observation.events[k] for k in order if k in observation.events]
     return tuple(

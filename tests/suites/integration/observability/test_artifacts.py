@@ -31,7 +31,7 @@ from xpool.observability import (
     reconstruct,
 )
 from xpool.observability.models import Artifact
-from xpool.observability.wire import CHUNK_HEADER_BYTES, CONTRACT_VERSION, SHA256_HEX_LENGTH, EventKind
+from xpool.observability.wire import CHUNK_HEADER_BYTES, CONTRACT_VERSION, SHA256_HEX_LENGTH, RoutingEventKind
 
 
 def write_inventory(
@@ -229,7 +229,7 @@ def test_routing_frozen_artifacts(tmp_path: Path, case: FixtureData) -> None:
             assert handle.get_tensor("records.0.topk_ids").tolist() == [[0, 1], [1, 0]]
             assert handle.get_tensor("records.0.topk_weights").tolist() == [[0.75, 0.25], [0.5, 0.5]]
     if not expected.get("event_available", True):
-        assert not any(event.record.kind == EventKind.ROUTING_PUBLISHED for event in result.events.values())
+        assert not any(event.record.kind == RoutingEventKind.ROUTING_PUBLISHED for event in result.events.values())
 
 
 def test_published_files_out_of_order_duplicates_and_provenance(tmp_path: Path) -> None:
@@ -357,18 +357,16 @@ def test_anomaly_evidence_survives_published_file_round_trip(tmp_path: Path, vec
     assert all(source.path == chunk_path for source in observation.sources)
 
 
-@pytest.mark.parametrize("field", ["generation", "pe", "sequence", "dropped", "contract_version"])
-def test_routing_metadata_rejects_legacy_keys_and_missing_version(
-    tmp_path: Path, routing_entry: RoutingAttachment, field: str
-) -> None:
+@pytest.mark.parametrize("field", ["unexpected", "contract_version", "run_id", "producer_id", "records"])
+def test_routing_metadata_requires_exact_schema(tmp_path: Path, routing_entry: RoutingAttachment, field: str) -> None:
     with safe_open(fixture_root / "routing.safetensors", framework="numpy") as handle:
         metadata = handle.metadata()
         assert metadata is not None
         tensors = {key: handle.get_tensor(key) for key in handle.keys()}
-    if field == "contract_version":
-        del metadata[field]
-    else:
+    if field == "unexpected":
         metadata[field] = "1"
+    else:
+        del metadata[field]
     path = tmp_path / "routing.safetensors"
     save_file(tensors, path, metadata=metadata)
     entry = routing_entry.model_copy(update={"sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
