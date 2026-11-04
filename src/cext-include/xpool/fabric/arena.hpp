@@ -12,7 +12,6 @@
 
 #include <c10/util/Exception.h>
 #include <cuda/atomic>
-#include <cuda/std/optional>
 #include <cuda/std/span>
 #include <cuda_runtime_api.h>
 
@@ -20,7 +19,7 @@
 #include <xpool/fabric/layout.hpp>
 #include <xpool/fabric/protocol.hpp>
 #include <xpool/macros.hpp>
-#include <xpool/utils/device.hpp>
+#include <xpool/utils/cuda.hpp>
 
 namespace xpool::fabric {
 
@@ -266,7 +265,7 @@ public:
   /// Return a non-owning address view over this allocation.
   ArenaView view() const { return ArenaView{base_}; }
   /// Publish shutdown on the supplied stream.
-  void request_shutdown(const xpool::utils::device::OwnedCudaStream &stream) const;
+  void request_shutdown(const xpool::utils::cuda::OwnedCudaStream &stream) const;
   /// Release the symmetric allocation and reset this owner.
   /// \pre No resident or graph execution still addresses the allocation.
   void destroy();

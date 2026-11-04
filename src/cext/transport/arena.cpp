@@ -8,6 +8,8 @@
 #include <c10/util/TypeCast.h>
 #include <cuda_runtime_api.h>
 
+#include <xpool/utils/cuda.hpp>
+
 namespace xpool::transport {
 
 Arena Arena::create(c10::DeviceIndex device, const ArenaLayout &layout) {
@@ -50,8 +52,7 @@ Arena Arena::from_handle(const ArenaHandle &handle) {
 
 c10::DeviceIndex Arena::device() const {
   TORCH_CHECK(base_ != nullptr, "xpool cannot query an empty transport arena device");
-  cudaPointerAttributes attributes{};
-  C10_CUDA_CHECK(cudaPointerGetAttributes(&attributes, base_));
+  const auto attributes = xpool::utils::cuda::pointer_attributes(base_);
   return c10::checked_convert<c10::DeviceIndex>(attributes.device, "CUDA pointer device");
 }
 

@@ -6,7 +6,7 @@
 #include <nvshmemx.h>
 
 #include <xpool/macros.hpp>
-#include <xpool/utils/device.hpp>
+#include <xpool/utils/cuda.hpp>
 
 namespace {
 
@@ -23,7 +23,7 @@ ModuleRegistration ModuleRegistration::create() {
   auto function = cudaFunction_t{nullptr};
   C10_CUDA_CHECK(cudaGetFuncBySymbol(&function, reinterpret_cast<const void *>(fabric_module_anchor)));
   auto resolved_module = CUmodule{nullptr};
-  xpool::utils::device::check_driver_result(cuFuncGetModule(&resolved_module, reinterpret_cast<CUfunction>(function)));
+  xpool::utils::cuda::check_driver_result(cuFuncGetModule(&resolved_module, reinterpret_cast<CUfunction>(function)));
   const auto status = nvshmemx_cumodule_init(resolved_module);
   TORCH_CHECK(status == 0, "xpool failed to register the Fabric CUDA module: ", status);
   return ModuleRegistration{resolved_module};

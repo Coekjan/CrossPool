@@ -15,6 +15,6 @@ namespace xpool::utils::time {
 /// \return Device-global timestamp in nanoseconds.
 /// \note Timestamp differences are meaningful only within one GPU clock
 /// domain.
-XPOOL_DEVICE_FN inline std::uint64_t now() { return cuda::ptx::get_sreg_globaltimer(); }
+XPOOL_DEVICE_FN inline std::uint64_t now() { return ::cuda::ptx::get_sreg_globaltimer(); }
 
 } // namespace xpool::utils::time

@@ -47,7 +47,7 @@ ArenaState Arena::state() const {
   return state;
 }
 
-void Arena::request_shutdown(const xpool::utils::device::OwnedCudaStream &stream) const {
+void Arena::request_shutdown(const xpool::utils::cuda::OwnedCudaStream &stream) const {
   TORCH_CHECK(base_ != nullptr, "xpool cannot request shutdown on an empty Fabric arena");
   auto *shutdown =
       reinterpret_cast<std::uint32_t *>(base_ + layout_.header.state_offset + offsetof(ArenaState, shutdown));

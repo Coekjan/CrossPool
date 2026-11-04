@@ -7,14 +7,14 @@
 #include <cuda_runtime_api.h>
 #include <gtest/gtest.h>
 
-#include <xpool/utils/device.hpp>
+#include <xpool/utils/cuda.hpp>
 
 namespace {
 
 TEST(DriverResultTest, PreservesNumericFailureAndCallerLocation) {
-  EXPECT_NO_THROW(xpool::utils::device::check_driver_result(CUDA_SUCCESS));
+  EXPECT_NO_THROW(xpool::utils::cuda::check_driver_result(CUDA_SUCCESS));
   try {
-    xpool::utils::device::check_driver_result(CUDA_ERROR_LAUNCH_FAILED);
+    xpool::utils::cuda::check_driver_result(CUDA_ERROR_LAUNCH_FAILED);
     FAIL() << "a failing Driver result must throw";
   } catch (const c10::AcceleratorError &error) {
     EXPECT_EQ(error.get_error_code(), static_cast<std::int32_t>(CUDA_ERROR_LAUNCH_FAILED));
@@ -42,7 +42,7 @@ protected:
 };
 
 TEST_F(OwnedCudaStreamTest, DefaultOwnerIsEmpty) {
-  xpool::utils::device::OwnedCudaStream stream;
+  xpool::utils::cuda::OwnedCudaStream stream;
 
   EXPECT_FALSE(static_cast<bool>(stream));
   EXPECT_EQ(stream.get(), nullptr);
@@ -51,7 +51,7 @@ TEST_F(OwnedCudaStreamTest, DefaultOwnerIsEmpty) {
 }
 
 TEST_F(OwnedCudaStreamTest, QueryDistinguishesPendingAndCompletedWork) {
-  auto stream = xpool::utils::device::OwnedCudaStream::create();
+  auto stream = xpool::utils::cuda::OwnedCudaStream::create();
   auto release = std::atomic<bool>{false};
 
   EXPECT_TRUE(static_cast<bool>(stream));
@@ -68,8 +68,8 @@ TEST_F(OwnedCudaStreamTest, QueryDistinguishesPendingAndCompletedWork) {
 }
 
 TEST_F(OwnedCudaStreamTest, MoveLeavesSourceEmptyAndTransfersOwnership) {
-  auto source = xpool::utils::device::OwnedCudaStream::create();
-  xpool::utils::device::OwnedCudaStream destination{std::move(source)};
+  auto source = xpool::utils::cuda::OwnedCudaStream::create();
+  xpool::utils::cuda::OwnedCudaStream destination{std::move(source)};
 
   EXPECT_FALSE(static_cast<bool>(source));
   EXPECT_TRUE(static_cast<bool>(destination));
@@ -79,7 +79,7 @@ TEST_F(OwnedCudaStreamTest, MoveLeavesSourceEmptyAndTransfersOwnership) {
 }
 
 TEST_F(OwnedCudaStreamTest, WritesDeviceValueInStreamOrder) {
-  auto stream = xpool::utils::device::OwnedCudaStream::create();
+  auto stream = xpool::utils::cuda::OwnedCudaStream::create();
   auto *value = static_cast<std::uint32_t *>(nullptr);
   ASSERT_EQ(cudaMalloc(&value, sizeof(*value)), cudaSuccess);
 
@@ -90,18 +90,6 @@ TEST_F(OwnedCudaStreamTest, WritesDeviceValueInStreamOrder) {
   EXPECT_EQ(observed, 17U);
 
   ASSERT_EQ(cudaFree(value), cudaSuccess);
-  stream.destroy();
-}
-
-TEST_F(OwnedCudaStreamTest, CleanupWriteRejectsEmptyResourcesWithoutThrowing) {
-  auto *value = static_cast<std::uint32_t *>(nullptr);
-  ASSERT_EQ(cudaMalloc(&value, sizeof(*value)), cudaSuccess);
-  auto empty_stream = xpool::utils::device::OwnedCudaStream{};
-  EXPECT_FALSE(empty_stream.try_write_value(value, 1));
-  ASSERT_EQ(cudaFree(value), cudaSuccess);
-
-  auto stream = xpool::utils::device::OwnedCudaStream::create();
-  EXPECT_FALSE(stream.try_write_value(nullptr, 1));
   stream.destroy();
 }
 

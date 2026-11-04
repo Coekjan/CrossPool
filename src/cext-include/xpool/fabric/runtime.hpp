@@ -15,7 +15,7 @@
 #include <xpool/fabric/projection.hpp>
 #include <xpool/fabric/scheduler.hpp>
 #include <xpool/ffnagent/runtime.hpp>
-#include <xpool/utils/device.hpp>
+#include <xpool/utils/cuda.hpp>
 
 namespace xpool::fabric {
 
@@ -94,9 +94,9 @@ private:
   Arena arena_;
   ModuleRegistration module_registration_;
   FfnAgentControl ffnagent_control_;
-  xpool::utils::device::OwnedCudaStream drain_stream_;
+  xpool::utils::cuda::OwnedCudaStream drain_stream_;
   bool outbound_quiet_queued_ = false;
-  xpool::utils::device::OwnedCudaStream resident_stream_;
+  xpool::utils::cuda::OwnedCudaStream resident_stream_;
   xpool::ffnagent::ExecutionRuntime ffn_execution_runtime_;
 };
 

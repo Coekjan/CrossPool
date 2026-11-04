@@ -52,8 +52,8 @@ AtnAgentRuntime::Resident::Resident(c10::DeviceIndex device, std::span<const Are
     // The control stream owns host-to-device lifecycle publication, while the
     // resident stream owns the long-running kernel. Separate streams keep drain
     // asynchronous while the resident kernel continues.
-    control_stream_ = xpool::utils::device::OwnedCudaStream::create();
-    resident_stream_ = xpool::utils::device::OwnedCudaStream::create();
+    control_stream_ = xpool::utils::cuda::OwnedCudaStream::create();
+    resident_stream_ = xpool::utils::cuda::OwnedCudaStream::create();
     launch_resident_kernel(arenas_, fabric_arena, state_, resident_stream_.get());
   } catch (...) {
     if (!arenas_.empty()) {

@@ -17,7 +17,7 @@
 #include <xpool/ffn.hpp>
 #include <xpool/transport/arena.hpp>
 #include <xpool/transport/atnagent.hpp>
-#include <xpool/utils/device.hpp>
+#include <xpool/utils/cuda.hpp>
 
 namespace {
 
@@ -41,8 +41,8 @@ public:
       state_ = static_cast<xpool::transport::ResidentState *>(state_allocation);
       C10_CUDA_CHECK(cudaMemset(state_, 0, sizeof(xpool::transport::ResidentState)));
 
-      control_stream_ = xpool::utils::device::OwnedCudaStream::create();
-      resident_stream_ = xpool::utils::device::OwnedCudaStream::create();
+      control_stream_ = xpool::utils::cuda::OwnedCudaStream::create();
+      resident_stream_ = xpool::utils::cuda::OwnedCudaStream::create();
       xpool::transport::launch_resident_kernel(
           cuda::std::span<const xpool::transport::ArenaView>{arenas_, arenas.size()}, fabric_arena, state_,
           resident_stream_.get());
@@ -108,7 +108,8 @@ private:
     if (launched_ && !drain_requested_ && state_ != nullptr && control_stream_) {
       auto *address = reinterpret_cast<std::uint32_t *>(reinterpret_cast<std::uint8_t *>(state_) +
                                                         offsetof(xpool::transport::ResidentState, drain_requested));
-      static_cast<void>(control_stream_.try_write_value(address, 1));
+      static_cast<void>(cuStreamWriteValue32(reinterpret_cast<CUstream>(control_stream_.get()),
+                                             reinterpret_cast<CUdeviceptr>(address), 1, CU_STREAM_WRITE_VALUE_DEFAULT));
     }
     if (resident_stream_) {
       C10_CUDA_IGNORE_ERROR(cudaStreamSynchronize(resident_stream_.get()));
@@ -129,8 +130,8 @@ private:
   c10::DeviceIndex device_ = 0;
   xpool::transport::ArenaView *arenas_ = nullptr;
   xpool::transport::ResidentState *state_ = nullptr;
-  xpool::utils::device::OwnedCudaStream control_stream_;
-  xpool::utils::device::OwnedCudaStream resident_stream_;
+  xpool::utils::cuda::OwnedCudaStream control_stream_;
+  xpool::utils::cuda::OwnedCudaStream resident_stream_;
   bool launched_ = false;
   bool drain_requested_ = false;
 };
@@ -210,7 +211,7 @@ TEST_F(TransportShutdownCudaTest, RejectsOverCapacityBeforeOpeningAnyMailbox) {
   ASSERT_TRUE(cuda_succeeded(cudaMalloc(&state_allocation, sizeof(xpool::transport::ResidentState))));
   auto *state = static_cast<xpool::transport::ResidentState *>(state_allocation);
   ASSERT_TRUE(cuda_succeeded(cudaMemset(state, 0, sizeof(xpool::transport::ResidentState))));
-  auto stream = xpool::utils::device::OwnedCudaStream::create();
+  auto stream = xpool::utils::cuda::OwnedCudaStream::create();
 
   EXPECT_THROW(
       xpool::transport::launch_resident_kernel(

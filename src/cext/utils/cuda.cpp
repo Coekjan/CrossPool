@@ -1,4 +1,4 @@
-#include <xpool/utils/device.hpp>
+#include <xpool/utils/cuda.hpp>
 
 #include <utility>
 
@@ -7,7 +7,35 @@
 #include <c10/util/StringUtil.h>
 #include <cuda.h>
 
-namespace xpool::utils::device {
+#include <xpool/utils/checked.hpp>
+
+namespace xpool::utils::cuda {
+
+int current_device() {
+  auto device = -1;
+  C10_CUDA_CHECK(cudaGetDevice(&device));
+  return device;
+}
+
+int device_attribute(cudaDeviceAttr attribute, int device) {
+  auto value = 0;
+  C10_CUDA_CHECK(cudaDeviceGetAttribute(&value, attribute, device));
+  return value;
+}
+
+int max_active_blocks_per_multiprocessor(const void *function, int block_size,
+                                         std::size_t dynamic_shared_memory_bytes) {
+  auto blocks = 0;
+  C10_CUDA_CHECK(
+      cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks, function, block_size, dynamic_shared_memory_bytes));
+  return blocks;
+}
+
+cudaPointerAttributes pointer_attributes(const void *pointer) {
+  auto attributes = cudaPointerAttributes{};
+  C10_CUDA_CHECK(cudaPointerGetAttributes(&attributes, pointer));
+  return attributes;
+}
 
 void check_driver_result(CUresult result, std::source_location location) {
   if (result == CUDA_SUCCESS) {
@@ -20,9 +48,9 @@ void check_driver_result(CUresult result, std::source_location location) {
                               c10::str("CUDA driver error: ", description == nullptr ? "unknown error" : description)};
 }
 
-OwnedCudaStream OwnedCudaStream::create(unsigned int flags) {
+OwnedCudaStream OwnedCudaStream::create() {
   auto stream = OwnedCudaStream{};
-  C10_CUDA_CHECK(cudaStreamCreateWithFlags(&stream.stream_, flags));
+  C10_CUDA_CHECK(cudaStreamCreateWithFlags(&stream.stream_, cudaStreamNonBlocking));
   return stream;
 }
 
@@ -49,14 +77,6 @@ void OwnedCudaStream::write_value(std::uint32_t *address, std::uint32_t value) c
                                            value, CU_STREAM_WRITE_VALUE_DEFAULT));
 }
 
-bool OwnedCudaStream::try_write_value(std::uint32_t *address, std::uint32_t value) const noexcept {
-  if (stream_ == nullptr || address == nullptr) {
-    return false;
-  }
-  return cuStreamWriteValue32(reinterpret_cast<CUstream>(stream_), reinterpret_cast<CUdeviceptr>(address), value,
-                              CU_STREAM_WRITE_VALUE_DEFAULT) == CUDA_SUCCESS;
-}
-
 bool OwnedCudaStream::query() const {
   if (stream_ == nullptr) {
     return true;
@@ -73,6 +93,11 @@ bool OwnedCudaStream::query() const {
   return false;
 }
 
+void OwnedCudaStream::synchronize() const {
+  TORCH_CHECK(stream_ != nullptr, "xpool capture stream is closed");
+  C10_CUDA_CHECK(cudaStreamSynchronize(stream_));
+}
+
 void OwnedCudaStream::destroy() {
   if (stream_ == nullptr) {
     return;
@@ -81,4 +106,4 @@ void OwnedCudaStream::destroy() {
   stream_ = nullptr;
 }
 
-} // namespace xpool::utils::device
+} // namespace xpool::utils::cuda

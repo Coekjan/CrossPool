@@ -25,18 +25,20 @@ public:
   /// Construct a view over caller-owned records and counters.
   /// \param records Fixed-capacity record storage.
   /// \param state Shared reservation and overflow counters.
-  XPOOL_DEVICE_FN BufferView(cuda::std::span<Record> records, BufferState &state) : records_(records), state_(state) {}
+  XPOOL_DEVICE_FN BufferView(::cuda::std::span<Record> records, BufferState &state)
+      : records_(records), state_(state) {}
 
   /// Reserve the next record without wrapping or overwriting evidence.
   /// \return A writable entry, or no value after capacity is exhausted.
-  XPOOL_DEVICE_FN cuda::std::optional<Entry<Record>> reserve() const {
+  XPOOL_DEVICE_FN ::cuda::std::optional<Entry<Record>> reserve() const {
     if (records_.empty()) {
-      return cuda::std::nullopt;
+      return ::cuda::std::nullopt;
     }
-    const auto sequence = cuda::atomic_ref{state_.sequence}.fetch_add(std::uint64_t{1}, cuda::memory_order_relaxed) + 1;
+    const auto sequence =
+        ::cuda::atomic_ref{state_.sequence}.fetch_add(std::uint64_t{1}, ::cuda::memory_order_relaxed) + 1;
     if (sequence > records_.size()) {
-      cuda::atomic_ref{state_.dropped}.fetch_add(std::uint64_t{1}, cuda::memory_order_relaxed);
-      return cuda::std::nullopt;
+      ::cuda::atomic_ref{state_.dropped}.fetch_add(std::uint64_t{1}, ::cuda::memory_order_relaxed);
+      return ::cuda::std::nullopt;
     }
     auto *record = &records_[static_cast<std::size_t>(sequence - 1)];
     *record = Record{};
@@ -54,7 +56,7 @@ public:
   }
 
 private:
-  cuda::std::span<Record> records_;
+  ::cuda::std::span<Record> records_;
   BufferState &state_;
 };
 

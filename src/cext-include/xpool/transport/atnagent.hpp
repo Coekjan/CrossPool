@@ -16,7 +16,7 @@
 
 #include <xpool/fabric/arena.hpp>
 #include <xpool/transport/arena.hpp>
-#include <xpool/utils/device.hpp>
+#include <xpool/utils/cuda.hpp>
 
 namespace xpool::transport {
 
@@ -102,8 +102,8 @@ private:
     c10::DeviceIndex device_;
     cuda::std::span<ArenaView> arenas_{};
     ResidentState *state_ = nullptr;
-    xpool::utils::device::OwnedCudaStream control_stream_;
-    xpool::utils::device::OwnedCudaStream resident_stream_;
+    xpool::utils::cuda::OwnedCudaStream control_stream_;
+    xpool::utils::cuda::OwnedCudaStream resident_stream_;
     bool host_drain_requested_ = false;
   };
 

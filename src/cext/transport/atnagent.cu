@@ -200,17 +200,13 @@ XPOOL_KERNEL_FN void transport_resident_kernel(cuda::std::span<const ArenaView> 
 
 void launch_resident_kernel(cuda::std::span<const ArenaView> arenas, xpool::fabric::ArenaView fabric_arena,
                             ResidentState *state, cudaStream_t stream) {
-  auto device = 0;
-  C10_CUDA_CHECK(cudaGetDevice(&device));
-  auto cooperative_launch = 0;
-  C10_CUDA_CHECK(cudaDeviceGetAttribute(&cooperative_launch, cudaDevAttrCooperativeLaunch, device));
+  const auto device = xpool::utils::cuda::current_device();
+  const auto cooperative_launch = xpool::utils::cuda::device_attribute(cudaDevAttrCooperativeLaunch, device);
   TORCH_CHECK(cooperative_launch != 0, "xpool Transport Resident requires cooperative-launch support");
 
-  auto blocks_per_multiprocessor = 0;
-  C10_CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_multiprocessor, transport_resident_kernel,
-                                                               kBlockSize, 0));
-  auto multiprocessor_count = 0;
-  C10_CUDA_CHECK(cudaDeviceGetAttribute(&multiprocessor_count, cudaDevAttrMultiProcessorCount, device));
+  const auto blocks_per_multiprocessor = xpool::utils::cuda::max_active_blocks_per_multiprocessor(
+      reinterpret_cast<const void *>(transport_resident_kernel), kBlockSize, 0);
+  const auto multiprocessor_count = xpool::utils::cuda::device_attribute(cudaDevAttrMultiProcessorCount, device);
   const auto resident_capacity =
       static_cast<std::size_t>(blocks_per_multiprocessor) * static_cast<std::size_t>(multiprocessor_count);
   TORCH_CHECK(arenas.size() <= resident_capacity, "xpool Transport Resident requires ", arenas.size(),

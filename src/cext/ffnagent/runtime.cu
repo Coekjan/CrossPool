@@ -719,8 +719,7 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
         std::max(maximum_workspace_bytes,
                  std::visit([](const auto &value) { return value.compute_workspace_bytes; }, signature));
   }
-  auto multiprocessor_count = 0;
-  C10_CUDA_CHECK(cudaDeviceGetAttribute(&multiprocessor_count, cudaDevAttrMultiProcessorCount, device));
+  const auto multiprocessor_count = xpool::utils::cuda::device_attribute(cudaDevAttrMultiProcessorCount, device);
   const auto delivery_block_count = xpool::utils::checked::prod(
       static_cast<std::size_t>(multiprocessor_count), static_cast<std::size_t>(kDeliveryBlocksPerMultiprocessor));
   TORCH_CHECK(delivery_block_count <= std::numeric_limits<unsigned int>::max(),
@@ -747,7 +746,7 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
   auto *device_capacity_entries = static_cast<CapacityExecutionEntry *>(capacity_entries_);
   lanes_.emplace_back();
   auto &lane = lanes_.back();
-  lane.stream = xpool::utils::device::OwnedCudaStream::create();
+  lane.stream = xpool::utils::cuda::OwnedCudaStream::create();
   if (maximum_workspace_bytes != 0) {
     C10_CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&lane.workspace), maximum_workspace_bytes));
     lane.workspace_bytes = maximum_workspace_bytes;

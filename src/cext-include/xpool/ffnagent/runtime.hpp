@@ -15,7 +15,7 @@
 #include <xpool/ffnagent/execution.hpp>
 #include <xpool/ffnagent/runtime.cuh>
 #include <xpool/macros.hpp>
-#include <xpool/utils/device.hpp>
+#include <xpool/utils/cuda.hpp>
 
 namespace xpool::ffnagent {
 
@@ -68,7 +68,7 @@ private:
   struct LaneOwner {
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t executable = nullptr;
-    xpool::utils::device::OwnedCudaStream stream;
+    xpool::utils::cuda::OwnedCudaStream stream;
     void *state = nullptr;
     void *schemas = nullptr;
     void *sites = nullptr;

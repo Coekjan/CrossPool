@@ -54,7 +54,7 @@ void Runtime::join(c10::DeviceIndex device, const ArenaProjection &projection, i
   try {
     // Phase: Materialize Layout - Project immutable Instance and Layer
     // topology into the typed tables and maximum storage geometry.
-    drain_stream_ = xpool::utils::device::OwnedCudaStream::create();
+    drain_stream_ = xpool::utils::cuda::OwnedCudaStream::create();
     auto layer_count = std::size_t{0};
     for (const auto &instance : projection.instances) {
       layer_count = xpool::utils::checked::sum(layer_count, instance.layers.size());
@@ -182,7 +182,7 @@ void Runtime::activate_ffnagent() {
               "xpool FfnAgent activation requires installed execution");
   const auto control = ffnagent_control_.view();
   if (is_coordinator) {
-    resident_stream_ = xpool::utils::device::OwnedCudaStream::create();
+    resident_stream_ = xpool::utils::cuda::OwnedCudaStream::create();
     launch_coordinator(arena_.view(), arena_.layout(), control, resident_stream_.get());
   }
   ffn_execution_runtime_.activate();
