@@ -21,7 +21,53 @@ from xtest.harness.native.ffn import topology
 from xtest.harness.native.ffn.protocol import FfnInstanceCommand, FfnInstanceSpec, FfnInvocationSpec
 from xtest.harness.native.ffn.qualification import execution_fabric_plan
 from xtest.harness.native.ffn.topology import ffn_cluster_environment, materialize_ffn_cluster_launch
-from xtest.harness.support.config import TEST_MODEL_ID, synthetic_config
+from xtest.harness.support.config import (
+    TEST_MODEL_ID,
+    synthetic_config,
+)
+
+
+@pytest.mark.parametrize("configured", (False, True))
+def test_qualification_preserves_effective_compute_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured: bool
+) -> None:
+    policy = {
+        "PYTORCH_ALLOC_CONF": "max_split_size_mb:128",
+        "PYTORCH_CUDA_ALLOC_CONF": "",
+        "PYTORCH_NO_CUDA_MEMORY_CACHING": "1",
+        "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+        "CUBLASLT_WORKSPACE_SIZE": "2048",
+        "TORCH_BLAS_PREFER_CUBLASLT": "1",
+        "TORCH_CUBLASLT_UNIFIED_WORKSPACE": "0",
+        "NVSHMEM_SYMMETRIC_SIZE": "2G",
+        "NVSHMEM_CONF_FILE": "/configs/nvshmem.conf",
+        "NCCL_ALGO": "Tree",
+        "NCCL_CONF_FILE": "/configs/nccl.conf",
+        "NCCL_TOPO_FILE": "/configs/topology.xml",
+        "CUDA_MODULE_LOADING": "EAGER",
+    }
+    for name, value in policy.items():
+        if configured:
+            monkeypatch.setenv(name, value)
+        else:
+            monkeypatch.delenv(name, raising=False)
+
+    excluded = {
+        "CUBLAS_LOGINFO_DBG",
+        "CUBLAS_LOGDEST_DBG",
+        "NCCL_DEBUG",
+        "NCCL_DEBUG_FILE",
+        "NVSHMEM_INFO",
+        "PYTHONPATH",
+        "LD_PRELOAD",
+        "XPOOL_UNDECLARED_POLICY",
+    }
+    for name in excluded:
+        monkeypatch.setenv(name, "excluded")
+    environment = ffn_cluster_environment(config_path=tmp_path / "xpool.toml", observer_outdir=tmp_path / "observers")
+    assert excluded.isdisjoint(environment)
+
+    assert {name: environment[name] for name in policy if name in environment} == (policy if configured else {})
 
 
 def test_materialization_freezes_selected_topology_and_model_policy(
@@ -44,7 +90,11 @@ def test_materialization_freezes_selected_topology_and_model_policy(
                 "ffn_random_seed": 17,
             },
             "atn": {"devices": [0, 1]},
-            "ffn": {"devices": [2, 3, 4, 5], "loader": {"parallelism": 2}},
+            "ffn": {
+                "devices": [2, 3, 4, 5],
+                "loader": {"parallelism": 2},
+                "device_memory_calibration": str(tmp_path / "profile.json"),
+            },
             "models": [
                 {"id": "test/first", "path": str(tmp_path / "custom"), "ffn_tp_size": 4},
                 {"id": "test/second", "ffn_tp_size": 2},
@@ -64,6 +114,7 @@ def test_materialization_freezes_selected_topology_and_model_policy(
     assert tuple(model.ffn_tp_size for model in launch.config.models) == (4, 2)
     assert launch.config.scheduler.ffn_random_seed == 17
     assert launch.config.ffn.loader.parallelism == 2
+    assert launch.config.ffn.device_memory_calibration == tmp_path / "profile.json"
     assert launch.config.model_path_of(ModelId("test/first")) == tmp_path / "custom"
     assert launch.config.model_path_of(ModelId("test/second")) == model_root / "test/second"
     assert launch.config.debug.graph_observer.enable and launch.config.debug.fabric_observer.enable

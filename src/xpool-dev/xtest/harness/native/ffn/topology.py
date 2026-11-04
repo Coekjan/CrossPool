@@ -104,8 +104,27 @@ def ffn_cluster_environment(*, config_path: Path, observer_outdir: Path) -> dict
         "CUDA_VISIBLE_DEVICES",
         "CUDA_MPS_PIPE_DIRECTORY",
         "CUDA_MPS_LOG_DIRECTORY",
+        "PYTORCH_ALLOC_CONF",
+        "PYTORCH_CUDA_ALLOC_CONF",
+        "PYTORCH_NO_CUDA_MEMORY_CACHING",
     )
-    environment = {name: os.environ[name] for name in inherited_names if name in os.environ}
+    compute_prefixes = ("NVSHMEM_", "NCCL_", "CUBLAS_", "CUBLASLT_", "TORCH_BLAS_", "TORCH_CUBLAS", "CUDA_MODULE_")
+    diagnostics = {
+        "CUBLAS_LOGINFO_DBG",
+        "CUBLAS_LOGDEST_DBG",
+        "NVSHMEM_INFO",
+        "NVSHMEM_VERSION",
+        "NVSHMEM_DEBUG",
+        "NCCL_DEBUG",
+        "NCCL_DEBUG_SUBSYS",
+        "NCCL_DEBUG_FILE",
+        "NCCL_TOPO_DUMP_FILE",
+    }
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name in inherited_names or (name.startswith(compute_prefixes) and name not in diagnostics)
+    }
     environment.update(
         {
             "HF_HUB_OFFLINE": "1",

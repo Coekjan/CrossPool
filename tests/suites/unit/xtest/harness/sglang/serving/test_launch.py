@@ -19,7 +19,11 @@ def test_prepare_applies_deployment_policy_and_sanitizes_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manifest = TestCatalog.from_file(TEST_CATALOG_PATH)
-    case = next(case for case in manifest.serving_cases if len(case.models) == 2)
+    case = next(
+        case
+        for case in manifest.serving_cases
+        if len(case.models) == 2 and case.atnagent_count == 1 and case.ffnagent_count == 2
+    )
     base_config = base_e2e_config(manifest, tmp_path)
     inherited = {
         "PATH": "/test/bin",
@@ -34,6 +38,19 @@ def test_prepare_applies_deployment_policy_and_sanitizes_environment(
         "CUDA_VISIBLE_DEVICES": "GPU-a,GPU-b,GPU-c",
         "CUDA_MPS_PIPE_DIRECTORY": "/tmp/mps-pipe",
         "CUDA_MPS_LOG_DIRECTORY": "/tmp/mps-log",
+        "PYTORCH_ALLOC_CONF": "max_split_size_mb:128",
+        "PYTORCH_CUDA_ALLOC_CONF": "",
+        "PYTORCH_NO_CUDA_MEMORY_CACHING": "1",
+        "NVSHMEM_SYMMETRIC_SIZE": "2G",
+        "NCCL_ALGO": "Ring",
+        "NVSHMEM_CONF_FILE": "/configs/nvshmem.conf",
+        "NCCL_CONF_FILE": "/configs/nccl.conf",
+        "NCCL_TOPO_FILE": "/configs/topology.xml",
+        "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+        "CUBLASLT_WORKSPACE_SIZE": "2048",
+        "TORCH_BLAS_PREFER_CUBLASLT": "1",
+        "TORCH_CUBLASLT_UNIFIED_WORKSPACE": "0",
+        "CUDA_MODULE_LOADING": "EAGER",
     }
     for name, value in inherited.items():
         monkeypatch.setenv(name, value)
@@ -43,13 +60,19 @@ def test_prepare_applies_deployment_policy_and_sanitizes_environment(
         lambda: (40 * 1024**3, 40 * 1024**3, 40 * 1024**3),
     )
     monkeypatch.setenv("XPOOL_DEBUG_TRANSPORT_OBSERVER_RECORD_CAPACITY", "1")
-    monkeypatch.setenv("XPOOL_UNDECLARED_POLICY", "bad")
-    monkeypatch.setenv("PYTHONPATH", "/untrusted/python")
-    monkeypatch.setenv("LD_PRELOAD", "/untrusted/preload.so")
-    monkeypatch.setenv("NCCL_DEBUG", "TRACE")
-    monkeypatch.setenv("NVSHMEM_DEBUG", "TRACE")
-    monkeypatch.setenv("HTTPS_PROXY", "http://untrusted.invalid")
-    monkeypatch.setenv("HF_HOME", "/untrusted/huggingface")
+    excluded = {
+        "CUBLAS_LOGDEST_DBG": "/tmp/blas.log",
+        "CUBLAS_LOGINFO_DBG": "1",
+        "XPOOL_UNDECLARED_POLICY": "bad",
+        "PYTHONPATH": "/untrusted/python",
+        "LD_PRELOAD": "/untrusted/preload.so",
+        "NCCL_DEBUG": "TRACE",
+        "NVSHMEM_DEBUG": "TRACE",
+        "HTTPS_PROXY": "http://untrusted.invalid",
+        "HF_HOME": "/untrusted/huggingface",
+    }
+    for name, value in excluded.items():
+        monkeypatch.setenv(name, value)
     monkeypatch.setenv("SGLANG_GRPC_PORT", "12345")
 
     launch = prepare(
@@ -68,10 +91,9 @@ def test_prepare_applies_deployment_policy_and_sanitizes_environment(
         assert launch.config.model_path_of(model.id) == base_config.config.model_path_of(model.id)
         assert model.ffn_tp_size == 1 and model.slo is None
     assert launch.config.vendor == base_config.config.vendor
+    assert launch.config.ffn.device_memory_calibration == base_config.config.ffn.device_memory_calibration
     assert {name: launch.environment[name] for name in inherited} == inherited
-    assert "XPOOL_UNDECLARED_POLICY" not in launch.environment
-    for name in ("PYTHONPATH", "LD_PRELOAD", "NCCL_DEBUG", "NVSHMEM_DEBUG", "HTTPS_PROXY", "HF_HOME"):
-        assert name not in launch.environment
+    assert launch.environment.keys().isdisjoint(excluded)
     assert "SGLANG_GRPC_PORT" not in launch.environment
     assert launch.config.debug.transport_observer.record_capacity == SERVING_OBSERVER_RECORD_CAPACITY
     assert launch.config.debug.fabric_observer.record_capacity == SERVING_OBSERVER_RECORD_CAPACITY
@@ -210,7 +232,7 @@ def base_e2e_config(
                     "devices": [0],
                     "device_memory_utilization": atn_device_memory_utilization,
                 },
-                "ffn": {"devices": [1, 2]},
+                "ffn": {"devices": [1, 2], "device_memory_calibration": str(tmp_path / "profile.json")},
                 "models": [
                     {
                         "id": str(model_id),

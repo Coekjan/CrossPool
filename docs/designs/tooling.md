@@ -458,6 +458,8 @@ registered overrides that could reinterpret the frozen TOML. Env-only debug
 inputs retain their effective values.
 Snapshotting preserves other caller-supplied environment inputs. Native FFN
 qualification uses the same configuration operation with its own environment.
+Native FFN and serving qualification preserve allocator and compute settings
+used for Profile matching and omit selected cuBLAS, NCCL and NVSHMEM diagnostics.
 Invocation working directory and resolved model/calibration paths preserve their
 meaning. Each owned worker installs its frozen global configuration once.
 
