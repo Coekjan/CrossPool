@@ -269,8 +269,9 @@ Existing real repetition directories remain in place. Reopening withdraws the
 parent completion marker; safe finalization restores it. Run prints the offline
 report command after continuation but neither deletes nor regenerates reports.
 
-Replay digests identify normalized prompt, trace and warmup content. Repetition
-digests cover requests/events and the origin whenever it is retained,
+Preparation hashes normalized prompts, traces and warmup content once.
+Loading a saved `PreparedWorkload` verifies those digests.
+Repetition digests cover requests/events and the origin whenever it is retained,
 independently of window availability. A usable timed window requires an origin;
 reporting validates each retained origin's schema and digest. Recording loss
 preserves original bytes/valid prefix and represents unsupported outcomes as

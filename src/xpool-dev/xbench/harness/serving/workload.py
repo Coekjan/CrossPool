@@ -108,7 +108,14 @@ class PreparedWorkload(BenchValue):
                 raise ValueError(f"workload input escapes its case: {inputs[field]}")
             metadata[field] = read_jsonl(path, value_type)
         metadata.update(case_id=case.id, model_ids=tuple(target.model_id for target in case.targets))
-        return cls.model_validate(metadata)
+        prepared = cls.model_validate(metadata)
+        if prepared.prompt_sha256 != content_digest(prepared.prompts):
+            raise ValueError("prepared prompt content digest does not match")
+        if prepared.trace_sha256 != content_digest(prepared.requests):
+            raise ValueError("prepared trace content digest does not match")
+        if prepared.warmup_sha256 != content_digest(prepared.warmup):
+            raise ValueError("prepared warmup content digest does not match")
+        return prepared
 
     @model_validator(mode="after")
     def validate_replay(self) -> Self:
@@ -118,6 +125,9 @@ class PreparedWorkload(BenchValue):
         ids = tuple(request.request_id for request in self.requests)
         if len(ids) != len(set(ids)) or len(prompt_keys) != len(self.prompts):
             raise ValueError("prepared request and target-scoped prompt IDs must be unique")
+        warmup_ids = tuple(request.request_id for request in self.warmup)
+        if len(warmup_ids) != len(set(warmup_ids)):
+            raise ValueError("prepared warmup request IDs must be unique")
         if any((request.model_id, request.prompt_id) not in prompt_keys for request in (*self.requests, *self.warmup)):
             raise ValueError("prepared request prompt reference is unresolved")
         if any(request.model_id not in self.model_ids for request in (*self.requests, *self.warmup)):
@@ -125,12 +135,6 @@ class PreparedWorkload(BenchValue):
         arrivals = tuple(request.arrival_seconds for request in self.requests)
         if arrivals != tuple(sorted(arrivals)) or any(value > self.arrival_horizon_seconds for value in arrivals):
             raise ValueError("prepared requests must be chronological within their arrival horizon")
-        if self.prompt_sha256 != content_digest(self.prompts):
-            raise ValueError("prepared prompt content digest does not match")
-        if self.trace_sha256 != content_digest(self.requests):
-            raise ValueError("prepared trace content digest does not match")
-        if self.warmup_sha256 != content_digest(self.warmup):
-            raise ValueError("prepared warmup content digest does not match")
         return self
 
 
@@ -270,7 +274,6 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
             value = PromptValue(
                 prompt_id=id, input_ids=tuple(content_rng.choice(local.admissible_ids) for _ in range(length))
             )
-            validate_prompt(value, metadata.get(target.model_id))
         else:
             by_id = prompt_index[target.model_id]
             if id not in by_id:

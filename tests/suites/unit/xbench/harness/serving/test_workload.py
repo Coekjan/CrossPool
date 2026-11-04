@@ -9,7 +9,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from xbench.harness.serving.case import BenchCase, ClientBenchCase, LogNormalTokens, TokenRange
-from xbench.harness.serving.workload import prepare_workload, sample_tokens
+from xbench.harness.serving.workload import PreparedWorkload, prepare_workload, sample_tokens
 from xpool.integrations.sglang.devkit.requests import LocalModelMetadata, SglangRequestLimits
 from xpool.model import ModelId
 from xtest.harness.support.config import TEST_CASE_ID
@@ -55,6 +55,16 @@ def test_prompt_changes_and_warmup_do_not_perturb_arrivals(tmp_path: Path, monke
     assert baseline.trace_sha256 == altered.trace_sha256
     assert baseline.prompt_sha256 != altered.prompt_sha256
     assert len(altered.warmup) == 8
+
+
+def test_replay_rejects_duplicate_warmup_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stub_metadata(monkeypatch, tmp_path)
+    case = workload_case(tmp_path, random_prompts=True, poisson_arrivals=True)
+    raw = prepare_workload(case).model_dump(mode="json")
+    raw["warmup"].append(raw["warmup"][0])
+
+    with pytest.raises(ValueError, match="warmup request IDs must be unique"):
+        PreparedWorkload.model_validate_json(json.dumps(raw))
 
 
 @pytest.mark.parametrize(("random_prompts", "ratio"), [(False, 2.0), (True, 2.0), (True, 0.25)])
