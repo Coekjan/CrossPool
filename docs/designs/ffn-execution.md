@@ -110,20 +110,13 @@ concrete operations call their pinned libraries and configuration modules
 directly, without a provider hierarchy or service-time fallback. Expanding this
 dependency seam requires an accepted design change.
 
-The shared [execution geometry](../../src/xpool/runtime/ffnagent/execution.py)
-owns Signatures, common workspace shapes, alignment and Graph-storage byte
-formulas. [Preparation](../../src/xpool/runtime/ffnagent/preparation.py) resolves
-TP source intervals and physical resource layouts, and composes Expert-private
-scratch with named Router projection, ID and weight regions. Loading,
-calibration, capture, memory estimation and placement consume those same
-prepared layouts and Signatures. Each prepared layer owns its ordered physical
-weight-allocation requests. Estimation and placement each prepare a layer's TP
-role once, then derive Signatures and weight requests from that layout.
-Preparation and geometry perform no Tensor allocation or kernel launch. MoE
-capture allocates one contiguous root workspace covering every admitted block
-size; the selected Expert operation
-borrows its private slice and preserves its internal overlap. Router storage
-is independent of the Expert implementation's region order.
+[Execution geometry](../../src/xpool/runtime/ffnagent/execution.py) defines
+Signatures and capture placeholder layouts. [Preparation](../../src/xpool/runtime/ffnagent/preparation.py)
+derives each TP shard's weight requests and Capacity-specific Signatures
+without allocating tensors. Loading, capture and placement use the same layout.
+An MoE workspace has one root large enough for every admitted block size.
+The Expert implementation lays out its slice; Router storage has independent
+offsets. Estimation uses the same byte extents as view construction.
 
 The [Router implementation](../../src/xpool/runtime/ffnagent/operators/routing.py) owns
 projection, TopK and final Routing Metadata construction. Source compilers select
@@ -188,78 +181,72 @@ performance evidence.
 
 ## GraphTemplate and Executor Lanes
 
-A GraphTemplate is one reusable captured compute structure. Its Execution
-Signature contains execution semantics, tensor geometry, Capacity, TP
-realization, and delivery behavior. It omits model IDs and layer ordinals when
-multiple layers can safely reuse the same structure.
-Router Algorithm, Projection Precision, TopK Weight Rounding, normalization,
-bias presence, Expert operation and physical resource layouts specialize capture.
-Loading owns source encoding declarations and source row order. Signatures
-retain the selected operation and prepared resource layouts that determine
-captured execution, without duplicating the loading declarations.
-Replay consumes current Tensor contents and binds layer addresses within that
-fixed resource schema; optional ownership remains constant within a Signature.
-Registry installation, memory estimation, and placement use one shared required
-Signature inventory rather than deriving their own capture domains.
+A GraphTemplate describes compute shared by compatible layers. Each Lane
+captures its own instance for each Execution Signature. The Signature fixes
+geometry, Capacity, TP and delivery, operator semantics and physical layouts.
+Layers can share a Signature when only their weight addresses differ. Capture,
+placement and memory estimation use the same Signature inventory.
 
 Each request selects the smallest installed Capacity that contains its live row
 count. Capacity tails are storage only and carry no semantic payload. Capacity
 derivation and validation belong to FfnAgent installation; the Fabric
 Coordinator publishes live rows and the selected Layer, not a Graph Capacity.
 
-Each Signature Capture produces topology-identical Primary and Control Graphs.
-Primary Capture uses execution resources and is embedded into each Lane Graph.
-Control Capture uses probe resources only to discover and validate the concrete
-Kernel argument schema. Both source Graphs and temporary capture resources are
-construction resources and are released after synchronous installation.
+For each required Signature the Lane captures two graphs with the same
+topology. Primary supplies the compute nodes embedded in the Lane Graph.
+Control uses probe weights so installation can identify which kernel arguments
+must change when the Lane selects another layer. Compatible captures may reuse
+read-only probes. Replay uses the current layer's resident weights.
 
-Graph parameterization discovers supported resource-address sites and converts
-the embedded Primary Kernel Nodes into Device-updatable nodes. Before each
-execution, the Lane Graph binds the selected Layer's resident addresses without
-mutating Graph topology. Generic Host-side CUDA Graph construction,
-conditional-node creation, topology comparison, Kernel parameter storage, and
-dependency splicing belong to `xpool::utils::graph`. Kernel parameter storage
-normalizes CUDA pointer-array and packed-buffer transports into the same owned
-logical arguments. FFN resource matching, Routing Publication placement, and
-Lane topology remain in `xpool::ffnagent`.
+The FfnAgent prepares source declarations before the free-memory baseline.
+It keeps any external owners locally and transfers them with the weights to
+`FfnExecutionRegistry` before materialization. A Signature borrows only its
+declared shared ranges. Production currently declares stream-local BLAS
+scratch; it supplies no baseline external Tensor. BLAS settings must stay
+fixed from preparation through capture.
 
-Different Executor Lanes own different GraphExec instances even when they share
-one GraphTemplate. A GraphExec is never launched concurrently with itself.
-Every Lane Graph contains the resident wait, request binding, selected embedded
-compute branch, routing publication where required, delivery branch,
-completion publication, and lease re-arm needed for Device-side progress.
+Each active capture Lane owns an exclusive stream and a private Torch memory
+pool with `use_on_oom=False`. Compute workspace and library scratch stay at
+their Primary addresses. IO, routing and live-row placeholders use the
+default allocator. The Signature's placeholder layout supplies the allocation
+shapes and request sizes; budgeting separately counts temporary initialization
+and Torch's per-graph RNG state. The Registry retains initialized tensors
+while construction can still reuse their subblocks.
 
-Native projection binding views borrow values, optional scales and optional
-additive bias together with each Tensor's byte extent. Dense, Expert and Router
-views compose that same representation; Router correction bias remains separate.
-Installation checks corresponding resource presence and byte extents across
-Primary, Control and layer targets, and requires distinct corresponding
-Primary/Control addresses. Byte extents do not identify an encoding or replace
-the Registry's admitted mathematical and Tensor-layout checks. Resource matching
-continues to use exact base addresses rather than ranges.
+A source declares the identity and logical extent of each range. Pool coverage
+proves the backing is retained; comparing graph addresses alone cannot prove
+ownership or discover opaque nested pointers. Installation checks Primary and
+Control offsets and access bounds. Writable storage is disjoint across Lanes;
+explicit read-only ranges may be shared. A difference between predicted and
+actual pool reservation is reported separately from an ownership failure.
 
-Registry validates each complete Layer Plan once against prepared geometry.
-A separate resource check compares actual Tensor layouts, device placement and
-independent storage. Both checks run before capture. Operation constructors
-validate their workspace; execution checks the actual supplied Tensor resources.
-The loader establishes semantic Gate/Up row order through its selections,
-which cannot be inferred from Tensor shape, dtype or stride alone.
+The Registry checks real Tensor layouts against the Layer Plan. Native
+installation checks all Lanes against the same Layer mapping, verifies graph
+topology and device accessibility, and binds Fabric IO, routing and live rows.
+Weight arguments match exact projection bases, including optional scales and
+bias; compute ranges allow verified interior offsets. Supported memory nodes
+include bounded pitched Memset and contiguous one-dimensional device copies
+with both endpoints checked. Unsupported nodes or inconsistent access fail
+installation.
 
-`ExecutionInstallDescriptor` owns intrinsic Signature, Capacity, Layer, resource
-schema, topology, ordering, and cross-Capacity weight-geometry validation.
-Runtime installation separately validates live CUDA allocations, current-device
-accessibility, Graph handles, and external runtime results. An established
-installation invariant is not checked again in private materialization helpers.
+The native runtime owns each Lane's GraphExec, execution stream and binding
+tables. It borrows compute storage. Fixed-table sizing counts native requests;
+driver graph storage, variable binding arrays and allocator reservation can
+add physical cost. Each Lane runs its own wait, binding, compute, delivery
+and lease re-arm sequence. A GraphExec never runs concurrently with itself.
 
-The native Execution Runtime owns installed GraphExecs, Lane state, discovered
-schemas, shared immutable lookup tables, workspaces, streams, and activation.
-The Python `FfnExecutionRegistry` owns the tensors and modules whose addresses
-remain referenced after installation. It validates each local weight owner
-against its co-indexed Spec and Plan before per-Capacity capture. Dense/MoE
-dispatch preserves that admitted relationship through the Signature and Control
-Capture Probe cache; private capture consumers rely on that correspondence.
-Installation either publishes the whole runtime or rolls back construction
-resources; activation never performs lazy materialization.
+Installation is synchronous and consumes one attempt. On success the Registry
+synchronizes capture streams, resets the source graphs, clears stream-local
+library caches and releases construction tensors and probes. It then trims
+releasable default cache. Each private pool and its stream stay sealed against
+new allocations until retirement; replay can still write scratch there.
+[Memory admission](control-plane.md#memory-admission) uses this point for the
+retained budget.
+
+On partial failure the native runtime drains streams before destroying graphs
+or their storage. If cleanup also fails, it preserves the remaining handles.
+The Registry holds weights, external owners and Lane backing until native
+retirement is confirmed. Activation never retries installation.
 
 `FfnAgentControl` owns the process-local Device allocation shared by Lane
 Graph activation edges and, on the Coordinator PE, the Fabric Coordinator

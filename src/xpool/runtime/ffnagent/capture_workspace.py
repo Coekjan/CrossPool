@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import torch
+
 import xpool.native
 from xpool.memory import (
     ExecutionResourceDeclaration,
@@ -74,3 +76,48 @@ def snapshot_resources(
         for declaration in contract.lane_resources
         if declaration.requirement.key in backings
     )
+
+
+def pair_resources(
+    primary: tuple[xpool.native.cuda.CaptureAllocation, ...],
+    control: tuple[xpool.native.cuda.CaptureAllocation, ...],
+) -> tuple[xpool.native.ffnagent.CapturedResourceRange, ...]:
+    """Pair logical identities; native installation verifies topology and pointer offsets."""
+
+    p = {resource.key: resource for resource in primary}
+    c = {resource.key: resource for resource in control}
+    if len(p) != len(primary) or len(c) != len(control) or p.keys() != c.keys():
+        raise ValueError("Primary and Control resource identities disagree")
+    result = []
+    for resource in primary:
+        other = c[resource.key]
+        if resource.bytes != other.bytes:
+            raise ValueError("Primary and Control resource extents disagree")
+        result.append(
+            xpool.native.ffnagent.CapturedResourceRange(
+                key=resource.key,
+                primary_address=resource.address,
+                control_address=other.address,
+                bytes=resource.bytes,
+            )
+        )
+    return tuple(result)
+
+
+def validate_pool_coverage(
+    pool: torch.cuda.MemPool, allocations: tuple[xpool.native.cuda.CaptureAllocation, ...]
+) -> None:
+    """Require source-declared logical spans to be backed by this retained Lane pool.
+
+    Segment coverage establishes backing, not logical access bounds. Sources
+    provide those bounds separately; pool-external data needs an explicit owner.
+    """
+
+    segments = pool.snapshot()
+    for allocation in allocations:
+        if not any(
+            allocation.address >= segment["address"]
+            and allocation.address + allocation.bytes <= segment["address"] + segment["total_size"]
+            for segment in segments
+        ):
+            raise ValueError(f"execution resource has no declared Lane backing owner: {allocation.key}")

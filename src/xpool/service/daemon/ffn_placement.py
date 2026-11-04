@@ -24,8 +24,10 @@ from xpool.memory import (
 )
 from xpool.runtime.ffnagent import execution, preparation
 from xpool.runtime.ffnagent.device_memory import (
+    TORCH_GRAPH_CAPTURE_STATE_REQUEST_BYTES,
     DeviceMemoryEstimator,
     allocator_reservation_bytes,
+    capture_pool_reservation_bytes,
     graph_capture_allocator_allowance_bytes,
 )
 from xpool.service.errors import XpoolDaemonError
@@ -180,8 +182,6 @@ def place_ffn_models(
         raise XpoolDaemonError("conflict", "FfnAgent free-memory observations must be positive")
 
     return solve_placement(
-        model_specs=model_specs,
-        instance_plans=instance_plans,
         ffnagent_free_memory_bytes=ffnagent_free_memory_bytes,
         estimator=estimator,
         deadline=monotonic() + config.ffn.placement.timeout_seconds,
@@ -190,19 +190,19 @@ def place_ffn_models(
 
 def solve_placement(
     *,
-    model_specs: tuple[ffn.FfnModelSpec, ...],
-    instance_plans: tuple[FabricInstancePlan, ...],
     ffnagent_free_memory_bytes: tuple[int, ...],
     estimator: DeviceMemoryEstimator,
     deadline: float,
 ) -> FfnPlacementResult:
-    """Solve one Placement with ordered objectives and deterministic projection.
+    """Solve a validated request with ordered objectives and deterministic projection.
 
     Parallel CP-SAT solves fix each objective value in priority order. A final
     single-worker fixed search chooses one reproducible representative before
     aggregate assignment counts are decomposed into concrete TP groups.
     """
 
+    model_specs = estimator.model_specs
+    ffnagent_execution_contracts = estimator.ffn_execution_contracts
     config = get_global_config()
     ffnagent_count = len(config.ffn.devices)
 
@@ -211,11 +211,9 @@ def solve_placement(
     class_model_indices: list[int] = []
     class_layer_indices: list[tuple[int, ...]] = []
     class_rank_rows: list[tuple[tuple[int, int, int, tuple[execution.ExecutionSignature, ...]], ...]] = []
-    for model_index, (model_config, spec, instance_plan) in enumerate(
-        zip(config.models, model_specs, instance_plans, strict=True)
+    for model_index, (model_config, spec, profile) in enumerate(
+        zip(config.models, model_specs, estimator.instance_profiles, strict=True)
     ):
-        if spec.model_id != model_config.id:
-            raise XpoolDaemonError("conflict", "FfnAgent Model Specs do not follow configured Model order")
         tp_size = model_config.ffn_tp_size or ffnagent_count
         if tp_size > ffnagent_count:
             raise XpoolDaemonError("conflict", f"FFN TP size for {model_config.id!r} exceeds the FfnAgent Fleet")
@@ -230,7 +228,7 @@ def solve_placement(
                     layout = preparation.prepare_ffn_layer(
                         spec,
                         layer_ordinal=layer_ordinal,
-                        payload_dtype=instance_plan.ffn_profile.payload_dtype,
+                        payload_dtype=profile.payload_dtype,
                         tp_size=tp_size,
                         tp_rank=tp_rank,
                     )
@@ -240,7 +238,7 @@ def solve_placement(
                             sum(storage_bytes),
                             len(storage_bytes),
                             allocator_reservation_bytes(storage_bytes) - sum(storage_bytes),
-                            layout.execution_signatures(profile=instance_plan.ffn_profile),
+                            layout.execution_signatures(profile=profile),
                         )
                     )
                 rank_rows = tuple(rows)
@@ -260,17 +258,31 @@ def solve_placement(
         )
     )
     signature_index = {signature: index for index, signature in enumerate(all_signatures)}
+    resource_plans = tuple(
+        preparation.ExecutionResourcePlan.from_signatures(all_signatures, contract=contract)
+        for contract in ffnagent_execution_contracts
+    )
     capture_weight_pair_keys = tuple(dict.fromkeys(execution.capture_weight_pair_key(item) for item in all_signatures))
-    capture_weight_pair_index = {key: index for index, key in enumerate(capture_weight_pair_keys)}
-    signature_storage_bytes = {
-        signature: preparation.graph_capture_capacity_storage_bytes(signature) for signature in all_signatures
-    }
+    signature_storage_bytes = {}
+    signature_allocator_allowance_bytes = {}
+    dense_signature_count = 0
+    router_signatures: list[execution.MoeFfnExecutionSignature] = []
+    for signature in all_signatures:
+        signature_storage_bytes[signature] = (
+            signature.capture_placeholder_layout().allocation_bytes() + TORCH_GRAPH_CAPTURE_STATE_REQUEST_BYTES
+        )
+        signature_allocator_allowance_bytes[signature] = graph_capture_allocator_allowance_bytes(signature)
+        if isinstance(signature, execution.DenseFfnExecutionSignature):
+            dense_signature_count += 1
+        elif signature.router is not None:
+            router_signatures.append(signature)
+    moe_signature_count = len(all_signatures) - dense_signature_count
+    routing_capacities = sorted({0, *(item.payload_row_capacity * item.effective_topk for item in router_signatures)})
+    routing_bytes_table = [
+        (capacity, estimator.routing_record_buffer_bytes(capacity)) for capacity in routing_capacities
+    ]
     capture_weight_pair_storage_bytes = {
-        weight_pair_key: execution.control_capture_probe_storage_bytes(weight_pair_key)
-        for weight_pair_key in capture_weight_pair_keys
-    }
-    signature_allocator_allowance_bytes = {
-        signature: graph_capture_allocator_allowance_bytes(signature) for signature in all_signatures
+        key: execution.control_capture_probe_storage_bytes(key) for key in capture_weight_pair_keys
     }
     capture_weight_pair_allocator_allowance_bytes = {
         weight_pair_key: allocator_reservation_bytes(storage_bytes) - sum(storage_bytes)
@@ -278,55 +290,55 @@ def solve_placement(
     }
     remaining_placement_seconds(deadline, "resource calculation")
 
-    maximum_weight_bytes = sum(
-        len(class_layer_indices[class_index]) * sum(row[0] for row in rank_rows)
-        for class_index, rank_rows in enumerate(class_rank_rows)
+    maximum_weight_bytes = 0
+    maximum_weight_allocations = 0
+    maximum_weight_allowance = 0
+    maximum_layer_capacity_count = 0
+    for class_index, rank_rows in enumerate(class_rank_rows):
+        layer_count = len(class_layer_indices[class_index])
+        maximum_rank_capacity_count = 0
+        for weight_bytes, allocation_count, allowance, signatures in rank_rows:
+            maximum_weight_bytes += layer_count * weight_bytes
+            maximum_weight_allocations += layer_count * allocation_count
+            maximum_weight_allowance += layer_count * allowance
+            maximum_rank_capacity_count = max(maximum_rank_capacity_count, len(signatures))
+        maximum_layer_capacity_count += layer_count * maximum_rank_capacity_count
+    maximum_graph_capture_bytes = config.scheduler.ffn_concurrency * sum(
+        map(sum, signature_storage_bytes.values())
+    ) + sum(map(sum, capture_weight_pair_storage_bytes.values()))
+    maximum_graph_capture_allocations = config.scheduler.ffn_concurrency * (
+        sum(map(len, signature_storage_bytes.values()))
+    ) + sum(map(len, capture_weight_pair_storage_bytes.values()))
+    maximum_graph_capture_allowance = config.scheduler.ffn_concurrency * sum(
+        signature_allocator_allowance_bytes.values()
+    ) + sum(capture_weight_pair_allocator_allowance_bytes.values())
+    maximum_pool_bytes = config.scheduler.ffn_concurrency * max(
+        (capture_pool_reservation_bytes(plan) for plan in resource_plans), default=0
     )
-    maximum_weight_allocations = sum(
-        len(class_layer_indices[class_index]) * sum(row[1] for row in rank_rows)
-        for class_index, rank_rows in enumerate(class_rank_rows)
-    )
-    maximum_weight_allowance = sum(
-        len(class_layer_indices[class_index]) * sum(row[2] for row in rank_rows)
-        for class_index, rank_rows in enumerate(class_rank_rows)
-    )
-    maximum_graph_capture_bytes = sum(map(sum, signature_storage_bytes.values())) + sum(
-        map(sum, capture_weight_pair_storage_bytes.values())
-    )
-    maximum_graph_capture_allocations = sum(map(len, signature_storage_bytes.values())) + sum(
-        map(len, capture_weight_pair_storage_bytes.values())
-    )
-    maximum_graph_capture_allowance = sum(signature_allocator_allowance_bytes.values()) + sum(
-        capture_weight_pair_allocator_allowance_bytes.values()
-    )
-    maximum_workspace_bytes = config.scheduler.ffn_concurrency * max(
-        (preparation.compute_workspace_bytes(item) for item in all_signatures),
-        default=0,
-    )
+    maximum_resource_bytes = 0
+    maximum_resource_allocations = 0
+    for resource_plan in resource_plans:
+        resource_bytes = 0
+        resource_allocations = 0
+        for group in resource_plan.lane_resources:
+            resource_bytes += config.scheduler.ffn_concurrency * group.requirement.logical_extent_bound_bytes
+            resource_allocations += config.scheduler.ffn_concurrency * len(group.requirement.request_bytes)
+        maximum_resource_bytes = max(maximum_resource_bytes, resource_bytes)
+        maximum_resource_allocations = max(maximum_resource_allocations, resource_allocations)
     maximum_runtime_bytes = estimator.execution_runtime_bytes(
         local_layer_count=sum(len(item) for item in class_layer_indices),
-        local_layer_capacity_count=sum(
-            len(class_layer_indices[class_index]) * max(len(row[3]) for row in rank_rows)
-            for class_index, rank_rows in enumerate(class_rank_rows)
-        ),
+        local_layer_capacity_count=maximum_layer_capacity_count,
         local_signature_count=len(all_signatures),
         coordinator=True,
     )
-    maximum_routing_elements = max(
-        (
-            item.payload_row_capacity * item.effective_topk
-            for item in all_signatures
-            if isinstance(item, execution.MoeFfnExecutionSignature) and item.router is not None
-        ),
-        default=0,
-    )
+    maximum_routing_elements = routing_capacities[-1]
     maximum_routing_bytes = estimator.routing_record_buffer_bytes(maximum_routing_elements)
     maximum_exact_bytes = (
         maximum_weight_bytes
         + estimator.fabric_arena_bytes()
         + estimator.fabric_observer_bytes()
         + maximum_graph_capture_bytes
-        + maximum_workspace_bytes
+        + maximum_pool_bytes
         + maximum_runtime_bytes
         + maximum_routing_bytes
     )
@@ -334,25 +346,20 @@ def solve_placement(
     if estimator.coefficients is not None:
         maximum_calibrated_overhead = estimator.coefficients.evaluate(
             DeviceMemoryFeatures(
-                tensor_storage_bytes=maximum_weight_bytes + maximum_graph_capture_bytes,
-                tensor_storage_allocation_count=maximum_weight_allocations + maximum_graph_capture_allocations,
-                dense_graph_capture_count=sum(
-                    isinstance(item, execution.DenseFfnExecutionSignature) for item in all_signatures
-                ),
-                moe_graph_capture_count=sum(
-                    isinstance(item, execution.MoeFfnExecutionSignature) for item in all_signatures
-                ),
+                tensor_storage_bytes=maximum_weight_bytes + maximum_graph_capture_bytes + maximum_resource_bytes,
+                tensor_storage_allocation_count=maximum_weight_allocations
+                + maximum_graph_capture_allocations
+                + maximum_resource_allocations,
+                dense_graph_capture_count=config.scheduler.ffn_concurrency * dense_signature_count,
+                moe_graph_capture_count=config.scheduler.ffn_concurrency * moe_signature_count,
                 executor_lane_count=config.scheduler.ffn_concurrency,
                 compute_branch_count=config.scheduler.ffn_concurrency * len(all_signatures),
-                dense_implementation_present=any(
-                    isinstance(item, execution.DenseFfnExecutionSignature) for item in all_signatures
-                ),
-                moe_implementation_present=any(
-                    isinstance(item, execution.MoeFfnExecutionSignature) for item in all_signatures
-                ),
+                dense_implementation_present=dense_signature_count != 0,
+                moe_implementation_present=moe_signature_count != 0,
                 joined_ffnagent=True,
             )
         )
+
     try:
         maximum_stage_overhead = (
             maximum_weight_allowance + maximum_graph_capture_allowance + maximum_calibrated_overhead
@@ -479,56 +486,57 @@ def solve_placement(
                 "conflict",
                 f"FfnAgent {ffnagent_index} has no memory after the configured margin",
             )
-        packed_weight_bytes = sum(
-            row[0] * assignment_count[class_index, ffnagent_index, tp_rank]
-            for class_index, rank_rows in enumerate(class_rank_rows)
-            for tp_rank, row in enumerate(rank_rows)
-        )
-        packed_weight_allocations = sum(
-            row[1] * assignment_count[class_index, ffnagent_index, tp_rank]
-            for class_index, rank_rows in enumerate(class_rank_rows)
-            for tp_rank, row in enumerate(rank_rows)
-        )
-        packed_weight_allowance = sum(
-            row[2] * assignment_count[class_index, ffnagent_index, tp_rank]
-            for class_index, rank_rows in enumerate(class_rank_rows)
-            for tp_rank, row in enumerate(rank_rows)
-        )
-        graph_capture_bytes = sum(
-            sum(signature_storage_bytes[signature]) * signature_present[ffnagent_index, signature_index[signature]]
-            for signature in all_signatures
-        ) + sum(
-            sum(capture_weight_pair_storage_bytes[weight_pair_key])
-            * capture_weight_pair_present[ffnagent_index, capture_weight_pair_index[weight_pair_key]]
-            for weight_pair_key in capture_weight_pair_keys
-        )
-        graph_capture_allocations = sum(
-            len(signature_storage_bytes[signature]) * signature_present[ffnagent_index, signature_index[signature]]
-            for signature in all_signatures
-        ) + sum(
-            len(capture_weight_pair_storage_bytes[weight_pair_key])
-            * capture_weight_pair_present[ffnagent_index, capture_weight_pair_index[weight_pair_key]]
-            for weight_pair_key in capture_weight_pair_keys
-        )
-        graph_capture_allowance = sum(
-            signature_allocator_allowance_bytes[signature]
-            * signature_present[ffnagent_index, signature_index[signature]]
-            for signature in all_signatures
-        ) + sum(
-            capture_weight_pair_allocator_allowance_bytes[weight_pair_key]
-            * capture_weight_pair_present[ffnagent_index, capture_weight_pair_index[weight_pair_key]]
-            for weight_pair_key in capture_weight_pair_keys
-        )
-        dense_signatures = [
-            signature_present[ffnagent_index, signature_index[signature]]
-            for signature in all_signatures
-            if isinstance(signature, execution.DenseFfnExecutionSignature)
-        ]
-        moe_signatures = [
-            signature_present[ffnagent_index, signature_index[signature]]
-            for signature in all_signatures
-            if isinstance(signature, execution.MoeFfnExecutionSignature)
-        ]
+        packed_weight_bytes: cp_model.LinearExpr | int = 0
+        packed_weight_allocations: cp_model.LinearExpr | int = 0
+        packed_weight_allowance: cp_model.LinearExpr | int = 0
+        local_layer_count: cp_model.LinearExpr | int = 0
+        local_layer_capacity_count: cp_model.LinearExpr | int = 0
+        for class_index, rank_rows in enumerate(class_rank_rows):
+            for tp_rank, (weight_bytes, allocation_count, allowance, signatures) in enumerate(rank_rows):
+                assigned = assignment_count[class_index, ffnagent_index, tp_rank]
+                packed_weight_bytes += weight_bytes * assigned
+                packed_weight_allocations += allocation_count * assigned
+                packed_weight_allowance += allowance * assigned
+                local_layer_count += assigned
+                local_layer_capacity_count += len(signatures) * assigned
+
+        graph_capture_bytes: cp_model.LinearExpr | int = 0
+        graph_capture_allocations: cp_model.LinearExpr | int = 0
+        graph_capture_allowance: cp_model.LinearExpr | int = 0
+        local_signature_count: cp_model.LinearExpr | int = 0
+        dense_signatures: list[cp_model.IntVar] = []
+        moe_signatures: list[cp_model.IntVar] = []
+        for current_signature_index, signature in enumerate(all_signatures):
+            present = signature_present[ffnagent_index, current_signature_index]
+            local_signature_count += present
+            graph_capture_bytes += lanes * sum(signature_storage_bytes[signature]) * present
+            graph_capture_allocations += lanes * len(signature_storage_bytes[signature]) * present
+            graph_capture_allowance += lanes * signature_allocator_allowance_bytes[signature] * present
+            if isinstance(signature, execution.DenseFfnExecutionSignature):
+                dense_signatures.append(present)
+            else:
+                moe_signatures.append(present)
+        for weight_pair_index, key in enumerate(capture_weight_pair_keys):
+            present = capture_weight_pair_present[ffnagent_index, weight_pair_index]
+            graph_capture_bytes += sum(capture_weight_pair_storage_bytes[key]) * present
+            graph_capture_allocations += len(capture_weight_pair_storage_bytes[key]) * present
+            graph_capture_allowance += capture_weight_pair_allocator_allowance_bytes[key] * present
+
+        private_pool_bytes: cp_model.LinearExpr | int = 0
+        resource_storage_bytes: cp_model.LinearExpr | int = 0
+        resource_allocations: cp_model.LinearExpr | int = 0
+        for resource_index, group in enumerate(resource_plans[ffnagent_index].lane_resources):
+            if len(group.signature_indices) == 1:
+                present = signature_present[ffnagent_index, group.signature_indices[0]]
+            else:
+                present = model.new_bool_var(f"resource_present_a{ffnagent_index}_r{resource_index}")
+                model.add_max_equality(
+                    present,
+                    [signature_present[ffnagent_index, index] for index in group.signature_indices],
+                )
+            private_pool_bytes += lanes * allocator_reservation_bytes(group.requirement.request_bytes) * present
+            resource_storage_bytes += lanes * group.requirement.logical_extent_bound_bytes * present
+            resource_allocations += lanes * len(group.requirement.request_bytes) * present
         dense_present = model.new_bool_var(f"dense_present_a{ffnagent_index}")
         moe_present = model.new_bool_var(f"moe_present_a{ffnagent_index}")
         if dense_signatures:
@@ -539,36 +547,9 @@ def solve_placement(
             model.add_max_equality(moe_present, moe_signatures)
         else:
             model.add(moe_present == 0)
-        dense_graph_capture_count = sum(dense_signatures)
-        moe_graph_capture_count = sum(moe_signatures)
-        local_layer_count = sum(
-            assignment_count[class_index, ffnagent_index, tp_rank]
-            for class_index, rank_rows in enumerate(class_rank_rows)
-            for tp_rank in range(len(rank_rows))
-        )
-        local_layer_capacity_count = sum(
-            len(row[3]) * assignment_count[class_index, ffnagent_index, tp_rank]
-            for class_index, rank_rows in enumerate(class_rank_rows)
-            for tp_rank, row in enumerate(rank_rows)
-        )
-        local_signature_count = sum(
-            signature_present[ffnagent_index, current_signature_index]
-            for current_signature_index in range(len(all_signatures))
-        )
+        dense_graph_capture_count = lanes * sum(dense_signatures)
+        moe_graph_capture_count = lanes * sum(moe_signatures)
         compute_branch_count = lanes * local_signature_count
-        maximum_workspace = model.new_int_var(0, maximum_workspace_bytes // lanes, f"workspace_a{ffnagent_index}")
-        model.add_max_equality(
-            maximum_workspace,
-            [
-                0,
-                *(
-                    preparation.compute_workspace_bytes(signature)
-                    * signature_present[ffnagent_index, signature_index[signature]]
-                    for signature in all_signatures
-                ),
-            ],
-        )
-        lane_workspace_bytes = lanes * maximum_workspace
         runtime_base = estimator.execution_runtime_bytes(
             local_layer_count=0,
             local_layer_capacity_count=0,
@@ -608,15 +589,8 @@ def solve_placement(
             + runtime_per_capacity * local_layer_capacity_count
             + runtime_per_signature * local_signature_count
         )
-        router_signatures = [
-            signature
-            for signature in all_signatures
-            if isinstance(signature, execution.MoeFfnExecutionSignature) and signature.router is not None
-        ]
         if config.debug.ffn_routing_observer.enable and router_signatures:
-            routing_elements_upper = max(
-                signature.payload_row_capacity * signature.effective_topk for signature in router_signatures
-            )
+            routing_elements_upper = maximum_routing_elements
             routing_elements = model.new_int_var(0, routing_elements_upper, f"routing_elements_a{ffnagent_index}")
             model.add_max_equality(
                 routing_elements,
@@ -630,12 +604,6 @@ def solve_placement(
                     ),
                 ],
             )
-            routing_capacities = sorted(
-                {
-                    0,
-                    *(signature.payload_row_capacity * signature.effective_topk for signature in router_signatures),
-                }
-            )
             routing_bytes_upper = estimator.routing_record_buffer_bytes(routing_capacities[-1])
             routing_record_buffer_bytes = model.new_int_var(
                 0,
@@ -644,7 +612,7 @@ def solve_placement(
             )
             model.add_allowed_assignments(
                 [routing_elements, routing_record_buffer_bytes],
-                [(capacity, estimator.routing_record_buffer_bytes(capacity)) for capacity in routing_capacities],
+                routing_bytes_table,
             )
         else:
             routing_record_buffer_bytes = 0
@@ -656,10 +624,22 @@ def solve_placement(
         )
         model.add(packed_weight_bytes <= MIB * packed_mib)
         model.add(MIB * packed_mib <= packed_weight_bytes + MIB - 1)
-        graph_capture_tensor_bytes = packed_weight_bytes + graph_capture_bytes
+        retained_tensor_bytes = packed_weight_bytes + resource_storage_bytes
+        retained_mib = model.new_int_var(
+            0,
+            align_up(maximum_weight_bytes + maximum_resource_bytes, MIB) // MIB,
+            f"retained_mib_a{ffnagent_index}",
+        )
+        model.add(retained_tensor_bytes <= MIB * retained_mib)
+        model.add(MIB * retained_mib <= retained_tensor_bytes + MIB - 1)
+        graph_capture_tensor_bytes = packed_weight_bytes + resource_storage_bytes + graph_capture_bytes
         graph_capture_mib = model.new_int_var(
             0,
-            align_up(maximum_weight_bytes + maximum_graph_capture_bytes, MIB) // MIB,
+            align_up(
+                maximum_weight_bytes + maximum_graph_capture_bytes + maximum_resource_bytes,
+                MIB,
+            )
+            // MIB,
             f"graph_capture_mib_a{ffnagent_index}",
         )
         model.add(graph_capture_tensor_bytes <= MIB * graph_capture_mib)
@@ -686,34 +666,35 @@ def solve_placement(
                 + coefficients.bytes_per_moe_graph_capture * moe_capture_count
                 + coefficients.bytes_per_executor_lane * lane_count
                 + coefficients.bytes_per_compute_branch * branch_count
-                + coefficients.dense_implementation_bytes * dense_present
-                + coefficients.moe_implementation_bytes * moe_present
+                + coefficients.dense_implementation_bytes * (dense_present if lane_count else 0)
+                + coefficients.moe_implementation_bytes * (moe_present if lane_count else 0)
                 + coefficients.joined_ffnagent_bytes * joined
             )
 
-        retained_exact = (
-            packed_weight_bytes
-            + fabric_join_bytes
-            + lane_workspace_bytes
-            + execution_runtime_bytes
-            + routing_record_buffer_bytes
+        weight_physical = packed_weight_bytes + packed_weight_allowance
+        joined_physical = weight_physical + fabric_join_bytes
+        captured_physical = joined_physical + private_pool_bytes + graph_capture_bytes + graph_capture_allowance
+        installed_native = execution_runtime_bytes + routing_record_buffer_bytes
+        physical_costs = {
+            "weight_materialization": weight_physical,
+            "fabric_join": joined_physical,
+            "graph_capture": captured_physical,
+            "execution_installation": captured_physical + installed_native,
+            "retained": joined_physical + private_pool_bytes + installed_native,
+        }
+        capture_correction = calibrated_overhead(
+            tensor_storage_mib=graph_capture_mib,
+            tensor_storage_allocation_count=packed_weight_allocations
+            + graph_capture_allocations
+            + resource_allocations,
+            dense_capture_count=dense_graph_capture_count,
+            moe_capture_count=moe_graph_capture_count,
+            lane_count=lanes,
+            branch_count=compute_branch_count,
+            joined=1,
         )
-        exact_resource_ledgers = (
-            packed_weight_bytes,
-            packed_weight_bytes + fabric_join_bytes,
-            packed_weight_bytes + fabric_join_bytes + graph_capture_bytes,
-            retained_exact + graph_capture_bytes,
-            retained_exact,
-        )
-        allocator_allowances = (
-            packed_weight_allowance,
-            packed_weight_allowance,
-            packed_weight_allowance + graph_capture_allowance,
-            packed_weight_allowance + graph_capture_allowance,
-            packed_weight_allowance,
-        )
-        calibrated_overheads = (
-            calibrated_overhead(
+        calibrated_overheads = {
+            "weight_materialization": calibrated_overhead(
                 tensor_storage_mib=packed_mib,
                 tensor_storage_allocation_count=packed_weight_allocations,
                 dense_capture_count=0,
@@ -722,7 +703,7 @@ def solve_placement(
                 branch_count=0,
                 joined=0,
             ),
-            calibrated_overhead(
+            "fabric_join": calibrated_overhead(
                 tensor_storage_mib=packed_mib,
                 tensor_storage_allocation_count=packed_weight_allocations,
                 dense_capture_count=0,
@@ -731,44 +712,26 @@ def solve_placement(
                 branch_count=0,
                 joined=1,
             ),
-            calibrated_overhead(
-                tensor_storage_mib=graph_capture_mib,
-                tensor_storage_allocation_count=packed_weight_allocations + graph_capture_allocations,
-                dense_capture_count=dense_graph_capture_count,
-                moe_capture_count=moe_graph_capture_count,
-                lane_count=0,
-                branch_count=0,
-                joined=1,
-            ),
-            calibrated_overhead(
-                tensor_storage_mib=graph_capture_mib,
-                tensor_storage_allocation_count=packed_weight_allocations + graph_capture_allocations,
-                dense_capture_count=dense_graph_capture_count,
-                moe_capture_count=moe_graph_capture_count,
-                lane_count=lanes,
-                branch_count=compute_branch_count,
-                joined=1,
-            ),
-            calibrated_overhead(
-                tensor_storage_mib=packed_mib,
-                tensor_storage_allocation_count=packed_weight_allocations,
+            "graph_capture": capture_correction,
+            "execution_installation": capture_correction,
+            "retained": calibrated_overhead(
+                tensor_storage_mib=retained_mib,
+                tensor_storage_allocation_count=packed_weight_allocations + resource_allocations,
                 dense_capture_count=0,
                 moe_capture_count=0,
                 lane_count=lanes,
                 branch_count=compute_branch_count,
                 joined=1,
             ),
-        )
-        stage_values = []
-        for point_index, (exact_resource_ledger, allocator_allowance, calibrated) in enumerate(
-            zip(exact_resource_ledgers, allocator_allowances, calibrated_overheads, strict=True)
-        ):
-            value = model.new_int_var(0, admission_limit, f"stage_a{ffnagent_index}_p{point_index}")
-            model.add(value == exact_resource_ledger + allocator_allowance + calibrated)
-            stage_values.append(value)
+        }
+        stage_values = {}
+        for point, physical_cost in physical_costs.items():
+            value = model.new_int_var(0, admission_limit, f"stage_a{ffnagent_index}_{point}")
+            model.add(value == physical_cost + calibrated_overheads[point])
+            stage_values[point] = value
         peak = model.new_int_var(0, admission_limit, f"peak_a{ffnagent_index}")
-        model.add_max_equality(peak, stage_values)
-        retained = stage_values[-1]
+        model.add_max_equality(peak, list(stage_values.values()))
+        retained = stage_values["retained"]
         available = model.new_int_var(0, admission_limit, f"headroom_a{ffnagent_index}")
         model.add(available == admission_limit - peak)
         retained_bytes.append(retained)
@@ -830,6 +793,8 @@ def solve_placement(
     )
     solver.parameters.num_workers = 1
     solver.parameters.search_branching = cp_model.FIXED_SEARCH
+    # Preserve the declared coordinate order when equal solutions are interchangeable.
+    solver.parameters.cp_model_presolve = False
     solver.parameters.max_time_in_seconds = remaining_placement_seconds(deadline, "representative selection")
     status = solver.solve(model)
     remaining_placement_seconds(deadline, "representative selection")
@@ -880,7 +845,7 @@ def solve_placement(
                         local_intermediate_size=preparation.prepare_ffn_layer(
                             spec,
                             layer_ordinal=layer_ordinal,
-                            payload_dtype=instance_plans[model_index].ffn_profile.payload_dtype,
+                            payload_dtype=estimator.instance_profiles[model_index].payload_dtype,
                             tp_size=len(groups_by_coordinate[model_index, layer_ordinal]),
                             tp_rank=0,
                         ).local_intermediate_size,
@@ -909,10 +874,13 @@ def solve_placement(
             raise RuntimeError("FFN Placement projection does not reproduce solved assignment counts")
     estimates = []
     for ffnagent_index in range(ffnagent_count):
-        estimate = estimator.estimate_model_plans(
-            model_plans=model_plans,
-            ffnagent_index=ffnagent_index,
-        )
+        try:
+            estimate = estimator.estimate_model_plans(
+                model_plans=model_plans,
+                ffnagent_index=ffnagent_index,
+            )
+        except ValueError as error:
+            raise XpoolDaemonError("not_ready", str(error)) from error
         if estimate.retained_bytes != solver.value(
             retained_bytes[ffnagent_index]
         ) or estimate.peak_bytes != solver.value(peak_bytes[ffnagent_index]):

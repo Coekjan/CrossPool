@@ -4,14 +4,12 @@
 #include <utility>
 #include <vector>
 
-#include <pybind11/native_enum.h>
+#include <c10/util/Exception.h>
 #include <pybind11/stl.h>
-#include <torch/python.h>
 
 #include <xpool/bindings.hpp>
 #include <xpool/fabric/runtime.hpp>
 #include <xpool/ffn.hpp>
-#include <xpool/ffnagent/runtime.hpp>
 #include <xpool/runtime.hpp>
 
 namespace py = pybind11;
@@ -97,13 +95,6 @@ void bind_fabric(py::module_ &module) {
       .def_readonly("key", &xpool::fabric::FailurePayload::key, "Failed invocation identity.")
       .def_readonly("layer_ordinal", &xpool::fabric::FailurePayload::layer_ordinal,
                     "Failed config-order FFN layer ordinal.");
-
-  py::native_enum<xpool::fabric::DeliveryVariant>(fabric, "DeliveryVariant", "enum.IntEnum",
-                                                  "Observed Fabric output-delivery branch.")
-      .value("DIRECT_PARTIAL", xpool::fabric::DeliveryVariant::DirectPartial)
-      .value("SINGLE_COMPLETE", xpool::fabric::DeliveryVariant::SingleComplete)
-      .value("REPLICATED_COMPLETE", xpool::fabric::DeliveryVariant::ReplicatedComplete)
-      .finalize();
 
   fabric.def("arena_allocation_bytes", &xpool::fabric::arena_allocation_bytes, py::arg("atnagent_count"),
              py::arg("ffnagent_count"), py::arg("instance_count"), py::arg("executor_lane_count"),

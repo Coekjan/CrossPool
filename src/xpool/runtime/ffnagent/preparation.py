@@ -397,18 +397,3 @@ def compute_workspace_bytes(signature: execution.ExecutionSignature) -> int:
             local_intermediate_size=signature.local_intermediate_size,
         )
     return MoeWorkspaceLayout.from_signature(signature).nbytes
-
-
-def graph_capture_capacity_storage_bytes(signature: execution.ExecutionSignature) -> tuple[int, ...]:
-    """Return Capacity-dependent capture requests in their allocation order."""
-
-    payload_bytes = signature.payload_dtype.itemsize * signature.payload_row_capacity * signature.hidden_size
-    if isinstance(signature, execution.DenseFfnExecutionSignature):
-        return payload_bytes, payload_bytes, compute_workspace_bytes(signature)
-    result = (
-        payload_bytes,
-        payload_bytes,
-        8 * signature.payload_row_capacity * signature.effective_topk,
-        compute_workspace_bytes(signature),
-    )
-    return (*result, 8) if signature.router is not None else result

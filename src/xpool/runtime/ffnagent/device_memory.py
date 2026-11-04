@@ -1,15 +1,17 @@
-"""Exact FFN device-memory resources shared by placement and qualification."""
+"""FFN device-memory estimates shared by placement and qualification."""
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
+
+import torch
 
 import xpool.native
 from xpool import ffn
 from xpool.config import get_global_config
-from xpool.fabric import FabricPlan, FfnModelPlan, InstanceFfnProfile
+from xpool.fabric import FfnModelPlan, InstanceFfnProfile
 from xpool.memory import (
     MIB,
     DeviceMemoryEstimate,
@@ -22,6 +24,9 @@ from xpool.utils import align_up
 from xpool.utils.integer import ensure_sint64_nonnegative
 
 logger = logging.getLogger(__name__)
+
+# Each Primary/Control Torch Graph owns an int64 RNG seed and offset during construction.
+TORCH_GRAPH_CAPTURE_STATE_REQUEST_BYTES = (torch.int64.itemsize,) * 4
 
 type StartupPoint = Literal[
     "weight_materialization",
@@ -111,7 +116,7 @@ def graph_capture_allocator_allowance_bytes(signature: execution.ExecutionSignat
     Transient reservations include their logical bytes, absent from the ledger.
     """
 
-    storage_bytes = preparation.graph_capture_capacity_storage_bytes(signature)
+    storage_bytes = signature.capture_placeholder_layout().allocation_bytes() + TORCH_GRAPH_CAPTURE_STATE_REQUEST_BYTES
     if isinstance(signature, execution.DenseFfnExecutionSignature):
         reserved = allocator_reservation_bytes(storage_bytes)
     else:
@@ -122,8 +127,16 @@ def graph_capture_allocator_allowance_bytes(signature: execution.ExecutionSignat
     return result
 
 
+def capture_pool_reservation_bytes(plan: preparation.ExecutionResourcePlan) -> int:
+    """Estimate one Lane's declared pool for the complete resource plan."""
+
+    result = sum(allocator_reservation_bytes(group.requirement.request_bytes) for group in plan.lane_resources)
+    ensure_sint64_nonnegative(result)
+    return result
+
+
 class DeviceMemoryEstimator:
-    """Exact allocation and optional calibrated opaque-overhead authority."""
+    """Analytic resource estimates and optional calibrated overhead."""
 
     def __init__(
         self,
@@ -165,7 +178,11 @@ class DeviceMemoryEstimator:
         local_signature_count: int,
         coordinator: bool,
     ) -> int:
-        """Return exact native readiness, lookup, binding, and Lane storage."""
+        """Return logical requests for readiness, fixed tables and Lane state.
+
+        Discovered binding overhead and physical CUDA/driver costs remain
+        explicit unmodeled entries alongside the known request estimates.
+        """
 
         ensure_sint64_nonnegative(local_layer_count, local_layer_capacity_count, local_signature_count)
         lanes = get_global_config().scheduler.ffn_concurrency
@@ -230,16 +247,6 @@ class DeviceMemoryEstimator:
             maximum_routing_metadata_elements,
         )
 
-    def allocation_ledger(self, *, fabric_plan: FabricPlan, ffnagent_index: int) -> tuple[DeviceMemoryPoint, ...]:
-        """Compose the five exact startup ledgers and feature rows."""
-
-        if fabric_plan.executor_lane_count != get_global_config().scheduler.ffn_concurrency:
-            raise ValueError("Fabric Plan executor Lane count disagrees with the process configuration")
-        return self.allocation_ledger_for_model_plans(
-            model_plans=fabric_plan.model_plans,
-            ffnagent_index=ffnagent_index,
-        )
-
     def allocation_ledger_for_model_plans(
         self,
         *,
@@ -251,9 +258,10 @@ class DeviceMemoryEstimator:
         ffnagent_count = len(get_global_config().ffn.devices)
         if not 0 <= ffnagent_index < ffnagent_count:
             raise ValueError("device-memory FfnAgent index is outside the configured Fleet")
+        execution_contract = self.ffn_execution_contracts[ffnagent_index]
         if len(model_plans) != len(self.model_specs):
             raise ValueError("device-memory Model Plans are not co-indexed with Model Specs")
-        signatures: set[execution.ExecutionSignature] = set()
+        signatures: dict[execution.ExecutionSignature, None] = {}
         packed_weight_storage_bytes: list[int] = []
         packed_weight_allowance = 0
         local_layer_count = 0
@@ -271,41 +279,44 @@ class DeviceMemoryEstimator:
                     tp_rank=tp_rank,
                 )
                 local_signatures = layout.execution_signatures(profile=profile)
-                signatures.update(local_signatures)
+                signatures.update(dict.fromkeys(local_signatures))
                 local_layer_count += 1
                 local_layer_capacity_count += len(local_signatures)
                 storage_bytes = layout.weight_allocation_bytes()
                 packed_weight_storage_bytes.extend(storage_bytes)
                 packed_weight_allowance += allocator_reservation_bytes(storage_bytes) - sum(storage_bytes)
 
-        capture_weight_pair_keys = {execution.capture_weight_pair_key(signature) for signature in signatures}
-        graph_capture_storage_bytes = tuple(
-            value
-            for signature in capture_weight_pair_keys
-            for value in execution.control_capture_probe_storage_bytes(signature)
-        ) + tuple(
-            value for signature in signatures for value in preparation.graph_capture_capacity_storage_bytes(signature)
+        executor_lane_count = get_global_config().scheduler.ffn_concurrency
+        capture_weight_pair_keys = tuple(
+            dict.fromkeys(execution.capture_weight_pair_key(signature) for signature in signatures)
         )
-        packed_weight_storage_bytes_tuple = tuple(packed_weight_storage_bytes)
-        packed_weight_bytes = sum(packed_weight_storage_bytes_tuple)
-        packed_weight_allocations = len(packed_weight_storage_bytes_tuple)
+        probe_groups = tuple(execution.control_capture_probe_storage_bytes(key) for key in capture_weight_pair_keys)
+        placeholder_groups = tuple(
+            (signature.capture_placeholder_layout().allocation_bytes() + TORCH_GRAPH_CAPTURE_STATE_REQUEST_BYTES)
+            for signature in signatures
+        )
+        graph_capture_storage_bytes = (
+            tuple(value for group in probe_groups for value in group)
+            + tuple(value for group in placeholder_groups for value in group) * executor_lane_count
+        )
         graph_capture_bytes = sum(graph_capture_storage_bytes)
         graph_capture_allocations = len(graph_capture_storage_bytes)
-        graph_capture_allowance = sum(graph_capture_allocator_allowance_bytes(signature) for signature in signatures)
-        for signature in capture_weight_pair_keys:
-            storage_bytes = execution.control_capture_probe_storage_bytes(signature)
-            graph_capture_allowance += allocator_reservation_bytes(storage_bytes) - sum(storage_bytes)
-        dense_graph_capture_count = sum(
+        graph_capture_allowance = sum(
+            graph_capture_allocator_allowance_bytes(signature) for signature in signatures
+        ) * executor_lane_count + sum(allocator_reservation_bytes(group) - sum(group) for group in probe_groups)
+        resource_plan = preparation.ExecutionResourcePlan.from_signatures(
+            tuple(signatures), contract=execution_contract
+        )
+        private_pool_reservation = executor_lane_count * capture_pool_reservation_bytes(resource_plan)
+        packed_weight_bytes = sum(packed_weight_storage_bytes)
+        packed_weight_allocations = len(packed_weight_storage_bytes)
+        dense_signature_count = sum(
             isinstance(signature, execution.DenseFfnExecutionSignature) for signature in signatures
         )
-        moe_graph_capture_count = len(signatures) - dense_graph_capture_count
-        dense_present = dense_graph_capture_count != 0
-        moe_present = moe_graph_capture_count != 0
-        executor_lane_count = get_global_config().scheduler.ffn_concurrency
+        moe_signature_count = len(signatures) - dense_signature_count
+        dense_present = dense_signature_count != 0
+        moe_present = moe_signature_count != 0
         compute_branch_count = executor_lane_count * len(signatures)
-        lane_workspace_bytes = executor_lane_count * max(
-            (preparation.compute_workspace_bytes(signature) for signature in signatures), default=0
-        )
         execution_runtime_bytes = self.execution_runtime_bytes(
             local_layer_count=local_layer_count,
             local_layer_capacity_count=local_layer_capacity_count,
@@ -323,102 +334,117 @@ class DeviceMemoryEstimator:
         routing_record_buffer_bytes = self.routing_record_buffer_bytes(routing_elements)
         fabric_join_bytes = self.fabric_arena_bytes() + self.fabric_observer_bytes()
 
-        def features(
-            *,
-            graph_capture: bool,
-            lanes: bool,
-            joined: bool,
-        ) -> DeviceMemoryFeatures:
-            return DeviceMemoryFeatures(
-                tensor_storage_bytes=packed_weight_bytes + (graph_capture_bytes if graph_capture else 0),
-                tensor_storage_allocation_count=packed_weight_allocations
-                + (graph_capture_allocations if graph_capture else 0),
-                dense_graph_capture_count=dense_graph_capture_count if graph_capture else 0,
-                moe_graph_capture_count=moe_graph_capture_count if graph_capture else 0,
-                executor_lane_count=executor_lane_count if lanes else 0,
-                compute_branch_count=compute_branch_count if lanes else 0,
-                dense_implementation_present=dense_present,
-                moe_implementation_present=moe_present,
-                joined_ffnagent=joined,
-            )
-
-        retained_exact = (
-            packed_weight_bytes
-            + fabric_join_bytes
-            + lane_workspace_bytes
-            + execution_runtime_bytes
-            + routing_record_buffer_bytes
+        weights_charge = DeviceMemoryCharge(
+            "weights.default", packed_weight_bytes, packed_weight_bytes + packed_weight_allowance
+        )
+        fabric_charge = DeviceMemoryCharge(
+            "fabric", fabric_join_bytes, fabric_join_bytes, ("fabric.internal_overhead",)
+        )
+        pending_native_charge = DeviceMemoryCharge("native.storage", 0, 0, ("native.physical_allocations",))
+        native_storage_bytes = execution_runtime_bytes + routing_record_buffer_bytes
+        installed_native_charge = DeviceMemoryCharge(
+            "native.storage",
+            native_storage_bytes,
+            native_storage_bytes,
+            ("native.physical_allocations", "native.binding_storage"),
+        )
+        capture_private_charge = DeviceMemoryCharge(
+            "capture.private_pools",
+            sum(
+                executor_lane_count * group.requirement.exact_logical_bytes
+                for group in resource_plan.lane_resources
+                if group.requirement.exact_logical_bytes is not None
+            ),
+            private_pool_reservation,
+        )
+        infrastructure_charge = DeviceMemoryCharge("capture.infrastructure", 0, 0, ("capture.infrastructure",))
+        construction_charge = DeviceMemoryCharge(
+            "capture.default", graph_capture_bytes, graph_capture_bytes + graph_capture_allowance
+        )
+        graph_driver_charge = DeviceMemoryCharge("cuda.graph_driver", 0, 0, ("cuda.graph_driver",))
+        weight_features = DeviceMemoryFeatures(
+            tensor_storage_bytes=packed_weight_bytes,
+            tensor_storage_allocation_count=packed_weight_allocations,
+            dense_graph_capture_count=0,
+            moe_graph_capture_count=0,
+            executor_lane_count=0,
+            compute_branch_count=0,
+            dense_implementation_present=False,
+            moe_implementation_present=False,
+            joined_ffnagent=False,
+        )
+        joined_features = replace(weight_features, joined_ffnagent=True)
+        capture_features = DeviceMemoryFeatures(
+            tensor_storage_bytes=packed_weight_bytes
+            + graph_capture_bytes
+            + sum(
+                executor_lane_count * group.requirement.logical_extent_bound_bytes
+                for group in resource_plan.lane_resources
+            ),
+            tensor_storage_allocation_count=packed_weight_allocations
+            + graph_capture_allocations
+            + sum(executor_lane_count * len(group.requirement.request_bytes) for group in resource_plan.lane_resources),
+            dense_graph_capture_count=dense_signature_count * executor_lane_count,
+            moe_graph_capture_count=moe_signature_count * executor_lane_count,
+            executor_lane_count=executor_lane_count,
+            compute_branch_count=compute_branch_count,
+            dense_implementation_present=dense_present,
+            moe_implementation_present=moe_present,
+            joined_ffnagent=True,
+        )
+        retained_features = replace(
+            capture_features,
+            tensor_storage_bytes=packed_weight_bytes
+            + sum(
+                executor_lane_count * group.requirement.logical_extent_bound_bytes
+                for group in resource_plan.lane_resources
+            ),
+            tensor_storage_allocation_count=packed_weight_allocations
+            + sum(executor_lane_count * len(group.requirement.request_bytes) for group in resource_plan.lane_resources),
+            dense_graph_capture_count=0,
+            moe_graph_capture_count=0,
         )
         return (
+            DeviceMemoryPoint("weight_materialization", (weights_charge,), weight_features),
+            DeviceMemoryPoint("fabric_join", (weights_charge, fabric_charge, pending_native_charge), joined_features),
             DeviceMemoryPoint(
-                point="weight_materialization",
-                charges=(
-                    DeviceMemoryCharge(
-                        domain="execution",
-                        exact_logical_bytes=packed_weight_bytes,
-                        estimated_physical_bytes=(packed_weight_bytes) + (packed_weight_allowance),
-                        unmodeled_costs=(),
-                    ),
+                "graph_capture",
+                (
+                    weights_charge,
+                    fabric_charge,
+                    pending_native_charge,
+                    capture_private_charge,
+                    infrastructure_charge,
+                    construction_charge,
                 ),
-                features=features(graph_capture=False, lanes=False, joined=False),
+                capture_features,
             ),
             DeviceMemoryPoint(
-                point="fabric_join",
-                charges=(
-                    DeviceMemoryCharge(
-                        domain="execution",
-                        exact_logical_bytes=packed_weight_bytes + fabric_join_bytes,
-                        estimated_physical_bytes=(packed_weight_bytes + fabric_join_bytes) + (packed_weight_allowance),
-                        unmodeled_costs=(),
-                    ),
+                "execution_installation",
+                (
+                    weights_charge,
+                    fabric_charge,
+                    installed_native_charge,
+                    capture_private_charge,
+                    infrastructure_charge,
+                    construction_charge,
+                    graph_driver_charge,
                 ),
-                features=features(graph_capture=False, lanes=False, joined=True),
+                capture_features,
             ),
             DeviceMemoryPoint(
-                point="graph_capture",
-                charges=(
-                    DeviceMemoryCharge(
-                        domain="execution",
-                        exact_logical_bytes=packed_weight_bytes + fabric_join_bytes + graph_capture_bytes,
-                        estimated_physical_bytes=(packed_weight_bytes + fabric_join_bytes + graph_capture_bytes)
-                        + (packed_weight_allowance + graph_capture_allowance),
-                        unmodeled_costs=("cuda.graph_driver",),
-                    ),
+                "retained",
+                (
+                    weights_charge,
+                    fabric_charge,
+                    installed_native_charge,
+                    capture_private_charge,
+                    infrastructure_charge,
+                    graph_driver_charge,
                 ),
-                features=features(graph_capture=True, lanes=False, joined=True),
-            ),
-            DeviceMemoryPoint(
-                point="execution_installation",
-                charges=(
-                    DeviceMemoryCharge(
-                        domain="execution",
-                        exact_logical_bytes=retained_exact + graph_capture_bytes,
-                        estimated_physical_bytes=(retained_exact + graph_capture_bytes)
-                        + (packed_weight_allowance + graph_capture_allowance),
-                        unmodeled_costs=("cuda.graph_driver",),
-                    ),
-                ),
-                features=features(graph_capture=True, lanes=True, joined=True),
-            ),
-            DeviceMemoryPoint(
-                point="retained",
-                charges=(
-                    DeviceMemoryCharge(
-                        domain="execution",
-                        exact_logical_bytes=retained_exact,
-                        estimated_physical_bytes=(retained_exact) + (packed_weight_allowance),
-                        unmodeled_costs=("cuda.graph_driver",),
-                    ),
-                ),
-                features=features(graph_capture=False, lanes=True, joined=True),
+                retained_features,
             ),
         )
-
-    def estimate(self, *, fabric_plan: FabricPlan, ffnagent_index: int) -> DeviceMemoryEstimate:
-        """Estimate retained and startup-peak bytes for one concrete FfnAgent."""
-
-        points = self.allocation_ledger(fabric_plan=fabric_plan, ffnagent_index=ffnagent_index)
-        return self.estimate_points(points)
 
     def estimate_model_plans(
         self,

@@ -380,6 +380,11 @@ and participants, retiring clients before stopping their controller. Cases that
 do not need MPS run directly. Allocation return follows verified resource
 retirement and complete task-domain drain.
 
+If native topology setup fails before the first Plan send attempt, stop the
+children and confirm that each has exited and MPS has no clients before
+releasing the controller. Report cleanup errors. Once a send is attempted,
+even partial delivery requires the usual collective retirement checks.
+
 Owned benchmark placement uses the shared attention-first consecutive role
 blocks within lease-local ordinals `0..N-1`. Physical UUID mapping and logical
 role placement are retained separately. Nested benchmark E2E execution stays

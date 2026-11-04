@@ -148,6 +148,7 @@ protected:
   void SetUp() override {
     ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
     projection_.validate();
+    descriptor_.lanes.resize(layout_.executor_lane_count);
     descriptor_.validate();
     ASSERT_EQ(cudaMalloc(&arena_, layout_.header.total_bytes), cudaSuccess);
     ASSERT_EQ(cudaMalloc(&activation_count_, sizeof(std::uint32_t)), cudaSuccess);
@@ -244,6 +245,110 @@ TEST_F(ExecutionRetirementTest, PartialInstallationPreservesOperationErrorAfterS
   EXPECT_TRUE(faults.allocations.empty());
   EXPECT_TRUE(faults.executables.empty());
   EXPECT_THROW(install(), c10::Error);
+}
+
+XPOOL_KERNEL_FN void borrowed_compute(const std::uint32_t *input, const std::uint32_t *gate, const std::uint32_t *down,
+                                      std::uint32_t *scratch, std::uint32_t *output) {
+  *scratch = *input + *gate + *down;
+  *output = *scratch;
+}
+
+class BorrowedExecutionRetirementTest : public ExecutionRetirementTest {
+protected:
+  void SetUp() override {
+    ExecutionRetirementTest::SetUp();
+    if (HasFatalFailure()) {
+      return;
+    }
+    faults.enabled = false;
+    ASSERT_EQ(cudaMalloc(&weights_, std::size_t{256}), cudaSuccess);
+    ASSERT_EQ(cudaMemset(weights_, 0x5a, std::size_t{256}), cudaSuccess);
+    faults.borrowed_allocations.insert(weights_);
+    const auto projection = [this](std::size_t offset, std::size_t bytes) {
+      return xpool::ffnagent::ProjectionBindingView{.values = reinterpret_cast<std::uintptr_t>(weights_ + offset),
+                                                    .values_bytes = bytes,
+                                                    .scales = std::nullopt,
+                                                    .scales_bytes = 0,
+                                                    .bias = std::nullopt,
+                                                    .bias_bytes = 0};
+    };
+    const auto primary = xpool::ffnagent::DenseBindingView{.gate_up = projection(0, 64), .down = projection(64, 32)};
+    const auto control = xpool::ffnagent::DenseBindingView{.gate_up = projection(128, 64), .down = projection(192, 32)};
+    projection_.instances[0].layers[0].ffnagent_indices = {1};
+    projection_.validate();
+    descriptor_.layers = {{.instance_index = 0,
+                           .layer_ordinal = 0,
+                           .execution_signature_indices = {0},
+                           .layer_resource_targets = primary}};
+    for (auto lane = std::size_t{0}; lane < backing_.size(); ++lane) {
+      ASSERT_EQ(cudaMalloc(&backing_[lane], std::size_t{96}), cudaSuccess);
+      ASSERT_EQ(cudaMemset(backing_[lane], 0x5a, std::size_t{96}), cudaSuccess);
+      faults.borrowed_allocations.insert(backing_[lane]);
+      auto *input = reinterpret_cast<std::uint32_t *>(backing_[lane]);
+      auto *output = reinterpret_cast<std::uint32_t *>(backing_[lane] + 32);
+      auto *scratch = reinterpret_cast<std::uint32_t *>(backing_[lane] + 64);
+      const auto capture = [&](const xpool::ffnagent::DenseBindingView &view) {
+        auto graph = cudaGraph_t{};
+        C10_CUDA_CHECK(cudaGraphCreate(&graph, 0));
+        source_graphs_.push_back(graph);
+        auto *gate = reinterpret_cast<const std::uint32_t *>(view.gate_up.values);
+        auto *down = reinterpret_cast<const std::uint32_t *>(view.down.values);
+        auto args = std::array<void *, 5>{&input, &gate, &down, &scratch, &output};
+        static_cast<void>(xpool::utils::cuda::graph::add_kernel_node(
+            graph, reinterpret_cast<const void *>(borrowed_compute), dim3{1}, dim3{1}, 0, args.data()));
+        return reinterpret_cast<std::uintptr_t>(graph);
+      };
+      descriptor_.lanes[lane].signatures.push_back(xpool::ffnagent::DenseCaptureDescriptor{
+          .payload_dtype = c10::ScalarType::BFloat16,
+          .payload_row_capacity = 1,
+          .hidden_size = 16,
+          .local_intermediate_size = 1,
+          .primary_graph_address = capture(primary),
+          .control_graph_address = capture(control),
+          .capture_input_address = reinterpret_cast<std::uintptr_t>(input),
+          .capture_partial_address = reinterpret_cast<std::uintptr_t>(output),
+          .capture_ranges = {{"compute", reinterpret_cast<std::uintptr_t>(scratch),
+                              reinterpret_cast<std::uintptr_t>(scratch), 32}},
+          .primary_weight_bindings = primary,
+          .control_weight_bindings = control,
+      });
+    }
+    descriptor_.validate();
+    faults.enabled = true;
+  }
+
+  void TearDown() override {
+    ExecutionRetirementTest::TearDown();
+    EXPECT_FALSE(faults.borrowed_free_attempted);
+    for (const auto graph : source_graphs_) {
+      EXPECT_EQ(cudaGraphDestroy(graph), cudaSuccess);
+    }
+    for (auto *pointer : backing_) {
+      EXPECT_EQ(cudaFree(pointer), cudaSuccess);
+    }
+    EXPECT_EQ(cudaFree(weights_), cudaSuccess);
+  }
+
+  void expect_borrowed_backing_alive() {
+    ASSERT_FALSE(faults.borrowed_free_attempted);
+    for (auto *pointer : backing_) {
+      auto value = std::uint32_t{};
+      ASSERT_EQ(cudaMemcpy(&value, pointer + 64, sizeof(value), cudaMemcpyDeviceToHost), cudaSuccess);
+      EXPECT_EQ(value, std::uint32_t{0x5a5a5a5a});
+    }
+  }
+
+  std::uint8_t *weights_ = nullptr;
+  std::array<std::uint8_t *, 2> backing_{};
+  std::vector<cudaGraph_t> source_graphs_;
+};
+
+TEST_F(BorrowedExecutionRetirementTest, PartialInstallationRetiresBeforeBorrowedOwnerRelease) {
+  faults.fail_instantiation = 2;
+  EXPECT_THROW(install(), c10::Error);
+  EXPECT_TRUE(faults.executables.empty());
+  EXPECT_TRUE(faults.allocations.empty());
+  expect_borrowed_backing_alive();
 }
 
 } // namespace

@@ -133,7 +133,7 @@ class FabricFfnAgentTrace:
     executor_lane_index: int | None
     executor_lease_sequence: int | None
     payload_row_capacity: int | None
-    delivery: xpool.native.fabric.DeliveryVariant | None
+    delivery: xpool.native.devkit.fabric_observer.DeliveryVariant | None
     lane_execution_observed_ns: int
     compute_started_ns: int
     compute_completed_ns: int

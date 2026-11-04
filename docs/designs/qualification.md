@@ -88,29 +88,32 @@ the Coordinator launches one block.
 
 ## Resource evidence
 
-Resource qualification checks real-model startup against the analytic or
-calibrated memory estimate. Baseline startup worlds require zero
-underprediction for every observed startup stage. Memory-pressure startup
-worlds set the operator device-memory margin to zero, hold one raw CUDA reserve
-through startup, inference, and normal retirement, and require startup to
-succeed with actual admission-time free memory `F` and predicted peak `P`
-satisfying `P <= F <= P + 16 MiB`. The lower bound keeps the admitted startup
-feasible; the upper bound prevents an ordinary memory-rich startup from passing
-as pressure qualification. The 16-MiB interval is positioning resolution, not
-permitted underprediction or a production margin. Any underprediction reopens
-the estimator rather than increasing a hidden or default margin.
+Compare predicted and observed incremental bytes at weight materialization,
+Fabric join, Graph Capture, installation and retained service. Observe the
+same [Registry completion boundary](ffn-execution.md#graphtemplate-and-executor-lanes)
+as production. Report the baseline, analytic cost, correction and operator
+margin separately. Sample outside active capture without extra synchronization
+or cache trimming. Record sampling gaps: a sampled maximum can miss a peak.
 
-Real-model observations cover the four startup phases through execution
-installation and finish before activation launches persistent Lane Graphs.
-Calibration additionally observes a cleaned final `retained` point after its
-explicit cache trim. Production post-installation memory without that trim is
-separate diagnostic evidence, not a measurement of the cleaned point. Passing
-synthetic fitting and held-out checks does not qualify real-model startup.
+- **Without a Profile**, require real-model startup and inference with
+  sufficient memory. Report observed minus predicted bytes at each stage.
+  Near the estimate, an OOM is acceptable only if readiness stays false and
+  resources retire safely. Record the actual failure stage and distinguish
+  confirmed native finalization and Registry close from complete process
+  exit. A successful constrained run must exercise the requested inference mode.
+- **With a Profile**, both independent held-out worlds and real-model runs
+  must show no sampled underprediction. Set the operator margin to zero and
+  hold a raw CUDA reserve on each FFN device through inference and normal
+  retirement. At admission require `P <= F <= P + 16 MiB`, where `P` is
+  the predicted peak and `F` is fresh free memory. The interval positions
+  the pressure test; it does not excuse underprediction.
 
-Temporary observers forward the original lifecycle calls and sample outside
-active Graph Capture without adding synchronization or cache trimming to
-production startup. Phase peaks remain the accuracy verdict; allocator
-snapshots describe their own observation boundary, not a different-time peak.
+Qualify a shared external source with a real Tensor acquired before baseline.
+Exercise a Signature that reads it and one that does not, across at least two
+Lanes. Verify dynamic replay after construction cleanup, rejection of missing
+or inconsistent owners, retention on failure and release after retirement.
+This component evidence covers shared storage; a production source still
+needs its own installed-startup evidence.
 
 Resource qualification runners are evidence-only tools. Production modules,
 reusable test harnesses, and permanent test cases own the runtime contracts
@@ -140,12 +143,9 @@ assertion surface. Qualification cases provide evidence rather than an
 adapter allowlist. Runtime compatibility follows the SGLang memory and cache
 contract, with structural incompatibility at that seam determining rejection.
 
-Memory underprediction or memory-pressure startup failure invalidates that
-qualification result. Preserve the affected case, measured deviation, and raw
-evidence, then continue authorized diagnosis and implementation fixes. Obtain a
-design decision before changing the estimator contract, production interfaces,
-or acceptance criteria. Runner adaptation that requires new telemetry likewise
-requires a design decision.
+Computation errors, missing ownership and unconfirmed reclamation invalidate
+either route. Preserve the failing case, discrepancy and raw evidence.
+Changing production interfaces or acceptance criteria requires a design decision.
 
 Managed lifecycle evidence observes actual attention MPS membership and direct
 FFN execution, normal serving/daemon retirement, and cancellation at retained
@@ -153,6 +153,9 @@ startup boundaries. Controlled termination evidence uses self-owned clients:
 one client's confirmed context termination and host exit must leave an
 independent peer and server usable. Cache-helper lifecycle evidence does not
 substitute for mode-specific model-loading or inference qualification.
+Qualify Profile reuse under the effective compute settings in real startup.
+[Tooling](tooling.md#devices-and-endpoints) owns launch and cleanup rules.
+
 Resource cleanup, complete-domain exit and the original execution verdict are
 separate facts under [Control Plane](control-plane.md#startup-and-shutdown) and
 [Tooling](tooling.md#shared-process-and-resource-ownership).

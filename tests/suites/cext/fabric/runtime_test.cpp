@@ -1,16 +1,23 @@
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
 #include <variant>
-#include <vector>
 
+#include <c10/core/ScalarType.h>
+#include <c10/util/Exception.h>
 #include <gtest/gtest.h>
+#include <nvshmemx.h>
 
-#include <xpool/fabric/protocol.hpp>
-#include <xpool/fabric/runtime.hpp>
+#include <xpool/fabric/ffnagent.hpp>
+#include <xpool/fabric/projection.hpp>
+#include <xpool/fabric/scheduler.hpp>
 #include <xpool/ffn.hpp>
+#include <xpool/ffnagent/execution.hpp>
 #include <xpool/ffnagent/runtime.cuh>
+#include <xpool/ffnagent/runtime.hpp>
 
 namespace {
 
@@ -96,17 +103,16 @@ moe_execution_projection(bool router_owner, std::optional<std::uintptr_t> captur
       .control_graph_address = 2,
       .capture_input_address = 3,
       .capture_partial_address = 4,
-      .capture_workspace_address = 5,
-      .compute_workspace_bytes = 1,
+      .capture_ranges = {},
       .capture_routing_metadata_address = 6,
       .capture_payload_rows_address = capture_payload_rows_address,
-      .primary_capture_resources =
+      .primary_weight_bindings =
           {
               .gate_up = weight_view(8, 64),
               .down = weight_view(9, 32),
               .router = primary_router,
           },
-      .control_capture_resources =
+      .control_weight_bindings =
           {
               .gate_up = weight_view(11, 64),
               .down = weight_view(12, 32),
@@ -114,7 +120,7 @@ moe_execution_projection(bool router_owner, std::optional<std::uintptr_t> captur
           },
   };
   return {
-      .signatures = {signature},
+      .lanes = {{{signature}}},
       .layers =
           {
               xpool::ffnagent::LayerExecutionDescriptor{
@@ -171,12 +177,12 @@ TEST(FfnExecutionInstallDescriptorTest, CorrelatesPayloadRowsSourceWithRouterOwn
 
 TEST(FfnExecutionInstallDescriptorTest, AcceptsIncreasingNonPowerOfTwoCapacities) {
   auto projection = moe_execution_projection(true, 7);
-  auto middle = std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.signatures.front());
+  auto middle = std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.lanes.front().signatures.front());
   middle.payload_row_capacity = 3;
   auto final = middle;
   final.payload_row_capacity = 16;
-  projection.signatures.emplace_back(std::move(middle));
-  projection.signatures.emplace_back(std::move(final));
+  projection.lanes.front().signatures.emplace_back(std::move(middle));
+  projection.lanes.front().signatures.emplace_back(std::move(final));
   projection.layers.front().execution_signature_indices = {0, 1, 2};
 
   EXPECT_NO_THROW(projection.validate());
@@ -215,12 +221,12 @@ TEST(FfnExecutionInstallDescriptorTest, ValidatesProjectionAddressAndExtentPairs
 
 TEST(FfnExecutionInstallDescriptorTest, ChecksOptionalCaptureResourcesAndTargetExtents) {
   auto descriptor = moe_execution_projection(true, 7);
-  auto &capture = std::get<xpool::ffnagent::MoeCaptureDescriptor>(descriptor.signatures.front());
+  auto &capture = std::get<xpool::ffnagent::MoeCaptureDescriptor>(descriptor.lanes.front().signatures.front());
   auto &target = std::get<xpool::ffnagent::MoeBindingView>(descriptor.layers.front().layer_resource_targets);
-  capture.primary_capture_resources.gate_up.scales = 20;
-  capture.primary_capture_resources.gate_up.scales_bytes = 4;
-  capture.control_capture_resources.gate_up.scales = 21;
-  capture.control_capture_resources.gate_up.scales_bytes = 4;
+  capture.primary_weight_bindings.gate_up.scales = 20;
+  capture.primary_weight_bindings.gate_up.scales_bytes = 4;
+  capture.control_weight_bindings.gate_up.scales = 21;
+  capture.control_weight_bindings.gate_up.scales_bytes = 4;
   target.gate_up.scales = 22;
   target.gate_up.scales_bytes = 4;
   EXPECT_NO_THROW(descriptor.validate());
@@ -228,14 +234,14 @@ TEST(FfnExecutionInstallDescriptorTest, ChecksOptionalCaptureResourcesAndTargetE
   target.gate_up.scales_bytes = 8;
   EXPECT_THROW(descriptor.validate(), c10::Error);
   target.gate_up.scales_bytes = 4;
-  capture.control_capture_resources.gate_up.scales = 20;
+  capture.control_weight_bindings.gate_up.scales = 20;
   EXPECT_THROW(descriptor.validate(), c10::Error);
-  capture.control_capture_resources.gate_up.scales = 21;
-  capture.primary_capture_resources.down.bias = 23;
-  capture.primary_capture_resources.down.bias_bytes = 8;
+  capture.control_weight_bindings.gate_up.scales = 21;
+  capture.primary_weight_bindings.down.bias = 23;
+  capture.primary_weight_bindings.down.bias_bytes = 8;
   EXPECT_THROW(descriptor.validate(), c10::Error);
-  capture.control_capture_resources.down.bias = 24;
-  capture.control_capture_resources.down.bias_bytes = 8;
+  capture.control_weight_bindings.down.bias = 24;
+  capture.control_weight_bindings.down.bias_bytes = 8;
   target.down.bias = 25;
   target.down.bias_bytes = 8;
   EXPECT_NO_THROW(descriptor.validate());
@@ -243,12 +249,115 @@ TEST(FfnExecutionInstallDescriptorTest, ChecksOptionalCaptureResourcesAndTargetE
 
 TEST(FfnExecutionInstallDescriptorTest, RejectsCrossCapacityWeightGeometryMismatch) {
   auto projection = moe_execution_projection(true, 7);
-  auto second = std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.signatures.front());
+  auto second = std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.lanes.front().signatures.front());
   second.payload_row_capacity = 2;
   ++second.hidden_size;
-  projection.signatures.emplace_back(std::move(second));
+  projection.lanes.front().signatures.emplace_back(std::move(second));
   projection.layers.front().execution_signature_indices = {0, 1};
 
+  EXPECT_THROW(projection.validate(), c10::Error);
+}
+
+TEST(FfnExecutionInstallDescriptorTest, RequiresDistinctCapturedRouterCorrectionBias) {
+  auto projection = moe_execution_projection(true, 7);
+  auto &capture = std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.lanes.front().signatures.front());
+  auto &primary = *capture.primary_weight_bindings.router;
+  auto &control = *capture.control_weight_bindings.router;
+  auto &target = *std::get<xpool::ffnagent::MoeBindingView>(projection.layers.front().layer_resource_targets).router;
+  primary.correction_bias_address = 0x3000;
+  control.correction_bias_address = 0x4000;
+  target.correction_bias_address = 0x5000;
+  primary.correction_bias_bytes = control.correction_bias_bytes = target.correction_bias_bytes = 16;
+  EXPECT_NO_THROW(projection.validate());
+  control.correction_bias_address = primary.correction_bias_address;
+  EXPECT_THROW(projection.validate(), c10::Error);
+}
+
+TEST(FfnExecutionInstallDescriptorTest, ValidatesLogicalRangesAndRejectsOverlappingResources) {
+  auto projection = moe_execution_projection(false, std::nullopt);
+  auto &capture = std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.lanes.front().signatures.front());
+  capture.capture_ranges = {{"scratch", 0x1000, 0x2000, 256}, {"other", 0x2000, 0x1000, 128}};
+  EXPECT_NO_THROW(projection.validate());
+  capture.capture_ranges[0].bytes = 0;
+  EXPECT_THROW(projection.validate(), c10::Error);
+  capture.capture_ranges[0].bytes = 256;
+  capture.capture_ranges[1].key = "scratch";
+  EXPECT_THROW(projection.validate(), c10::Error);
+  capture.capture_ranges[1].key = "other";
+  capture.capture_ranges[1].primary_address = 0x1000;
+  EXPECT_THROW(projection.validate(), c10::Error);
+  capture.capture_ranges[1].primary_address = 0x2000;
+  capture.capture_input_address = 0x1000;
+  EXPECT_THROW(projection.validate(), c10::Error);
+}
+
+TEST(FfnExecutionInstallDescriptorTest, RejectsNullOrOverflowingExternalCaptureBindings) {
+  for (auto field : {&xpool::ffnagent::MoeCaptureDescriptor::primary_graph_address,
+                     &xpool::ffnagent::MoeCaptureDescriptor::control_graph_address}) {
+    auto projection = moe_execution_projection(false, std::nullopt);
+    auto &capture = std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.lanes.front().signatures.front());
+    capture.*field = 0;
+    EXPECT_THROW(projection.validate(), c10::Error);
+  }
+  for (auto field : {&xpool::ffnagent::MoeCaptureDescriptor::capture_input_address,
+                     &xpool::ffnagent::MoeCaptureDescriptor::capture_partial_address,
+                     &xpool::ffnagent::MoeCaptureDescriptor::capture_routing_metadata_address}) {
+    auto projection = moe_execution_projection(false, std::nullopt);
+    auto &capture = std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.lanes.front().signatures.front());
+    capture.*field = 0;
+    EXPECT_THROW(projection.validate(), c10::Error);
+    capture.*field = std::numeric_limits<std::uintptr_t>::max();
+    EXPECT_THROW(projection.validate(), c10::Error);
+  }
+  auto projection = moe_execution_projection(true, 0);
+  EXPECT_THROW(projection.validate(), c10::Error);
+}
+
+TEST(FfnExecutionInstallDescriptorTest, RejectsWritableSharingAcrossIndependentLanes) {
+  auto projection = moe_execution_projection(false, std::nullopt);
+  auto &first = std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.lanes.front().signatures.front());
+  first.capture_ranges = {{"table", 0x1000, 0x1000, 256, false}};
+  projection.lanes.push_back(projection.lanes.front());
+  auto &second = std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.lanes.back().signatures.front());
+  second.primary_graph_address = 3;
+  second.control_graph_address = 4;
+  EXPECT_THROW(projection.validate(), c10::Error);
+  std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.lanes.front().signatures.front())
+      .capture_ranges.front()
+      .shared_read_only = true;
+  second.capture_ranges.front().shared_read_only = true;
+  EXPECT_NO_THROW(projection.validate());
+  second.capture_ranges.front().primary_address += 16;
+  second.capture_ranges.front().control_address += 16;
+  EXPECT_THROW(projection.validate(), c10::Error);
+  second.capture_ranges.front().primary_address -= 16;
+  second.capture_ranges.front().control_address -= 16;
+  second.payload_row_capacity = 2;
+  EXPECT_THROW(projection.validate(), c10::Error);
+}
+
+TEST(FfnExecutionInstallDescriptorTest, RejectsWritableOverlapAcrossDifferentSignaturesAndLanes) {
+  auto projection = moe_execution_projection(false, std::nullopt);
+  auto &first = std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.lanes.front().signatures.front());
+  first.capture_ranges = {{"scratch", 0x1000, 0x1000, 256}};
+  auto larger = first;
+  larger.payload_row_capacity = 2;
+  larger.primary_graph_address = 5;
+  larger.control_graph_address = 6;
+  larger.capture_ranges = {{"scratch", 0x2000, 0x2000, 256}};
+  projection.lanes.front().signatures.emplace_back(std::move(larger));
+  projection.layers.front().execution_signature_indices = {0, 1};
+  auto second_lane = projection.lanes.front();
+  for (auto index = std::size_t{0}; index < second_lane.signatures.size(); ++index) {
+    auto &capture = std::get<xpool::ffnagent::MoeCaptureDescriptor>(second_lane.signatures[index]);
+    capture.primary_graph_address += 10;
+    capture.control_graph_address += 10;
+    capture.capture_ranges = {{"scratch", 0x3000 + index * 0x1000, 0x3000 + index * 0x1000, 256}};
+  }
+  projection.lanes.push_back(std::move(second_lane));
+  EXPECT_NO_THROW(projection.validate());
+  auto &collision = std::get<xpool::ffnagent::MoeCaptureDescriptor>(projection.lanes.back().signatures.back());
+  collision.capture_ranges.front().primary_address = 0x1000;
   EXPECT_THROW(projection.validate(), c10::Error);
 }
 

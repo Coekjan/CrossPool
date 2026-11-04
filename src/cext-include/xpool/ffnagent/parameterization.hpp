@@ -27,14 +27,20 @@ struct ResourceReplacement {
   std::size_t value_offset_bytes;
 };
 
-/// One captured storage range rebased into lane-owned storage.
+/// One captured interval and its service target.
 struct LaneAddressReplacement {
-  /// Beginning of the captured source range.
-  std::uintptr_t capture_address;
+  /// Corresponding Primary source base.
+  std::uintptr_t primary_address;
+  /// Corresponding Control source base; equal addresses are permitted.
+  std::uintptr_t control_address;
   /// Byte extent of the captured source range.
   std::size_t bytes;
-  /// Beginning of the lane-owned target range.
+  /// Beginning of the service target, including retained original storage.
   std::uintptr_t target_address;
+  /// Require a direct graph reference to this range.
+  bool required = true;
+  /// Reject typed memory writes through a shared immutable resource.
+  bool read_only = false;
 };
 
 /// One node together with the graph that directly owns it.

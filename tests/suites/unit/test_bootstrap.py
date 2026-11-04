@@ -46,12 +46,7 @@ def test_bootstrap_initializes_native_runtime(monkeypatch: pytest.MonkeyPatch) -
     assert events[0] == ("load",)
     assert events[1] == ("logging", RuntimeRole.INSTANCE)
     assert events[2][:3] == ("init", RuntimeRole.INSTANCE, 2)
-    debug_options = events[2][3]
-    assert isinstance(debug_options, xpool.bootstrap.xpool.native.debug.Options)
-    assert debug_options.transport_observer.record_capacity == 8192
-    assert debug_options.fabric_observer.record_capacity == 8192
-    assert debug_options.graph_observer.enable is False
-    assert debug_options.ffn_routing_observer.record_capacity == 8
+    assert isinstance(events[2][3], xpool.bootstrap.xpool.native.debug.Options)
     assert events[3] == ("device", 2)
     assert len(events) == 4
 

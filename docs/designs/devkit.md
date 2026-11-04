@@ -3,10 +3,9 @@
 Devkit observes real production execution through typed Hook Points. Transport,
 Fabric, and FFN computation remain production responsibilities.
 
-Debug configuration is process-global and immutable after native
-initialization. Native owners read the installed value directly; Debug policy
-stays out of runtime state, adapters, and Kernel arguments. The configuration
-contains Transport, Fabric, Graph, and FFN Routing Observer options.
+Python supplies process-wide Debug options at native initialization. Native
+owners read the immutable settings for Transport, Fabric, Graph and FFN
+Routing Observers.
 
 Each Observer records evidence from the real execution path and owns
 process-local storage. Observer state is never stored in a Transport or Fabric

@@ -295,80 +295,61 @@ only.
 
 ## Memory admission
 
-Admission estimates every startup stage as the Exact Resource Ledger plus the
-Analytic Allocator Allowance and, when a compatible Profile is selected, the
-Calibrated Overhead Envelope. The peak across those stages is the predicted
-peak. An explicit operator device-memory margin is added once after that peak;
-it is not part of the estimator and cannot repair estimator underprediction.
+Each FfnAgent prepares its execution sources and trims releasable cache before
+measuring free memory. It registers that baseline and an address-free
+`FfnExecutionContract`. The contract names the resources each Lane may need
+and any read-only storage already held by the process. Only declarations
+cross registration; the FfnAgent keeps the owners. See
+[FFN execution](ffn-execution.md#graphtemplate-and-executor-lanes) for their lifetime.
 
-The ledger counts logical Tensor storage and native device allocations. The
-allocator allowance bounds physical reservation under the pinned default native
-PyTorch allocator. Known consecutive construction groups share a segment bound;
-independent groups receive no assumed credit for cached blocks. Graph
-construction includes known transient initialization requests as well as
-retained placeholders. Placement and local startup admission use the same costs.
+For each candidate placement, the solver charges a backing once when any of
+its Signatures needs it. Each Lane has its own private backing. Shared storage
+held at baseline already reduces free memory and adds no incremental charge.
+The estimate distinguishes exact logical requests from physical reservation:
+known consecutive Torch requests can share a segment, while independent groups
+receive no assumed cache reuse. Library and driver overhead can exceed the
+analytic estimate.
 
-The analytic estimator works with no prior profiling. An optional calibration
-file supplies a device-local correction learned from a synthetic, model-neutral
-corpus. With no `ffn.device_memory_calibration` path configured, admission uses
-analytic estimation alone. An explicitly configured profile must be readable,
-valid, and compatible with the deployment; startup reports a profile error
-when those conditions fail. The compatibility checks compare recorded
-software, configuration and per-FfnAgent device evidence from direct FFN
-execution. They constrain profile reuse, not the set of device models on which
-CrossPool may run.
+Admission compares five stages: weights, Fabric join, Graph Capture, execution
+installation and retained service. The last stage starts after Registry
+releases construction storage and trims releasable cache. Each stage includes
+its estimated physical bytes and any calibrated correction. The largest stage
+sets the predicted peak; the operator margin is added once, after the peak.
 
-The `xpool memory-profile` command runs a fixed synthetic corpus through shared
-weight allocation and execution construction. Immutable experiments combine
-concrete FFN specifications with their placement and execution configuration.
-Configuration snapshots, Fabric Plans and participants derive from the same
-experiment definition. Synthetic specifications declare FFN semantics directly,
-without loading checkpoints or selecting real source architectures. The snapshot
-describes the complete configured fleet; an experiment instance's attention
-membership belongs to its Instance Plan and may use a subset of that fleet.
-For a Fleet of `N` FfnAgents, independent packed fitting experiments cover the
-distinct TP widths `min(N, 2)` and `min(N, 4)`. Fresh repeated worlds supply fit
-observations and a disjoint mixed held-out placement checks the candidate.
-Equal feature rows retain their largest residual rather than an average.
-The fitter adds one empirically derived Device
-Observation Quantum to each grouped residual target and finds nonnegative,
-quantized coefficients minimizing total overprediction, with a canonical
-coefficient tie-break. The single-worker fitter supplies the preceding optimal
-assignment as a search hint for each successive objective and still proves
-every optimum. The quantum is absorbed into the fitted coefficients;
-it is separate from Profile fields and the operator margin. Successful fitting
-and held-out validation do not replace independent
-[Resource Qualification](qualification.md#resource-evidence).
+The daemon freezes membership, selects any configured Profile and solves
+placement. It checks the solver's costs with an independent numeric estimate
+before publishing a budget for every FfnAgent, including idle ones. Each
+FfnAgent checks its contract and Lane count, then compares its budget plus
+margin with fresh free memory before loading weights. The deployment carries
+contracts and budgets; environment observations and coefficients stay with the
+daemon. Editing the Profile cannot change a published budget.
 
-A runtime Profile records device and software compatibility, fitted
-coefficients, and minimum held-out headroom. Its sibling `<stem>.evidence.json`
-retains the complete candidate Profile and separate collections of fitting and
-held-out worlds. Each world records its concrete experiment definition once,
-including the specifications, FFN TP widths and effective Instance Plans,
-together with its repetition and ordered FfnAgent observations. Each observation
-retains its point, exact ledger, allocator allowance, feature row, observed bytes,
-and analytic and calibrated predictions. Shared environment and device facts
-remain in the Profile. The evidence supports inspection and prediction
-recalculation; it does not retain a complete deployment for replay. The CLI
-atomically publishes evidence first and the runtime Profile second. Failure
-before publication leaves both previous files unchanged. If Profile publication
-fails after evidence succeeds, the previous runtime Profile remains unchanged
-and the new evidence retains its candidate; the command reports the failed stage
-and both paths.
+Without `ffn.device_memory_calibration`, placement uses the analytic estimate.
+A startup OOM must prevent readiness and preserve borrowed resources until
+retirement. An explicitly configured Profile must load and match before the
+daemon publishes the Plan. Matching uses the Lane count, PE-ordered device and
+software observations, execution contracts, and allocation and compute settings.
+The runtime reads relevant configuration-file contents, including the selected
+NCCL topology. An inspection error prevents reuse; ordinary unprofiled startup
+skips this inspection. Changes to estimation rules can require remeasurement
+even if the Profile schema still matches.
 
-Each measurement world owns its attention MPS scope and direct FFN participants.
-The parent checks cancellation at owner-acquisition boundaries and protects child
-creation until the child handle is retained. Cancellation interrupts bootstrap
-and pre-join readiness waits. In-flight join, execution and retirement retain
-their confirmation requirements and share the existing retirement budget.
-Participants check retained sampler failures at phase and retirement boundaries,
-even after the sampling thread stops. Before join, participants stop
-cooperatively; after confirmed join, the complete world retires collectively
-before its bootstrap owner and MPS.
-If membership or retirement is unconfirmed, the parent retains the affected
-resource owners and the original failure. It logs the available operation and
-cleanup exception chains before waiting. It does not force teardown or retry
-the world.
+`xpool memory-profile` fits nonnegative corrections on repeated synthetic
+deployments using production weight allocation and execution construction.
+For a fleet of `N` FfnAgents the fitting corpus covers the distinct widths
+`min(N, 2)` and `min(N, 4)`. Fitting uses the largest observed residual for
+each feature row plus one Device Observation Quantum. A separate mixed
+placement checks the result. Fitting and numeric estimation share a feature
+basis; CP-SAT expresses its constraints independently.
+[Resource qualification](qualification.md#resource-evidence) checks real models.
+
+The command atomically writes the candidate and its fitting and held-out
+observations to `<stem>.evidence.json` before publishing the runtime Profile.
+The evidence records enough to recalculate predictions. If the second write
+fails, the previous runtime Profile stays in place. Each measurement world
+owns its MPS scope and participants. Before join, the parent stops and reaps
+the children; after confirmed join, it retires the world collectively. An
+uncertain join or retirement keeps the owners and the original failure.
 
 Checkpoint files may be read concurrently. Host buffers may use pinned memory,
 and independent tensor copies may use multiple CUDA streams. Device-side
@@ -532,6 +513,10 @@ arenas, and finalize Fabric collectively. Explicit Instance detach serves
 startup rollback and controlled cleanup; unexpected process loss enters the
 watchdog's owner-loss path and is not itself verified retirement. Destructors
 are best-effort guards, not distributed recovery.
+
+Native finalization also retires partial FFN installations. Once finalization
+starts it cannot re-enter collectives. A cleanup failure leaves the owner open
+and retains outstanding native handles and borrowed Python storage.
 
 A failed Generation seals new work and retires according to remaining resource
 usability. Serving retirement skips normal request drain; necessary device-work

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 
 import pytest
@@ -74,14 +75,18 @@ def isolated_fabric_binding_validation() -> None:
         2,
         capture_input,
         capture_partial,
-        capture_workspace,
-        1,
+        (
+            xpool.native.ffnagent.CapturedResourceRange(
+                "compute", capture_workspace.data_ptr(), capture_workspace.data_ptr(), 1
+            ),
+        ),
         primary_weights,
         control_weights,
     )
     layer = xpool.native.ffnagent.LayerExecutionDescriptor(0, 0, (0,), primary_weights)
-    projection = xpool.native.ffnagent.ExecutionInstallDescriptor((signature,), (layer,))
-    assert not hasattr(projection, "signatures")
+    xpool.native.ffnagent.ExecutionInstallDescriptor(
+        (xpool.native.ffnagent.LaneCaptureDescriptor((signature,)),), (layer,)
+    )
     with pytest.raises(RuntimeError, match="must be a CUDA Tensor"):
         xpool.native.ffnagent.ProjectionBindingView(torch.empty(1), None, None)
 
@@ -90,6 +95,59 @@ def isolated_fabric_role_guard() -> None:
     xpool.native.initialize(RuntimeRole.INSTANCE, torch.cuda.current_device(), None)
     with pytest.raises(RuntimeError, match="requires runtime role ffnagent"):
         xpool.native.ffnagent.activate()
+
+
+def isolated_capture_tensor_extents() -> None:
+    values = tuple(torch.empty((2, 1), device="cuda", dtype=torch.bfloat16) for _ in range(4))
+    projections = tuple(xpool.native.ffnagent.ProjectionBindingView(tensor, None, None) for tensor in values)
+    primary = xpool.native.ffnagent.DenseBindingView(projections[0], projections[1])
+    control = xpool.native.ffnagent.DenseBindingView(projections[2], projections[3])
+    payload = torch.empty((2, 1), device="cuda", dtype=torch.bfloat16)
+    partial = torch.empty_like(payload)
+    dense = functools.partial(
+        xpool.native.ffnagent.DenseCaptureDescriptor,
+        payload_dtype=torch.bfloat16,
+        payload_row_capacity=2,
+        hidden_size=1,
+        local_intermediate_size=1,
+        primary_graph_address=1,
+        control_graph_address=2,
+        capture_input=payload,
+        capture_partial=partial,
+        capture_ranges=(),
+        primary_weight_bindings=primary,
+        control_weight_bindings=control,
+    )
+    moe = functools.partial(
+        xpool.native.ffnagent.MoeCaptureDescriptor,
+        payload_dtype=torch.bfloat16,
+        payload_row_capacity=2,
+        hidden_size=1,
+        local_intermediate_size=1,
+        expert_count=1,
+        effective_topk=1,
+        routed_expert_count=None,
+        primary_graph_address=1,
+        control_graph_address=2,
+        capture_input=payload,
+        capture_partial=partial,
+        capture_ranges=(),
+        capture_routing_metadata=torch.empty(16, device="cuda", dtype=torch.uint8),
+        capture_payload_rows=torch.empty((), device="cuda", dtype=torch.int64),
+        primary_weight_bindings=xpool.native.ffnagent.MoeBindingView(projections[0], projections[1], None),
+        control_weight_bindings=xpool.native.ffnagent.MoeBindingView(projections[2], projections[3], None),
+    )
+    for build in (dense, moe):
+        build()
+        for field in ("capture_input", "capture_partial"):
+            with pytest.raises(RuntimeError, match="requires at least 4 bytes"):
+                build(**{field: payload[:1]})
+            with pytest.raises(RuntimeError, match="must match payload dtype"):
+                build(**{field: payload.float()})
+    with pytest.raises(RuntimeError, match="routing metadata requires at least 16 bytes"):
+        moe(capture_routing_metadata=torch.empty(15, device="cuda", dtype=torch.uint8))
+    with pytest.raises(RuntimeError, match="payload rows must have int64 dtype"):
+        moe(capture_payload_rows=torch.empty(2, device="cuda", dtype=torch.int32))
 
 
 def isolated_native_accelerator_error_translation() -> None:
@@ -137,6 +195,11 @@ def test_fabric_join_validates_metadata_before_collective_initialization(tmp_pat
 @xtest.requirements(device_count=1)
 def test_fabric_binding_rejects_wrong_runtime_role(tmp_path: Path) -> None:
     run_native_case(isolated_fabric_role_guard, workdir=tmp_path / "case")
+
+
+@xtest.requirements(device_count=1)
+def test_capture_bindings_validate_tensor_extents_before_losing_metadata(tmp_path: Path) -> None:
+    run_native_case(isolated_capture_tensor_extents, workdir=tmp_path / "case")
 
 
 @xtest.requirements(device_count=1)

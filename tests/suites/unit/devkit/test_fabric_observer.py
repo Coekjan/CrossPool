@@ -42,7 +42,9 @@ class FakeRecord:
     executor_lease_sequence: int = 7
     ready_ticket: int = 9
     payload_row_capacity: int = 16
-    delivery: xpool.native.fabric.DeliveryVariant = xpool.native.fabric.DeliveryVariant.SINGLE_COMPLETE
+    delivery: xpool.native.devkit.fabric_observer.DeliveryVariant = (
+        xpool.native.devkit.fabric_observer.DeliveryVariant.SINGLE_COMPLETE
+    )
 
     @property
     def dp_row_layout(self) -> DpRowLayout | None:

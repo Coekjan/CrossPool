@@ -87,21 +87,16 @@ output storage, so eager execution and enclosing CUDA Graph replay use the same
 lifetime. Control-plane and resource lifecycle operations are typed pybind
 functions rather than Torch operators.
 
-The native binding tree follows ownership. The module root contains only ABI
-identity, runtime role, and initialization. Shared FFN semantics live under
-`xpool.native.ffn`; Elastic Context State Control Channels live under
-`xpool.native.ecs`; Debug options, Transport, Fabric, FfnAgent, and each Devkit
-Observer own their values and lifecycle in their corresponding submodules. Values are not re-exported at
-the root, and generic `types`, `common`, or `protocol` buckets are not part of
-the interface.
+The native Python root exposes ABI identity, role and initialization. FFN
+semantics, ECS channels, Debug options, Transport, Fabric, FfnAgent and
+Devkit Observers live in their own submodules. `xpool.native.cuda` exposes
+stream ownership, BLAS workspace observation and Graph resource inspection.
 
-The C++ namespace tree mirrors domain ownership without introducing an
-`xpool::native` namespace. ABI identity belongs to `xpool::abi`, shared FFN
-semantics to `xpool::ffn`, concrete lifecycle to `xpool::transport`,
-`xpool::fabric`, `xpool::ffnagent`, and `xpool::ecs`, Observer evidence to
-`xpool::devkit::<observer>`, and typed Hook Points to `xpool::hooks`.
-Generic Host-side CUDA Graph mechanisms belong to `xpool::utils::graph`.
-Shared Python conversions and binding assembly remain in `xpool::bindings`.
+C++ uses the same domain boundaries. ABI identity lives in `xpool::abi`,
+Hook Points in `xpool::hooks` and Python conversions in `xpool::bindings`.
+`xpool::utils::cuda` owns CUDA queries and streams; its `graph` and `blas`
+namespaces own the underlying library calls. Transport and FFN choose launch
+geometry and manage their own lifetimes.
 
 The daemon installs the same immutable Host Debug options as participants but
 creates no CUDA Device mirror and joins no NVSHMEM PE. Participant lifecycle

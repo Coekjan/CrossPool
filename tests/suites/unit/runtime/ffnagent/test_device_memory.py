@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import torch
 
@@ -25,6 +27,7 @@ from xpool.memory import (
     DeviceMemoryFeatures,
     ExecutionResourceDeclaration,
     ExecutionResourceRequirement,
+    FfnExecutionContract,
     FfnMemoryCalibrationCoefficients,
 )
 from xpool.runtime.ffnagent import device_memory, execution, preparation
@@ -34,6 +37,7 @@ from xtest.harness.support.config import (
     TEST_EXECUTION_CONTRACT,
     TEST_MODEL_ID,
     install_test_config,
+    lane_resource_declaration,
     reset_global_config,
     synthetic_config,
 )
@@ -116,6 +120,53 @@ def test_fp32_router_keeps_fp32_weights_and_input_workspace() -> None:
         assert signature.router.router_workspace_bytes == 4 * signature.payload_row_capacity * (spec.hidden_size + 64)
 
 
+def test_exact_dense_allocation_ledger_and_feature_rows() -> None:
+    estimator, plan = estimator_and_plan()
+
+    layout = preparation.prepare_ffn_layer(
+        estimator.model_specs[0],
+        layer_ordinal=0,
+        payload_dtype=estimator.instance_profiles[0].payload_dtype,
+        tp_size=2,
+        tp_rank=0,
+    )
+    assert layout.weight_allocation_bytes() == (64, 32)
+    signature = layout.execution_signatures(profile=estimator.instance_profiles[0])[0]
+    assert execution.control_capture_probe_storage_bytes(signature) == (64, 32)
+    assert estimator.fabric_arena_bytes() == 3328
+    points = estimator.allocation_ledger_for_model_plans(model_plans=plan.model_plans, ffnagent_index=0)
+    with pytest.raises(ValueError, match="more than once"):
+        replace(points[0], charges=points[0].charges + points[0].charges)
+    assert tuple(point.point for point in points) == (
+        "weight_materialization",
+        "fabric_join",
+        "graph_capture",
+        "execution_installation",
+        "retained",
+    )
+    assert tuple(point.exact_resource_ledger_bytes for point in points) == (96, 3424, 4248, 4688, 4224)
+    for point in points:
+        charges = {charge.domain: charge for charge in point.charges}
+        assert charges["weights.default"].estimated_physical_bytes == 2 * MIB
+        if point.point in ("graph_capture", "execution_installation", "retained"):
+            assert charges["capture.private_pools"].estimated_physical_bytes == 8 * MIB
+        if point.point in ("graph_capture", "execution_installation"):
+            assert charges["capture.default"].estimated_physical_bytes == 10 * MIB
+        if point.point == "retained":
+            assert "capture.default" not in charges
+    assert points[2].features.tensor_storage_bytes == 920
+    assert points[2].features.tensor_storage_allocation_count == 32
+    assert points[2].features.dense_graph_capture_count == 4
+    assert points[3].features.executor_lane_count == 1
+    assert points[3].features.compute_branch_count == 4
+    assert points[4].features.tensor_storage_bytes == 456
+    assert points[4].features.dense_graph_capture_count == 0
+    assert "cuda.graph_driver" in points[3].unmodeled_costs
+    assert "capture.infrastructure" in points[4].unmodeled_costs
+    assert tuple(point.features.dense_implementation_present for point in points) == (False, False, True, True, True)
+    assert not any(point.features.moe_implementation_present for point in points)
+
+
 @pytest.mark.parametrize("calibration_base", (None, 1 << 30))
 def test_unmodeled_overhead_allows_analytic_or_calibrated_estimation(calibration_base: int | None) -> None:
     estimator, plan = estimator_and_plan()
@@ -149,6 +200,49 @@ def test_estimator_requires_one_execution_contract_per_configured_ffnagent() -> 
             instance_profiles=estimator.instance_profiles,
             ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,),
             coefficients=None,
+        )
+
+
+def test_source_cache_is_charged_once_per_lane_and_retained_with_the_pool() -> None:
+    estimator, plan = estimator_and_plan()
+    contract = FfnExecutionContract(
+        lane_resources=(
+            lane_resource_declaration(
+                key="projection.scratch", max_bytes=1024, alignment_bytes=256, aliases=("projection.scratch",)
+            ),
+        ),
+        shared_resources=(),
+    )
+    baseline = estimator.allocation_ledger_for_model_plans(model_plans=plan.model_plans, ffnagent_index=0)
+    contracts = (contract, TEST_EXECUTION_CONTRACT)
+    estimator = device_memory.DeviceMemoryEstimator(
+        coefficients=None,
+        model_specs=estimator.model_specs,
+        instance_profiles=estimator.instance_profiles,
+        ffn_execution_contracts=contracts,
+    )
+    plan = plan.model_copy(update={"ffn_execution_contracts": contracts})
+    observed = estimator.allocation_ledger_for_model_plans(model_plans=plan.model_plans, ffnagent_index=0)
+
+    assert observed[0] == baseline[0]
+    assert observed[1] == baseline[1]
+    assert tuple(point.exact_resource_ledger_bytes for point in observed) == tuple(
+        point.exact_resource_ledger_bytes for point in baseline
+    )
+    for before, after in zip(baseline[2:], observed[2:], strict=True):
+        original = next(charge for charge in before.charges if charge.domain == "capture.private_pools")
+        with_source = next(charge for charge in after.charges if charge.domain == "capture.private_pools")
+        assert (
+            with_source.estimated_physical_bytes - original.estimated_physical_bytes
+            == 2 * MIB * plan.executor_lane_count
+        )
+        assert (
+            after.features.tensor_storage_bytes - before.features.tensor_storage_bytes
+            == 1024 * plan.executor_lane_count
+        )
+        assert (
+            after.features.tensor_storage_allocation_count - before.features.tensor_storage_allocation_count
+            == plan.executor_lane_count
         )
 
 
@@ -190,6 +284,26 @@ def test_allocator_reservation_bounds_segments_without_assuming_cached_reuse(
 def test_allocator_reservation_rejects_invalid_or_overflowing_byte_counts(requests: tuple[int, ...]) -> None:
     with pytest.raises(ValueError):
         device_memory.allocator_reservation_bytes(requests)
+
+
+def test_moe_capture_budget_includes_transient_initialization_reservations() -> None:
+    _, experiment = corpus.calibration_experiments(synthetic_config(ffn_devices=(1, 2)))
+    model = experiment.models[0]
+    spec = model.spec
+    profile = model.instance_plan().ffn_profile
+    signature = preparation.prepare_ffn_layer(
+        spec, layer_ordinal=0, payload_dtype=profile.payload_dtype, tp_size=2, tp_rank=0
+    ).execution_signatures(profile=profile)[0]
+    retained = (
+        signature.capture_placeholder_layout().allocation_bytes()
+        + device_memory.TORCH_GRAPH_CAPTURE_STATE_REQUEST_BYTES
+    )
+    temporary = execution.graph_capture_initialization_storage_bytes(signature)
+
+    assert temporary == (32, 32)
+    assert device_memory.graph_capture_allocator_allowance_bytes(signature) + sum(retained) == sum(
+        device_memory.allocator_reservation_bytes((value,)) for value in retained + temporary
+    )
 
 
 @pytest.mark.parametrize("storage_bytes", [-1, SINT64_MAX + 1])

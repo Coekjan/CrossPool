@@ -117,16 +117,18 @@ struct DenseCaptureDescriptor {
   std::uintptr_t capture_input_address;
   /// Device address used as graph partial output during capture.
   std::uintptr_t capture_partial_address;
-  /// Device address of the workspace used during capture.
-  std::uintptr_t capture_workspace_address;
-  /// Exact logical byte extent used to qualify and rebase captured workspace pointers.
-  std::size_t compute_workspace_bytes;
+  /// Logical private or explicitly shared storage retained by the caller.
+  std::vector<CapturedResourceRange> capture_ranges;
   /// Canonical resources used by the Primary capture.
-  DenseBindingView primary_capture_resources;
+  DenseBindingView primary_weight_bindings;
   /// Canonical resources used by the Control capture.
-  DenseBindingView control_capture_resources;
+  DenseBindingView control_weight_bindings;
 
-  constexpr bool operator==(const DenseCaptureDescriptor &other) const = default;
+  /// Validate intrinsic geometry, P/C bindings and declared storage ranges.
+  /// \throws c10::Error when the capture is malformed.
+  void validate() const;
+
+  bool operator==(const DenseCaptureDescriptor &other) const = default;
 };
 
 /// One captured MoE computation body and its Primary/Control captures.
@@ -153,20 +155,22 @@ struct MoeCaptureDescriptor {
   std::uintptr_t capture_input_address;
   /// Device address used as graph partial output during capture.
   std::uintptr_t capture_partial_address;
-  /// Device address of the workspace used during capture.
-  std::uintptr_t capture_workspace_address;
-  /// Exact logical byte extent used to qualify and rebase captured workspace pointers.
-  std::size_t compute_workspace_bytes;
+  /// Logical private or explicitly shared storage retained by the caller.
+  std::vector<CapturedResourceRange> capture_ranges;
   /// Device address used for routing metadata during capture.
   std::uintptr_t capture_routing_metadata_address;
   /// Optional device address used for dynamic live-row count during capture.
   std::optional<std::uintptr_t> capture_payload_rows_address;
   /// Canonical resources used by the Primary capture.
-  MoeBindingView primary_capture_resources;
+  MoeBindingView primary_weight_bindings;
   /// Canonical resources used by the Control capture.
-  MoeBindingView control_capture_resources;
+  MoeBindingView control_weight_bindings;
 
-  constexpr bool operator==(const MoeCaptureDescriptor &other) const = default;
+  /// Validate intrinsic geometry, Router ownership, P/C bindings and ranges.
+  /// \throws c10::Error when the capture is malformed.
+  void validate() const;
+
+  bool operator==(const MoeCaptureDescriptor &other) const = default;
 };
 
 /// Captured Dense or MoE signature accepted by native installation.
@@ -186,10 +190,18 @@ struct LayerExecutionDescriptor {
   bool operator==(const LayerExecutionDescriptor &other) const = default;
 };
 
+/// Borrowed captures for one independently owned Executor Lane.
+struct LaneCaptureDescriptor {
+  /// Captures in the installation's shared deterministic Signature order.
+  std::vector<CaptureDescriptor> signatures;
+
+  bool operator==(const LaneCaptureDescriptor &) const = default;
+};
+
 /// Complete one-time installation input for one FfnAgent PE.
 struct ExecutionInstallDescriptor {
-  /// Unique local execution signatures in deterministic installation order.
-  std::vector<CaptureDescriptor> signatures;
+  /// Independently captured Lanes in Fabric executor order.
+  std::vector<LaneCaptureDescriptor> lanes;
   /// Locally placed layers in deterministic first-use order.
   std::vector<LayerExecutionDescriptor> layers;
 

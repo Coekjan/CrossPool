@@ -1,18 +1,10 @@
 #include <xpool/ffnagent/runtime.hpp>
 
 #include <algorithm>
-#include <array>
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <limits>
-#include <map>
-#include <optional>
-#include <stdexcept>
-#include <tuple>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -53,8 +45,7 @@ constexpr auto kDeliveryBranchCount = std::uint32_t{2};
 
 void validate_cuda_address(std::uintptr_t address, int expected_device, const char *name) {
   TORCH_CHECK(address != 0, "xpool ", name, " has a null CUDA address");
-  auto attributes = cudaPointerAttributes{};
-  C10_CUDA_CHECK(cudaPointerGetAttributes(&attributes, reinterpret_cast<const void *>(address)));
+  const auto attributes = xpool::utils::cuda::pointer_attributes(reinterpret_cast<const void *>(address));
   TORCH_CHECK(attributes.type == cudaMemoryTypeDevice && attributes.device == expected_device, "xpool ", name,
               " is not Device memory on device ", expected_device);
 }
@@ -97,8 +88,8 @@ void append_projection_replacements(std::vector<ResourceReplacement> &result, co
 std::vector<ResourceReplacement> make_resource_replacements(const CaptureDescriptor &signature) {
   return std::visit(
       [](const auto &value) {
-        const auto &primary = value.primary_capture_resources;
-        const auto &control = value.control_capture_resources;
+        const auto &primary = value.primary_weight_bindings;
+        const auto &control = value.control_weight_bindings;
         auto result = std::vector<ResourceReplacement>{};
         append_projection_replacements(
             result, primary.gate_up, control.gate_up, offsetof(LayerBindingValues, gate_up_values_address),
@@ -152,6 +143,20 @@ void validate_layer_resource_targets(const ExecutionInstallDescriptor &descripto
   };
   for (const auto &layer : descriptor.layers) {
     std::visit(validate_resources, layer.layer_resource_targets);
+  }
+  for (const auto &lane : descriptor.lanes) {
+    for (const auto &signature : lane.signatures) {
+      std::visit(
+          [device](const auto &value) {
+            for (const auto &region : value.capture_ranges) {
+              for (const auto address : {region.primary_address, region.control_address}) {
+                validate_cuda_address(address, device, "captured resource");
+                validate_cuda_address(address + region.bytes - 1, device, "captured resource end");
+              }
+            }
+          },
+          signature);
+    }
   }
 }
 
@@ -559,9 +564,8 @@ XPOOL_KERNEL_FN void complete_lane_execution(xpool::fabric::ArenaView arena, std
 void insert_routing_publication(const PrimaryGraphLocation &location, xpool::fabric::ArenaView arena,
                                 std::size_t executor_lane_index, std::size_t payload_row_capacity,
                                 LaneRuntimeState *state) {
-  auto dependent_count = std::size_t{0};
-  C10_CUDA_CHECK(cudaGraphNodeGetDependentNodes(location.node, nullptr, nullptr, &dependent_count));
-  TORCH_CHECK(dependent_count != 0, "xpool Routing Finalization has no Expert successor");
+  TORCH_CHECK(xpool::utils::cuda::graph::dependent_count(location.node) != 0,
+              "xpool Routing Finalization has no Expert successor");
   void *arguments[] = {&arena, &executor_lane_index, &payload_row_capacity, &state};
   const auto publication = xpool::utils::cuda::graph::add_kernel_node(
       location.graph, reinterpret_cast<const void *>(publish_routing_metadata), dim3{1, 1, 1},
@@ -577,13 +581,12 @@ ExecutionRuntime::LaneOwner::LaneOwner(LaneOwner &&other) noexcept
     : graph(std::exchange(other.graph, nullptr)), executable(std::exchange(other.executable, nullptr)),
       stream(std::move(other.stream)), state(std::exchange(other.state, nullptr)),
       schemas(std::exchange(other.schemas, nullptr)), sites(std::exchange(other.sites, nullptr)),
-      updates(std::exchange(other.updates, nullptr)), workspace(std::exchange(other.workspace, nullptr)),
-      workspace_bytes(std::exchange(other.workspace_bytes, 0)) {}
+      updates(std::exchange(other.updates, nullptr)) {}
 
 ExecutionRuntime::LaneOwner &ExecutionRuntime::LaneOwner::operator=(LaneOwner &&other) noexcept {
   if (this != &other) {
     xpool::abort_if(graph != nullptr || executable != nullptr || stream || state != nullptr || schemas != nullptr ||
-                    sites != nullptr || updates != nullptr || workspace != nullptr);
+                    sites != nullptr || updates != nullptr);
     graph = std::exchange(other.graph, nullptr);
     executable = std::exchange(other.executable, nullptr);
     stream = std::move(other.stream);
@@ -591,8 +594,6 @@ ExecutionRuntime::LaneOwner &ExecutionRuntime::LaneOwner::operator=(LaneOwner &&
     schemas = std::exchange(other.schemas, nullptr);
     sites = std::exchange(other.sites, nullptr);
     updates = std::exchange(other.updates, nullptr);
-    workspace = std::exchange(other.workspace, nullptr);
-    workspace_bytes = std::exchange(other.workspace_bytes, 0);
   }
   return *this;
 }
@@ -614,11 +615,6 @@ void ExecutionRuntime::LaneOwner::destroy() {
       C10_CUDA_CHECK(cudaFree(*pointer));
       *pointer = nullptr;
     }
-  }
-  if (workspace != nullptr) {
-    C10_CUDA_CHECK(cudaFree(workspace));
-    workspace = nullptr;
-    workspace_bytes = 0;
   }
   stream.destroy();
 }
@@ -654,7 +650,7 @@ void ExecutionRuntime::materialize_shared_tables(const ExecutionInstallDescripto
       const auto values = materialize_binding_values(layer.layer_resource_targets);
       const auto capacity_begin = host_capacities.size();
       for (const auto signature_index : layer.execution_signature_indices) {
-        const auto &signature = projection.signatures[signature_index];
+        const auto &signature = projection.lanes.front().signatures[signature_index];
         std::visit(
             [&](const auto &value) {
               using Signature = std::remove_cvref_t<decltype(value)>;
@@ -707,14 +703,9 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
                                         const xpool::fabric::ArenaProjection &fabric_projection,
                                         std::size_t ffnagent_index, std::size_t executor_lane_index, int device,
                                         std::uint32_t *activation_count) {
-  // Phase: Size Lane Resources - Derive the largest workspace, delivery grid,
-  // and TP reader scratch needed by any execution selectable on this Lane.
-  auto maximum_workspace_bytes = std::size_t{0};
-  for (const auto &signature : projection.signatures) {
-    maximum_workspace_bytes =
-        std::max(maximum_workspace_bytes,
-                 std::visit([](const auto &value) { return value.compute_workspace_bytes; }, signature));
-  }
+  // Phase: Size Lane Resources - Derive the delivery grid and TP reader scratch
+  // needed by any execution selectable on this Lane.
+  const auto &signatures = projection.lanes[executor_lane_index].signatures;
   const auto multiprocessor_count = xpool::utils::cuda::device_attribute(cudaDevAttrMultiProcessorCount, device);
   const auto delivery_block_count = xpool::utils::checked::prod(
       static_cast<std::size_t>(multiprocessor_count), static_cast<std::size_t>(kDeliveryBlocksPerMultiprocessor));
@@ -734,8 +725,8 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
               "xpool FFN reader scratch exceeds CUDA shared memory");
 
   // Phase: Allocate Lane State - Every Lane owns an independently launchable
-  // GraphExec, stream, workspace, and stable Device state.
-  const auto signature_count = projection.signatures.size();
+  // GraphExec, stream and stable Device state; computation storage is borrowed.
+  const auto signature_count = signatures.size();
   const auto compute_switch_size = static_cast<std::uint32_t>(std::max(signature_count, std::size_t{1}));
   const auto compute_empty_branch_index = static_cast<std::uint32_t>(signature_count);
   auto *device_layer_entries = static_cast<LayerExecutionEntry *>(layer_entries_);
@@ -743,10 +734,6 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
   lanes_.emplace_back();
   auto &lane = lanes_.back();
   lane.stream = xpool::utils::cuda::OwnedCudaStream::create();
-  if (maximum_workspace_bytes != 0) {
-    C10_CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&lane.workspace), maximum_workspace_bytes));
-    lane.workspace_bytes = maximum_workspace_bytes;
-  }
   C10_CUDA_CHECK(cudaMalloc(&lane.state, sizeof(LaneRuntimeState)));
   const auto initial_state = LaneRuntimeState{};
   C10_CUDA_CHECK(cudaMemcpy(lane.state, &initial_state, sizeof(initial_state), cudaMemcpyHostToDevice));
@@ -754,7 +741,7 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
 
   // Phase: Embed Compute Branches - Build the resident outer WHILE and embed
   // every captured Signature behind one Device-selected switch.
-  C10_CUDA_CHECK(cudaGraphCreate(&lane.graph, 0));
+  xpool::utils::cuda::graph::create(lane.graph);
   auto while_handle = xpool::utils::cuda::graph::create_conditional_handle(lane.graph, 1, cudaGraphCondAssignDefault);
   const auto while_node = xpool::utils::cuda::graph::add_while_node(lane.graph, while_handle);
   const auto while_body = xpool::utils::cuda::graph::conditional_bodies(while_node).front();
@@ -774,18 +761,19 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
   host_schemas.reserve(signature_count);
   auto maximum_site_count = std::size_t{0};
   for (auto signature_index = std::size_t{0}; signature_index < signature_count; ++signature_index) {
-    const auto &signature = projection.signatures[signature_index];
+    const auto &signature = signatures[signature_index];
     const auto primary_graph = std::visit([](const auto &value) { return value.primary_graph_address; }, signature);
     const auto embedded_graph = xpool::utils::cuda::graph::embed_child_graph(
         compute_bodies[signature_index], reinterpret_cast<cudaGraph_t>(primary_graph));
 
     // Captured placeholder addresses become this Lane's stable Fabric and
-    // workspace addresses; weight sites remain Device-updatable per layer.
+    // external addresses; internal resources retain their Primary addresses.
     const auto input_target = reinterpret_cast<std::uintptr_t>(arena.ffn_input_storage(layout, executor_lane_index));
     const auto partial_target =
         reinterpret_cast<std::uintptr_t>(arena.ffn_partial_storage(layout, executor_lane_index));
-    const auto workspace_target = reinterpret_cast<std::uintptr_t>(lane.workspace);
     auto capture_routing_weights_address = std::uintptr_t{0};
+    auto capture_routing_metadata_address = std::uintptr_t{0};
+    auto capture_payload_rows_address = std::uintptr_t{0};
     auto routing_target = std::uintptr_t{0};
     auto lane_replacements = std::vector<LaneAddressReplacement>{};
     std::visit(
@@ -795,23 +783,32 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
                                           static_cast<std::size_t>(c10::elementSize(value.payload_dtype)));
           lane_replacements = {
               LaneAddressReplacement{
-                  .capture_address = value.capture_input_address,
+                  .primary_address = value.capture_input_address,
+                  .control_address = value.capture_input_address,
                   .bytes = io_bytes,
                   .target_address = input_target,
               },
               LaneAddressReplacement{
-                  .capture_address = value.capture_partial_address,
+                  .primary_address = value.capture_partial_address,
+                  .control_address = value.capture_partial_address,
                   .bytes = io_bytes,
                   .target_address = partial_target,
               },
-              LaneAddressReplacement{
-                  .capture_address = value.capture_workspace_address,
-                  .bytes = value.compute_workspace_bytes,
-                  .target_address = workspace_target,
-              },
           };
+          for (const auto &region : value.capture_ranges) {
+            lane_replacements.push_back(LaneAddressReplacement{
+                .primary_address = region.primary_address,
+                .control_address = region.control_address,
+                .bytes = region.bytes,
+                .target_address = region.primary_address,
+                .required = false,
+                .read_only = region.shared_read_only,
+            });
+          }
           using Signature = std::remove_cvref_t<decltype(value)>;
           if constexpr (std::is_same_v<Signature, MoeCaptureDescriptor>) {
+            capture_routing_metadata_address = value.capture_routing_metadata_address;
+            capture_payload_rows_address = value.capture_payload_rows_address.value_or(0);
             const auto route_elements = xpool::utils::checked::prod(value.payload_row_capacity, value.effective_topk);
             const auto route_bytes =
                 xpool::utils::checked::prod(route_elements, std::size_t{sizeof(std::int32_t) + sizeof(float)});
@@ -823,13 +820,15 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
             capture_routing_weights_address =
                 value.capture_routing_metadata_address + route_elements * sizeof(std::int32_t);
             lane_replacements.push_back(LaneAddressReplacement{
-                .capture_address = value.capture_routing_metadata_address,
+                .primary_address = value.capture_routing_metadata_address,
+                .control_address = value.capture_routing_metadata_address,
                 .bytes = route_bytes,
                 .target_address = routing_target,
             });
             if (value.capture_payload_rows_address.has_value()) {
               lane_replacements.push_back(LaneAddressReplacement{
-                  .capture_address = *value.capture_payload_rows_address,
+                  .primary_address = *value.capture_payload_rows_address,
+                  .control_address = *value.capture_payload_rows_address,
                   .bytes = sizeof(std::int64_t),
                   .target_address =
                       reinterpret_cast<std::uintptr_t>(arena.lane_payload_rows(layout, executor_lane_index)),
@@ -839,24 +838,6 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
         },
         signature);
     const auto resources = make_resource_replacements(signature);
-    const auto capture_routing_metadata_address = std::visit(
-        [](const auto &value) -> std::uintptr_t {
-          using Signature = std::remove_cvref_t<decltype(value)>;
-          if constexpr (std::is_same_v<Signature, MoeCaptureDescriptor>) {
-            return value.capture_routing_metadata_address;
-          }
-          return 0;
-        },
-        signature);
-    const auto capture_payload_rows_address = std::visit(
-        [](const auto &value) -> std::uintptr_t {
-          using Signature = std::remove_cvref_t<decltype(value)>;
-          if constexpr (std::is_same_v<Signature, MoeCaptureDescriptor>) {
-            return value.capture_payload_rows_address.value_or(0);
-          }
-          return 0;
-        },
-        signature);
     const auto control_graph = std::visit([](const auto &value) { return value.control_graph_address; }, signature);
     auto parameterization = parameterize_graph(embedded_graph, reinterpret_cast<cudaGraph_t>(control_graph), resources,
                                                lane_replacements, capture_routing_metadata_address,
@@ -885,8 +866,7 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
     }
   }
   if (signature_count == 0) {
-    auto empty_node = cudaGraphNode_t{};
-    C10_CUDA_CHECK(cudaGraphAddEmptyNode(&empty_node, compute_bodies[compute_empty_branch_index], nullptr, 0));
+    static_cast<void>(xpool::utils::cuda::graph::add_empty_node(compute_bodies[compute_empty_branch_index]));
   }
   if (!host_schemas.empty()) {
     const auto bytes = xpool::utils::checked::prod(host_schemas.size(), sizeof(DiscoveredBindingSchema));
@@ -1020,9 +1000,8 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
 
   // Installation uploads every Lane before activate() launches any resident
   // loop, so partial installation never becomes visible to the Fabric.
-  auto instantiate_parameters = cudaGraphInstantiateParams{};
-  C10_CUDA_CHECK(cudaGraphInstantiateWithParams(&lane.executable, lane.graph, &instantiate_parameters));
-  C10_CUDA_CHECK(cudaGraphUpload(lane.executable, lane.stream.get()));
+  xpool::utils::cuda::graph::instantiate(lane.executable, lane.graph);
+  xpool::utils::cuda::graph::upload(lane.executable, lane.stream.get());
   C10_CUDA_CHECK(cudaStreamSynchronize(lane.stream.get()));
 }
 
@@ -1032,7 +1011,9 @@ void ExecutionRuntime::install(const ExecutionInstallDescriptor &projection, xpo
                                std::uint32_t *activation_count) {
   TORCH_CHECK(!attempted_, "xpool FfnAgent execution installation cannot be retried");
   attempted_ = true;
-  const auto signature_count = projection.signatures.size();
+  TORCH_CHECK(projection.lanes.size() == layout.executor_lane_count,
+              "xpool execution capture Lane count disagrees with Fabric");
+  const auto signature_count = projection.lanes.front().signatures.size();
   TORCH_CHECK(signature_count <= std::numeric_limits<std::uint32_t>::max(),
               "xpool execution Signature count exceeds CUDA SWITCH capacity");
 

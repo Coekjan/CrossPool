@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <map>
 
+#include <pybind11/native_enum.h>
 #include <pybind11/stl.h>
 #include <torch/csrc/utils/pybind.h>
 
@@ -34,17 +35,19 @@ template <typename Event> void require_trace_event_family(const PublicationRecor
   }
 }
 
-template <typename Event> bool trace_recorded(const PublicationRecord &record, Event event) {
-  require_trace_event_family(record, event);
-  return record.recorded(event);
-}
-
 template <typename Event> std::uint64_t trace_timestamp(const PublicationRecord &record, Event event) {
   require_trace_event_family(record, event);
   return record.timestamp(event);
 }
 
 void bind_fabric_observer_types(py::module_ &module) {
+  py::native_enum<xpool::fabric::DeliveryVariant>(module, "DeliveryVariant", "enum.IntEnum",
+                                                  "Observed Fabric output-delivery branch.")
+      .value("DIRECT_PARTIAL", xpool::fabric::DeliveryVariant::DirectPartial)
+      .value("SINGLE_COMPLETE", xpool::fabric::DeliveryVariant::SingleComplete)
+      .value("REPLICATED_COMPLETE", xpool::fabric::DeliveryVariant::ReplicatedComplete)
+      .finalize();
+
   py::enum_<FabricRecordKind>(module, "RecordKind", "State-machine kind represented by one Fabric trace record.")
       .value("ATNAGENT", FabricRecordKind::AtnAgent, "Trace emitted by one AtnAgent request path.")
       .value("COORDINATOR", FabricRecordKind::Coordinator, "Trace emitted by the Fabric Coordinator.")
@@ -113,12 +116,6 @@ void bind_fabric_observer_types(py::module_ &module) {
                              "FfnAgent-executed row capacity, when applicable.")
       .def_property_readonly("delivery", &PublicationRecord::delivery,
                              "FfnAgent-executed delivery branch, when applicable.")
-      .def("recorded", &trace_recorded<FabricAtnAgentEvent>, py::arg("event"),
-           "Return whether an AtnAgent event was recorded.")
-      .def("recorded", &trace_recorded<FabricCoordinatorEvent>, py::arg("event"),
-           "Return whether a Coordinator event was recorded.")
-      .def("recorded", &trace_recorded<FabricFfnAgentEvent>, py::arg("event"),
-           "Return whether an FfnAgent event was recorded.")
       .def("timestamp", &trace_timestamp<FabricAtnAgentEvent>, py::arg("event"),
            "Return an AtnAgent event's raw global-timer timestamp.")
       .def("timestamp", &trace_timestamp<FabricCoordinatorEvent>, py::arg("event"),

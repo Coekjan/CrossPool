@@ -19,8 +19,10 @@
 
 namespace xpool::ffnagent {
 
-/// Return exact retained execution-table and lane-state allocation bytes.
-/// \return Retained allocation bytes excluding graphs, workspaces, and control storage.
+/// Return logical request bytes for fixed execution tables and Lane state.
+/// \return Request bytes including the fixed discovered-schema table and excluding
+/// variable BindingSite/update arrays, graphs, borrowed computation storage,
+/// allocator reservation, and control storage.
 /// \throws c10::Error when size arithmetic overflows.
 std::size_t execution_state_allocation_bytes(std::size_t local_layer_count, std::size_t local_capacity_count,
                                              std::size_t local_signature_count, std::size_t executor_lane_count);
@@ -37,8 +39,9 @@ public:
   ExecutionRuntime &operator=(ExecutionRuntime &&) = delete;
 
   /// Construct every lane graph and immutable lookup table.
-  /// A failed attempt releases partially materialized resources but consumes
-  /// this runtime; installation cannot be retried on the same owner.
+  /// A failed attempt consumes this runtime and attempts ordered finalization.
+  /// Failed cleanup retains its remaining owners for explicit finalization;
+  /// installation cannot be retried on the same owner.
   /// \pre projection passed intrinsic validation at construction.
   /// \pre fabric_projection and layout belong to the joined Fabric Runtime.
   /// \pre arena and activation_count refer to resources owned by the joined Fabric Runtime.
@@ -52,17 +55,19 @@ public:
   /// Reject premature Lane Graph completion or CUDA failure.
   void check_health() const;
 
-  /// Return whether any activated Lane Graph remains in terminal drain.
+  /// Return whether any installed Lane stream has pending work, including partial activation.
   [[nodiscard]] bool drain_pending() const;
 
-  /// Destroy drained lane graphs and private lookup storage.
+  /// Destroy drained graphs and storage from a complete or partial installation.
+  /// A successful repeated call is empty. Cleanup errors retain remaining owners
+  /// and leave finalization unconfirmed; borrowed capture owners must stay live.
   void finalize();
 
   /// Return whether a complete execution is installed.
   [[nodiscard]] bool installed() const noexcept { return installed_; }
 
 private:
-  /// One lane's owned Graph, GraphExec, stream, device tables, and workspace.
+  /// One lane's owned Graph, GraphExec, stream, and device tables.
   /// Raw pointers are CUDA allocations retained until destroy() after the lane
   /// graph has drained.
   struct LaneOwner {
@@ -73,8 +78,6 @@ private:
     void *schemas = nullptr;
     void *sites = nullptr;
     void *updates = nullptr;
-    std::uint8_t *workspace = nullptr;
-    std::size_t workspace_bytes = 0;
 
     LaneOwner() = default;
     LaneOwner(const LaneOwner &) = delete;

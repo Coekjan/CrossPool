@@ -201,7 +201,7 @@ def test_fp16_tp2_delivers_complete_output(tmp_path: Path) -> None:
         for record in participant.records
         if isinstance(record, FabricFfnAgentTrace)
     }
-    assert deliveries == {xpool.native.fabric.DeliveryVariant.SINGLE_COMPLETE}
+    assert deliveries == {xpool.native.devkit.fabric_observer.DeliveryVariant.SINGLE_COMPLETE}
 
 
 @xtest.requirements(device_count=3)
@@ -249,7 +249,7 @@ def test_unselected_ffnagent_installs_empty_lane_root(tmp_path: Path) -> None:
             2,
             ForwardMode.DECODE,
             1,
-            xpool.native.fabric.DeliveryVariant.DIRECT_PARTIAL,
+            xpool.native.devkit.fabric_observer.DeliveryVariant.DIRECT_PARTIAL,
             id="direct-partial-decode",
         ),
         pytest.param(
@@ -258,7 +258,7 @@ def test_unselected_ffnagent_installs_empty_lane_root(tmp_path: Path) -> None:
             2,
             ForwardMode.PREFILL,
             4,
-            xpool.native.fabric.DeliveryVariant.DIRECT_PARTIAL,
+            xpool.native.devkit.fabric_observer.DeliveryVariant.DIRECT_PARTIAL,
             id="direct-partial-prefill",
         ),
         pytest.param(
@@ -267,7 +267,7 @@ def test_unselected_ffnagent_installs_empty_lane_root(tmp_path: Path) -> None:
             4,
             ForwardMode.DECODE,
             1,
-            xpool.native.fabric.DeliveryVariant.SINGLE_COMPLETE,
+            xpool.native.devkit.fabric_observer.DeliveryVariant.SINGLE_COMPLETE,
             id="single-complete-decode",
         ),
         pytest.param(
@@ -276,7 +276,7 @@ def test_unselected_ffnagent_installs_empty_lane_root(tmp_path: Path) -> None:
             4,
             ForwardMode.PREFILL,
             4,
-            xpool.native.fabric.DeliveryVariant.SINGLE_COMPLETE,
+            xpool.native.devkit.fabric_observer.DeliveryVariant.SINGLE_COMPLETE,
             id="single-complete-prefill",
         ),
         pytest.param(
@@ -285,7 +285,7 @@ def test_unselected_ffnagent_installs_empty_lane_root(tmp_path: Path) -> None:
             4,
             ForwardMode.DECODE,
             1,
-            xpool.native.fabric.DeliveryVariant.REPLICATED_COMPLETE,
+            xpool.native.devkit.fabric_observer.DeliveryVariant.REPLICATED_COMPLETE,
             id="replicated-complete-decode",
         ),
         pytest.param(
@@ -294,7 +294,7 @@ def test_unselected_ffnagent_installs_empty_lane_root(tmp_path: Path) -> None:
             4,
             ForwardMode.PREFILL,
             4,
-            xpool.native.fabric.DeliveryVariant.REPLICATED_COMPLETE,
+            xpool.native.devkit.fabric_observer.DeliveryVariant.REPLICATED_COMPLETE,
             id="replicated-complete-prefill",
         ),
     ],
@@ -305,7 +305,7 @@ def test_execution_reuses_1000_leases_across_delivery_shapes(
     ffnagent_count: int,
     forward_mode: ForwardMode,
     payload_rows: int,
-    expected_delivery: xpool.native.fabric.DeliveryVariant,
+    expected_delivery: xpool.native.devkit.fabric_observer.DeliveryVariant,
     tmp_path: Path,
 ) -> None:
     """Run 1,000 real Dense leases for every Delivery and mode cell."""

@@ -35,12 +35,10 @@ capacity, and watches participant liveness. Each SGLang Instance Rank keeps
 attention and logical KV/prefix-cache ownership, then sends FFN work through a
 rank-local mailbox to its AtnAgent's Transport Kernel.
 
-FfnAgents retain model-specific FFN weight shards as reusable GraphTemplates and
-replay them through per-lane CUDA Graphs. The Fabric carries the rank-local work
-between the AtnAgents and FfnAgents; physical KV backing can move between
-co-located Instances without sharing logical KV contents. See the [system
-overview](docs/designs/overview.md) for complete process roles, request flow,
-and readiness contracts.
+FfnAgents keep the FFN weight shards. Each Executor Lane captures a CUDA
+Graph for each compute structure its layers need. The Fabric carries work
+between AtnAgents and FfnAgents. See the [system overview](docs/designs/overview.md)
+for request flow and readiness.
 
 ## Highlights
 
