@@ -82,7 +82,7 @@ class MemoryProfileWorld:
             for observation in participant.observations:
                 point = observation.point
                 analytic = point.exact_resource_ledger_bytes + point.allocator_allowance_bytes
-                calibrated = analytic + coefficients.evaluate(**asdict(point.features))
+                calibrated = analytic + coefficients.evaluate(point.features)
                 observations.append(
                     {
                         "point": asdict(point),

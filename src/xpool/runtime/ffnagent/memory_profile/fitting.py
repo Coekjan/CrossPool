@@ -8,31 +8,12 @@ from dataclasses import fields
 from ortools.sat.python import cp_model
 
 from xpool.memory import (
-    MIB,
     FfnMemoryCalibrationCoefficients,
 )
-from xpool.runtime.ffnagent.device_memory import DeviceMemoryFeatures
 from xpool.runtime.ffnagent.memory_profile.evidence import MemoryProfileWorld
 from xpool.utils.integer import SINT64_MAX
 
 COEFFICIENT_NAMES = tuple(field.name for field in fields(FfnMemoryCalibrationCoefficients))
-
-
-def feature_vector(features: DeviceMemoryFeatures) -> tuple[int, ...]:
-    """Project one accepted feature row into stable coefficient order."""
-
-    return (
-        1,
-        (features.tensor_storage_bytes + MIB - 1) // MIB,
-        features.tensor_storage_allocation_count,
-        features.dense_graph_capture_count,
-        features.moe_graph_capture_count,
-        features.executor_lane_count,
-        features.compute_branch_count,
-        int(features.dense_implementation_present),
-        int(features.moe_implementation_present),
-        int(features.joined_ffnagent),
-    )
 
 
 def solve_coefficients(
@@ -119,7 +100,7 @@ def fit_worlds(
                 0,
                 observed_residual - observation.point.allocator_allowance_bytes,
             )
-            vector = feature_vector(observation.point.features)
+            vector = observation.point.features.calibration_values()
             targets[vector] = max(targets.get(vector, 0), calibration_residual)
             if observation.observed_device_bytes > 0:
                 positive_observations.append(observation.observed_device_bytes)
@@ -142,12 +123,7 @@ def fit_worlds(
                 0,
                 observed_residual - observation.point.allocator_allowance_bytes,
             )
-            prediction = sum(
-                value * coefficient
-                for value, coefficient in zip(
-                    feature_vector(observation.point.features), coefficients.values(), strict=True
-                )
-            )
+            prediction = coefficients.evaluate(observation.point.features)
             if prediction < calibration_residual:
                 raise RuntimeError(
                     "memory-profile candidate underpredicts held-out experiment by "

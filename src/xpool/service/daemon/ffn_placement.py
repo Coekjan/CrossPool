@@ -13,7 +13,7 @@ from xpool.fabric import (
     FfnModelPlan,
     place_ffn_layer,
 )
-from xpool.memory import MIB
+from xpool.memory import MIB, DeviceMemoryFeatures
 from xpool.runtime.ffnagent import execution, preparation
 from xpool.runtime.ffnagent.device_memory import (
     DeviceMemoryEstimator,
@@ -313,23 +313,25 @@ def solve_placement(
     maximum_calibrated_overhead = 0
     if estimator.coefficients is not None:
         maximum_calibrated_overhead = estimator.coefficients.evaluate(
-            tensor_storage_bytes=maximum_weight_bytes + maximum_graph_capture_bytes,
-            tensor_storage_allocation_count=maximum_weight_allocations + maximum_graph_capture_allocations,
-            dense_graph_capture_count=sum(
-                isinstance(item, execution.DenseFfnExecutionSignature) for item in all_signatures
-            ),
-            moe_graph_capture_count=sum(
-                isinstance(item, execution.MoeFfnExecutionSignature) for item in all_signatures
-            ),
-            executor_lane_count=config.scheduler.ffn_concurrency,
-            compute_branch_count=config.scheduler.ffn_concurrency * len(all_signatures),
-            dense_implementation_present=any(
-                isinstance(item, execution.DenseFfnExecutionSignature) for item in all_signatures
-            ),
-            moe_implementation_present=any(
-                isinstance(item, execution.MoeFfnExecutionSignature) for item in all_signatures
-            ),
-            joined_ffnagent=True,
+            DeviceMemoryFeatures(
+                tensor_storage_bytes=maximum_weight_bytes + maximum_graph_capture_bytes,
+                tensor_storage_allocation_count=maximum_weight_allocations + maximum_graph_capture_allocations,
+                dense_graph_capture_count=sum(
+                    isinstance(item, execution.DenseFfnExecutionSignature) for item in all_signatures
+                ),
+                moe_graph_capture_count=sum(
+                    isinstance(item, execution.MoeFfnExecutionSignature) for item in all_signatures
+                ),
+                executor_lane_count=config.scheduler.ffn_concurrency,
+                compute_branch_count=config.scheduler.ffn_concurrency * len(all_signatures),
+                dense_implementation_present=any(
+                    isinstance(item, execution.DenseFfnExecutionSignature) for item in all_signatures
+                ),
+                moe_implementation_present=any(
+                    isinstance(item, execution.MoeFfnExecutionSignature) for item in all_signatures
+                ),
+                joined_ffnagent=True,
+            )
         )
     try:
         maximum_stage_overhead = (

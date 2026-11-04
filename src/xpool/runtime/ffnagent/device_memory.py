@@ -14,27 +14,13 @@ from xpool.fabric import FabricPlan, FfnModelPlan, InstanceFfnProfile
 from xpool.memory import (
     MIB,
     DeviceMemoryEstimate,
+    DeviceMemoryFeatures,
     FfnMemoryCalibrationCoefficients,
     load_memory_calibration_profile,
 )
 from xpool.runtime.ffnagent import execution, preparation
 from xpool.utils import align_up
 from xpool.utils.integer import ensure_sint64_nonnegative
-
-
-@dataclass(frozen=True, slots=True)
-class DeviceMemoryFeatures:
-    """Opaque-overhead inputs at one permanent observation point."""
-
-    tensor_storage_bytes: int
-    tensor_storage_allocation_count: int
-    dense_graph_capture_count: int
-    moe_graph_capture_count: int
-    executor_lane_count: int
-    compute_branch_count: int
-    dense_implementation_present: bool
-    moe_implementation_present: bool
-    joined_ffnagent: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,15 +382,17 @@ class DeviceMemoryEstimator:
                 0
                 if self.coefficients is None
                 else self.coefficients.evaluate(
-                    tensor_storage_bytes=point.features.tensor_storage_bytes,
-                    tensor_storage_allocation_count=point.features.tensor_storage_allocation_count,
-                    dense_graph_capture_count=point.features.dense_graph_capture_count,
-                    moe_graph_capture_count=point.features.moe_graph_capture_count,
-                    executor_lane_count=point.features.executor_lane_count,
-                    compute_branch_count=point.features.compute_branch_count,
-                    dense_implementation_present=point.features.dense_implementation_present,
-                    moe_implementation_present=point.features.moe_implementation_present,
-                    joined_ffnagent=point.features.joined_ffnagent,
+                    DeviceMemoryFeatures(
+                        tensor_storage_bytes=point.features.tensor_storage_bytes,
+                        tensor_storage_allocation_count=point.features.tensor_storage_allocation_count,
+                        dense_graph_capture_count=point.features.dense_graph_capture_count,
+                        moe_graph_capture_count=point.features.moe_graph_capture_count,
+                        executor_lane_count=point.features.executor_lane_count,
+                        compute_branch_count=point.features.compute_branch_count,
+                        dense_implementation_present=point.features.dense_implementation_present,
+                        moe_implementation_present=point.features.moe_implementation_present,
+                        joined_ffnagent=point.features.joined_ffnagent,
+                    )
                 )
             )
             estimates.append(point.exact_resource_ledger_bytes + point.allocator_allowance_bytes + calibrated_overhead)

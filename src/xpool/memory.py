@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -18,15 +18,56 @@ MIB = 1 << 20
 
 
 @dataclass(frozen=True, slots=True)
+class DeviceMemoryFeatures:
+    """Modeled post-baseline storage and execution features at one startup point."""
+
+    tensor_storage_bytes: int
+    tensor_storage_allocation_count: int
+    dense_graph_capture_count: int
+    moe_graph_capture_count: int
+    executor_lane_count: int
+    compute_branch_count: int
+    dense_implementation_present: bool
+    moe_implementation_present: bool
+    joined_ffnagent: bool
+
+    def __post_init__(self) -> None:
+        ensure_sint64_nonnegative(
+            self.tensor_storage_bytes,
+            self.tensor_storage_allocation_count,
+            self.dense_graph_capture_count,
+            self.moe_graph_capture_count,
+            self.executor_lane_count,
+            self.compute_branch_count,
+        )
+
+    def calibration_values(self) -> tuple[int, ...]:
+        """Normalize units and booleans in the stable coefficient fit order."""
+
+        return (
+            1,
+            align_up(self.tensor_storage_bytes, MIB) // MIB,
+            self.tensor_storage_allocation_count,
+            self.dense_graph_capture_count,
+            self.moe_graph_capture_count,
+            self.executor_lane_count,
+            self.compute_branch_count,
+            int(self.dense_implementation_present),
+            int(self.moe_implementation_present),
+            int(self.joined_ffnagent),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class FfnMemoryCalibrationCoefficients:
     """One immutable non-negative upper envelope over opaque FFN overhead."""
 
     base_bytes: int = field(metadata={"description": "Constant opaque device-memory bytes."})
     bytes_per_tensor_storage_mib: int = field(
-        metadata={"description": "Opaque bytes per ceiling MiB of live Tensor storage."}
+        metadata={"description": "Opaque bytes per ceiling MiB of live post-baseline Tensor storage."}
     )
     bytes_per_tensor_storage_allocation: int = field(
-        metadata={"description": "Opaque bytes per independently owned live Tensor storage."}
+        metadata={"description": "Opaque bytes per independently owned live post-baseline Tensor storage."}
     )
     bytes_per_dense_graph_capture: int = field(
         metadata={"description": "Opaque bytes per Capacity-specialized Dense Graph Capture."}
@@ -39,10 +80,10 @@ class FfnMemoryCalibrationCoefficients:
         metadata={"description": "Opaque bytes per installed Lane and Execution Signature branch."}
     )
     dense_implementation_bytes: int = field(
-        metadata={"description": "Opaque bytes present when the local runtime installs Dense execution."}
+        metadata={"description": "Opaque bytes while constructing or retaining local Dense execution."}
     )
     moe_implementation_bytes: int = field(
-        metadata={"description": "Opaque bytes present when the local runtime installs MoE execution."}
+        metadata={"description": "Opaque bytes while constructing or retaining local MoE execution."}
     )
     joined_ffnagent_bytes: int = field(
         metadata={"description": "Opaque bytes present after one FfnAgent joins Fabric."}
@@ -56,57 +97,14 @@ class FfnMemoryCalibrationCoefficients:
     def values(self) -> tuple[int, ...]:
         """Return coefficients in their stable fit tie-break order."""
 
-        return (
-            self.base_bytes,
-            self.bytes_per_tensor_storage_mib,
-            self.bytes_per_tensor_storage_allocation,
-            self.bytes_per_dense_graph_capture,
-            self.bytes_per_moe_graph_capture,
-            self.bytes_per_executor_lane,
-            self.bytes_per_compute_branch,
-            self.dense_implementation_bytes,
-            self.moe_implementation_bytes,
-            self.joined_ffnagent_bytes,
-        )
+        return tuple(getattr(self, coefficient.name) for coefficient in fields(self))
 
-    def evaluate(
-        self,
-        *,
-        tensor_storage_bytes: int,
-        tensor_storage_allocation_count: int,
-        dense_graph_capture_count: int,
-        moe_graph_capture_count: int,
-        executor_lane_count: int,
-        compute_branch_count: int,
-        dense_implementation_present: bool,
-        moe_implementation_present: bool,
-        joined_ffnagent: bool,
-    ) -> int:
+    def evaluate(self, features: DeviceMemoryFeatures) -> int:
         """Evaluate the exact signed-64-bit opaque-overhead expression."""
 
-        numeric = (
-            tensor_storage_bytes,
-            tensor_storage_allocation_count,
-            dense_graph_capture_count,
-            moe_graph_capture_count,
-            executor_lane_count,
-            compute_branch_count,
+        result = sum(
+            coefficient * value for coefficient, value in zip(self.values(), features.calibration_values(), strict=True)
         )
-        ensure_sint64_nonnegative(*numeric)
-        tensor_storage_mib = align_up(tensor_storage_bytes, MIB) // MIB
-        features = (
-            1,
-            tensor_storage_mib,
-            tensor_storage_allocation_count,
-            dense_graph_capture_count,
-            moe_graph_capture_count,
-            executor_lane_count,
-            compute_branch_count,
-            int(dense_implementation_present),
-            int(moe_implementation_present),
-            int(joined_ffnagent),
-        )
-        result = sum(coefficient * value for coefficient, value in zip(self.values(), features, strict=True))
         ensure_sint64_nonnegative(result)
         return result
 

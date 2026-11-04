@@ -18,7 +18,7 @@ from xpool.fabric import (
     InstanceRankTopology,
 )
 from xpool.ffn import FfnModelSpec
-from xpool.memory import MIB, FfnMemoryCalibrationCoefficients
+from xpool.memory import MIB, DeviceMemoryFeatures, FfnMemoryCalibrationCoefficients
 from xpool.runtime.ffnagent import device_memory, execution, preparation
 from xpool.runtime.ffnagent.memory_profile import corpus
 from xpool.service.daemon.ffn_placement import place_ffn_models
@@ -291,27 +291,31 @@ def test_calibrated_overhead_uses_one_mib_ceiling_and_rejects_overflow() -> None
 
     assert (
         coefficients.evaluate(
-            tensor_storage_bytes=MIB + 1,
-            tensor_storage_allocation_count=2,
-            dense_graph_capture_count=1,
-            moe_graph_capture_count=0,
-            executor_lane_count=1,
-            compute_branch_count=4,
-            dense_implementation_present=True,
-            moe_implementation_present=False,
-            joined_ffnagent=True,
+            DeviceMemoryFeatures(
+                tensor_storage_bytes=MIB + 1,
+                tensor_storage_allocation_count=2,
+                dense_graph_capture_count=1,
+                moe_graph_capture_count=0,
+                executor_lane_count=1,
+                compute_branch_count=4,
+                dense_implementation_present=True,
+                moe_implementation_present=False,
+                joined_ffnagent=True,
+            )
         )
         == 119
     )
     with pytest.raises(ValueError, match="sint64"):
         coefficients.evaluate(
-            tensor_storage_bytes=0,
-            tensor_storage_allocation_count=0,
-            dense_graph_capture_count=0,
-            moe_graph_capture_count=0,
-            executor_lane_count=0,
-            compute_branch_count=SINT64_MAX,
-            dense_implementation_present=False,
-            moe_implementation_present=False,
-            joined_ffnagent=False,
+            DeviceMemoryFeatures(
+                tensor_storage_bytes=0,
+                tensor_storage_allocation_count=0,
+                dense_graph_capture_count=0,
+                moe_graph_capture_count=0,
+                executor_lane_count=0,
+                compute_branch_count=SINT64_MAX,
+                dense_implementation_present=False,
+                moe_implementation_present=False,
+                joined_ffnagent=False,
+            )
         )
