@@ -40,6 +40,10 @@ void bind_debug(pybind11::module_ &module);
 /// \param module Root `xpool.native` extension module.
 void bind_devkit(pybind11::module_ &module);
 
+/// Bind FFN capture descriptors and execution lifecycle functions.
+/// \param module Root `xpool.native` extension module.
+void bind_ffnagent(pybind11::module_ &module);
+
 /// Bind Fabric metadata, trace values, and lifecycle functions.
 /// \param module Root `xpool.native` extension module.
 void bind_fabric(pybind11::module_ &module);
