@@ -30,8 +30,8 @@ wrappers. Model ID links point to the checkpoint configuration.
 | [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
 | [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
 | [Qwen/Qwen3.5-27B](https://huggingface.co/Qwen/Qwen3.5-27B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
-| [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b/blob/main/config.json) | `GptOssForCausalLM` | ❌ Not supported |
-| [openai/gpt-oss-120b](https://huggingface.co/openai/gpt-oss-120b/blob/main/config.json) | `GptOssForCausalLM` | ❌ Not supported |
+| [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b/blob/main/config.json) | `GptOssForCausalLM` | ✅ Supported |
+| [openai/gpt-oss-120b](https://huggingface.co/openai/gpt-oss-120b/blob/main/config.json) | `GptOssForCausalLM` | ✅ Supported |
 | [google/gemma-4-E2B-it](https://huggingface.co/google/gemma-4-E2B-it/blob/main/config.json) | `Gemma4ForConditionalGeneration` | ❌ Not supported |
 | [google/gemma-4-E4B-it](https://huggingface.co/google/gemma-4-E4B-it/blob/main/config.json) | `Gemma4ForConditionalGeneration` | ❌ Not supported |
 | [google/gemma-4-26B-A4B-it](https://huggingface.co/google/gemma-4-26B-A4B-it/blob/main/config.json) | `Gemma4ForConditionalGeneration` | ❌ Not supported |
@@ -63,6 +63,10 @@ wrappers. Model ID links point to the checkpoint configuration.
 | [deepseek-ai/DeepSeek-V3](https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/config.json) | `DeepseekV3ForCausalLM` | ❌ Not supported |
 | [deepseek-ai/DeepSeek-V2-Lite-Chat](https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite-Chat/blob/main/config.json) | `DeepseekV2ForCausalLM` | ✅ Supported |
 | [zai-org/GLM-4.7-Flash](https://huggingface.co/zai-org/GLM-4.7-Flash/blob/main/config.json) | `Glm4MoeLiteForCausalLM` | ✅ Supported |
+
+GPT-OSS uses the original MXFP4 checkpoints with BF16 payloads and Hybrid
+Full/SWA storage. Coverage follows the
+[qualification boundary](designs/overview.md#supported-boundary).
 
 Run the relevant `xtest run --suite <model-id> --strict-requirements` suite
 when changes invalidate that model's qualification evidence. The complete
