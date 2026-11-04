@@ -233,6 +233,29 @@ TEST_F(ExecutionRetirementTest, PartialActivationRetainsPendingProducerUntilComp
   EXPECT_FALSE(runtime_.drain_pending());
 }
 
+TEST_F(ExecutionRetirementTest, HealthAndDrainPreserveLaterLaneNumericCudaFailure) {
+  ASSERT_NO_THROW(install());
+  faults.intercept_launches = true;
+  producer_release.store(false, std::memory_order_release);
+  ASSERT_NO_THROW(runtime_.activate());
+  faults.queries = 0;
+  faults.fail_query = 2;
+  try {
+    runtime_.check_health();
+    FAIL() << "injected query failure was ignored";
+  } catch (const c10::AcceleratorError &error) {
+    EXPECT_EQ(error.get_error_code(), static_cast<std::int32_t>(cudaErrorIllegalAddress));
+    EXPECT_NE(std::string(error.what()).find("Lane Graph 1"), std::string::npos);
+  }
+  faults.queries = 0;
+  try {
+    static_cast<void>(runtime_.drain_pending());
+    FAIL() << "pending earlier work hid the later query failure";
+  } catch (const c10::AcceleratorError &error) {
+    EXPECT_EQ(error.get_error_code(), static_cast<std::int32_t>(cudaErrorIllegalAddress));
+  }
+}
+
 TEST_F(ExecutionRetirementTest, PartialInstallationPreservesOperationErrorAfterSuccessfulCleanup) {
   faults.fail_instantiation = 2;
   try {
@@ -245,6 +268,60 @@ TEST_F(ExecutionRetirementTest, PartialInstallationPreservesOperationErrorAfterS
   EXPECT_TRUE(faults.allocations.empty());
   EXPECT_TRUE(faults.executables.empty());
   EXPECT_THROW(install(), c10::Error);
+}
+
+TEST_F(ExecutionRetirementTest, FailedGraphExecDestroyRetainsPartialInstallationUntilFinalize) {
+  faults.fail_instantiation = 2;
+  faults.fail_exec_destroy = true;
+  try {
+    install();
+    FAIL() << "injected cleanup failure was ignored";
+  } catch (const c10::Error &error) {
+    EXPECT_NE(std::string(error.what()).find(cudaGetErrorString(cudaErrorInvalidValue)), std::string::npos);
+  }
+  EXPECT_FALSE(runtime_.installed());
+  EXPECT_EQ(faults.executables.size(), 1);
+  EXPECT_EQ(faults.allocations.size(), 2);
+  ASSERT_NO_THROW(runtime_.finalize());
+  EXPECT_TRUE(faults.executables.empty());
+  EXPECT_TRUE(faults.allocations.empty());
+}
+
+TEST_F(ExecutionRetirementTest, FailedFreeRetainsAllocationUntilFinalize) {
+  faults.fail_instantiation = 2;
+  faults.fail_free = true;
+  try {
+    install();
+    FAIL() << "injected cleanup failure was ignored";
+  } catch (const c10::Error &error) {
+    EXPECT_NE(std::string(error.what()).find(cudaGetErrorString(cudaErrorInvalidValue)), std::string::npos);
+  }
+  EXPECT_EQ(faults.allocations.size(), 2);
+  ASSERT_NO_THROW(runtime_.finalize());
+  EXPECT_TRUE(faults.allocations.empty());
+  EXPECT_TRUE(faults.executables.empty());
+}
+
+TEST_F(ExecutionRetirementTest, FailedUploadSynchronizationIsConfirmedBeforeDestroy) {
+  faults.synchronization_failures = 1;
+  EXPECT_THROW(install(), c10::Error);
+  EXPECT_EQ(faults.unconfirmed_stream, nullptr);
+  EXPECT_FALSE(faults.destroyed_before_confirmation);
+  EXPECT_TRUE(faults.allocations.empty());
+  EXPECT_TRUE(faults.executables.empty());
+}
+
+TEST_F(ExecutionRetirementTest, FailedCleanupSynchronizationPreservesAllLaneOwners) {
+  faults.synchronization_failures = 2;
+  EXPECT_THROW(install(), c10::Error);
+  EXPECT_NE(faults.unconfirmed_stream, nullptr);
+  EXPECT_FALSE(faults.destroyed_before_confirmation);
+  EXPECT_EQ(faults.allocations.size(), 1);
+  EXPECT_EQ(faults.executables.size(), 1);
+  ASSERT_NO_THROW(runtime_.finalize());
+  EXPECT_EQ(faults.unconfirmed_stream, nullptr);
+  EXPECT_TRUE(faults.allocations.empty());
+  EXPECT_TRUE(faults.executables.empty());
 }
 
 XPOOL_KERNEL_FN void borrowed_compute(const std::uint32_t *input, const std::uint32_t *gate, const std::uint32_t *down,
@@ -348,6 +425,31 @@ TEST_F(BorrowedExecutionRetirementTest, PartialInstallationRetiresBeforeBorrowed
   EXPECT_THROW(install(), c10::Error);
   EXPECT_TRUE(faults.executables.empty());
   EXPECT_TRUE(faults.allocations.empty());
+  expect_borrowed_backing_alive();
+}
+
+TEST_F(BorrowedExecutionRetirementTest, FailedDestroyPreservesReferencesAndBorrowedBacking) {
+  faults.fail_instantiation = 2;
+  faults.fail_exec_destroy = true;
+  EXPECT_THROW(install(), c10::Error);
+  EXPECT_EQ(faults.executables.size(), 1);
+  expect_borrowed_backing_alive();
+  ASSERT_NO_THROW(runtime_.finalize());
+  EXPECT_TRUE(faults.executables.empty());
+  EXPECT_TRUE(faults.allocations.empty());
+  expect_borrowed_backing_alive();
+}
+
+TEST_F(BorrowedExecutionRetirementTest, FailedSynchronizationKeepsBorrowedBackingUntilConfirmedRetirement) {
+  faults.synchronization_failures = 2;
+  EXPECT_THROW(install(), c10::Error);
+  EXPECT_NE(faults.unconfirmed_stream, nullptr);
+  EXPECT_FALSE(faults.destroyed_before_confirmation);
+  expect_borrowed_backing_alive();
+  ASSERT_NO_THROW(runtime_.finalize());
+  EXPECT_EQ(faults.unconfirmed_stream, nullptr);
+  EXPECT_TRUE(faults.allocations.empty());
+  EXPECT_TRUE(faults.executables.empty());
   expect_borrowed_backing_alive();
 }
 

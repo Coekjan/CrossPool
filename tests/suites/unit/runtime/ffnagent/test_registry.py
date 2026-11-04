@@ -249,6 +249,25 @@ def test_registry_completion_releases_locals_and_retains_service_backing(
     assert weight_ref() is None
 
 
+def test_registry_close_failure_retains_weight_ownership() -> None:
+    service_weight = torch.empty(1)
+    weight_ref = weakref.ref(service_weight)
+    installation = registry.FfnExecutionRegistry(
+        layer_weights=((cast(weights.FfnLayerWeights, service_weight),),), external_resources=()
+    )
+    del service_weight
+    stream = CaptureStream(failure=RuntimeError("retirement cleanup failed"))
+    lane = registry.LaneCaptureResources()
+    lane.stream_owner = cast(xpool.native.cuda.OwnedCudaStream, stream)
+    installation.capture_lanes.append(lane)
+    with pytest.raises(RuntimeError, match="retirement cleanup failed"):
+        installation.close()
+    assert weight_ref() is not None
+    stream.failure = None
+    installation.close()
+    assert weight_ref() is None
+
+
 def test_empty_participant_installs_once_and_seals_before_completion(monkeypatch: pytest.MonkeyPatch) -> None:
     config = synthetic_config(ffn_devices=(1, 2))
     experiments, _ = corpus.calibration_experiments(config)
