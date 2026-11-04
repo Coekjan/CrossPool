@@ -168,6 +168,21 @@ def test_report_renders_labeled_units_weights_and_layout(
     assert "mean represented-interval coverage: 0.6" in (output / "report.md").read_text()
 
 
+@pytest.mark.parametrize("record_type", [BenchRunManifest, RepetitionManifest])
+def test_retained_outcomes_reject_negative_codes(
+    tmp_path: Path, record_type: type[BenchRunManifest] | type[RepetitionManifest]
+) -> None:
+    run, repetition = retained_run(tmp_path, failed=True)
+    run.complete()
+    path = run.directory / "run.json" if record_type is BenchRunManifest else repetition / "repetition.json"
+    raw = json.loads(path.read_text())
+    raw["result_code"] = -1
+    write_json(path, raw)
+
+    with pytest.raises(ValueError, match="greater than or equal to 0"):
+        record_type.model_validate_json(path.read_bytes())
+
+
 def test_report_expands_repetitions_and_preserves_failed_source(
     tmp_path: Path, captured_figures: dict[str, Figure], capsys: pytest.CaptureFixture[str]
 ) -> None:

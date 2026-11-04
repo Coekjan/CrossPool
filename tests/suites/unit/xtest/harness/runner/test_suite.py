@@ -45,6 +45,16 @@ def test_task_formatter_colors_only_status_on_tty() -> None:
     )
 
 
+@pytest.mark.parametrize("result_code", [True, 1.0])
+def test_artifact_group_rejects_noninteger_result_codes(result_code: bool | float) -> None:
+    with pytest.raises(ValueError, match="result_code"):
+        xtest.harness.runner.artifact.ArtifactGroupResult(
+            "comparison",
+            result_code,  # ty: ignore[invalid-argument-type]
+            None,
+        )
+
+
 def test_compiler_builds_stage_tasks_with_exact_gpu_batching() -> None:
     cpu_requirements = requirements()
     gpu_one = requirements(device_count=1)

@@ -42,7 +42,9 @@ class BenchRunManifest(BenchValue):
     selected_cases: tuple[CaseId, ...]
     case_directories: tuple[str, ...] = ()
     finished: bool = Field(default=False, description="All admitted case execution and finalization has ended.")
-    result_code: int | None = Field(default=None, description="Current invocation outcome; None until finalization.")
+    result_code: int | None = Field(
+        default=None, ge=0, description="Current invocation outcome; None until finalization."
+    )
     infrastructure_error: str | None = None
 
 
@@ -105,7 +107,9 @@ class RepetitionManifest(BenchValue):
         default=None, description="Measurement-owner end or recovered observation prefix; None without a usable window."
     )
     finished: bool = Field(default=False, description="Runner finalization has ended; this is not a success verdict.")
-    result_code: int | None = Field(default=None, description="Original repetition outcome; None until finalization.")
+    result_code: int | None = Field(
+        default=None, ge=0, description="Original repetition outcome; None until finalization."
+    )
     cleanup_verified: bool | None = Field(
         default=None, description="Outer runner's descendant-drain proof; None until verified or rejected."
     )

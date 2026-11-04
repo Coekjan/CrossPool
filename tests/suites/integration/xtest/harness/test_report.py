@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,13 @@ def test_report_marks_interrupted_checkpoint_unavailable(tmp_path: Path) -> None
     assert report.summary()["evidence_complete"] is False
     assert report.summary()["cleanup_verified"] is True
     assert report.summary()["original_result_code"] == 143
+    manifest = report.manifest.model_dump(mode="json")
+    manifest["run_id"] = "20260927-100001-1-1"
+    (run.directory / "run.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert list_test_artifacts(run.directory.parent) == ()
+    with pytest.raises(ValueError, match="run ID differs"):
+        TestRunReport.load(run.directory)
 
 
 def test_report_rejects_active_and_unsealed_evidence(tmp_path: Path) -> None:

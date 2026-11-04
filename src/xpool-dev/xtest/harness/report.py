@@ -155,6 +155,8 @@ class TestRunReport(TestRecord):
         if not manifest_path.is_file():
             raise ValueError(f"unsupported test report format: no run.json in {run_directory}")
         manifest = TestRunManifest.model_validate_json(manifest_path.read_bytes())
+        if manifest.run_id != run_directory.name:
+            raise ValueError("test report manifest run ID differs from its directory")
         results_path = run_directory / "results.json"
         results = TestRunResults.model_validate_json(results_path.read_bytes())
         if not (run_directory / ".completed").is_file() or not results.finished or results.overall_result_code is None:

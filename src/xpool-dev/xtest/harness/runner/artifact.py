@@ -64,7 +64,7 @@ class ArtifactGroupResult:
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("artifact group result name must be nonempty")
-        if self.result_code not in {0, 1, 2}:
+        if type(self.result_code) is not int or self.result_code not in {0, 1, 2}:
             raise ValueError("artifact group result_code must be 0, 1, or 2")
 
 
