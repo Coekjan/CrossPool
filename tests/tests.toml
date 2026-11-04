@@ -34,6 +34,23 @@ graph_modes = ["decode-full-prefill-breakable"]
 estimated_duration_seconds = 360
 timeout_seconds = 1800
 
+[serving_cases.bc225d25-6d1d-4ba3-a27d-875b64b27173]
+description = "Cross-model prefix-cache reclamation with a shared two-Lane FFN participant."
+module = "e2e.sglang.test_e2e_elastic_kv"
+deployment = "atn1-ffn1-lanes2"
+models = [
+  "Qwen/Qwen2.5-0.5B",
+  "Qwen/Qwen3-0.6B",
+]
+estimated_duration_seconds = 600
+timeout_seconds = 3600
+
+[serving_cases.bc225d25-6d1d-4ba3-a27d-875b64b27173.elastic_kv]
+prefix_model_id = "Qwen/Qwen2.5-0.5B"
+prefix_tokens = 20000
+pressure_model_id = "Qwen/Qwen3-0.6B"
+atn_device_memory_budget_bytes = 10737418240
+
 [serving_cases.047e9b7d-7f49-4f51-a6d4-07374c9cb1c6]
 description = "Cross-model prefix-cache reclamation with single-rank attention."
 module = "e2e.sglang.test_e2e_elastic_kv"

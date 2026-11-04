@@ -11,6 +11,7 @@ from threading import Barrier
 import httpx
 
 import xtest
+from xkit.results import write_json
 from xkit.serving.sglang.graph import SglangGraphSettings
 from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.sglang.catalog import E2eServingCase
@@ -174,25 +175,21 @@ def test_e2e_elastic_kv(
             )
             completed = tuple(future.result() for future in futures)
 
-        print(
-            "XPOOL_ELASTIC_KV_CACHE="
-            + json.dumps(
-                {
-                    "competing_after_pressure": competing_after_pressure,
-                    "competing_hit": competing_hit,
-                    "competing_initial": competing_initial,
-                    "pressure_tokens": pressure_tokens,
-                    "primary_after_pressure": primary_after_pressure,
-                    "primary_hit": primary_hit,
-                    "primary_initial": primary_initial,
-                    "restored": restored,
-                    "restored_fill": restored_fill,
-                    "victim_after_pressure": victim_after_pressure,
-                    "victim_before_pressure": victim_before_pressure,
-                },
-                sort_keys=True,
-            )
-        )
+        cache_evidence = {
+            "competing_after_pressure": competing_after_pressure,
+            "competing_hit": competing_hit,
+            "competing_initial": competing_initial,
+            "pressure_tokens": pressure_tokens,
+            "primary_after_pressure": primary_after_pressure,
+            "primary_hit": primary_hit,
+            "primary_initial": primary_initial,
+            "restored": restored,
+            "restored_fill": restored_fill,
+            "victim_after_pressure": victim_after_pressure,
+            "victim_before_pressure": victim_before_pressure,
+        }
+        write_json(tmp_path / "elastic-kv.json", cache_evidence)
+        print("XPOOL_ELASTIC_KV_CACHE=" + json.dumps(cache_evidence, sort_keys=True))
         assert primary_initial < primary_hit
         assert competing_initial < competing_hit
         assert restored > 0
