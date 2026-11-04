@@ -127,13 +127,7 @@ class DeviceMemoryEstimator:
         for index, (model, spec, profile) in enumerate(zip(config.models, model_specs, instance_profiles, strict=True)):
             if model.id != spec.model_id:
                 raise ValueError(f"device-memory Model {index} does not follow configured order")
-            if (
-                profile.payload_dtype not in (torch.bfloat16, torch.float16)
-                or spec.hidden_size != profile.hidden_size
-                or tuple((layer.layer_id, layer.kind) for layer in spec.layers)
-                != tuple((layer.layer_id, layer.kind) for layer in profile.layers)
-            ):
-                raise ValueError(f"device-memory Model {spec.model_id!r} disagrees with its Profile")
+            profile.require_compatible_model(spec)
         self.model_specs = model_specs
         self.instance_profiles = instance_profiles
         self.config = config

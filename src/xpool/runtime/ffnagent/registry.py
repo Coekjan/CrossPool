@@ -336,10 +336,7 @@ class FfnExecutionRegistry:
             if len(model_weights) != len(model_plan.layers) or len(model_spec.layers) != len(model_plan.layers):
                 raise ValueError("Model Spec, layer weights, and Model Plan layers are not co-indexed")
             profile = instance_plan.ffn_profile
-            if profile.hidden_size != model_spec.hidden_size or tuple(
-                (layer.layer_id, layer.kind) for layer in profile.layers
-            ) != tuple((layer.layer_id, layer.kind) for layer in model_spec.layers):
-                raise ValueError("Instance Profile disagrees with the co-indexed Model Spec")
+            profile.require_compatible_model(model_spec)
             for layer_ordinal, (layer_plan, layer_spec, layer_weights_value) in enumerate(
                 zip(model_plan.layers, model_spec.layers, model_weights, strict=True)
             ):

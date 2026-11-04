@@ -22,13 +22,11 @@ additive projection bias and selection-only Router correction bias have separate
 declarations. A representable declaration does not establish operator support
 or qualify a concrete model.
 
-Shared family-profile validation admits BF16 and FP16 checkpoint declarations
-alongside the expected model type and SiLU activation. The Llama adapter reuses
-this validation rather than restricting the family to one checkpoint's dtype.
-Family admission is distinct from
-[qualification of a concrete checkpoint](qualification.md#numerical-and-graph-evidence).
+Family adapters check the model type, SiLU activation and BF16 or FP16 source
+dtype. `InstanceFfnProfile` independently requires BF16 or FP16 payloads. See [checkpoint qualification](qualification.md#numerical-and-graph-evidence).
 
-Weights are read from safetensors through explicit checkpoint keys. The bounded
+Before checkpoint I/O the loader checks Model/Instance identity and ordered
+layer geometry. Weights are read from explicit safetensors keys. The bounded
 reader verifies each original source shape, forms its declared canonical view,
 then applies the selected TP slice. Matrix and scale-blocked views are declared
 per projection, allowing gate/up and down to use different source-axis layouts.

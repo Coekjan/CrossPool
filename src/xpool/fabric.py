@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Literal
 
+import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 import xpool.native
@@ -200,12 +201,26 @@ class InstanceFfnProfile(FabricModel):
     )
 
     @model_validator(mode="after")
-    def validate_layers(self) -> InstanceFfnProfile:
-        """Require unique Layer IDs."""
+    def validate_profile(self) -> InstanceFfnProfile:
+        """Require supported payload precision and unique Layer IDs."""
 
+        if self.payload_dtype not in (torch.bfloat16, torch.float16):
+            raise ValueError("FFN Instance Profile requires BF16 or FP16 payloads")
         if len({layer.layer_id for layer in self.layers}) != len(self.layers):
             raise ValueError("FFN layer ids must be unique")
         return self
+
+    def require_compatible_model(self, spec: ffn.FfnModelSpec) -> None:
+        """Require matching hidden width and ordered Model layer semantics.
+
+        Raises:
+            ValueError: If the Model geometry disagrees with this Profile.
+        """
+
+        if self.hidden_size != spec.hidden_size or tuple(
+            (layer.layer_id, layer.kind) for layer in self.layers
+        ) != tuple((layer.layer_id, layer.kind) for layer in spec.layers):
+            raise ValueError(f"FFN Model {spec.model_id!r} disagrees with its Instance Profile")
 
 
 class DenseFfnLayerPlan(FabricModel):

@@ -98,15 +98,19 @@ def test_fabric_uid_and_plan_round_trip() -> None:
         FabricUid(value="ab")
 
 
-@pytest.mark.parametrize(
-    "dtype", (torch.bfloat16, torch.float16, torch.float32, torch.float64, torch.int64, torch.bool)
-)
-def test_profile_round_trips_any_canonical_torch_dtype(dtype: torch.dtype) -> None:
+@pytest.mark.parametrize("dtype", (torch.bfloat16, torch.float16))
+def test_profile_round_trips_supported_payload_dtype(dtype: torch.dtype) -> None:
     value = profile(dtype)
 
     assert value.model_dump(mode="python")["payload_dtype"] is dtype
     assert value.model_dump(mode="json")["payload_dtype"] == str(dtype).removeprefix("torch.")
     assert InstanceFfnProfile.model_validate_json(value.model_dump_json()) == value
+
+
+@pytest.mark.parametrize("dtype", (torch.float32, torch.float64, torch.int64, torch.bool))
+def test_profile_rejects_unsupported_payload_precision(dtype: torch.dtype) -> None:
+    with pytest.raises(ValidationError, match="BF16 or FP16"):
+        profile(dtype)
 
 
 def test_profile_rejects_noncanonical_dtype_name() -> None:

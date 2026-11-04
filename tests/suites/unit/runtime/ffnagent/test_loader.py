@@ -113,6 +113,14 @@ def test_plan_materialization_selects_only_local_layers(
     with pytest.raises(ValueError, match="Model Specs and Model Plans are not co-indexed"):
         loader.materialize_layer_weights(fabric_plan=plan, model_specs=(), ffnagent_index=0)
 
+    for inconsistent_spec in (
+        spec.model_copy(update={"hidden_size": 5}),
+        spec.model_copy(update={"layers": (spec.layers[0].model_copy(update={"layer_id": 1}),)}),
+    ):
+        with pytest.raises(ValueError, match="Instance Profile"):
+            loader.materialize_layer_weights(fabric_plan=plan, model_specs=(inconsistent_spec,), ffnagent_index=0)
+    assert observed_requests == []
+
     assert loader.materialize_layer_weights(
         fabric_plan=plan,
         model_specs=(spec,),

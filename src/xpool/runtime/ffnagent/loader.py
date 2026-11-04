@@ -181,6 +181,9 @@ def materialize_layer_weights(
     for model_index, (spec, model_plan, instance_plan) in enumerate(
         zip(model_specs, fabric_plan.model_plans, fabric_plan.instance_plans, strict=True)
     ):
+        if spec.model_id != instance_plan.model_id:
+            raise ValueError(f"Model Spec {model_index} disagrees with its Instance identity")
+        instance_plan.ffn_profile.require_compatible_model(spec)
         if spec.digest() != model_plan.model_spec_digest:
             raise ValueError(f"Model Spec {model_index} does not match its Model Plan digest")
         if len(spec.layers) != len(model_plan.layers):
