@@ -304,14 +304,12 @@ std::optional<FailurePayload> Runtime::failure() const {
 void Runtime::finalize() {
   const auto lock = std::lock_guard<std::mutex>{mutex_};
   TORCH_CHECK(phase_ == Phase::Drained, "xpool Fabric finalize requires completed local drain");
-  phase_ = Phase::Closed;
   const auto device_guard = c10::cuda::CUDAGuard{*device_};
+  phase_ = Phase::Finalizing;
   // Teardown order is contractual: release symmetric allocations while
   // NVSHMEM and its CUDA module remain live, unregister the module, then
   // finalize the participant-local host library.
-  if (ffn_execution_runtime_.installed()) {
-    ffn_execution_runtime_.finalize();
-  }
+  ffn_execution_runtime_.finalize();
   xpool::hooks::FabricFinalizePreEvent::hooks({.device = *device_});
   ffnagent_control_.destroy();
   arena_.destroy();
@@ -320,6 +318,7 @@ void Runtime::finalize() {
   device_.reset();
   projection_.reset();
   pe_.reset();
+  phase_ = Phase::Closed;
 }
 
 } // namespace xpool::fabric

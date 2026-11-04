@@ -122,9 +122,10 @@ deadline, cancellation, sleep interval, or retained wait state.
 
 ## Drain and backing lifetime
 
-Local drain first stops every producer stream, then completes this PE's prior
-GPU-issued NVSHMEM communication with one `nvshmemx_quiet_on_stream` on the
-retained drain stream. `DRAINED` requires that stream to complete. Attention
+Local drain stops all producer streams, including Lanes launched before an
+activation failure. It then completes this PE's prior GPU-issued NVSHMEM
+communication with one `nvshmemx_quiet_on_stream` on the drain stream.
+`DRAINED` requires that stream to complete. Attention
 retirement drains Transport before Fabric, so its last publications are covered
 by the same completion boundary. Pending or failed completion keeps the owner
 in drain. This follows the

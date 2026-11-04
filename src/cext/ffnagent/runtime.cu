@@ -573,13 +573,6 @@ void insert_routing_publication(const PrimaryGraphLocation &location, xpool::fab
 
 } // namespace
 
-ExecutionRuntime::LaneOwner::~LaneOwner() {
-  try {
-    destroy();
-  } catch (...) {
-  }
-}
-
 ExecutionRuntime::LaneOwner::LaneOwner(LaneOwner &&other) noexcept
     : graph(std::exchange(other.graph, nullptr)), executable(std::exchange(other.executable, nullptr)),
       stream(std::move(other.stream)), state(std::exchange(other.state, nullptr)),
@@ -605,12 +598,15 @@ ExecutionRuntime::LaneOwner &ExecutionRuntime::LaneOwner::operator=(LaneOwner &&
 }
 
 void ExecutionRuntime::LaneOwner::destroy() {
+  if (stream) {
+    C10_CUDA_CHECK(cudaStreamSynchronize(stream.get()));
+  }
   if (executable != nullptr) {
-    C10_CUDA_CHECK(cudaGraphExecDestroy(executable));
+    xpool::utils::cuda::graph::destroy(executable);
     executable = nullptr;
   }
   if (graph != nullptr) {
-    C10_CUDA_CHECK(cudaGraphDestroy(graph));
+    xpool::utils::cuda::graph::destroy(graph);
     graph = nullptr;
   }
   for (auto **pointer : {&state, &schemas, &sites, &updates}) {
@@ -628,8 +624,8 @@ void ExecutionRuntime::LaneOwner::destroy() {
 }
 
 ExecutionRuntime::~ExecutionRuntime() {
-  xpool::abort_if(installed_ || active_ || layer_entries_ != nullptr || capacity_entries_ != nullptr ||
-                  !lanes_.empty());
+  xpool::abort_if(installed_ || active_ || finalization_pending_ || layer_entries_ != nullptr ||
+                  capacity_entries_ != nullptr || !lanes_.empty());
 }
 
 void ExecutionRuntime::materialize_shared_tables(const ExecutionInstallDescriptor &projection,
@@ -1030,18 +1026,18 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
   C10_CUDA_CHECK(cudaStreamSynchronize(lane.stream.get()));
 }
 
-void ExecutionRuntime::materialize(const ExecutionInstallDescriptor &projection, xpool::fabric::ArenaView arena,
-                                   const xpool::fabric::ArenaLayout &layout,
-                                   const xpool::fabric::ArenaProjection &fabric_projection, std::size_t ffnagent_index,
-                                   std::uint32_t *activation_count) {
+void ExecutionRuntime::install(const ExecutionInstallDescriptor &projection, xpool::fabric::ArenaView arena,
+                               const xpool::fabric::ArenaLayout &layout,
+                               const xpool::fabric::ArenaProjection &fabric_projection, std::size_t ffnagent_index,
+                               std::uint32_t *activation_count) {
   TORCH_CHECK(!attempted_, "xpool FfnAgent execution installation cannot be retried");
   attempted_ = true;
   const auto signature_count = projection.signatures.size();
   TORCH_CHECK(signature_count <= std::numeric_limits<std::uint32_t>::max(),
               "xpool execution Signature count exceeds CUDA SWITCH capacity");
 
-  auto device = -1;
-  C10_CUDA_CHECK(cudaGetDevice(&device));
+  const auto device = xpool::utils::cuda::current_device();
+  finalization_pending_ = true;
   try {
     xpool::hooks::FfnExecutionInstallPreEvent::hooks(
         {.fabric_projection = fabric_projection, .ffnagent_index = ffnagent_index});
@@ -1055,23 +1051,16 @@ void ExecutionRuntime::materialize(const ExecutionInstallDescriptor &projection,
     }
     installed_ = true;
   } catch (...) {
-    destroy_noexcept();
-    xpool::hooks::FfnExecutionFinalizePostEvent::hooks({});
+    // Cleanup failure supersedes the operation error: borrowed owners remain live.
+    finalize();
     throw;
   }
-}
-
-void ExecutionRuntime::install(const ExecutionInstallDescriptor &projection, xpool::fabric::ArenaView arena,
-                               const xpool::fabric::ArenaLayout &layout,
-                               const xpool::fabric::ArenaProjection &fabric_projection, std::size_t ffnagent_index,
-                               std::uint32_t *activation_count) {
-  materialize(projection, arena, layout, fabric_projection, ffnagent_index, activation_count);
 }
 
 void ExecutionRuntime::activate() {
   TORCH_CHECK(installed_ && !active_, "xpool FfnAgent execution is not ready for activation");
   for (const auto &lane : lanes_) {
-    C10_CUDA_CHECK(cudaGraphLaunch(lane.executable, lane.stream.get()));
+    xpool::utils::cuda::graph::launch(lane.executable, lane.stream.get());
   }
   active_ = true;
 }
@@ -1080,40 +1069,33 @@ void ExecutionRuntime::check_health() const {
   TORCH_CHECK(installed_ && active_, "xpool FfnAgent execution has not been activated");
   for (auto lane_index = std::size_t{0}; lane_index < lanes_.size(); ++lane_index) {
     const auto &lane = lanes_[lane_index];
-    const auto status = cudaStreamQuery(lane.stream.get());
-    if (status == cudaErrorNotReady) {
-      static_cast<void>(cudaGetLastError());
-      continue;
+    try {
+      TORCH_CHECK(!lane.stream.query(), "xpool FfnAgent Lane Graph completed unexpectedly");
+    } catch (c10::Error &error) {
+      TORCH_RETHROW(error, "xpool FfnAgent Lane Graph ", lane_index);
     }
-    TORCH_CHECK(status == cudaSuccess, "xpool FfnAgent Lane Graph ", lane_index,
-                " failed: ", cudaGetErrorString(status));
-    TORCH_CHECK(false, "xpool FfnAgent Lane Graph completed unexpectedly");
   }
 }
 
 bool ExecutionRuntime::drain_pending() const {
   TORCH_CHECK(installed_, "xpool FfnAgent execution drain requires installation");
-  if (!active_) {
-    return false;
-  }
   auto pending = false;
   for (const auto &lane : lanes_) {
-    const auto status = cudaStreamQuery(lane.stream.get());
-    if (status == cudaErrorNotReady) {
-      static_cast<void>(cudaGetLastError());
-      pending = true;
-      continue;
-    }
-    C10_CUDA_CHECK(status);
+    const auto completed = lane.stream.query();
+    pending |= !completed;
   }
   return pending;
 }
 
 void ExecutionRuntime::finalize() {
-  TORCH_CHECK(installed_, "xpool FfnAgent execution finalize requires installation");
+  if (!finalization_pending_) {
+    return;
+  }
   if (active_) {
     TORCH_CHECK(!drain_pending(), "xpool FfnAgent execution finalize requires completed drain");
   }
+  active_ = false;
+  installed_ = false;
   for (auto &lane : lanes_) {
     lane.destroy();
   }
@@ -1128,8 +1110,7 @@ void ExecutionRuntime::finalize() {
   }
   layer_entry_count_ = 0;
   xpool::hooks::FfnExecutionFinalizePostEvent::hooks({});
-  active_ = false;
-  installed_ = false;
+  finalization_pending_ = false;
 }
 
 std::size_t execution_state_allocation_bytes(std::size_t local_layer_count, std::size_t local_capacity_count,
@@ -1140,27 +1121,6 @@ std::size_t execution_state_allocation_bytes(std::size_t local_layer_count, std:
       xpool::utils::checked::prod(executor_lane_count, local_signature_count, sizeof(DiscoveredBindingSchema));
   const auto lane_state_bytes = xpool::utils::checked::prod(executor_lane_count, sizeof(LaneRuntimeState));
   return xpool::utils::checked::sum(layer_bytes, capacity_bytes, schema_bytes, lane_state_bytes);
-}
-
-void ExecutionRuntime::destroy_noexcept() noexcept {
-  for (auto &lane : lanes_) {
-    try {
-      lane.destroy();
-    } catch (...) {
-    }
-  }
-  lanes_.clear();
-  if (layer_entries_ != nullptr) {
-    C10_CUDA_IGNORE_ERROR(cudaFree(layer_entries_));
-    layer_entries_ = nullptr;
-  }
-  if (capacity_entries_ != nullptr) {
-    C10_CUDA_IGNORE_ERROR(cudaFree(capacity_entries_));
-    capacity_entries_ = nullptr;
-  }
-  layer_entry_count_ = 0;
-  active_ = false;
-  installed_ = false;
 }
 
 } // namespace xpool::ffnagent

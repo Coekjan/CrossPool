@@ -77,6 +77,17 @@ foreach(XPOOL_CEXT_TEST_SOURCE IN LISTS XPOOL_CEXT_TEST_SOURCES)
       GTest::gtest_main
   )
   target_include_directories("${XPOOL_CEXT_TEST_TARGET}" PRIVATE "${XPOOL_CEXT_TEST_DIR}")
+  if(XPOOL_CEXT_TEST_STEM STREQUAL "fabric/execution_retirement_test")
+    target_link_options("${XPOOL_CEXT_TEST_TARGET}" PRIVATE
+      "LINKER:--wrap=cudaMalloc"
+      "LINKER:--wrap=cudaFree"
+      "LINKER:--wrap=cudaGraphInstantiateWithParams"
+      "LINKER:--wrap=cudaGraphExecDestroy"
+      "LINKER:--wrap=cudaStreamSynchronize"
+      "LINKER:--wrap=cudaGraphLaunch"
+      "LINKER:--wrap=cudaStreamQuery"
+    )
+  endif()
   target_compile_features("${XPOOL_CEXT_TEST_TARGET}" PRIVATE cxx_std_20)
   set_target_properties("${XPOOL_CEXT_TEST_TARGET}" PROPERTIES
     CUDA_STANDARD 20

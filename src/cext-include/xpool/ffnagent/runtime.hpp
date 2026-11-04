@@ -77,7 +77,6 @@ private:
     std::size_t workspace_bytes = 0;
 
     LaneOwner() = default;
-    ~LaneOwner();
     LaneOwner(const LaneOwner &) = delete;
     LaneOwner &operator=(const LaneOwner &) = delete;
     LaneOwner(LaneOwner &&other) noexcept;
@@ -94,15 +93,10 @@ private:
                         const xpool::fabric::ArenaProjection &fabric_projection, std::size_t ffnagent_index,
                         std::size_t executor_lane_index, int device, std::uint32_t *activation_count);
 
-  void materialize(const ExecutionInstallDescriptor &projection, xpool::fabric::ArenaView arena,
-                   const xpool::fabric::ArenaLayout &layout, const xpool::fabric::ArenaProjection &fabric_projection,
-                   std::size_t ffnagent_index, std::uint32_t *activation_count);
-
-  void destroy_noexcept() noexcept;
-
   bool installed_ = false;
   bool active_ = false;
   bool attempted_ = false;
+  bool finalization_pending_ = false;
   void *layer_entries_ = nullptr;
   void *capacity_entries_ = nullptr;
   std::size_t layer_entry_count_ = 0;

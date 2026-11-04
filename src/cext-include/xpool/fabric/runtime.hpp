@@ -77,6 +77,7 @@ private:
     Joined,
     Draining,
     Drained,
+    Finalizing,
     Closed,
   };
 
@@ -85,8 +86,9 @@ private:
 
   mutable std::mutex mutex_;
   // Joined, Draining, and Drained own one device, Projection, PE identity,
-  // Fabric arena, module registration, and join-time drain stream. Closed owns
-  // none of those resources.
+  // Fabric arena, module registration, and join-time drain stream. Finalizing
+  // retains unconfirmed resources and forbids repeating collective teardown.
+  // Successful finalization releases them; a failed join can close the lifecycle with residual owners.
   Phase phase_ = Phase::Empty;
   std::optional<c10::DeviceIndex> device_;
   std::optional<ArenaProjection> projection_;
