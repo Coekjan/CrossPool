@@ -118,7 +118,7 @@ class SglangTritonExperts:
     @staticmethod
     def workspace_layout(
         signature: execution.MoeFfnExecutionSignature,
-    ) -> tuple[tuple[tuple[torch.dtype, tuple[int, ...]], ...], tuple[int, ...], int]:
+    ) -> execution.ExpertWorkspaceLayout:
         """Cover every admitted configuration with the existing overlapping layout."""
 
         return max(
@@ -126,23 +126,23 @@ class SglangTritonExperts:
                 execution.moe_workspace_layout(signature, block_size_m=value)
                 for value in execution.QUALIFIED_MOE_BLOCK_SIZE_M_VALUES
             ),
-            key=lambda layout: layout[2],
+            key=lambda layout: layout.nbytes,
         )
 
     def __init__(self, signature: execution.MoeFfnExecutionSignature, workspace: torch.Tensor) -> None:
         weights.validate_tensor(workspace, name="floating Expert workspace", dtype=torch.uint8, dimensions=1)
-        if workspace.numel() < self.workspace_layout(signature)[2]:
+        if workspace.numel() < self.workspace_layout(signature).nbytes:
             raise ValueError("floating Expert workspace is smaller than its declared extent")
         self.signature = signature
         self.workspace = workspace
         self.w13_config, self.w2_config = select_moe_kernel_configs(signature=signature)
-        regions, offsets, _ = execution.moe_workspace_layout(
+        layout = execution.moe_workspace_layout(
             signature,
             block_size_m=self.w13_config["BLOCK_SIZE_M"],
         )
         views = tuple(
             workspace[offset : offset + math.prod(shape) * dtype.itemsize].view(dtype).view(shape)
-            for offset, (dtype, shape) in zip(offsets, regions, strict=True)
+            for offset, (dtype, shape) in zip(layout.offsets, layout.regions, strict=True)
         )
         self.sorted_token_ids, self.expert_ids, self.num_tokens_post_padded, self.cumsum_buffer = views[:4]
         self.activated = views[4]

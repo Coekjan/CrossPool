@@ -255,7 +255,7 @@ class DeviceMemoryEstimator:
                     tp_size=len(layer_plan.ffnagent_indices),
                     tp_rank=tp_rank,
                 )
-                local_signatures = preparation.required_execution_signatures(layer_layout=layout, profile=profile)
+                local_signatures = layout.execution_signatures(profile=profile)
                 signatures.update(local_signatures)
                 local_layer_count += 1
                 local_layer_capacity_count += len(local_signatures)

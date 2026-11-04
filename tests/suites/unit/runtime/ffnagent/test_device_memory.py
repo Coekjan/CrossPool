@@ -88,7 +88,7 @@ def test_fp32_router_keeps_fp32_weights_and_input_workspace() -> None:
         tp_rank=0,
     )
     assert layout.weight_allocation_bytes()[-2:] == (4 * 64 * spec.hidden_size, 4 * 64)
-    signatures = preparation.required_execution_signatures(layer_layout=layout, profile=profile)
+    signatures = layout.execution_signatures(profile=profile)
     for signature in signatures:
         assert isinstance(signature, execution.MoeFfnExecutionSignature)
         assert signature.router is not None
@@ -107,9 +107,7 @@ def test_exact_dense_allocation_ledger_and_feature_rows() -> None:
         tp_rank=0,
     )
     assert layout.weight_allocation_bytes() == (64, 32)
-    signature = preparation.required_execution_signatures(layer_layout=layout, profile=estimator.instance_profiles[0])[
-        0
-    ]
+    signature = layout.execution_signatures(profile=estimator.instance_profiles[0])[0]
     assert execution.control_capture_probe_storage_bytes(signature) == (64, 32)
     assert preparation.graph_capture_capacity_storage_bytes(signature) == (8, 8, 24)
     assert estimator.fabric_arena_bytes() == 3328
@@ -228,16 +226,9 @@ def test_moe_capture_budget_includes_transient_initialization_reservations() -> 
     model = experiment.models[0]
     spec = model.spec
     profile = model.instance_plan().ffn_profile
-    signature = preparation.required_execution_signatures(
-        layer_layout=preparation.prepare_ffn_layer(
-            spec,
-            layer_ordinal=0,
-            payload_dtype=profile.payload_dtype,
-            tp_size=2,
-            tp_rank=0,
-        ),
-        profile=profile,
-    )[0]
+    signature = preparation.prepare_ffn_layer(
+        spec, layer_ordinal=0, payload_dtype=profile.payload_dtype, tp_size=2, tp_rank=0
+    ).execution_signatures(profile=profile)[0]
     retained = preparation.graph_capture_capacity_storage_bytes(signature)
     temporary = execution.graph_capture_initialization_storage_bytes(signature)
 

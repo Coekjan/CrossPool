@@ -23,7 +23,6 @@ class DenseFfnLayerLayout:
     hidden_size: int
     payload_dtype: torch.dtype
     activation: ffn.ActivationSpec
-    tp_size: int
     tp_rank: int
     source_start: int
     source_length: int
@@ -36,6 +35,25 @@ class DenseFfnLayerLayout:
 
         return self.gate_up.allocation_bytes() + self.down.allocation_bytes()
 
+    def execution_signatures(self, *, profile: InstanceFfnProfile) -> tuple[execution.DenseFfnExecutionSignature, ...]:
+        """Specialize this prepared layout over the Instance Capacity domain."""
+
+        capacities = execution.derive_payload_row_capacities(
+            max(profile.decode_payload_row_capacity, profile.prefill_payload_row_capacity)
+        )
+        return tuple(
+            execution.DenseFfnExecutionSignature(
+                payload_dtype=self.payload_dtype,
+                payload_row_capacity=capacity,
+                hidden_size=self.hidden_size,
+                local_intermediate_size=self.local_intermediate_size,
+                activation=self.activation,
+                gate_up=self.gate_up,
+                down=self.down,
+            )
+            for capacity in capacities
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class MoeFfnLayerLayout:
@@ -45,7 +63,6 @@ class MoeFfnLayerLayout:
     hidden_size: int
     payload_dtype: torch.dtype
     activation: ffn.ActivationSpec
-    tp_size: int
     tp_rank: int
     source_start: int
     source_length: int
@@ -64,6 +81,49 @@ class MoeFfnLayerLayout:
         if self.router_correction_bias is not None:
             result += (math.prod(self.router_correction_bias.shape) * self.router_correction_bias.dtype.itemsize,)
         return result
+
+    def execution_signatures(self, *, profile: InstanceFfnProfile) -> tuple[execution.MoeFfnExecutionSignature, ...]:
+        """Specialize this prepared layout over the Instance Capacity domain."""
+
+        capacities = execution.derive_payload_row_capacities(
+            max(profile.decode_payload_row_capacity, profile.prefill_payload_row_capacity)
+        )
+        layer = self.layer
+        return tuple(
+            execution.MoeFfnExecutionSignature(
+                payload_dtype=self.payload_dtype,
+                payload_row_capacity=capacity,
+                hidden_size=self.hidden_size,
+                local_intermediate_size=self.local_intermediate_size,
+                expert_count=layer.routed_expert_count + layer.shared_expert_count,
+                effective_topk=layer.routed_topk + layer.shared_expert_count,
+                activation=self.activation,
+                routed_scaling_factor=layer.routed_scaling_factor,
+                router=execution.MoeRouterExecutionSignature(
+                    algorithm=layer.router_algorithm,
+                    projection_precision=layer.router_projection_precision,
+                    weight_rounding=layer.topk_weight_rounding,
+                    projection=self.router,
+                    routed_expert_count=layer.routed_expert_count,
+                    router_workspace_bytes=execution.router_workspace_bytes(
+                        layer.router_projection_precision,
+                        payload_dtype=self.payload_dtype,
+                        payload_row_capacity=capacity,
+                        hidden_size=self.hidden_size,
+                        routed_expert_count=layer.routed_expert_count,
+                        routed_topk=layer.routed_topk,
+                    ),
+                    correction_bias=self.router_correction_bias,
+                    renormalize=layer.renormalize,
+                )
+                if self.router is not None
+                else None,
+                operation=self.operation,
+                gate_up=self.experts.gate_up,
+                down=self.experts.down,
+            )
+            for capacity in capacities
+        )
 
 
 type FfnLayerLayout = DenseFfnLayerLayout | MoeFfnLayerLayout
@@ -89,14 +149,12 @@ class MoeWorkspaceLayout:
     @classmethod
     def from_signature(cls, signature: execution.MoeFfnExecutionSignature) -> MoeWorkspaceLayout:
         operation_type = moe.expert_operation_type(signature.operation)
-        expert_bytes = operation_type.workspace_layout(signature)[2]
+        expert_bytes = operation_type.workspace_layout(signature).nbytes
         experts = slice(0, expert_bytes)
         router = signature.router
         if router is None:
             return cls(experts=experts, router=None, nbytes=expert_bytes)
         routed_topk = signature.effective_topk - (signature.expert_count - router.routed_expert_count)
-        if routed_topk <= 0:
-            raise ValueError("Router-owner Execution Signature has invalid routed TopK")
         route_count = signature.payload_row_capacity * routed_topk
         cursor = align_up(expert_bytes, execution.OPERATOR_ALIGNMENT_BYTES)
         projection = slice(cursor, cursor + router.router_workspace_bytes)
@@ -160,7 +218,6 @@ def prepare_ffn_layer(
             hidden_size=hidden_size,
             payload_dtype=payload_dtype,
             activation=model_spec.activation,
-            tp_size=tp_size,
             tp_rank=tp_rank,
             source_start=tp_rank * local_width,
             source_length=local_width,
@@ -232,7 +289,6 @@ def prepare_ffn_layer(
         hidden_size=hidden_size,
         payload_dtype=payload_dtype,
         activation=model_spec.activation,
-        tp_size=tp_size,
         tp_rank=tp_rank,
         source_start=start,
         source_length=length,
@@ -257,67 +313,6 @@ def prepare_ffn_layer(
         if tp_rank == 0 and layer.router_correction_bias_key is not None
         else None,
         operation=operation,
-    )
-
-
-def required_execution_signatures(
-    *,
-    layer_layout: FfnLayerLayout,
-    profile: InstanceFfnProfile,
-) -> tuple[execution.ExecutionSignature, ...]:
-    """Specialize prepared resources for the existing complete Capacity domain."""
-
-    capacities = execution.derive_payload_row_capacities(
-        max(profile.decode_payload_row_capacity, profile.prefill_payload_row_capacity)
-    )
-    if isinstance(layer_layout, DenseFfnLayerLayout):
-        return tuple(
-            execution.DenseFfnExecutionSignature(
-                payload_dtype=layer_layout.payload_dtype,
-                payload_row_capacity=capacity,
-                hidden_size=layer_layout.hidden_size,
-                local_intermediate_size=layer_layout.local_intermediate_size,
-                activation=layer_layout.activation,
-                gate_up=layer_layout.gate_up,
-                down=layer_layout.down,
-            )
-            for capacity in capacities
-        )
-    layer = layer_layout.layer
-    return tuple(
-        execution.MoeFfnExecutionSignature(
-            payload_dtype=layer_layout.payload_dtype,
-            payload_row_capacity=capacity,
-            hidden_size=layer_layout.hidden_size,
-            local_intermediate_size=layer_layout.local_intermediate_size,
-            expert_count=layer.routed_expert_count + layer.shared_expert_count,
-            effective_topk=layer.routed_topk + layer.shared_expert_count,
-            activation=layer_layout.activation,
-            routed_scaling_factor=layer.routed_scaling_factor,
-            router=execution.MoeRouterExecutionSignature(
-                algorithm=layer.router_algorithm,
-                projection_precision=layer.router_projection_precision,
-                weight_rounding=layer.topk_weight_rounding,
-                projection=layer_layout.router,
-                routed_expert_count=layer.routed_expert_count,
-                router_workspace_bytes=execution.router_workspace_bytes(
-                    layer.router_projection_precision,
-                    payload_dtype=layer_layout.payload_dtype,
-                    payload_row_capacity=capacity,
-                    hidden_size=layer_layout.hidden_size,
-                    routed_expert_count=layer.routed_expert_count,
-                    routed_topk=layer.routed_topk,
-                ),
-                correction_bias=layer_layout.router_correction_bias,
-                renormalize=layer.renormalize,
-            )
-            if layer_layout.router is not None
-            else None,
-            operation=layer_layout.operation,
-            gate_up=layer_layout.experts.gate_up,
-            down=layer_layout.experts.down,
-        )
-        for capacity in capacities
     )
 
 

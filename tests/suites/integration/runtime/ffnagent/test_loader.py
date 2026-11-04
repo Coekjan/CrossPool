@@ -622,9 +622,11 @@ def test_stacked_packed_loading_preserves_source_slices_padding_and_single_bias_
             assert loaded.router.projection.bias is not None
             torch.testing.assert_close(loaded.router.projection.values.cpu(), tensors["router"], rtol=0, atol=0)
             torch.testing.assert_close(loaded.router.projection.bias.cpu(), tensors["router.bias"], rtol=0, atol=0)
-        signature = preparation.required_execution_signatures(layer_layout=layout, profile=profile)[-1]
+        signature = layout.execution_signatures(profile=profile)[-1]
         assert isinstance(signature, execution.MoeFfnExecutionSignature)
-        workspace = torch.empty(TritonKernelsExperts.workspace_layout(signature)[2], device=device, dtype=torch.uint8)
+        workspace = torch.empty(
+            TritonKernelsExperts.workspace_layout(signature).nbytes, device=device, dtype=torch.uint8
+        )
         operation = TritonKernelsExperts(signature, workspace)
         partial = torch.empty_like(hidden_states)
         operation.run(

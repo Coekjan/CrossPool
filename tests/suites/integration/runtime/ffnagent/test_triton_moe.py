@@ -103,12 +103,12 @@ def test_packed_experts_keep_dynamic_routes_and_capacity_tails_without_capture_a
         gate_up=layout.gate_up,
         down=layout.down,
     )
-    region_specs, offsets, extent = TritonKernelsExperts.workspace_layout(signature)
+    workspace_layout = TritonKernelsExperts.workspace_layout(signature)
     assert all(
-        offset + torch.Size(shape).numel() * dtype.itemsize <= extent
-        for offset, (dtype, shape) in zip(offsets, region_specs, strict=True)
+        offset + torch.Size(shape).numel() * dtype.itemsize <= workspace_layout.nbytes
+        for offset, (dtype, shape) in zip(workspace_layout.offsets, workspace_layout.regions, strict=True)
     )
-    workspace = torch.empty(extent, dtype=torch.uint8, device=device)
+    workspace = torch.empty(workspace_layout.nbytes, dtype=torch.uint8, device=device)
     operation = TritonKernelsExperts(signature, workspace)
     hidden = torch.randn((capacity, hidden_size), device=device, dtype=torch.bfloat16)
     rows = torch.arange(capacity, device=device)[:, None]

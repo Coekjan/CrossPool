@@ -365,10 +365,7 @@ class FfnExecutionRegistry:
                     device=torch.cuda.current_device(),
                 )
                 layer_signature_indices = []
-                for signature in preparation.required_execution_signatures(
-                    layer_layout=layer_layout,
-                    profile=profile,
-                ):
+                for signature in layer_layout.execution_signatures(profile=profile):
                     signature_index = signature_indices.get(signature)
                     if signature_index is None:
                         signature_index = len(signatures)

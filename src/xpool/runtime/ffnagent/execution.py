@@ -59,6 +59,34 @@ def moe_alignment_workspace_shapes(
 
 
 @dataclass(frozen=True, slots=True)
+class CapturePlaceholderLayout:
+    """Default-domain capture Tensor geometry, owning no allocated storage."""
+
+    hidden_states: TensorLayout
+    partial: TensorLayout
+    payload_rows: TensorLayout | None
+    routing: TensorLayout | None
+
+    def allocation_bytes(self) -> tuple[int, ...]:
+        """Return independent requests in capture allocation order."""
+
+        return tuple(
+            math.prod(layout.shape) * layout.dtype.itemsize
+            for layout in (self.hidden_states, self.partial, self.payload_rows, self.routing)
+            if layout is not None
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ExpertWorkspaceLayout:
+    """Expert scratch regions, aligned byte offsets and the root byte extent."""
+
+    regions: tuple[tuple[torch.dtype, tuple[int, ...]], ...]
+    offsets: tuple[int, ...]
+    nbytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class DenseFfnExecutionSignature:
     """Complete reusable gated-Dense Graph identity."""
 
@@ -77,6 +105,18 @@ class DenseFfnExecutionSignature:
             raise ValueError("Dense FFN execution requires BF16 or FP16 payloads")
         if min(self.payload_row_capacity, self.hidden_size, self.local_intermediate_size) <= 0:
             raise ValueError("Dense FFN execution dimensions must be positive")
+
+    @property
+    def payload_shape(self) -> tuple[int, int]:
+        """Return the shared hidden-state and partial-output geometry."""
+
+        return self.payload_row_capacity, self.hidden_size
+
+    def capture_placeholder_layout(self) -> CapturePlaceholderLayout:
+        """Describe input and partial-output storages shared by Primary/Control."""
+
+        payload = TensorLayout(self.payload_shape, self.payload_dtype, 0)
+        return CapturePlaceholderLayout(hidden_states=payload, partial=payload, payload_rows=None, routing=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,10 +180,41 @@ class MoeFfnExecutionSignature:
             raise ValueError("MoE FFN execution dimensions must be positive")
         if self.effective_topk > self.expert_count:
             raise ValueError("MoE effective TopK exceeds Expert count")
+        if self.router is not None and self.effective_topk <= self.expert_count - self.router.routed_expert_count:
+            raise ValueError("Router-owner Execution Signature has invalid routed TopK")
         if not isinstance(self.operation, ExpertOperationKind):
             raise ValueError("MoE execution requires a concrete Expert operation")
         if not math.isfinite(self.routed_scaling_factor) or self.routed_scaling_factor <= 0:
             raise ValueError("MoE routed scaling factor must be finite and positive")
+
+    @property
+    def payload_shape(self) -> tuple[int, int]:
+        """Return the shared hidden-state and partial-output geometry."""
+
+        return self.payload_row_capacity, self.hidden_size
+
+    @property
+    def routing_shape(self) -> tuple[int, int]:
+        """Return route IDs/weights geometry for this TP role."""
+
+        return self.payload_row_capacity, self.effective_topk
+
+    @property
+    def routing_storage_bytes(self) -> int:
+        """Return the packed int32 ID and float32 weight storage size."""
+
+        return math.prod(self.routing_shape) * (torch.int32.itemsize + torch.float32.itemsize)
+
+    def capture_placeholder_layout(self) -> CapturePlaceholderLayout:
+        """Describe payload, optional live rows and packed ID/weight storages."""
+
+        payload = TensorLayout(self.payload_shape, self.payload_dtype, 0)
+        return CapturePlaceholderLayout(
+            hidden_states=payload,
+            partial=payload,
+            payload_rows=TensorLayout((1,), torch.int64, 0) if self.router is not None else None,
+            routing=TensorLayout((self.routing_storage_bytes,), torch.uint8, 0),
+        )
 
 
 type ExecutionSignature = DenseFfnExecutionSignature | MoeFfnExecutionSignature
@@ -207,7 +278,7 @@ def moe_workspace_layout(
     signature: MoeFfnExecutionSignature,
     *,
     block_size_m: int,
-) -> tuple[tuple[tuple[torch.dtype, tuple[int, ...]], ...], tuple[int, ...], int]:
+) -> ExpertWorkspaceLayout:
     """Return selected MoE workspace regions, byte offsets, and final extent."""
 
     maximum_padded, expert_block_count, cumsum_count = moe_alignment_workspace_shapes(
@@ -239,7 +310,7 @@ def moe_workspace_layout(
         cursor = align_up(cursor, OPERATOR_ALIGNMENT_BYTES)
         offsets.append(cursor)
         cursor += math.prod(shape) * dtype.itemsize
-    return tuple(region_specs), tuple(offsets), cursor
+    return ExpertWorkspaceLayout(regions=tuple(region_specs), offsets=tuple(offsets), nbytes=cursor)
 
 
 def control_capture_probe_storage_bytes(signature: ExecutionSignature) -> tuple[int, ...]:

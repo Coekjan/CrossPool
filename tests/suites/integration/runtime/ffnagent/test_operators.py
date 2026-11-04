@@ -217,7 +217,7 @@ def test_floating_experts_match_reference_with_overlapped_workspace_and_graph(
         ),
     )
     workspace = torch.empty(
-        sglang_moe.SglangTritonExperts.workspace_layout(signature)[2], device="cuda", dtype=torch.uint8
+        sglang_moe.SglangTritonExperts.workspace_layout(signature).nbytes, device="cuda", dtype=torch.uint8
     )
     operation = sglang_moe.SglangTritonExperts(signature, workspace)
     gate_up = weights.ProjectionWeights(

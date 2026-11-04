@@ -88,7 +88,6 @@ def test_capture_source_shares_only_capacity_independent_weights() -> None:
         changed = replace(small, activation=activation)
         assert execution.capture_weight_pair_key(changed) != execution.capture_weight_pair_key(small)
     assert execution.control_capture_probe_storage_bytes(small) == (512, 256)
-    assert preparation.graph_capture_capacity_storage_bytes(small) == (128, 128, 192)
 
 
 def test_moe_workspace_formulas_preserve_cache_overlap() -> None:
@@ -112,10 +111,9 @@ def test_moe_workspace_formulas_preserve_cache_overlap() -> None:
         gate_up=weights.ProjectionLayout(values=TensorLayout((4, 16, 16), torch.bfloat16, 0), scales=None, bias=None),
         down=weights.ProjectionLayout(values=TensorLayout((4, 16, 8), torch.bfloat16, 0), scales=None, bias=None),
     )
-    _, _, selected_extent = execution.moe_workspace_layout(signature, block_size_m=16)
-    assert selected_extent == 800
+    selected_layout = execution.moe_workspace_layout(signature, block_size_m=16)
+    assert selected_layout.nbytes == 800
     assert preparation.compute_workspace_bytes(signature) == 3040
-    assert preparation.graph_capture_capacity_storage_bytes(signature) == (128, 128, 64, 3040)
 
     router_owner = execution.MoeFfnExecutionSignature(
         payload_dtype=torch.bfloat16,
@@ -141,13 +139,13 @@ def test_moe_workspace_formulas_preserve_cache_overlap() -> None:
         down=weights.ProjectionLayout(values=TensorLayout((4, 16, 8), torch.bfloat16, 0), scales=None, bias=None),
     )
     assert execution.control_capture_probe_storage_bytes(router_owner) == (2048, 1024, 256, 16)
-    assert preparation.graph_capture_capacity_storage_bytes(router_owner) == (
-        128,
-        128,
-        64,
-        preparation.compute_workspace_bytes(router_owner),
-        8,
-    )
+    with pytest.raises(ValueError, match="routed TopK"):
+        replace(
+            router_owner,
+            expert_count=6,
+            gate_up=replace(router_owner.gate_up, values=TensorLayout((6, 16, 16), torch.bfloat16, 0)),
+            down=replace(router_owner.down, values=TensorLayout((6, 16, 8), torch.bfloat16, 0)),
+        )
     with pytest.raises(ValueError, match="positive"):
         execution.moe_alignment_workspace_shapes(
             row_capacity=0,

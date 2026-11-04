@@ -164,8 +164,10 @@ def test_packed_workspace_rejects_schedule_index_overflow_without_allocating() -
             bias=None,
         ),
     )
-    regions, offsets, extent = TritonKernelsExperts.workspace_layout(signature)
-    assert offsets[-1] + torch.Size(regions[-1][1]).numel() * regions[-1][0].itemsize == extent
+    layout = TritonKernelsExperts.workspace_layout(signature)
+    assert (
+        layout.offsets[-1] + torch.Size(layout.regions[-1][1]).numel() * layout.regions[-1][0].itemsize == layout.nbytes
+    )
     with pytest.raises(ValueError, match="16-bit"):
         TritonKernelsExperts.workspace_layout(replace(signature, payload_row_capacity=(1 << 20) + 1))
 
@@ -211,7 +213,7 @@ def test_estimator_counts_encoded_padded_storages_and_router_owner(packed_model:
         assert point.exact_resource_ledger_bytes == sum(expected)
         assert point.features.tensor_storage_allocation_count == len(expected)
         assert point.allocator_allowance_bytes == device_memory.allocator_reservation_bytes(expected) - sum(expected)
-    signatures = preparation.required_execution_signatures(layer_layout=layout, profile=profile)
+    signatures = layout.execution_signatures(profile=profile)
     assert tuple(signature.payload_row_capacity for signature in signatures) == (1, 2, 4, 8, 16, 32, 64, 65)
     for signature in signatures:
         assert isinstance(signature, execution.MoeFfnExecutionSignature)
@@ -221,7 +223,7 @@ def test_estimator_counts_encoded_padded_storages_and_router_owner(packed_model:
         assert signature.router.weight_rounding is ffn.TopKWeightRounding.LOGITS_DTYPE
         assert execution.control_capture_probe_storage_bytes(signature) == (*expert_requests, 2 * 32 * 2880, 2 * 32)
         workspace = preparation.MoeWorkspaceLayout.from_signature(signature)
-        private_bytes = TritonKernelsExperts.workspace_layout(signature)[2]
+        private_bytes = TritonKernelsExperts.workspace_layout(signature).nbytes
         assert workspace.experts == slice(0, private_bytes)
         assert workspace.router is not None
         assert workspace.router.projection == slice(

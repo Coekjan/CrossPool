@@ -79,7 +79,7 @@ class TritonKernelsExperts:
     @staticmethod
     def workspace_layout(
         signature: execution.MoeFfnExecutionSignature,
-    ) -> tuple[tuple[tuple[torch.dtype, tuple[int, ...]], ...], tuple[int, ...], int]:
+    ) -> execution.ExpertWorkspaceLayout:
         """Account complete padded Expert metadata and intermediates."""
 
         capacity, experts, topk = signature.payload_row_capacity, signature.expert_count, signature.effective_topk
@@ -110,16 +110,16 @@ class TritonKernelsExperts:
             cursor = align_up(cursor, execution.OPERATOR_ALIGNMENT_BYTES)
             offsets.append(cursor)
             cursor += math.prod(shape) * storage_dtype.itemsize
-        return tuple(regions), tuple(offsets), cursor
+        return execution.ExpertWorkspaceLayout(regions=tuple(regions), offsets=tuple(offsets), nbytes=cursor)
 
     def __init__(self, signature: execution.MoeFfnExecutionSignature, workspace: torch.Tensor) -> None:
-        regions, offsets, total = self.workspace_layout(signature)
+        layout = self.workspace_layout(signature)
         weights.validate_tensor(workspace, name="packed Expert workspace", dtype=torch.uint8, dimensions=1)
-        if workspace.numel() < total:
+        if workspace.numel() < layout.nbytes:
             raise ValueError("packed Expert workspace is smaller than its declared extent")
         views = tuple(
             workspace[offset : offset + math.prod(shape) * dtype.itemsize].view(dtype).view(shape)
-            for offset, (dtype, shape) in zip(offsets, regions, strict=True)
+            for offset, (dtype, shape) in zip(layout.offsets, layout.regions, strict=True)
         )
         self.signature = signature
         self.workspace = workspace

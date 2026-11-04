@@ -238,10 +238,7 @@ class PlacementSolver:
                                 sum(storage_bytes),
                                 len(storage_bytes),
                                 allocator_reservation_bytes(storage_bytes) - sum(storage_bytes),
-                                preparation.required_execution_signatures(
-                                    layer_layout=layout,
-                                    profile=instance_plan.ffn_profile,
-                                ),
+                                layout.execution_signatures(profile=instance_plan.ffn_profile),
                             )
                         )
                     rank_rows = tuple(rows)

@@ -10,7 +10,7 @@ from xpool.runtime.ffnagent.operators import dense, linear, routing
 
 @pytest.fixture(autouse=True)
 def ffn_blas_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    # FfnAgent installs this policy before bootstrap; component calls have the same prerequisite.
+    # Keep these projection cases independent of BLAS workspace allocation.
     monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":0:0")
 
 
