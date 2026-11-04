@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, model_validator
 from sglang.srt.utils.hf_transformers_utils import get_context_length, get_hf_text_config, get_tokenizer
 from transformers import AutoConfig
 
@@ -78,6 +78,14 @@ class LocalModelMetadata(BaseModel):
     limits: SglangRequestLimits
     admissible_ids: tuple[Annotated[int, Field(ge=0)], ...]
     text_lengths: dict[str, Annotated[int, Field(ge=0)]]
+
+    @model_validator(mode="after")
+    def validate_admissible_ids(self) -> Self:
+        """Require sampling IDs to fit the declared model vocabulary."""
+
+        if any(token_id >= self.vocab_size for token_id in self.admissible_ids):
+            raise ValueError("admissible token IDs exceed the local model vocabulary")
+        return self
 
     @classmethod
     def from_checkpoint(cls, path: Path, *, text_prompts: Mapping[str, str]) -> Self:

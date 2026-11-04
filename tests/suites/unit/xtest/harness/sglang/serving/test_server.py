@@ -111,7 +111,10 @@ def test_server_result_rejects_invalid_graph_settings_before_inference(
     assert not server.inference_path.exists()
 
 
-def test_server_result_rejects_boolean_token_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("invalid_id", [True, -1])
+def test_server_result_rejects_invalid_token_ids(
+    invalid_id: bool | int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     responses = {
         "/server_info": FakeResponse(
             {
@@ -121,7 +124,7 @@ def test_server_result_rejects_boolean_token_ids(tmp_path: Path, monkeypatch: py
                 }
             }
         ),
-        "/generate": FakeResponse({"output_ids": [0, 1, 2, 3, 4, 5, 6, True]}),
+        "/generate": FakeResponse({"output_ids": [0, 1, 2, 3, 4, 5, 6, invalid_id]}),
     }
     monkeypatch.setattr(xtest.harness.sglang.serving.server.httpx, "Client", lambda **kwargs: FakeClient(responses))
     server = SglangProbeServer(

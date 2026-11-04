@@ -65,9 +65,9 @@ class TokenOutput:
 
     def __post_init__(self) -> None:
         if not self.output_ids or any(
-            not isinstance(token_id, int) or isinstance(token_id, bool) for token_id in self.output_ids
+            not isinstance(token_id, int) or isinstance(token_id, bool) or token_id < 0 for token_id in self.output_ids
         ):
-            raise ValueError("token output must contain non-boolean integer IDs")
+            raise ValueError("token output must contain nonnegative non-boolean integer IDs")
 
 
 @dataclass(frozen=True, slots=True)

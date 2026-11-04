@@ -67,6 +67,13 @@ def test_replay_rejects_duplicate_warmup_ids(tmp_path: Path, monkeypatch: pytest
         PreparedWorkload.model_validate_json(json.dumps(raw))
 
 
+def test_model_metadata_owns_sampling_vocabulary_bounds() -> None:
+    with pytest.raises(ValueError, match="admissible token IDs"):
+        LocalModelMetadata(
+            vocab_size=20, limits=SglangRequestLimits.from_context(128), admissible_ids=(20,), text_lengths={}
+        )
+
+
 @pytest.mark.parametrize(("random_prompts", "ratio"), [(False, 2.0), (True, 2.0), (True, 0.25)])
 def test_interval_relative_lengths_obey_joint_bounds_and_keep_isolated_model_streams(
     random_prompts: bool, ratio: float, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

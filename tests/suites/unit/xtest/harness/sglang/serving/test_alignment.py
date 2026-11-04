@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,11 @@ def test_serving_graph_artifact_round_trips_and_rejects_overwrite(tmp_path: Path
     assert ServingGraphArtifact.read(path) == expected
     with pytest.raises(FileExistsError):
         expected.write(path)
+    raw = json.loads(path.read_text())
+    raw["outputs"][0]["output_ids"][-1] = -1
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="nonnegative"):
+        ServingGraphArtifact.read(path)
 
 
 def test_serving_graph_alignment_compares_decode_tokens_and_prefill_distributions() -> None:

@@ -118,7 +118,10 @@ class SglangProbeServer:
         if (
             not isinstance(output_ids, list)
             or len(output_ids) != NEW_TOKENS
-            or not all(isinstance(token_id, int) and not isinstance(token_id, bool) for token_id in output_ids)
+            or not all(
+                isinstance(token_id, int) and not isinstance(token_id, bool) and token_id >= 0
+                for token_id in output_ids
+            )
         ):
             raise RuntimeError(f"{self.process.owner.name} returned invalid output_ids: {output_ids!r}")
         return SglangServerResult(
