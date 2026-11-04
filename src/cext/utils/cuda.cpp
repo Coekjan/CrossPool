@@ -11,6 +11,13 @@
 
 namespace xpool::utils::cuda {
 
+CaptureAllocation::CaptureAllocation(std::string key, std::uintptr_t address, std::size_t bytes)
+    : key(std::move(key)), address(address), bytes(bytes) {
+  TORCH_CHECK(!this->key.empty() && address != 0 && bytes != 0,
+              "xpool capture allocation must have a key and nonempty interval");
+  static_cast<void>(xpool::utils::checked::sum(address, static_cast<std::uintptr_t>(bytes)));
+}
+
 int current_device() {
   auto device = -1;
   C10_CUDA_CHECK(cudaGetDevice(&device));

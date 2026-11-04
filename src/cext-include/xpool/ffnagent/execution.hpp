@@ -6,12 +6,29 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
 #include <c10/core/ScalarType.h>
 
 namespace xpool::ffnagent {
+
+/// Corresponding logical storage borrowed from retained execution owners.
+struct CapturedResourceRange {
+  /// Stable source identity within this capture.
+  std::string key;
+  /// Primary base, preserved in the installed graph.
+  std::uintptr_t primary_address;
+  /// Corresponding Control base used only for validation.
+  std::uintptr_t control_address;
+  /// Positive logical extent shared by both captures.
+  std::size_t bytes;
+  /// Permit cross-Lane sharing only when the source declares immutable data.
+  bool shared_read_only = false;
+
+  bool operator==(const CapturedResourceRange &) const = default;
+};
 
 /// Encoded values, optional scales and optional additive bias of one projection.
 struct ProjectionBindingView {

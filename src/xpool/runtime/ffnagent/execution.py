@@ -8,6 +8,7 @@ from enum import IntEnum
 
 import torch
 
+import xpool.native
 from xpool import ffn
 from xpool.quantization import TensorLayout
 from xpool.runtime.ffnagent.weights import ProjectionLayout
@@ -15,6 +16,22 @@ from xpool.utils import align_up
 
 OPERATOR_ALIGNMENT_BYTES = 16
 QUALIFIED_MOE_BLOCK_SIZE_M_VALUES = (16, 32, 64, 128)
+
+
+@dataclass(frozen=True, slots=True)
+class OwnedExecutionResource:
+    """A source's strong owner and keyed range outside Lane-private capture backing.
+
+    Generic consumers retain the opaque owner without inspecting its internals.
+    The source guarantees the range and qualified read-only sharing contract.
+    """
+
+    owner: object
+    region: xpool.native.ffnagent.CapturedResourceRange
+
+    def __post_init__(self) -> None:
+        if self.owner is None or not self.region.key:
+            raise ValueError("borrowed execution resource needs an owner and resource identity")
 
 
 class ExpertOperationKind(IntEnum):

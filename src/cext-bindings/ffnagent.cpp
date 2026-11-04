@@ -32,6 +32,20 @@ namespace xpool::bindings {
 void bind_ffnagent(py::module_ &module) {
   auto ffnagent = module.def_submodule("ffnagent", "Native FfnAgent execution lifecycle functions.");
 
+  py::class_<xpool::ffnagent::CapturedResourceRange>(ffnagent, "CapturedResourceRange",
+                                                     "Logical storage borrowed from a retained pool or explicit owner.")
+      .def(py::init<std::string, std::uintptr_t, std::uintptr_t, std::size_t, bool>(), py::arg("key"),
+           py::arg("primary_address"), py::arg("control_address"), py::arg("bytes"),
+           py::arg("shared_read_only") = false)
+      .def_readonly("key", &xpool::ffnagent::CapturedResourceRange::key, "Source identity within one capture.")
+      .def_readonly("primary_address", &xpool::ffnagent::CapturedResourceRange::primary_address,
+                    "Primary address retained for service.")
+      .def_readonly("control_address", &xpool::ffnagent::CapturedResourceRange::control_address,
+                    "Control address retained through installation.")
+      .def_readonly("bytes", &xpool::ffnagent::CapturedResourceRange::bytes, "Logical extent of each source range.")
+      .def_readonly("shared_read_only", &xpool::ffnagent::CapturedResourceRange::shared_read_only,
+                    "Source-declared immutable storage permitted across Lanes.");
+
   py::class_<xpool::ffnagent::ProjectionBindingView>(ffnagent, "ProjectionBindingView",
                                                      "Non-owning projection addresses and Tensor byte extents.")
       .def(py::init([](const at::Tensor &values, const std::optional<at::Tensor> &scales,

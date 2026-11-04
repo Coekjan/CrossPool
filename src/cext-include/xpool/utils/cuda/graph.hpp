@@ -19,6 +19,12 @@
 
 namespace xpool::utils::cuda::graph {
 
+/// Locate references to declared borrowed intervals in supported graph nodes.
+/// Typed Memset/Memcpy nodes validate full access spans; Kernel arguments identify
+/// numeric references, not arbitrary pointer types, access lengths or ownership.
+/// \throws c10::Error for invalid intervals or unsupported graph nodes.
+std::vector<std::size_t> used_resource_regions(cudaGraph_t graph, const std::vector<CaptureAllocation> &allocations);
+
 /// Create a graph directly in the caller's retained output slot.
 /// \throws c10::AcceleratorError if CUDA rejects creation.
 void create(cudaGraph_t &graph);

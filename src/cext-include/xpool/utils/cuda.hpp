@@ -14,6 +14,35 @@
 
 namespace xpool::utils::cuda {
 
+/// Address-free capacity reported by one execution implementation.
+struct ResourceCapacity {
+  /// Stable source identity, independent of captured addresses.
+  std::string key;
+  /// Positive upper bound in logical bytes.
+  std::size_t max_bytes;
+  /// Required positive power-of-two alignment.
+  std::size_t alignment_bytes;
+  /// Unique source roles sharing this canonical backing, including key.
+  std::vector<std::string> aliases;
+
+  bool operator==(const ResourceCapacity &) const = default;
+};
+
+/// Borrowed source storage; its external owner outlives synchronous installation.
+struct CaptureAllocation {
+  /// Source role, normalized through the registered backing aliases.
+  std::string key;
+  /// Nonzero device base address.
+  std::uintptr_t address;
+  /// Positive logical byte extent.
+  std::size_t bytes;
+
+  /// Establish a keyed nonempty interval with checked address arithmetic.
+  /// \throws c10::Error for empty roles, null addresses or overflowing extents.
+  CaptureAllocation(std::string key, std::uintptr_t address, std::size_t bytes);
+  bool operator==(const CaptureAllocation &) const = default;
+};
+
 /// Return the current process-local CUDA device index.
 /// \throws c10::AcceleratorError if the CUDA query fails.
 [[nodiscard]] int current_device();
