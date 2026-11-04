@@ -89,12 +89,8 @@ def run_fabric_participant(connection: Connection, spec: FabricParticipantSpec) 
             tuple(local_layer_weights(layer_ordinal) for layer_ordinal in range(spec.execution_layer_count))
             for _ in spec.forward_modes
         )
-        execution_registry = FfnExecutionRegistry.materialize(
-            fabric_plan=fabric_plan,
-            model_specs=model_specs,
-            ffnagent_index=ffnagent_index,
-            layer_weights=layer_weights,
-        )
+        execution_registry = FfnExecutionRegistry(layer_weights=layer_weights, external_resources=())
+        execution_registry.materialize(fabric_plan=fabric_plan, model_specs=model_specs, ffnagent_index=ffnagent_index)
     arenas: list[str] = []
     if spec.role is RuntimeRole.FFNAGENT:
         xpool.native.ffnagent.activate()

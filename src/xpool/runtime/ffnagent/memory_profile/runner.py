@@ -420,11 +420,9 @@ def participant_child(
                 if recorder is None:
                     raise AssertionError("FFN participant lacks its sampler")
                 with record_registry_phases(recorder):
-                    execution_registry = FfnExecutionRegistry.materialize(
-                        fabric_plan=fabric_plan,
-                        model_specs=model_specs,
-                        ffnagent_index=ffnagent_index,
-                        layer_weights=layer_weights,
+                    execution_registry = FfnExecutionRegistry(layer_weights=layer_weights, external_resources=())
+                    execution_registry.materialize(
+                        fabric_plan=fabric_plan, model_specs=model_specs, ffnagent_index=ffnagent_index
                     )
                 recorder.close()
                 observations = (

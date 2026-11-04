@@ -295,20 +295,36 @@ class FfnExecutionRegistry:
         self,
         *,
         layer_weights: tuple[tuple[weights.FfnLayerWeights | None, ...], ...],
+        external_resources: tuple[execution.OwnedExecutionResource, ...],
     ) -> None:
         """Retain the Plan-selected service weight owners."""
 
         self.layer_weights = layer_weights
+        self.external_resources = external_resources
+        self.captured_signatures: list[CapturedExecutionSignature] = []
+        self.materialization_started = False
 
-    @classmethod
+    def release_capture_resources(self) -> None:
+        """Release construction graphs after synchronous installation or retirement."""
+        while self.captured_signatures:
+            capture = self.captured_signatures[-1]
+            capture.primary_graph.reset()
+            capture.control_graph.reset()
+            self.captured_signatures.pop()
+
+    def close(self) -> None:
+        """Release weights only after native execution has retired."""
+        self.release_capture_resources()
+        self.layer_weights = ()
+        self.external_resources = ()
+
     def materialize(
-        cls,
+        self,
         *,
         fabric_plan: FabricPlan,
         model_specs: tuple[ffn.FfnModelSpec, ...],
         ffnagent_index: int,
-        layer_weights: tuple[tuple[weights.FfnLayerWeights | None, ...], ...],
-    ) -> FfnExecutionRegistry:
+    ) -> None:
         """Capture, install, and retain the Plan-selected local execution.
 
         Equal execution signatures share one captured compute body. Capture
@@ -316,6 +332,10 @@ class FfnExecutionRegistry:
         returned Registry retains the service weights borrowed by Lane GraphExecs.
         """
 
+        if self.materialization_started:
+            raise RuntimeError("FFN execution preparation cannot be retried")
+        self.materialization_started = True
+        layer_weights = self.layer_weights
         ffnagent_count = sum(placement.role is FabricRole.FFNAGENT for placement in fabric_plan.pe_placements)
         if not 0 <= ffnagent_index < ffnagent_count:
             raise ValueError("FfnAgent index is outside the Fabric Plan")
@@ -385,7 +405,7 @@ class FfnExecutionRegistry:
         # One Primary/Control pair discovers weight bindings
         # for every compatible signature while retaining representative owners.
         capture_started_at = monotonic()
-        captures = []
+        captures = self.captured_signatures
         capture_weight_pairs: dict[
             execution.ExecutionSignature,
             tuple[weights.FfnLayerWeights, weights.FfnLayerWeights],
@@ -443,4 +463,4 @@ class FfnExecutionRegistry:
             fabric_plan.executor_lane_count,
             monotonic() - install_started_at,
         )
-        return cls(layer_weights=layer_weights)
+        self.release_capture_resources()

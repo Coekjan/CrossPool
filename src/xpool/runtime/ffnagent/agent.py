@@ -14,6 +14,7 @@ from xpool.fabric import FabricGenerationPhase, FabricParticipantPhase, FabricRo
 from xpool.memory import load_memory_calibration_profile
 from xpool.native import ABI_VERSION, RuntimeRole
 from xpool.runtime.agent import Agent, AgentError, AgentHeartbeat
+from xpool.runtime.ffnagent import execution
 from xpool.runtime.ffnagent.architecture import load
 from xpool.runtime.ffnagent.device_memory import DeviceMemoryEstimator, ensure_supported_cuda_allocator
 from xpool.runtime.ffnagent.loader import materialize_layer_weights
@@ -84,6 +85,7 @@ class FfnAgent(Agent):
             abi_version=ABI_VERSION,
             pid=self.proc_id.pid,
         )
+        self.external_resources: tuple[execution.OwnedExecutionResource, ...] = ()
         self.layer_weights: tuple[tuple[FfnLayerWeights | None, ...], ...] | None = None
         self.execution_registry: FfnExecutionRegistry | None = None
         self.heartbeat_worker = AgentHeartbeat(agent=self)
@@ -172,16 +174,21 @@ class FfnAgent(Agent):
     def prepare_fabric_execution(self) -> None:
         """Capture and atomically install the Plan-selected local execution."""
 
+        if self.execution_registry is not None:
+            raise AgentError("FFN execution preparation cannot be retried")
         if self.fabric_plan is None or self.layer_weights is None:
             raise AgentError("FFN execution preparation requires a retained Plan and weights")
         atnagent_count = sum(placement.role is FabricRole.ATNAGENT for placement in self.fabric_plan.pe_placements)
-        self.execution_registry = FfnExecutionRegistry.materialize(
+        self.execution_registry = FfnExecutionRegistry(
+            layer_weights=self.layer_weights, external_resources=self.external_resources
+        )
+        self.layer_weights = None
+        self.external_resources = ()
+        self.execution_registry.materialize(
             fabric_plan=self.fabric_plan,
             model_specs=self.registration.model_specs,
             ffnagent_index=self.fabric_pe() - atnagent_count,
-            layer_weights=self.layer_weights,
         )
-        self.layer_weights = None
 
     def poll_fabric_health(self) -> None:
         """Check Fabric failure state and the selected FfnAgent runtime."""
@@ -203,5 +210,8 @@ class FfnAgent(Agent):
     def close_role(self) -> None:
         """Release FFN-side resources after Fabric shutdown."""
 
+        if self.execution_registry is not None:
+            self.execution_registry.close()
         self.execution_registry = None
         self.layer_weights = None
+        self.external_resources = ()

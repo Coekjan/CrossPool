@@ -8,7 +8,7 @@ import pytest
 import torch
 
 import xpool.runtime.ffnagent.agent
-from xpool.fabric import FabricPlan
+from xpool.fabric import FabricPePlacement, FabricPlan, FabricRole
 from xpool.memory import DeviceMemoryEstimate
 from xpool.native import RuntimeRole
 from xpool.runtime.agent import Agent, AgentError
@@ -129,8 +129,8 @@ def test_ffnagent_prepares_weights_then_installs_execution(monkeypatch: pytest.M
     agent.local_rank = 0
     agent.layer_weights = None
     agent.execution_registry = None
+    agent.external_resources = ()
     layer_weights = (("weights",),)
-    registry = SimpleNamespace(layer_weights=layer_weights)
     observed: list[tuple[str, dict[str, object]]] = []
     monkeypatch.setattr(agent, "fabric_pe", lambda: 0)
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
@@ -151,16 +151,16 @@ def test_ffnagent_prepares_weights_then_installs_execution(monkeypatch: pytest.M
     monkeypatch.setattr(
         FfnExecutionRegistry,
         "materialize",
-        lambda **arguments: observed.append(("registry", arguments)) or registry,
+        lambda self, **arguments: observed.append(("registry", arguments)),
     )
 
     assert agent.prepare_fabric_join()
     agent.prepare_fabric_execution()
 
     assert agent.layer_weights is None
-    assert agent.execution_registry is registry
+    assert agent.execution_registry is not None
+    assert agent.execution_registry.layer_weights is layer_weights
     assert [name for name, _ in observed] == ["weights", "registry"]
-    assert observed[1][1]["layer_weights"] is layer_weights
 
 
 def test_ffnagent_rejects_prejoin_memory_shortfall(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -192,3 +192,83 @@ def test_ffnagent_rejects_prejoin_memory_shortfall(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(AgentError, match="analytic memory admission requires 10 bytes"):
         agent.prepare_fabric_join()
+
+
+@pytest.mark.parametrize("fails", (False, True))
+def test_ffnagent_retains_registry_through_materialization(monkeypatch: pytest.MonkeyPatch, fails: bool) -> None:
+    config = synthetic_config()
+    install_test_config(config)
+    agent = object.__new__(FfnAgent)
+    agent.fabric_plan = cast(
+        FabricPlan,
+        SimpleNamespace(
+            pe_placements=(
+                FabricPePlacement(role=FabricRole.ATNAGENT, device=0),
+                FabricPePlacement(role=FabricRole.FFNAGENT, device=1),
+            ),
+            instance_plans=(),
+            executor_lane_count=1,
+            model_plans=(),
+        ),
+    )
+    agent.registration = SimpleNamespace(
+        model_specs=("spec",),
+    )
+    agent.runtime_role = RuntimeRole.FFNAGENT
+    agent.device = 1
+    agent.local_rank = 0
+    agent.layer_weights = (("weights",),)
+    agent.execution_registry = None
+    agent.external_resources = ()
+    layer_weights = agent.layer_weights
+    observed: list[tuple[str, dict[str, object]]] = []
+
+    def materialize(registry: FfnExecutionRegistry, **arguments: object) -> None:
+        assert agent.execution_registry is registry
+        assert agent.layer_weights is None
+        assert registry.layer_weights is layer_weights
+        observed.append(("registry", arguments))
+        if fails:
+            raise RuntimeError("materialization failed")
+
+    monkeypatch.setattr(agent, "fabric_pe", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(
+        torch.cuda, "synchronize", lambda device: pytest.fail("Agent repeated Registry-owned completion")
+    )
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (1 << 30, 2 << 30))
+    monkeypatch.setattr(
+        FfnExecutionRegistry,
+        "materialize",
+        materialize,
+    )
+
+    if fails:
+        with pytest.raises(RuntimeError, match="materialization failed"):
+            agent.prepare_fabric_execution()
+    else:
+        agent.prepare_fabric_execution()
+    assert agent.layer_weights is None
+
+    assert agent.execution_registry is not None
+    assert agent.execution_registry.layer_weights is layer_weights
+    assert [name for name, _ in observed] == ["registry"]
+
+    retained_registry = agent.execution_registry
+    with pytest.raises(AgentError, match="cannot be retried"):
+        agent.prepare_fabric_execution()
+    assert agent.execution_registry is retained_registry
+    assert [name for name, _ in observed] == ["registry"]
+
+    def release(registry: FfnExecutionRegistry) -> None:
+        raise RuntimeError("capture retirement failed")
+
+    monkeypatch.setattr(FfnExecutionRegistry, "close", release)
+    with pytest.raises(RuntimeError, match="capture retirement failed"):
+        agent.close_role()
+    assert agent.execution_registry is not None
+    assert agent.execution_registry.layer_weights is layer_weights
+    monkeypatch.setattr(FfnExecutionRegistry, "close", lambda self: None)
+    agent.close_role()
+    assert agent.execution_registry is None
+    assert agent.layer_weights is None

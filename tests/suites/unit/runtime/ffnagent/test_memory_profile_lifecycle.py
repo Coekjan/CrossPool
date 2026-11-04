@@ -80,7 +80,7 @@ def participant(
     monkeypatch.setattr(runner, "materialize_calibration_weights", lambda **kwargs: ())
     monkeypatch.setattr(runner, "project_fabric_arena", lambda plan: None)
     monkeypatch.setattr(runner.xpool.native.fabric, "join", lambda arena, pe: events.append("joined"))
-    monkeypatch.setattr(runner, "FfnExecutionRegistry", SimpleNamespace(materialize=capture))
+    monkeypatch.setattr(runner, "FfnExecutionRegistry", lambda **_: SimpleNamespace(materialize=capture))
     monkeypatch.setattr(runner, "drain_and_finalize", lambda: events.append("finalized"))
 
     def run() -> None:
@@ -300,7 +300,7 @@ def test_terminal_failure_in_a_stopped_sampler_prevents_collective_retirement(
     def exit_process(code: int) -> None:
         raise SystemExit(code)
 
-    monkeypatch.setattr(runner, "FfnExecutionRegistry", SimpleNamespace(materialize=capture))
+    monkeypatch.setattr(runner, "FfnExecutionRegistry", lambda **_: SimpleNamespace(materialize=capture))
     monkeypatch.setattr(runner, "os", SimpleNamespace(environ={}, _exit=exit_process))
     for command in ("join", "execute"):
         parent.send(command)
