@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import importlib.metadata
 from dataclasses import dataclass, field, fields
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, ValidationError, model_validator, with_config
 
 from xpool.config import get_global_config
 from xpool.native import ABI_VERSION
@@ -15,6 +16,37 @@ from xpool.utils.files import atomic_write_text
 from xpool.utils.integer import SINT64_MAX, ensure_sint64_nonnegative
 
 MIB = 1 << 20
+
+
+@with_config(ConfigDict(extra="forbid", strict=False))
+@dataclass(frozen=True, slots=True)
+class ExecutionResourceRequirement:
+    """One prospective logical range retained through execution retirement.
+
+    Requests bound allocation activity; logical extent bounds one referenced
+    range. Only a source-proven exact request contributes to the exact ledger.
+    """
+
+    key: StrictStr
+    request_bytes: tuple[StrictInt, ...]
+    logical_extent_bound_bytes: StrictInt
+    exact_logical_bytes: StrictInt | None
+    alignment_bytes: StrictInt
+
+    def __post_init__(self) -> None:
+        ensure_sint64_nonnegative(self.logical_extent_bound_bytes, self.alignment_bytes, *self.request_bytes)
+        if not self.key or self.logical_extent_bound_bytes == 0:
+            raise ValueError("execution resource needs an identity and positive logical extent")
+        if not 0 < self.alignment_bytes <= 256 or self.alignment_bytes & (self.alignment_bytes - 1):
+            raise ValueError("resource alignment must be a positive power of two at most 256 bytes")
+        if not self.request_bytes or any(value == 0 for value in self.request_bytes):
+            raise ValueError("framework resource requests must be positive and nonempty")
+        if self.exact_logical_bytes is not None:
+            ensure_sint64_nonnegative(self.exact_logical_bytes)
+            if self.exact_logical_bytes > self.logical_extent_bound_bytes:
+                raise ValueError("exact resource bytes exceed the declared logical extent")
+            if self.exact_logical_bytes > sum(self.request_bytes):
+                raise ValueError("exact resource bytes exceed the declared request bounds")
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +139,58 @@ class FfnMemoryCalibrationCoefficients:
         )
         ensure_sint64_nonnegative(result)
         return result
+
+
+class ExecutionResourceDeclaration(BaseModel):
+    """Source-owned allocation contract, aliases and potential computation users."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    requirement: ExecutionResourceRequirement = Field(description="Address-free retained allocation contract.")
+    aliases: tuple[str, ...] = Field(strict=False, description="Source identities sharing this canonical backing.")
+    uses: tuple[Literal["dense", "moe_router"], ...] = Field(
+        min_length=1, strict=False, description="Computation sites that may reference the resource."
+    )
+
+    @model_validator(mode="after")
+    def validate_source(self) -> ExecutionResourceDeclaration:
+        """Require canonical source aliases and distinct nonempty use sites."""
+
+        if (
+            self.requirement.key not in self.aliases
+            or len(set(self.aliases)) != len(self.aliases)
+            or any(not key for key in self.aliases)
+        ):
+            raise ValueError("resource aliases must be unique, nonempty and include their canonical identity")
+        if len(set(self.uses)) != len(self.uses):
+            raise ValueError("resource computation use sites must be unique")
+        return self
+
+
+class FfnExecutionContract(BaseModel):
+    """Address-free execution compatibility and resource declarations shared with admission."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    lane_resources: tuple[ExecutionResourceDeclaration, ...] = Field(
+        strict=False,
+        description="Distinct source backings owned independently by each Lane.",
+    )
+    shared_resources: tuple[ExecutionResourceDeclaration, ...] = Field(
+        strict=False,
+        description="Read-only external backings acquired before baseline and retained through retirement.",
+    )
+
+    @model_validator(mode="after")
+    def validate_sources(self) -> FfnExecutionContract:
+        """Keep every alias attached to exactly one declared backing."""
+
+        aliases = tuple(
+            alias for declaration in (*self.lane_resources, *self.shared_resources) for alias in declaration.aliases
+        )
+        if len(set(aliases)) != len(aliases):
+            raise ValueError("execution resource identities and aliases must be unique")
+        return self
 
 
 class MemoryCalibrationDevice(BaseModel):

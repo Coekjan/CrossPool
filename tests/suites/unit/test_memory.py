@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 import xpool.memory
 from xpool.config import XpoolConfig
 from xpool.memory import (
+    ExecutionResourceDeclaration,
     FfnMemoryCalibration,
     FfnMemoryCalibrationCoefficients,
     MemoryCalibrationDevice,
@@ -17,7 +19,12 @@ from xpool.memory import (
     XpoolMemoryCalibrationProfile,
 )
 from xpool.native import ABI_VERSION
-from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
+from xtest.harness.support.config import (
+    TEST_MODEL_ID,
+    install_test_config,
+    lane_resource_declaration,
+    reset_global_config,
+)
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -130,3 +137,44 @@ def test_writer_serializes_profile_to_the_configured_path(tmp_path: Path) -> Non
     xpool.memory.write_memory_calibration_profile(expected)
 
     assert XpoolMemoryCalibrationProfile.model_validate_json(path.read_text(encoding="utf-8")) == expected
+
+
+@pytest.mark.parametrize(
+    ("capacity", "alignment", "aliases"),
+    (
+        (0, 256, ("scratch",)),
+        (1024, 3, ("scratch",)),
+        (1024, 256, ("other",)),
+        (1024, 256, ("scratch", "scratch")),
+    ),
+)
+def test_resource_declaration_rejects_unusable_backing(capacity: int, alignment: int, aliases: tuple[str, ...]) -> None:
+    with pytest.raises(ValueError):
+        lane_resource_declaration(key="scratch", max_bytes=capacity, alignment_bytes=alignment, aliases=aliases)
+
+
+@pytest.mark.parametrize(
+    "change",
+    (
+        {"request_bytes": ()},
+        {"request_bytes": (0,)},
+        {"alignment_bytes": 512},
+        {"exact_logical_bytes": 1025},
+        {"request_bytes": (1,), "exact_logical_bytes": 1024},
+    ),
+)
+def test_requirement_rejects_incoherent_contract(change: dict[str, object]) -> None:
+    requirement = lane_resource_declaration(
+        key="scratch", max_bytes=1024, alignment_bytes=256, aliases=("scratch",)
+    ).requirement
+    with pytest.raises(ValueError):
+        replace(requirement, **change)
+
+
+@pytest.mark.parametrize("uses", ([], ["dense", "dense"], ["unknown"]))
+def test_resource_requires_distinct_known_computation_sites(uses: list[str]) -> None:
+    declaration = lane_resource_declaration(key="scratch", max_bytes=1024, alignment_bytes=256, aliases=("scratch",))
+    values = declaration.model_dump(mode="json")
+    values["uses"] = uses
+    with pytest.raises(ValidationError):
+        ExecutionResourceDeclaration.model_validate(values)

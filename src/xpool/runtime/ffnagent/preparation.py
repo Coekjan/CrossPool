@@ -9,10 +9,81 @@ import torch
 
 from xpool import ffn
 from xpool.fabric import InstanceFfnProfile
+from xpool.memory import ExecutionResourceRequirement, FfnExecutionContract
 from xpool.quantization import TensorLayout, Unquantized
 from xpool.runtime.ffnagent import execution, weights
 from xpool.runtime.ffnagent.operators import moe
 from xpool.utils import align_up
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionResourceGroup:
+    """One source-owned storage instance needed by any of its Signature users."""
+
+    requirement: ExecutionResourceRequirement
+    signature_indices: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionResourcePlan:
+    """Selected Lane and shared resources, retained through execution retirement."""
+
+    lane_resources: tuple[ExecutionResourceGroup, ...]
+    shared_resources: tuple[ExecutionResourceGroup, ...]
+
+    @classmethod
+    def from_signatures(
+        cls,
+        signatures: tuple[execution.ExecutionSignature, ...],
+        *,
+        contract: FfnExecutionContract,
+    ) -> ExecutionResourcePlan:
+        """Resolve compute ranges and source-declared computation use sites.
+
+        Sources own allocation and lifetime policy. This pure projection attaches
+        Signature users after each requirement establishes its accounting contract.
+        """
+
+        lane_resources = []
+        shared_resources = []
+        for index, signature in enumerate(signatures):
+            compute_bytes = compute_workspace_bytes(signature)
+            lane_resources.append(
+                ExecutionResourceGroup(
+                    requirement=ExecutionResourceRequirement(
+                        key="compute",
+                        request_bytes=(compute_bytes,),
+                        logical_extent_bound_bytes=compute_bytes,
+                        exact_logical_bytes=compute_bytes,
+                        alignment_bytes=256,
+                    ),
+                    signature_indices=(index,),
+                )
+            )
+        for declarations, groups in (
+            (contract.lane_resources, lane_resources),
+            (contract.shared_resources, shared_resources),
+        ):
+            for declaration in declarations:
+                source_users = tuple(
+                    index
+                    for index, signature in enumerate(signatures)
+                    if (
+                        (isinstance(signature, execution.DenseFfnExecutionSignature) and "dense" in declaration.uses)
+                        or (
+                            isinstance(signature, execution.MoeFfnExecutionSignature)
+                            and signature.router is not None
+                            and "moe_router" in declaration.uses
+                        )
+                    )
+                )
+                if source_users:
+                    if declaration.requirement.key == "compute":
+                        raise ValueError("execution resource identities overlap within a Signature")
+                    groups.append(
+                        ExecutionResourceGroup(requirement=declaration.requirement, signature_indices=source_users)
+                    )
+        return cls(lane_resources=tuple(lane_resources), shared_resources=tuple(shared_resources))
 
 
 @dataclass(frozen=True, slots=True)

@@ -10,7 +10,14 @@ from xpool.quantization import Mxfp4, TensorLayout, Unquantized
 from xpool.runtime.ffnagent import device_memory, execution, preparation, weights
 from xpool.runtime.ffnagent.operators import moe
 from xpool.runtime.ffnagent.operators.triton_moe import TritonKernelsExperts
-from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config, synthetic_config
+from xtest.harness.support.config import (
+    TEST_EXECUTION_CONTRACT,
+    TEST_MODEL_ID,
+    install_test_config,
+    lane_resource_declaration,
+    reset_global_config,
+    synthetic_config,
+)
 
 
 @pytest.fixture
@@ -238,3 +245,46 @@ def test_estimator_counts_encoded_padded_storages_and_router_owner(packed_model:
     unrounded = replace(signature, router=replace(signature.router, weight_rounding=ffn.TopKWeightRounding.NONE))
     assert execution.capture_weight_pair_key(unrounded) != execution.capture_weight_pair_key(signature)
     assert not torch.cuda.is_initialized()
+
+
+def test_resource_plan_selects_only_applicable_signatures(packed_model: ffn.FfnModelSpec) -> None:
+    dense = execution.DenseFfnExecutionSignature(
+        payload_dtype=torch.bfloat16,
+        payload_row_capacity=1,
+        hidden_size=16,
+        local_intermediate_size=32,
+        activation=ffn.SiluActivation(),
+        gate_up=weights.ProjectionLayout(values=TensorLayout((64, 16), torch.bfloat16, 0), scales=None, bias=None),
+        down=weights.ProjectionLayout(values=TensorLayout((16, 32), torch.bfloat16, 0), scales=None, bias=None),
+    )
+    profile = InstanceFfnProfile(
+        payload_dtype=torch.bfloat16,
+        hidden_size=packed_model.hidden_size,
+        layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.MOE),),
+        decode_payload_row_capacity=1,
+        prefill_payload_row_capacity=1,
+        group_sum_complete_admitted=True,
+    )
+    layout = preparation.prepare_ffn_layer(
+        packed_model,
+        layer_ordinal=0,
+        payload_dtype=profile.payload_dtype,
+        tp_size=1,
+        tp_rank=0,
+    )
+    (moe_signature,) = layout.execution_signatures(profile=profile)
+    declaration = lane_resource_declaration(
+        key="dense.source",
+        max_bytes=1024,
+        alignment_bytes=256,
+        aliases=("dense.source",),
+    ).model_copy(update={"uses": ("dense",)})
+    plan = preparation.ExecutionResourcePlan.from_signatures(
+        (dense, moe_signature), contract=TEST_EXECUTION_CONTRACT.model_copy(update={"lane_resources": (declaration,)})
+    )
+    assert [(group.requirement.key, group.signature_indices) for group in plan.lane_resources] == [
+        ("compute", (0,)),
+        ("compute", (1,)),
+        ("dense.source", (0,)),
+    ]
+    assert not plan.shared_resources
