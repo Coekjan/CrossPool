@@ -14,6 +14,7 @@ from pydantic import Field
 
 import xpool.native
 from xpool.config import get_global_config
+from xpool.devkit import phases
 from xpool.fabric import FabricGenerationId, FabricParticipantPhase
 from xpool.native import RuntimeRole
 from xpool.runtime.agent import Agent
@@ -179,11 +180,7 @@ def atnagent_payload(
         events,
         durations(
             events,
-            (
-                ("admission_wait", "submission_published", "admission_observed"),
-                ("output_wait", "admission_observed", "output_commit_observed"),
-                ("total", "submission_prepared", "output_acknowledgement_published"),
-            ),
+            phases.fabric_atnagent_phases,
         ),
     )
 
@@ -213,12 +210,7 @@ def coordinator_payload(
         events,
         durations(
             events,
-            (
-                ("scheduling", "enqueued", "scheduled"),
-                ("execution", "lane_execution_published", "ffnagent_completions_observed"),
-                ("active_total", "scheduled", "lane_released"),
-                ("total", "enqueued", "lane_released"),
-            ),
+            phases.fabric_coordinator_phases,
         ),
     )
 
@@ -246,11 +238,7 @@ def ffnagent_payload(
         events,
         durations(
             events,
-            (
-                ("input_wait", "lane_execution_observed", "input_ready_observed"),
-                ("compute", "compute_started", "compute_completed"),
-                ("total", "lane_execution_observed", "completion_published"),
-            ),
+            phases.fabric_ffnagent_phases,
         ),
     )
 
