@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -82,10 +83,12 @@ class CollectedTestCase:
             raise ValueError(f"collected test nodeid does not belong to path: {self.nodeid!r}")
         if self.stage is TestStage.UNIT and self.requirements.device_count != 0:
             raise ValueError("unit tests cannot require devices")
-        if self.estimated_duration_seconds is not None and self.estimated_duration_seconds <= 0:
-            raise ValueError("estimated test duration must be positive")
-        if self.timeout_seconds <= 0:
-            raise ValueError("test timeout must be positive")
+        if self.estimated_duration_seconds is not None and (
+            not math.isfinite(self.estimated_duration_seconds) or self.estimated_duration_seconds <= 0
+        ):
+            raise ValueError("estimated test duration must be finite and positive")
+        if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
+            raise ValueError("test timeout must be finite and positive")
 
     @classmethod
     def from_raw(cls, raw: object) -> Self:

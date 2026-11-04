@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -53,6 +54,23 @@ def test_collected_case_rejects_stage_and_resource_drift() -> None:
             timeout_seconds=10,
             artifact_group=None,
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("estimated_duration_seconds", float("nan")), ("timeout_seconds", float("inf"))),
+)
+def test_collection_rejects_nonfinite_times(field: str, value: float, tmp_path: Path) -> None:
+    case = unit_case()
+    with pytest.raises(ValueError, match="finite and positive"):
+        replace(case, **{field: value})
+    raw = case.raw()
+    raw[field] = value
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps({"cases": [raw], "selected_suites": []}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="finite and positive"):
+        xtest.harness.runner.plan.TestPlan.read(path)
 
 
 def test_plan_rejects_duplicate_nodes_and_incomplete_serving_graph_groups() -> None:
