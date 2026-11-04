@@ -8,7 +8,7 @@
 #include <c10/util/Exception.h>
 #include <cuda_runtime.h>
 
-#include <xpool/utils/graph.hpp>
+#include <xpool/utils/cuda/graph.hpp>
 
 namespace xpool::ffnagent {
 
@@ -22,16 +22,16 @@ void parameterize_graph_recursive(
     GraphParameterization &parameterization) {
   // Phase: Verify Topology - Primary and Control captures must have identical
   // direct topology before their nodes can be compared recursively.
-  const auto primary_nodes = xpool::utils::graph::nodes(primary_graph);
-  const auto control_nodes = xpool::utils::graph::nodes(control_graph);
-  TORCH_CHECK(xpool::utils::graph::same_direct_topology(primary_graph, control_graph),
+  const auto primary_nodes = xpool::utils::cuda::graph::nodes(primary_graph);
+  const auto control_nodes = xpool::utils::cuda::graph::nodes(control_graph);
+  TORCH_CHECK(xpool::utils::cuda::graph::same_direct_topology(primary_graph, control_graph),
               "xpool Primary and Control Graph topologies differ");
 
   for (auto node_index = std::size_t{0}; node_index < primary_nodes.size(); ++node_index) {
-    const auto primary_type = xpool::utils::graph::node_type(primary_nodes[node_index]);
+    const auto primary_type = xpool::utils::cuda::graph::node_type(primary_nodes[node_index]);
     if (primary_type == cudaGraphNodeTypeGraph) {
-      const auto primary_child = xpool::utils::graph::child_graph(primary_nodes[node_index]);
-      const auto control_child = xpool::utils::graph::child_graph(control_nodes[node_index]);
+      const auto primary_child = xpool::utils::cuda::graph::child_graph(primary_nodes[node_index]);
+      const auto control_child = xpool::utils::cuda::graph::child_graph(control_nodes[node_index]);
       parameterize_graph_recursive(primary_child, control_child, resources, lane_replacements, resource_matches,
                                    lane_matches, capture_routing_metadata_address, capture_routing_weights_address,
                                    capture_payload_rows_address, parameterization);
@@ -42,8 +42,8 @@ void parameterize_graph_recursive(
     }
     TORCH_CHECK(primary_type == cudaGraphNodeTypeKernel, "xpool Primary Graph contains an unsupported node kind");
 
-    auto primary = xpool::utils::graph::KernelNodeParameters::read(primary_nodes[node_index]);
-    const auto control = xpool::utils::graph::KernelNodeParameters::read(control_nodes[node_index]);
+    auto primary = xpool::utils::cuda::graph::KernelNodeParameters::read(primary_nodes[node_index]);
+    const auto control = xpool::utils::cuda::graph::KernelNodeParameters::read(control_nodes[node_index]);
     TORCH_CHECK(primary.same_schema(control), "xpool Primary and Control Graph kernel schemas differ");
     const auto routing_candidate = capture_payload_rows_address != 0 &&
                                    primary.contains_address(capture_payload_rows_address) &&
@@ -130,7 +130,7 @@ void parameterize_graph_recursive(
     // Phase: Apply Node Changes - Record runtime binding offsets before
     // committing the rewritten argument storage to the embedded graph.
     if (!node_matches.empty()) {
-      const auto device_node = xpool::utils::graph::make_device_updatable(primary_nodes[node_index]);
+      const auto device_node = xpool::utils::cuda::graph::make_device_updatable(primary_nodes[node_index]);
       for (const auto &[parameter_offset, resource_index] : node_matches) {
         parameterization.binding_sites.push_back(BindingSite{
             .node = device_node,

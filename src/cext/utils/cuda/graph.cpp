@@ -1,4 +1,4 @@
-#include <xpool/utils/graph.hpp>
+#include <xpool/utils/cuda/graph.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -15,9 +15,82 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
+#include <xpool/utils/checked.hpp>
 #include <xpool/utils/cuda.hpp>
 
-namespace xpool::utils::graph {
+namespace xpool::utils::cuda::graph {
+
+void create(cudaGraph_t &graph) { C10_CUDA_CHECK(cudaGraphCreate(&graph, 0)); }
+
+void instantiate(cudaGraphExec_t &executable, cudaGraph_t graph) {
+  auto parameters = cudaGraphInstantiateParams{};
+  C10_CUDA_CHECK(cudaGraphInstantiateWithParams(&executable, graph, &parameters));
+}
+
+void upload(cudaGraphExec_t executable, cudaStream_t stream) { C10_CUDA_CHECK(cudaGraphUpload(executable, stream)); }
+
+void launch(cudaGraphExec_t executable, cudaStream_t stream) { C10_CUDA_CHECK(cudaGraphLaunch(executable, stream)); }
+
+void destroy(cudaGraph_t graph) { C10_CUDA_CHECK(cudaGraphDestroy(graph)); }
+
+void destroy(cudaGraphExec_t executable) { C10_CUDA_CHECK(cudaGraphExecDestroy(executable)); }
+
+cudaMemsetParams memset_parameters(cudaGraphNode_t node) {
+  auto parameters = cudaMemsetParams{};
+  C10_CUDA_CHECK(cudaGraphMemsetNodeGetParams(node, &parameters));
+  return parameters;
+}
+
+void set_memset_parameters(cudaGraphNode_t node, const cudaMemsetParams &parameters) {
+  C10_CUDA_CHECK(cudaGraphMemsetNodeSetParams(node, &parameters));
+}
+
+cudaMemcpy3DParms memcpy_parameters(cudaGraphNode_t node) {
+  auto parameters = cudaMemcpy3DParms{};
+  C10_CUDA_CHECK(cudaGraphMemcpyNodeGetParams(node, &parameters));
+  return parameters;
+}
+
+void set_memcpy_parameters(cudaGraphNode_t node, const cudaMemcpy3DParms &parameters) {
+  C10_CUDA_CHECK(cudaGraphMemcpyNodeSetParams(node, &parameters));
+}
+
+std::size_t dependent_count(cudaGraphNode_t node) {
+  auto count = std::size_t{0};
+  C10_CUDA_CHECK(cudaGraphNodeGetDependentNodes(node, nullptr, nullptr, &count));
+  return count;
+}
+
+cudaGraphNode_t add_empty_node(cudaGraph_t graph) {
+  auto node = cudaGraphNode_t{};
+  C10_CUDA_CHECK(cudaGraphAddEmptyNode(&node, graph, nullptr, 0));
+  return node;
+}
+
+std::size_t memset_access_bytes(const cudaMemsetParams &parameters) {
+  TORCH_CHECK(parameters.dst != nullptr && parameters.width != 0 && parameters.height != 0,
+              "xpool graph Memset requires nonempty device storage");
+  TORCH_CHECK(parameters.elementSize == 1 || parameters.elementSize == 2 || parameters.elementSize == 4,
+              "xpool graph Memset has an unsupported element size");
+  const auto row = xpool::utils::checked::prod(parameters.width, static_cast<std::size_t>(parameters.elementSize));
+  TORCH_CHECK(parameters.height == 1 || parameters.pitch >= row, "xpool graph Memset pitch is smaller than a row");
+  return xpool::utils::checked::sum(xpool::utils::checked::prod(parameters.height - 1, parameters.pitch), row);
+}
+
+std::size_t memcpy_access_bytes(const cudaMemcpy3DParms &parameters) {
+  TORCH_CHECK(parameters.srcArray == nullptr && parameters.dstArray == nullptr && parameters.extent.width != 0 &&
+                  parameters.extent.height == 1 && parameters.extent.depth == 1 && parameters.srcPos.x == 0 &&
+                  parameters.srcPos.y == 0 && parameters.srcPos.z == 0 && parameters.dstPos.x == 0 &&
+                  parameters.dstPos.y == 0 && parameters.dstPos.z == 0,
+              "xpool graph Memcpy requires contiguous one-dimensional storage");
+  TORCH_CHECK(parameters.kind == cudaMemcpyDeviceToDevice || parameters.kind == cudaMemcpyDefault,
+              "xpool graph Memcpy requires device-to-device direction");
+  for (const auto *pointer : {parameters.srcPtr.ptr, parameters.dstPtr.ptr}) {
+    const auto attributes = xpool::utils::cuda::pointer_attributes(pointer);
+    TORCH_CHECK(attributes.type == cudaMemoryTypeDevice, "xpool graph Memcpy requires device allocations");
+  }
+  return parameters.extent.width;
+}
 
 namespace {
 
@@ -350,4 +423,4 @@ void insert_node_after(cudaGraph_t graph, cudaGraphNode_t predecessor, cudaGraph
   }
 }
 
-} // namespace xpool::utils::graph
+} // namespace xpool::utils::cuda::graph

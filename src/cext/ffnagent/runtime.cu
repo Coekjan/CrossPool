@@ -38,7 +38,7 @@
 #include <xpool/hooks.hpp>
 #include <xpool/macros.hpp>
 #include <xpool/utils/checked.hpp>
-#include <xpool/utils/graph.hpp>
+#include <xpool/utils/cuda/graph.hpp>
 #include <xpool/utils/wait.cuh>
 
 namespace xpool::ffnagent {
@@ -563,12 +563,12 @@ void insert_routing_publication(const PrimaryGraphLocation &location, xpool::fab
   C10_CUDA_CHECK(cudaGraphNodeGetDependentNodes(location.node, nullptr, nullptr, &dependent_count));
   TORCH_CHECK(dependent_count != 0, "xpool Routing Finalization has no Expert successor");
   void *arguments[] = {&arena, &executor_lane_index, &payload_row_capacity, &state};
-  const auto publication =
-      xpool::utils::graph::add_kernel_node(location.graph, reinterpret_cast<const void *>(publish_routing_metadata),
-                                           dim3{1, 1, 1}, dim3{kLaneControlBlockSize, 1, 1}, 0, arguments);
+  const auto publication = xpool::utils::cuda::graph::add_kernel_node(
+      location.graph, reinterpret_cast<const void *>(publish_routing_metadata), dim3{1, 1, 1},
+      dim3{kLaneControlBlockSize, 1, 1}, 0, arguments);
   // Routing metadata becomes remotely visible after finalization and before
   // every Expert consumer that previously depended directly on that node.
-  xpool::utils::graph::insert_node_after(location.graph, location.node, publication);
+  xpool::utils::cuda::graph::insert_node_after(location.graph, location.node, publication);
 }
 
 } // namespace
@@ -759,19 +759,19 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
   // Phase: Embed Compute Branches - Build the resident outer WHILE and embed
   // every captured Signature behind one Device-selected switch.
   C10_CUDA_CHECK(cudaGraphCreate(&lane.graph, 0));
-  auto while_handle = xpool::utils::graph::create_conditional_handle(lane.graph, 1, cudaGraphCondAssignDefault);
-  const auto while_node = xpool::utils::graph::add_while_node(lane.graph, while_handle);
-  const auto while_body = xpool::utils::graph::conditional_bodies(while_node).front();
+  auto while_handle = xpool::utils::cuda::graph::create_conditional_handle(lane.graph, 1, cudaGraphCondAssignDefault);
+  const auto while_node = xpool::utils::cuda::graph::add_while_node(lane.graph, while_handle);
+  const auto while_body = xpool::utils::cuda::graph::conditional_bodies(while_node).front();
 
   void *activation_arguments[] = {&activation_count};
   const auto activation_node =
-      xpool::utils::graph::add_kernel_node(lane.graph, reinterpret_cast<const void *>(publish_lane_activation),
-                                           dim3{1, 1, 1}, dim3{1, 1, 1}, 0, activation_arguments);
-  xpool::utils::graph::add_dependency(lane.graph, activation_node, while_node);
+      xpool::utils::cuda::graph::add_kernel_node(lane.graph, reinterpret_cast<const void *>(publish_lane_activation),
+                                                 dim3{1, 1, 1}, dim3{1, 1, 1}, 0, activation_arguments);
+  xpool::utils::cuda::graph::add_dependency(lane.graph, activation_node, while_node);
 
-  auto compute_handle = xpool::utils::graph::create_conditional_handle(while_body);
-  const auto compute_node = xpool::utils::graph::add_switch_node(while_body, compute_handle, compute_switch_size);
-  const auto compute_bodies = xpool::utils::graph::conditional_bodies(compute_node);
+  auto compute_handle = xpool::utils::cuda::graph::create_conditional_handle(while_body);
+  const auto compute_node = xpool::utils::cuda::graph::add_switch_node(while_body, compute_handle, compute_switch_size);
+  const auto compute_bodies = xpool::utils::cuda::graph::conditional_bodies(compute_node);
 
   auto host_schemas = std::vector<DiscoveredBindingSchema>{};
   auto host_sites = std::vector<BindingSite>{};
@@ -780,8 +780,8 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
   for (auto signature_index = std::size_t{0}; signature_index < signature_count; ++signature_index) {
     const auto &signature = projection.signatures[signature_index];
     const auto primary_graph = std::visit([](const auto &value) { return value.primary_graph_address; }, signature);
-    const auto embedded_graph = xpool::utils::graph::embed_child_graph(compute_bodies[signature_index],
-                                                                       reinterpret_cast<cudaGraph_t>(primary_graph));
+    const auto embedded_graph = xpool::utils::cuda::graph::embed_child_graph(
+        compute_bodies[signature_index], reinterpret_cast<cudaGraph_t>(primary_graph));
 
     // Captured placeholder addresses become this Lane's stable Fabric and
     // workspace addresses; weight sites remain Device-updatable per layer.
@@ -924,7 +924,7 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
       const_cast<std::size_t *>(&signature_count),
       const_cast<std::uint32_t *>(&compute_empty_branch_index),
   };
-  const auto wait_node = xpool::utils::graph::add_kernel_node(
+  const auto wait_node = xpool::utils::cuda::graph::add_kernel_node(
       while_body, reinterpret_cast<const void *>(wait_pre_compute), dim3{1, 1, 1}, dim3{1, 1, 1}, 0, wait_arguments);
 
   // Phase: Bind - Patch only the discovered weight sites for the selected
@@ -941,19 +941,21 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
       &device_sites,
       &device_updates,
   };
-  const auto bind_node = xpool::utils::graph::add_kernel_node(while_body, reinterpret_cast<const void *>(bind_compute),
-                                                              dim3{1, 1, 1}, dim3{1, 1, 1}, 0, bind_arguments);
-  xpool::utils::graph::add_dependency(while_body, wait_node, bind_node);
+  const auto bind_node = xpool::utils::cuda::graph::add_kernel_node(
+      while_body, reinterpret_cast<const void *>(bind_compute), dim3{1, 1, 1}, dim3{1, 1, 1}, 0, bind_arguments);
+  xpool::utils::cuda::graph::add_dependency(while_body, wait_node, bind_node);
 
   // Phase: Compute - The bound signature branch produces this TP rank's
   // partial output and, for the router owner, publishes finalized routing data.
-  xpool::utils::graph::add_dependency(while_body, bind_node, compute_node);
+  xpool::utils::cuda::graph::add_dependency(while_body, bind_node, compute_node);
 
-  auto delivery_handle = xpool::utils::graph::create_conditional_handle(while_body);
-  const auto delivery_node = xpool::utils::graph::add_switch_node(while_body, delivery_handle, kDeliveryBranchCount);
-  const auto delivery_bodies = xpool::utils::graph::conditional_bodies(delivery_node);
+  auto delivery_handle = xpool::utils::cuda::graph::create_conditional_handle(while_body);
+  const auto delivery_node =
+      xpool::utils::cuda::graph::add_switch_node(while_body, delivery_handle, kDeliveryBranchCount);
+  const auto delivery_bodies = xpool::utils::cuda::graph::conditional_bodies(delivery_node);
 
-  auto peer_partial_handle = xpool::utils::graph::create_conditional_handle(lane.graph, 0, cudaGraphCondAssignDefault);
+  auto peer_partial_handle =
+      xpool::utils::cuda::graph::create_conditional_handle(lane.graph, 0, cudaGraphCondAssignDefault);
 
   // Phase: Prepare Delivery - Select direct or complete delivery and publish
   // PartialReady only after the local partial payload is visible to its readers.
@@ -965,11 +967,11 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
       &peer_partial_handle,
       &device_state,
   };
-  const auto prepare_node =
-      xpool::utils::graph::add_kernel_node(while_body, reinterpret_cast<const void *>(prepare_delivery), dim3{1, 1, 1},
-                                           dim3{kLaneControlBlockSize, 1, 1}, reader_scratch_bytes, prepare_arguments);
-  xpool::utils::graph::add_dependency(while_body, compute_node, prepare_node);
-  xpool::utils::graph::add_dependency(while_body, prepare_node, delivery_node);
+  const auto prepare_node = xpool::utils::cuda::graph::add_kernel_node(
+      while_body, reinterpret_cast<const void *>(prepare_delivery), dim3{1, 1, 1}, dim3{kLaneControlBlockSize, 1, 1},
+      reader_scratch_bytes, prepare_arguments);
+  xpool::utils::cuda::graph::add_dependency(while_body, compute_node, prepare_node);
+  xpool::utils::cuda::graph::add_dependency(while_body, prepare_node, delivery_node);
 
   // Phase: Deliver - Direct delivery forwards each partial; complete delivery
   // waits for peer partials, reduces in PE order, and writes the admitted output.
@@ -977,15 +979,15 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
       const_cast<xpool::fabric::ArenaView *>(&arena),
       &executor_lane_index,
   };
-  static_cast<void>(xpool::utils::graph::add_kernel_node(delivery_bodies[kDirectDeliveryBranch],
-                                                         reinterpret_cast<const void *>(deliver_direct_partial_output),
-                                                         dim3{static_cast<unsigned int>(delivery_block_count), 1, 1},
-                                                         dim3{kLaneControlBlockSize, 1, 1}, 0, delivery_arguments));
+  static_cast<void>(xpool::utils::cuda::graph::add_kernel_node(
+      delivery_bodies[kDirectDeliveryBranch], reinterpret_cast<const void *>(deliver_direct_partial_output),
+      dim3{static_cast<unsigned int>(delivery_block_count), 1, 1}, dim3{kLaneControlBlockSize, 1, 1}, 0,
+      delivery_arguments));
   const auto complete_delivery_body = delivery_bodies[kCompleteDeliveryBranch];
   // Complete-delivery subprotocol: publish local PartialReady, observe every
   // peer publication, then perform ordered reduction and remote delivery.
-  const auto peer_partial_node = xpool::utils::graph::add_while_node(complete_delivery_body, peer_partial_handle);
-  const auto peer_partial_body = xpool::utils::graph::conditional_bodies(peer_partial_node).front();
+  const auto peer_partial_node = xpool::utils::cuda::graph::add_while_node(complete_delivery_body, peer_partial_handle);
+  const auto peer_partial_body = xpool::utils::cuda::graph::conditional_bodies(peer_partial_node).front();
   void *peer_partial_arguments[] = {
       const_cast<xpool::fabric::ArenaView *>(&arena),
       &executor_lane_index,
@@ -993,14 +995,14 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
       &peer_partial_handle,
       &device_state,
   };
-  static_cast<void>(xpool::utils::graph::add_kernel_node(peer_partial_body,
-                                                         reinterpret_cast<const void *>(probe_peer_partials),
-                                                         dim3{1, 1, 1}, dim3{1, 1, 1}, 0, peer_partial_arguments));
-  const auto reduce_node = xpool::utils::graph::add_kernel_node(
+  static_cast<void>(
+      xpool::utils::cuda::graph::add_kernel_node(peer_partial_body, reinterpret_cast<const void *>(probe_peer_partials),
+                                                 dim3{1, 1, 1}, dim3{1, 1, 1}, 0, peer_partial_arguments));
+  const auto reduce_node = xpool::utils::cuda::graph::add_kernel_node(
       complete_delivery_body, reinterpret_cast<const void *>(deliver_complete_output_range),
       dim3{static_cast<unsigned int>(delivery_block_count), 1, 1}, dim3{kLaneControlBlockSize, 1, 1}, 0,
       delivery_arguments);
-  xpool::utils::graph::add_dependency(complete_delivery_body, peer_partial_node, reduce_node);
+  xpool::utils::cuda::graph::add_dependency(complete_delivery_body, peer_partial_node, reduce_node);
 
   // Phase: Complete - Remote writes are quiet before Completion publication;
   // only then may the Coordinator commit output and eventually reuse the Lane.
@@ -1010,10 +1012,10 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
       &while_handle,
       &device_state,
   };
-  const auto completion_node =
-      xpool::utils::graph::add_kernel_node(while_body, reinterpret_cast<const void *>(complete_lane_execution),
-                                           dim3{1, 1, 1}, dim3{kLaneControlBlockSize, 1, 1}, 0, completion_arguments);
-  xpool::utils::graph::add_dependency(while_body, delivery_node, completion_node);
+  const auto completion_node = xpool::utils::cuda::graph::add_kernel_node(
+      while_body, reinterpret_cast<const void *>(complete_lane_execution), dim3{1, 1, 1},
+      dim3{kLaneControlBlockSize, 1, 1}, 0, completion_arguments);
+  xpool::utils::cuda::graph::add_dependency(while_body, delivery_node, completion_node);
 
   xpool::hooks::FfnLaneGraphBuildPostEvent::hooks({.executor_lane_index = executor_lane_index,
                                                    .graph = lane.graph,

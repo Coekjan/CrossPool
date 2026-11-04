@@ -10,7 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <xpool/macros.hpp>
-#include <xpool/utils/graph.hpp>
+#include <xpool/utils/cuda/graph.hpp>
 
 namespace {
 
@@ -47,28 +47,28 @@ TEST(GraphTest, ConstructsAndVisitsRetainedNodeKinds) {
 
   auto graph = cudaGraph_t{};
   ASSERT_EQ(cudaGraphCreate(&graph, 0), cudaSuccess);
-  const auto while_handle = xpool::utils::graph::create_conditional_handle(graph, 1, cudaGraphCondAssignDefault);
-  const auto while_node = xpool::utils::graph::add_while_node(graph, while_handle);
-  const auto while_bodies = xpool::utils::graph::conditional_bodies(while_node);
+  const auto while_handle = xpool::utils::cuda::graph::create_conditional_handle(graph, 1, cudaGraphCondAssignDefault);
+  const auto while_node = xpool::utils::cuda::graph::add_while_node(graph, while_handle);
+  const auto while_bodies = xpool::utils::cuda::graph::conditional_bodies(while_node);
   ASSERT_EQ(while_bodies.size(), 1U);
 
-  const auto switch_handle = xpool::utils::graph::create_conditional_handle(while_bodies.front());
-  const auto switch_node = xpool::utils::graph::add_switch_node(while_bodies.front(), switch_handle, 2);
-  const auto switch_bodies = xpool::utils::graph::conditional_bodies(switch_node);
+  const auto switch_handle = xpool::utils::cuda::graph::create_conditional_handle(while_bodies.front());
+  const auto switch_node = xpool::utils::cuda::graph::add_switch_node(while_bodies.front(), switch_handle, 2);
+  const auto switch_bodies = xpool::utils::cuda::graph::conditional_bodies(switch_node);
   ASSERT_EQ(switch_bodies.size(), 2U);
 
-  const auto embedded = xpool::utils::graph::embed_child_graph(switch_bodies.front(), source);
-  const auto child_nodes = xpool::utils::graph::nodes(switch_bodies.front());
+  const auto embedded = xpool::utils::cuda::graph::embed_child_graph(switch_bodies.front(), source);
+  const auto child_nodes = xpool::utils::cuda::graph::nodes(switch_bodies.front());
   ASSERT_EQ(child_nodes.size(), 1U);
-  EXPECT_EQ(xpool::utils::graph::node_type(child_nodes.front()), cudaGraphNodeTypeGraph);
-  EXPECT_EQ(xpool::utils::graph::child_graph(child_nodes.front()), embedded);
-  const auto embedded_nodes = xpool::utils::graph::nodes(embedded);
+  EXPECT_EQ(xpool::utils::cuda::graph::node_type(child_nodes.front()), cudaGraphNodeTypeGraph);
+  EXPECT_EQ(xpool::utils::cuda::graph::child_graph(child_nodes.front()), embedded);
+  const auto embedded_nodes = xpool::utils::cuda::graph::nodes(embedded);
   ASSERT_EQ(embedded_nodes.size(), 1U);
-  EXPECT_EQ(xpool::utils::graph::node_type(embedded_nodes.front()), cudaGraphNodeTypeEmpty);
+  EXPECT_EQ(xpool::utils::cuda::graph::node_type(embedded_nodes.front()), cudaGraphNodeTypeEmpty);
 
   auto node_counts = std::map<cudaGraphNodeType, std::size_t>{};
-  xpool::utils::graph::for_each_reachable_node(graph,
-                                               [&](cudaGraphNode_t, cudaGraphNodeType type) { ++node_counts[type]; });
+  xpool::utils::cuda::graph::for_each_reachable_node(
+      graph, [&](cudaGraphNode_t, cudaGraphNodeType type) { ++node_counts[type]; });
   EXPECT_EQ(node_counts[cudaGraphNodeTypeConditional], 2U);
   EXPECT_EQ(node_counts[cudaGraphNodeTypeGraph], 1U);
   EXPECT_EQ(node_counts[cudaGraphNodeTypeEmpty], 1U);
@@ -87,9 +87,9 @@ TEST(GraphTest, ReturnsDeviceUpdatableKernelNode) {
 
   auto graph = cudaGraph_t{};
   ASSERT_EQ(cudaGraphCreate(&graph, 0), cudaSuccess);
-  const auto node = xpool::utils::graph::add_kernel_node(graph, reinterpret_cast<const void *>(empty_kernel), dim3{1},
-                                                         dim3{1}, 0, nullptr);
-  const auto device_node = xpool::utils::graph::make_device_updatable(node);
+  const auto node = xpool::utils::cuda::graph::add_kernel_node(graph, reinterpret_cast<const void *>(empty_kernel),
+                                                               dim3{1}, dim3{1}, 0, nullptr);
+  const auto device_node = xpool::utils::cuda::graph::make_device_updatable(node);
 
   auto attribute = cudaKernelNodeAttrValue{};
   ASSERT_EQ(cudaGraphKernelNodeGetAttribute(node, cudaKernelNodeAttributeDeviceUpdatableKernelNode, &attribute),
@@ -133,9 +133,9 @@ TEST(GraphTest, NormalizesPackedKernelParametersForDeviceUpdates) {
   auto pointer_graph = cudaGraph_t{};
   ASSERT_EQ(cudaGraphCreate(&pointer_graph, 0), cudaSuccess);
   auto pointer_arguments = std::array<void *, 2>{&first_output, &value};
-  const auto pointer_node = xpool::utils::graph::add_kernel_node(
+  const auto pointer_node = xpool::utils::cuda::graph::add_kernel_node(
       pointer_graph, reinterpret_cast<const void *>(write_value_kernel), dim3{1}, dim3{1}, 0, pointer_arguments.data());
-  const auto pointer_parameters = xpool::utils::graph::KernelNodeParameters::read(pointer_node);
+  const auto pointer_parameters = xpool::utils::cuda::graph::KernelNodeParameters::read(pointer_node);
 
   auto packed = std::vector<std::byte>(packed_size);
   std::memcpy(packed.data() + offsets[0], &first_output, sizes[0]);
@@ -166,7 +166,7 @@ TEST(GraphTest, NormalizesPackedKernelParametersForDeviceUpdates) {
   ASSERT_EQ(cuGraphKernelNodeGetParams(reinterpret_cast<CUgraphNode>(packed_node), &observed_packed), CUDA_SUCCESS);
   ASSERT_EQ(observed_packed.kernelParams, nullptr);
   ASSERT_NE(observed_packed.extra, nullptr);
-  auto packed_parameters = xpool::utils::graph::KernelNodeParameters::read(packed_node);
+  auto packed_parameters = xpool::utils::cuda::graph::KernelNodeParameters::read(packed_node);
   ASSERT_TRUE(pointer_parameters.same_schema(packed_parameters));
   ASSERT_EQ(pointer_parameters.arguments().size(), packed_parameters.arguments().size());
   for (auto index = std::size_t{0}; index < pointer_parameters.arguments().size(); ++index) {
@@ -179,24 +179,25 @@ TEST(GraphTest, NormalizesPackedKernelParametersForDeviceUpdates) {
 
   auto cloned_graph = cudaGraph_t{};
   ASSERT_EQ(cudaGraphClone(&cloned_graph, packed_graph), cudaSuccess);
-  const auto cloned_nodes = xpool::utils::graph::nodes(cloned_graph);
+  const auto cloned_nodes = xpool::utils::cuda::graph::nodes(cloned_graph);
   ASSERT_EQ(cloned_nodes.size(), 1U);
-  EXPECT_TRUE(pointer_parameters.same_schema(xpool::utils::graph::KernelNodeParameters::read(cloned_nodes.front())));
+  EXPECT_TRUE(
+      pointer_parameters.same_schema(xpool::utils::cuda::graph::KernelNodeParameters::read(cloned_nodes.front())));
 
   auto parent_graph = cudaGraph_t{};
   ASSERT_EQ(cudaGraphCreate(&parent_graph, 0), cudaSuccess);
-  const auto embedded_graph = xpool::utils::graph::embed_child_graph(parent_graph, packed_graph);
-  const auto child_nodes = xpool::utils::graph::nodes(parent_graph);
+  const auto embedded_graph = xpool::utils::cuda::graph::embed_child_graph(parent_graph, packed_graph);
+  const auto child_nodes = xpool::utils::cuda::graph::nodes(parent_graph);
   ASSERT_EQ(child_nodes.size(), 1U);
-  const auto embedded_nodes = xpool::utils::graph::nodes(embedded_graph);
+  const auto embedded_nodes = xpool::utils::cuda::graph::nodes(embedded_graph);
   ASSERT_EQ(embedded_nodes.size(), 1U);
   const auto embedded_node = embedded_nodes.front();
   auto observed_embedded = CUDA_KERNEL_NODE_PARAMS{};
   ASSERT_EQ(cuGraphKernelNodeGetParams(reinterpret_cast<CUgraphNode>(embedded_node), &observed_embedded), CUDA_SUCCESS);
   ASSERT_EQ(observed_embedded.kernelParams, nullptr);
   ASSERT_NE(observed_embedded.extra, nullptr);
-  auto device_node = xpool::utils::graph::make_device_updatable(embedded_node);
-  const auto embedded_parameters = xpool::utils::graph::KernelNodeParameters::read(embedded_node);
+  auto device_node = xpool::utils::cuda::graph::make_device_updatable(embedded_node);
+  const auto embedded_parameters = xpool::utils::cuda::graph::KernelNodeParameters::read(embedded_node);
   ASSERT_TRUE(pointer_parameters.same_schema(embedded_parameters));
   packed_parameters.apply(embedded_node);
 
@@ -208,10 +209,10 @@ TEST(GraphTest, NormalizesPackedKernelParametersForDeviceUpdates) {
   auto rebound_value = std::int32_t{31};
   auto update_arguments =
       std::array<void *, 6>{&device_node, &first_output, &rebound_value, &offsets[0], &offsets[1], &update_status};
-  const auto update_node =
-      xpool::utils::graph::add_kernel_node(parent_graph, reinterpret_cast<const void *>(update_write_value_kernel),
-                                           dim3{1}, dim3{1}, 0, update_arguments.data());
-  xpool::utils::graph::add_dependency(parent_graph, update_node, child_nodes.front());
+  const auto update_node = xpool::utils::cuda::graph::add_kernel_node(
+      parent_graph, reinterpret_cast<const void *>(update_write_value_kernel), dim3{1}, dim3{1}, 0,
+      update_arguments.data());
+  xpool::utils::cuda::graph::add_dependency(parent_graph, update_node, child_nodes.front());
 
   auto executable = cudaGraphExec_t{};
   ASSERT_EQ(cudaGraphInstantiate(&executable, parent_graph, nullptr, nullptr, 0), cudaSuccess);
@@ -258,18 +259,18 @@ TEST(GraphTest, UpdatesKernelParametersAndSplicesDependencies) {
   ASSERT_EQ(cudaGraphAddEmptyNode(&predecessor, graph, nullptr, 0), cudaSuccess);
   auto value = std::int32_t{17};
   auto arguments = std::array<void *, 2>{&first_output, &value};
-  const auto kernel =
-      xpool::utils::graph::add_kernel_node(graph, reinterpret_cast<const void *>(write_value_kernel), dim3{1}, dim3{1},
-                                           0, arguments.data(), std::span<const cudaGraphNode_t>{&predecessor, 1});
+  const auto kernel = xpool::utils::cuda::graph::add_kernel_node(
+      graph, reinterpret_cast<const void *>(write_value_kernel), dim3{1}, dim3{1}, 0, arguments.data(),
+      std::span<const cudaGraphNode_t>{&predecessor, 1});
   auto inserted = cudaGraphNode_t{};
   ASSERT_EQ(cudaGraphAddEmptyNode(&inserted, graph, nullptr, 0), cudaSuccess);
 
-  auto parameters = xpool::utils::graph::KernelNodeParameters::read(kernel);
+  auto parameters = xpool::utils::cuda::graph::KernelNodeParameters::read(kernel);
   ASSERT_EQ(parameters.arguments().size(), 2U);
   EXPECT_TRUE(parameters.contains_address(reinterpret_cast<std::uintptr_t>(first_output)));
   parameters.arguments()[0].write_address(0, reinterpret_cast<std::uintptr_t>(second_output));
   parameters.apply(kernel);
-  xpool::utils::graph::insert_node_after(graph, predecessor, inserted);
+  xpool::utils::cuda::graph::insert_node_after(graph, predecessor, inserted);
 
   auto predecessor_successors = std::size_t{0};
   ASSERT_EQ(cudaGraphNodeGetDependentNodes(predecessor, nullptr, nullptr, &predecessor_successors), cudaSuccess);

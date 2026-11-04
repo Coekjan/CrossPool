@@ -1,6 +1,6 @@
 #pragma once
 
-/// \file xpool/utils/graph.hpp
+/// \file xpool/utils/cuda/graph.hpp
 /// \brief Host-side CUDA Graph inspection and mutation helpers.
 ///
 /// Borrowed graph and node handles remain owned by CUDA. CUDA query, creation,
@@ -15,7 +15,57 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
-namespace xpool::utils::graph {
+#include <xpool/utils/cuda.hpp>
+
+namespace xpool::utils::cuda::graph {
+
+/// Create a graph directly in the caller's retained output slot.
+/// \throws c10::AcceleratorError if CUDA rejects creation.
+void create(cudaGraph_t &graph);
+
+/// Instantiate into the caller's retained executable slot, including partial output on failure.
+/// \throws c10::AcceleratorError if CUDA rejects instantiation.
+void instantiate(cudaGraphExec_t &executable, cudaGraph_t graph);
+
+/// Enqueue graph upload without waiting for stream completion.
+/// \throws c10::AcceleratorError if CUDA rejects upload.
+void upload(cudaGraphExec_t executable, cudaStream_t stream);
+
+/// Enqueue graph execution without waiting for stream completion.
+/// \throws c10::AcceleratorError if CUDA rejects launch.
+void launch(cudaGraphExec_t executable, cudaStream_t stream);
+
+/// Destroy a graph; the caller clears its retained slot after successful return.
+/// \throws c10::AcceleratorError if CUDA rejects destruction.
+void destroy(cudaGraph_t graph);
+
+/// Destroy an executable; the caller clears its retained slot after successful return.
+/// \throws c10::AcceleratorError if CUDA rejects destruction.
+void destroy(cudaGraphExec_t executable);
+
+/// Read typed Memset parameters from a borrowed node.
+/// \throws c10::AcceleratorError if CUDA rejects the query.
+[[nodiscard]] cudaMemsetParams memset_parameters(cudaGraphNode_t node);
+
+/// Set typed Memset parameters; CUDA copies the supplied values during the call.
+/// \throws c10::AcceleratorError if CUDA rejects the change.
+void set_memset_parameters(cudaGraphNode_t node, const cudaMemsetParams &parameters);
+
+/// Read typed Memcpy parameters from a borrowed node.
+/// \throws c10::AcceleratorError if CUDA rejects the query.
+[[nodiscard]] cudaMemcpy3DParms memcpy_parameters(cudaGraphNode_t node);
+
+/// Set typed Memcpy parameters; CUDA copies the supplied values during the call.
+/// \throws c10::AcceleratorError if CUDA rejects the change.
+void set_memcpy_parameters(cudaGraphNode_t node, const cudaMemcpy3DParms &parameters);
+
+/// Return the number of direct dependent nodes.
+/// \throws c10::AcceleratorError if CUDA rejects the query.
+[[nodiscard]] std::size_t dependent_count(cudaGraphNode_t node);
+
+/// Add one graph-owned empty node.
+/// \throws c10::AcceleratorError if CUDA rejects the addition.
+[[nodiscard]] cudaGraphNode_t add_empty_node(cudaGraph_t graph);
 
 /// One owned CUDA Kernel Node argument and its ABI offset.
 struct KernelNodeArgument {
@@ -100,6 +150,14 @@ create_conditional_handle(cudaGraph_t owner, unsigned int default_launch_value =
 /// The returned device-node handle remains owned by the graph node.
 [[nodiscard]] cudaGraphDeviceNode_t make_device_updatable(cudaGraphNode_t node);
 
+/// Return the covering span from the first through last Memset write, including pitch gaps.
+/// \throws c10::Error for empty geometry, invalid element size/pitch or overflow.
+[[nodiscard]] std::size_t memset_access_bytes(const cudaMemsetParams &parameters);
+
+/// Return the byte span of a contiguous one-dimensional device-to-device copy.
+/// \throws c10::Error for unsupported geometry, direction or storage.
+[[nodiscard]] std::size_t memcpy_access_bytes(const cudaMemcpy3DParms &parameters);
+
 /// Visit every node reachable through child graphs and conditional bodies.
 /// The visitor is invoked synchronously and is not retained.
 void for_each_reachable_node(cudaGraph_t graph, const std::function<void(cudaGraphNode_t, cudaGraphNodeType)> &visitor);
@@ -121,4 +179,4 @@ void add_dependency(cudaGraph_t graph, cudaGraphNode_t predecessor, cudaGraphNod
 /// Every direct default-edge successor is rewired through the inserted node.
 void insert_node_after(cudaGraph_t graph, cudaGraphNode_t predecessor, cudaGraphNode_t inserted);
 
-} // namespace xpool::utils::graph
+} // namespace xpool::utils::cuda::graph
