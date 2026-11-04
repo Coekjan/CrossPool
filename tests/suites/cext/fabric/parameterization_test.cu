@@ -162,3 +162,113 @@ TEST(FfnParameterizationTest, AllowsUnusedOptionalRangeAndRejectsUnusedRequiredR
     EXPECT_EQ(cudaGraphDestroy(graph), cudaSuccess);
   }
 }
+
+TEST(FfnParameterizationTest, RejectsTwoDimensionalDeviceMemcpy) {
+  ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
+  auto storage = std::array<void *, 2>{};
+  for (auto &pointer : storage) {
+    ASSERT_EQ(cudaMalloc(&pointer, 64), cudaSuccess);
+  }
+  auto graphs = std::array<cudaGraph_t, 2>{};
+  auto parameters = cudaMemcpy3DParms{};
+  parameters.srcPtr = make_cudaPitchedPtr(storage[0], 16, 16, 4);
+  parameters.dstPtr = make_cudaPitchedPtr(storage[1], 16, 16, 4);
+  parameters.extent = make_cudaExtent(8, 2, 1);
+  parameters.kind = cudaMemcpyDeviceToDevice;
+  for (auto &graph : graphs) {
+    ASSERT_EQ(cudaGraphCreate(&graph, 0), cudaSuccess);
+    auto node = cudaGraphNode_t{};
+    ASSERT_EQ(cudaGraphAddMemcpyNode(&node, graph, nullptr, 0, &parameters), cudaSuccess);
+  }
+  EXPECT_THROW(xpool::ffnagent::parameterize_graph(graphs[0], graphs[1], {}, {}, 0, 0, 0), c10::Error);
+  for (auto graph : graphs) {
+    EXPECT_EQ(cudaGraphDestroy(graph), cudaSuccess);
+  }
+  for (auto pointer : storage) {
+    EXPECT_EQ(cudaFree(pointer), cudaSuccess);
+  }
+}
+
+TEST(FfnParameterizationTest, BindsMemsetWithPitchAndRejectsIncompleteWriteSpans) {
+  ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
+  auto storage = std::array<std::uint8_t *, 3>{};
+  for (auto &pointer : storage) {
+    ASSERT_EQ(cudaMalloc(&pointer, 64), cudaSuccess);
+  }
+  auto graphs = std::array<cudaGraph_t, 2>{};
+  auto nodes = std::array<cudaGraphNode_t, 2>{};
+  for (auto index = std::size_t{0}; index < graphs.size(); ++index) {
+    ASSERT_EQ(cudaGraphCreate(&graphs[index], 0), cudaSuccess);
+    const auto parameters = cudaMemsetParams{storage[index] + 4, 16, 7, 1, 12, 2};
+    ASSERT_EQ(cudaGraphAddMemsetNode(&nodes[index], graphs[index], nullptr, 0, &parameters), cudaSuccess);
+  }
+  auto replacement = xpool::ffnagent::LaneAddressReplacement{reinterpret_cast<std::uintptr_t>(storage[0]),
+                                                             reinterpret_cast<std::uintptr_t>(storage[1]), 31,
+                                                             reinterpret_cast<std::uintptr_t>(storage[2])};
+  EXPECT_THROW(xpool::ffnagent::parameterize_graph(graphs[0], graphs[1], {}, {&replacement, 1}, 0, 0, 0), c10::Error);
+  replacement.bytes = 64;
+  replacement.read_only = true;
+  EXPECT_THROW(xpool::ffnagent::parameterize_graph(graphs[0], graphs[1], {}, {&replacement, 1}, 0, 0, 0), c10::Error);
+  replacement.read_only = false;
+  ASSERT_NO_THROW(xpool::ffnagent::parameterize_graph(graphs[0], graphs[1], {}, {&replacement, 1}, 0, 0, 0));
+  ASSERT_EQ(cudaGraphDestroy(graphs[1]), cudaSuccess);
+  ASSERT_EQ(cudaFree(storage[0]), cudaSuccess);
+  ASSERT_EQ(cudaFree(storage[1]), cudaSuccess);
+  ASSERT_EQ(cudaMemset(storage[2], 0, 64), cudaSuccess);
+  auto executable = cudaGraphExec_t{};
+  ASSERT_EQ(cudaGraphInstantiate(&executable, graphs[0], 0), cudaSuccess);
+  ASSERT_EQ(cudaGraphLaunch(executable, nullptr), cudaSuccess);
+  ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+  auto result = std::array<std::uint8_t, 64>{};
+  ASSERT_EQ(cudaMemcpy(result.data(), storage[2], result.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  for (auto index = std::size_t{0}; index < result.size(); ++index) {
+    EXPECT_EQ(result[index], (index >= 4 && index < 16) || (index >= 20 && index < 32) ? 7 : 0);
+  }
+  EXPECT_EQ(cudaGraphExecDestroy(executable), cudaSuccess);
+  EXPECT_EQ(cudaGraphDestroy(graphs[0]), cudaSuccess);
+  EXPECT_EQ(cudaFree(storage[2]), cudaSuccess);
+}
+
+TEST(FfnParameterizationTest, BindsDeviceMemcpyEndpointsBeforeSourceRetirement) {
+  ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
+  auto storage = std::array<std::uint8_t *, 6>{};
+  for (auto &pointer : storage) {
+    ASSERT_EQ(cudaMalloc(&pointer, 64), cudaSuccess);
+  }
+  auto graphs = std::array<cudaGraph_t, 2>{};
+  for (auto index = std::size_t{0}; index < graphs.size(); ++index) {
+    ASSERT_EQ(cudaGraphCreate(&graphs[index], 0), cudaSuccess);
+    auto node = cudaGraphNode_t{};
+    ASSERT_EQ(cudaGraphAddMemcpyNode1D(&node, graphs[index], nullptr, 0, storage[index + 2] + 4, storage[index] + 8, 16,
+                                       cudaMemcpyDeviceToDevice),
+              cudaSuccess);
+  }
+  const auto replacements = std::array<xpool::ffnagent::LaneAddressReplacement, 2>{
+      xpool::ffnagent::LaneAddressReplacement{reinterpret_cast<std::uintptr_t>(storage[0]),
+                                              reinterpret_cast<std::uintptr_t>(storage[1]), 64,
+                                              reinterpret_cast<std::uintptr_t>(storage[4]), true, true},
+      xpool::ffnagent::LaneAddressReplacement{reinterpret_cast<std::uintptr_t>(storage[2]),
+                                              reinterpret_cast<std::uintptr_t>(storage[3]), 64,
+                                              reinterpret_cast<std::uintptr_t>(storage[5])},
+  };
+  ASSERT_NO_THROW(xpool::ffnagent::parameterize_graph(graphs[0], graphs[1], {}, replacements, 0, 0, 0));
+  ASSERT_EQ(cudaGraphDestroy(graphs[1]), cudaSuccess);
+  for (auto index = std::size_t{0}; index < 4; ++index) {
+    ASSERT_EQ(cudaFree(storage[index]), cudaSuccess);
+  }
+  ASSERT_EQ(cudaMemset(storage[4], 13, 64), cudaSuccess);
+  ASSERT_EQ(cudaMemset(storage[5], 0, 64), cudaSuccess);
+  auto executable = cudaGraphExec_t{};
+  ASSERT_EQ(cudaGraphInstantiate(&executable, graphs[0], 0), cudaSuccess);
+  ASSERT_EQ(cudaGraphLaunch(executable, nullptr), cudaSuccess);
+  ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+  auto result = std::array<std::uint8_t, 64>{};
+  ASSERT_EQ(cudaMemcpy(result.data(), storage[5], result.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+  for (auto index = std::size_t{0}; index < result.size(); ++index) {
+    EXPECT_EQ(result[index], index >= 4 && index < 20 ? 13 : 0);
+  }
+  EXPECT_EQ(cudaGraphExecDestroy(executable), cudaSuccess);
+  EXPECT_EQ(cudaGraphDestroy(graphs[0]), cudaSuccess);
+  EXPECT_EQ(cudaFree(storage[4]), cudaSuccess);
+  EXPECT_EQ(cudaFree(storage[5]), cudaSuccess);
+}
