@@ -109,7 +109,8 @@ functions reject the daemon role before initializing CUDA or touching Device
 resources.
 
 Native `RuntimeState` is the sole process-lifetime authority for the initialized
-role. Python bootstrap queries that authority through the root binding and does
+role and validates the role/device pairing before publishing initialization.
+Python bootstrap queries that authority through the root binding and does
 not retain a second role or CUDA-device identity.
 
 Native validation follows the ownership seam. Aggregate Projection construction

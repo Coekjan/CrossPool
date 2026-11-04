@@ -21,6 +21,7 @@ std::string_view name(RuntimeRole role) {
 }
 
 void RuntimeState::initialize(RuntimeRole role, const std::optional<c10::DeviceIndex> &device) {
+  TORCH_CHECK(is_valid(role), "xpool initialize received an invalid runtime role");
   if (role == RuntimeRole::Daemon) {
     TORCH_CHECK(!device.has_value(), "xpool daemon init requires a null device");
   } else {

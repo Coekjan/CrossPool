@@ -59,10 +59,8 @@ PYBIND11_MODULE(native, module) {
          const std::optional<xpool::debug::Options> &debug_options) {
         auto parsed_device = std::optional<c10::DeviceIndex>{};
         if (device.has_value()) {
-          TORCH_CHECK(*device >= 0, "xpool initialize requires a non-negative device");
           parsed_device = c10::checked_convert<c10::DeviceIndex>(*device, "device");
         }
-        TORCH_CHECK(xpool::is_valid(role), "xpool initialize received an invalid runtime role");
         xpool::RuntimeState::singleton().initialize(role, parsed_device);
         xpool::debug::configure(debug_options.value_or(xpool::debug::Options{}), parsed_device);
       },

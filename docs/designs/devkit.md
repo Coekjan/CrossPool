@@ -17,8 +17,11 @@ observation therefore already reflects its bytes; it needs no duplicate
 planning field.
 
 Every Observer owns its record and snapshot values and exposes reads through
-its own `xpool.native.devkit.<observer>` submodule. An enabled Observer that
-cannot allocate or install fails startup. Exhausted Device record capacity
+its own `xpool.native.devkit.<observer>` submodule. The Fabric Observer binding
+exposes the delivery enum and typed event timestamps for trace serialization.
+Enabled Transport, Fabric and FFN Routing Observers require positive record
+capacity when configuration is installed. An enabled Observer that cannot allocate
+or install fails startup. Exhausted Device record capacity
 increments the Observer's dropped count; an Observer destination-bounds failure
 omits that record rather than corrupting storage or changing execution.
 Snapshot read failures are reported to the Host reader and do not alter an

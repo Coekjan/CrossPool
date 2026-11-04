@@ -30,6 +30,12 @@ void configure(const Options &debug_options, std::optional<c10::DeviceIndex> dev
     TORCH_CHECK(options_h == debug_options, "xpool debug options differ from the first configure call");
     return;
   }
+  TORCH_CHECK(!debug_options.transport_observer.enable || debug_options.transport_observer.record_capacity != 0,
+              "enabled Transport Observer record capacity must be positive");
+  TORCH_CHECK(!debug_options.fabric_observer.enable || debug_options.fabric_observer.record_capacity != 0,
+              "enabled Fabric Observer record capacity must be positive");
+  TORCH_CHECK(!debug_options.ffn_routing_observer.enable || debug_options.ffn_routing_observer.record_capacity != 0,
+              "enabled Routing Observer record capacity must be positive");
   if (device.has_value()) {
     TORCH_CHECK(*device >= 0, "xpool debug options require a non-negative device");
     c10::cuda::CUDAGuard device_guard(*device);

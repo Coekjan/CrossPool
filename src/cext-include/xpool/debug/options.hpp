@@ -68,8 +68,8 @@ static_assert(std::is_trivially_copyable_v<Options>);
 extern Options options_h;
 
 /// Configure process-wide host debug options and, when present, their device mirror.
-/// \throws c10::Error if a device is invalid, CUDA update fails, or a later
-/// call differs from the first configuration.
+/// \throws c10::Error if an enabled Observer has zero record capacity, a device
+/// is invalid, CUDA update fails, or a later call differs from the first configuration.
 void configure(const Options &debug_options, std::optional<c10::DeviceIndex> device);
 
 /// Return the host-side native debug options.
