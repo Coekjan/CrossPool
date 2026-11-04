@@ -9,7 +9,6 @@
 #include <span>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 #include <c10/util/Exception.h>
 #include <cuda/atomic>

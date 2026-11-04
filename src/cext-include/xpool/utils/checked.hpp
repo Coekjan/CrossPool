@@ -4,7 +4,6 @@
 /// \brief Host-side checked integer arithmetic utilities.
 
 #include <concepts>
-#include <cstddef>
 #include <type_traits>
 
 #include <c10/util/Exception.h>

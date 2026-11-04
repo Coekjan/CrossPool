@@ -3,7 +3,10 @@
 /// \file xpool/devkit/fabric_observer.cuh
 /// \brief Device implementations for Fabric Observer state transitions.
 
+#include <cuda/std/variant>
+
 #include <xpool/devkit/fabric_observer.hpp>
+#include <xpool/macros.hpp>
 #include <xpool/utils/time.cuh>
 
 namespace xpool::devkit::fabric_observer {

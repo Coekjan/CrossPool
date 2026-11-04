@@ -4,12 +4,13 @@
 #include <map>
 #include <string>
 
+#include <c10/util/Exception.h>
+#include <cuda_runtime_api.h>
 #include <gtest/gtest.h>
 
 #include <xpool/abi.hpp>
 #include <xpool/transport/arena.hpp>
 #include <xpool/transport/layout.hpp>
-#include <xpool/transport/protocol.hpp>
 #include <xpool/utils/checked.hpp>
 
 TEST(TransportArenaHandleTest, EncodesDecodesAndIndexesOrderedContainers) {

@@ -7,8 +7,8 @@
 #include <chrono>
 #include <concepts>
 #include <cstdint>
-#include <functional>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 namespace xpool::utils::wait {

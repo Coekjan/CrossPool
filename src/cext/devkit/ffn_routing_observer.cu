@@ -47,7 +47,6 @@ struct BufferLayout {
   std::size_t total_bytes;
 
   static BufferLayout create(std::size_t record_capacity, std::size_t element_capacity) {
-    TORCH_CHECK(record_capacity != 0, "routing observer record capacity must be positive");
     TORCH_CHECK(element_capacity != 0, "routing observer element capacity must be positive");
     const auto total_elements = xpool::utils::checked::prod(record_capacity, element_capacity);
     const auto plan = xpool::utils::layout::LayoutPlan<4>{

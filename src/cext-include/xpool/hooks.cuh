@@ -4,7 +4,7 @@
 /// \brief Typed Device extension points and built-in adapter composition.
 
 #include <xpool/devkit/adapters.cuh>
-#include <xpool/hooks/registry.cuh>
+#include <xpool/macros.hpp>
 
 namespace xpool::hooks {
 

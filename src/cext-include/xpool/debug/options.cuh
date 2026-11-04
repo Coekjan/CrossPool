@@ -3,8 +3,6 @@
 /// \file xpool/debug/options.cuh
 /// \brief Device-side native debug option state.
 
-#include <cstdint>
-
 #include <xpool/debug/options.hpp>
 #include <xpool/macros.hpp>
 

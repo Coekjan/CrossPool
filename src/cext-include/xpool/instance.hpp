@@ -3,7 +3,6 @@
 /// \file xpool/instance.hpp
 /// \brief Native entrypoints owned by instance processes.
 
-#include <cstdint>
 #include <optional>
 
 #include <ATen/core/TensorBody.h>

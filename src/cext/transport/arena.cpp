@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 
-#include <ATen/Functions.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/util/TypeCast.h>

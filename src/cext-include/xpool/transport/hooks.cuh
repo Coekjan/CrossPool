@@ -4,12 +4,11 @@
 /// \brief Device extension points owned by Transport execution.
 
 #include <cstddef>
-#include <cstdint>
 
 #include <xpool/ffn.hpp>
-#include <xpool/hooks/registry.hpp>
 #include <xpool/transport/arena.hpp>
 #include <xpool/transport/hooks.hpp>
+#include <xpool/transport/protocol.hpp>
 
 namespace xpool::hooks {
 

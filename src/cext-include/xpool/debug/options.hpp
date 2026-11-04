@@ -4,7 +4,6 @@
 /// \brief Host-side native debug option state.
 
 #include <cstddef>
-#include <cstdint>
 #include <optional>
 #include <type_traits>
 

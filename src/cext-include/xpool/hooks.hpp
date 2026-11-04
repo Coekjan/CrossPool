@@ -4,7 +4,6 @@
 /// \brief Typed Host hook dispatch through the built-in adapter catalog.
 
 #include <xpool/devkit/adapters.hpp>
-#include <xpool/hooks/registry.hpp>
 
 namespace xpool::hooks {
 

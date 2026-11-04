@@ -9,6 +9,7 @@
 #include <cuda/atomic>
 
 #include <xpool/abort.hpp>
+#include <xpool/macros.hpp>
 #include <xpool/transport/arena.hpp>
 
 namespace xpool::transport {

@@ -4,13 +4,14 @@
 /// \brief Single CUDA IPC transport attachment owned by one Instance-rank process.
 
 #include <cstddef>
-#include <cstdint>
 #include <mutex>
 #include <optional>
 
 #include <ATen/core/TensorBody.h>
+#include <cuda_runtime_api.h>
 
 #include <xpool/transport/arena.hpp>
+#include <xpool/transport/protocol.hpp>
 
 namespace xpool::transport {
 

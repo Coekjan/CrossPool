@@ -10,6 +10,7 @@
 #include <xpool/abort.hpp>
 #include <xpool/fabric/arena.hpp>
 #include <xpool/fabric/protocol.cuh>
+#include <xpool/macros.hpp>
 
 namespace xpool::fabric {
 

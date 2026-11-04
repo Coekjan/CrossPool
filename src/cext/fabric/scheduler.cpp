@@ -1,7 +1,6 @@
 #include <xpool/fabric/scheduler.hpp>
 
 #include <concepts>
-#include <type_traits>
 #include <variant>
 
 #include <c10/util/Exception.h>

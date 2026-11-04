@@ -4,7 +4,6 @@
 /// \brief Common process-local observer counters and event timelines.
 
 #include <array>
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>

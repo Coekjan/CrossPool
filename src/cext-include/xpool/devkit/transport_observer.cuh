@@ -4,6 +4,7 @@
 /// \brief Device implementations for Transport Observer state transitions.
 
 #include <xpool/devkit/transport_observer.hpp>
+#include <xpool/macros.hpp>
 #include <xpool/utils/time.cuh>
 
 namespace xpool::devkit::transport_observer {

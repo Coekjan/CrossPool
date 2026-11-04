@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <string_view>
 
+#include <c10/util/Exception.h>
+
 #include <xpool/utils/checked.hpp>
 
 /// Generic helpers for constructing and validating in-memory byte layouts.

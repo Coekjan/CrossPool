@@ -1,17 +1,15 @@
-#include <xpool/arena.hpp>
+#include <xpool/fabric/arena.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
-#include <utility>
 
-#include <ATen/ATen.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/util/Exception.h>
 #include <cuda_runtime_api.h>
 #include <nvshmem.h>
 
-#include <xpool/fabric/arena.hpp>
+#include <xpool/arena.hpp>
 #include <xpool/fabric/layout.hpp>
 
 namespace xpool::fabric {

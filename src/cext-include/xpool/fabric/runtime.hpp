@@ -3,11 +3,8 @@
 /// \file xpool/fabric/runtime.hpp
 /// \brief Host lifecycle boundary for one generation-scoped NVSHMEM Fabric.
 
-#include <cstddef>
-#include <cstdint>
 #include <mutex>
 #include <optional>
-#include <vector>
 
 #include <c10/core/Device.h>
 

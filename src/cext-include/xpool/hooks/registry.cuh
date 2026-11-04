@@ -3,8 +3,6 @@
 /// \file xpool/hooks/registry.cuh
 /// \brief Compile-time dispatch over a fixed Device adapter catalog.
 
-#include <cstddef>
-
 #include <xpool/hooks/registry.hpp>
 #include <xpool/macros.hpp>
 

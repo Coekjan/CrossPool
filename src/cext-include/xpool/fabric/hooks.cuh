@@ -9,7 +9,6 @@
 #include <xpool/fabric/arena.hpp>
 #include <xpool/fabric/hooks.hpp>
 #include <xpool/fabric/protocol.hpp>
-#include <xpool/hooks/registry.hpp>
 
 namespace xpool::hooks {
 

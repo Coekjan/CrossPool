@@ -6,6 +6,7 @@
 #include <cuda/atomic>
 
 #include <xpool/abort.hpp>
+#include <xpool/macros.hpp>
 #include <xpool/transport/protocol.hpp>
 
 namespace xpool::transport {

@@ -9,6 +9,7 @@
 
 #include <xpool/hooks/registry.hpp>
 #include <xpool/transport/arena.hpp>
+#include <xpool/transport/layout.hpp>
 
 #if defined(__CUDACC__)
 #include <xpool/hooks/registry.cuh>
