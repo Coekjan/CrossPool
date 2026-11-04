@@ -15,7 +15,7 @@ from xpool.config import FfnSchedulingPolicy
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
 from xpool.utils.dtype import TorchDtype
-from xpool.utils.integer import UINT64_MAX
+from xpool.utils.integer import UINT64_MAX, ensure_uint64
 
 __all__ = [
     "FABRIC_UID_HEX_LENGTH",
@@ -121,8 +121,7 @@ class FabricGenerationId:
     def __post_init__(self) -> None:
         """Validate both unsigned 64-bit generation words."""
 
-        if not 0 <= self.high <= UINT64_MAX or not 0 <= self.low <= UINT64_MAX:
-            raise ValueError("xpool fabric generation words must be unsigned 64-bit integers")
+        ensure_uint64(self.high, self.low)
         if self.high == 0 and self.low == 0:
             raise ValueError("xpool fabric generation must be nonzero")
 

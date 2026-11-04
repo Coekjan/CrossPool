@@ -5,7 +5,8 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+import httpx
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from xpool import ffn
 from xpool.config import XpoolConfig
@@ -298,6 +299,17 @@ class ServingListener(WireModel):
 
     host: str = Field(min_length=1, description="Host bound by the Instance serving process.")
     port: int = Field(ge=1, le=65535, description="TCP port bound by the Instance serving process.")
+
+    @field_validator("host")
+    @classmethod
+    def validate_host(cls, value: str) -> str:
+        """Reject addresses that cannot be used for an HTTP health probe."""
+
+        try:
+            httpx.URL(scheme="http", host=value)
+        except httpx.InvalidURL as error:
+            raise ValueError(f"invalid serving listener host: {error}") from error
+        return value
 
 
 class InstanceRankInitializedPublication(WireModel):

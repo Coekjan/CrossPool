@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import torch
 from pydantic import ValidationError
@@ -79,6 +81,12 @@ def test_generation_round_trips_canonical_text() -> None:
         FabricGenerationId.parse("ABC")
     with pytest.raises(ValueError, match="nonzero"):
         FabricGenerationId.parse("0" * 32)
+
+
+@pytest.mark.parametrize("word", [True, 1.0])
+def test_generation_rejects_noninteger_words(word: bool | float) -> None:
+    with pytest.raises(ValueError, match="uint64"):
+        replace(FabricGenerationId(1, 2), high=word)
 
 
 def test_fabric_uid_and_plan_round_trip() -> None:

@@ -40,6 +40,7 @@ def test_daemon_failure_retains_first_exception_and_retirement_budget() -> None:
     ("host", "port"),
     [
         pytest.param("", 30000, id="empty-host"),
+        pytest.param("\n", 30000, id="invalid-host"),
         pytest.param("127.0.0.1", 0, id="zero-port"),
         pytest.param("127.0.0.1", 65536, id="port-too-large"),
     ],
