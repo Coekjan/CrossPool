@@ -27,12 +27,14 @@ def test_memory_profile_command_publishes_evidence_before_profile(
         "write_memory_profile_evidence",
         lambda value: written.append(value) or tmp_path / "memory.evidence.json",
     )
-    monkeypatch.setattr(memory_profile, "write_memory_calibration_profile", written.append)
+    monkeypatch.setattr(
+        memory_profile, "write_memory_calibration_profile", lambda value, *, path: written.append((value, path))
+    )
 
     result = memory_profile.MemoryProfileCommand().run(argparse.Namespace(), config)
 
     assert result == 0
-    assert written == [evidence, profile]
+    assert written == [evidence, (profile, config.ffn.device_memory_calibration)]
     output = capsys.readouterr().out
     assert str(tmp_path / "memory.evidence.json") in output
     assert str(tmp_path / "memory.json") in output
@@ -57,7 +59,8 @@ def test_memory_profile_publication_failure_preserves_stage_and_paths(
         published.append(value)
         return evidence_path
 
-    def write_profile(value: object) -> None:
+    def write_profile(value: object, *, path: Path | None) -> None:
+        assert path == profile_path
         if failure_stage == "evidence":
             pytest.fail("runtime Profile must not be published after an evidence failure")
         raise RuntimeError("profile publication denied")

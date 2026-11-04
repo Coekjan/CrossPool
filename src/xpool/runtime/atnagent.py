@@ -14,6 +14,7 @@ from xpool.config import get_global_config
 from xpool.fabric import FabricGenerationPhase, FabricParticipantPhase
 from xpool.model import ModelId
 from xpool.native import ABI_VERSION, RuntimeRole
+from xpool.runtime import memory_calibration
 from xpool.runtime.agent import AGENT_SHUTDOWN_POLL_INTERVAL_S, Agent, AgentError, AgentHeartbeat
 from xpool.service.client import XpoolClient, XpoolClientError
 from xpool.service.errors import XpoolDaemonError
@@ -314,6 +315,11 @@ class AtnAgent(Agent):
         super().__init__(device=device, runtime_role=RuntimeRole.ATNAGENT)
         self.registration = AtnAgentRegistration(
             device=device,
+            calibration_environment=(
+                memory_calibration.observe_environment(device)
+                if get_global_config().ffn.device_memory_calibration is not None
+                else None
+            ),
             abi_version=ABI_VERSION,
             pid=self.proc_id.pid,
         )

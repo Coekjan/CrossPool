@@ -20,6 +20,49 @@ from xtest.harness.support.config import (
 )
 
 
+def test_resource_plan_selects_only_applicable_signatures(packed_model: ffn.FfnModelSpec) -> None:
+    dense = execution.DenseFfnExecutionSignature(
+        payload_dtype=torch.bfloat16,
+        payload_row_capacity=1,
+        hidden_size=16,
+        local_intermediate_size=32,
+        activation=ffn.SiluActivation(),
+        gate_up=weights.ProjectionLayout(values=TensorLayout((64, 16), torch.bfloat16, 0), scales=None, bias=None),
+        down=weights.ProjectionLayout(values=TensorLayout((16, 32), torch.bfloat16, 0), scales=None, bias=None),
+    )
+    profile = InstanceFfnProfile(
+        payload_dtype=torch.bfloat16,
+        hidden_size=packed_model.hidden_size,
+        layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.MOE),),
+        decode_payload_row_capacity=1,
+        prefill_payload_row_capacity=1,
+        group_sum_complete_admitted=True,
+    )
+    layout = preparation.prepare_ffn_layer(
+        packed_model,
+        layer_ordinal=0,
+        payload_dtype=profile.payload_dtype,
+        tp_size=1,
+        tp_rank=0,
+    )
+    (moe_signature,) = layout.execution_signatures(profile=profile)
+    declaration = lane_resource_declaration(
+        key="dense.source",
+        max_bytes=1024,
+        alignment_bytes=256,
+        aliases=("dense.source",),
+    ).model_copy(update={"uses": ("dense",)})
+    plan = preparation.ExecutionResourcePlan.from_signatures(
+        (dense, moe_signature), contract=TEST_EXECUTION_CONTRACT.model_copy(update={"lane_resources": (declaration,)})
+    )
+    assert [(group.requirement.key, group.signature_indices) for group in plan.lane_resources] == [
+        ("compute", (0,)),
+        ("compute", (1,)),
+        ("dense.source", (0,)),
+    ]
+    assert not plan.shared_resources
+
+
 @pytest.fixture
 def packed_model() -> ffn.FfnModelSpec:
     return ffn.FfnModelSpec(
@@ -192,7 +235,12 @@ def test_estimator_counts_encoded_padded_storages_and_router_owner(packed_model:
         prefill_payload_row_capacity=65,
         group_sum_complete_admitted=True,
     )
-    estimator = device_memory.DeviceMemoryEstimator(model_specs=(packed_model,), instance_profiles=(profile,))
+    estimator = device_memory.DeviceMemoryEstimator(
+        coefficients=None,
+        model_specs=(packed_model,),
+        instance_profiles=(profile,),
+        ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 4,
+    )
     expert_requests = (
         32 * 1472 * 1440,
         32 * 1472 * 90,
@@ -219,7 +267,7 @@ def test_estimator_counts_encoded_padded_storages_and_router_owner(packed_model:
         point = estimator.allocation_ledger_for_model_plans(model_plans=plans, ffnagent_index=rank)[0]
         assert point.exact_resource_ledger_bytes == sum(expected)
         assert point.features.tensor_storage_allocation_count == len(expected)
-        assert point.allocator_allowance_bytes == device_memory.allocator_reservation_bytes(expected) - sum(expected)
+        assert point.charges[0].estimated_physical_bytes == device_memory.allocator_reservation_bytes(expected)
     signatures = layout.execution_signatures(profile=profile)
     assert tuple(signature.payload_row_capacity for signature in signatures) == (1, 2, 4, 8, 16, 32, 64, 65)
     for signature in signatures:
@@ -245,46 +293,3 @@ def test_estimator_counts_encoded_padded_storages_and_router_owner(packed_model:
     unrounded = replace(signature, router=replace(signature.router, weight_rounding=ffn.TopKWeightRounding.NONE))
     assert execution.capture_weight_pair_key(unrounded) != execution.capture_weight_pair_key(signature)
     assert not torch.cuda.is_initialized()
-
-
-def test_resource_plan_selects_only_applicable_signatures(packed_model: ffn.FfnModelSpec) -> None:
-    dense = execution.DenseFfnExecutionSignature(
-        payload_dtype=torch.bfloat16,
-        payload_row_capacity=1,
-        hidden_size=16,
-        local_intermediate_size=32,
-        activation=ffn.SiluActivation(),
-        gate_up=weights.ProjectionLayout(values=TensorLayout((64, 16), torch.bfloat16, 0), scales=None, bias=None),
-        down=weights.ProjectionLayout(values=TensorLayout((16, 32), torch.bfloat16, 0), scales=None, bias=None),
-    )
-    profile = InstanceFfnProfile(
-        payload_dtype=torch.bfloat16,
-        hidden_size=packed_model.hidden_size,
-        layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.MOE),),
-        decode_payload_row_capacity=1,
-        prefill_payload_row_capacity=1,
-        group_sum_complete_admitted=True,
-    )
-    layout = preparation.prepare_ffn_layer(
-        packed_model,
-        layer_ordinal=0,
-        payload_dtype=profile.payload_dtype,
-        tp_size=1,
-        tp_rank=0,
-    )
-    (moe_signature,) = layout.execution_signatures(profile=profile)
-    declaration = lane_resource_declaration(
-        key="dense.source",
-        max_bytes=1024,
-        alignment_bytes=256,
-        aliases=("dense.source",),
-    ).model_copy(update={"uses": ("dense",)})
-    plan = preparation.ExecutionResourcePlan.from_signatures(
-        (dense, moe_signature), contract=TEST_EXECUTION_CONTRACT.model_copy(update={"lane_resources": (declaration,)})
-    )
-    assert [(group.requirement.key, group.signature_indices) for group in plan.lane_resources] == [
-        ("compute", (0,)),
-        ("compute", (1,)),
-        ("dense.source", (0,)),
-    ]
-    assert not plan.shared_resources

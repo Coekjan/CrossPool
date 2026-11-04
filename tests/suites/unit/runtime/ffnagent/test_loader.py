@@ -27,7 +27,12 @@ from xpool.ffn import DenseFfnSpec, FfnModelSpec, GatedProjectionSpec, Projectio
 from xpool.native.ffn import LayerKind
 from xpool.quantization import Unquantized
 from xpool.runtime.ffnagent import loader, preparation, weights
-from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
+from xtest.harness.support.config import (
+    TEST_EXECUTION_CONTRACT,
+    TEST_MODEL_ID,
+    install_test_config,
+    reset_global_config,
+)
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -56,6 +61,7 @@ def test_plan_materialization_selects_only_local_layers(
     plan = FabricPlan(
         generation=FabricGenerationId(high=1, low=2),
         uid=FabricUid(value="ab" * 128),
+        ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 2,
         pe_placements=(
             FabricPePlacement(role=FabricRole.ATNAGENT, device=0),
             FabricPePlacement(role=FabricRole.FFNAGENT, device=1),

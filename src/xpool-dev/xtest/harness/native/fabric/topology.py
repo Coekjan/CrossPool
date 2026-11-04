@@ -13,6 +13,7 @@ import torch
 from xkit.child import PythonChildProcess
 from xkit.task import TaskCancelled, get_task_root
 from xpool.fabric import FabricUid
+from xpool.memory import FfnExecutionContract
 from xpool.native import RuntimeRole
 from xpool.native.ffn import ForwardMode, LayerKind, OutputRequirement
 from xpool.utils.device import visible_uuids
@@ -35,7 +36,14 @@ from xtest.harness.native.fabric.protocol import (
     FabricParticipantReady,
     FabricParticipantReport,
     FabricParticipantSpec,
+    FabricParticipantStopped,
     FabricTopologyReport,
+)
+from xtest.harness.native.ffn.qualification import (
+    DENSE_INTERMEDIATE_SIZE,
+    EXECUTION_HIDDEN_SIZE,
+    MOE_INTERMEDIATE_SIZE,
+    execution_fabric_plan,
 )
 from xtest.harness.support.wait import remaining_seconds
 
@@ -62,11 +70,20 @@ def run_fabric_topology(
     payload_rows: tuple[int, ...] | None = None,
     layer_ordinals: tuple[int, ...] = (0,),
     output_requirement: OutputRequirement = OutputRequirement.PER_RANK_COMPLETE,
+    hidden_size: int = EXECUTION_HIDDEN_SIZE,
+    intermediate_size: int | None = None,
 ) -> FabricTopologyReport:
     """Run concurrent requests and return complete native Fabric evidence."""
 
     if not forward_modes or repetition_count <= 0:
         raise ValueError("Fabric modes and repetition count must be non-empty and positive")
+    selected_intermediate_size = (
+        intermediate_size
+        if intermediate_size is not None
+        else (DENSE_INTERMEDIATE_SIZE if layer_kind is LayerKind.DENSE else MOE_INTERMEDIATE_SIZE)
+    )
+    if hidden_size <= 0 or selected_intermediate_size <= 0:
+        raise ValueError("Fabric qualification dimensions must be positive")
     selected_payload_rows = (4,) * len(forward_modes) if payload_rows is None else payload_rows
     if len(selected_payload_rows) != len(forward_modes):
         raise ValueError("Fabric qualification payload rows must match the configured instances")
@@ -104,7 +121,6 @@ def run_fabric_topology(
             role=RuntimeRole.ATNAGENT,
             device=index,
             environment=attention_environment,
-            uid=uid.value,
             pe=index,
             atnagent_count=atnagent_count,
             ffnagent_count=ffnagent_count,
@@ -116,6 +132,8 @@ def run_fabric_topology(
             executor_lane_count=executor_lane_count,
             forward_modes=forward_modes,
             layer_kind=layer_kind,
+            hidden_size=hidden_size,
+            intermediate_size=selected_intermediate_size,
         )
         for index in range(atnagent_count)
     ) + tuple(
@@ -123,7 +141,6 @@ def run_fabric_topology(
             role=RuntimeRole.FFNAGENT,
             device=atnagent_count + index,
             environment=ffn_environment,
-            uid=uid.value,
             pe=atnagent_count + index,
             atnagent_count=atnagent_count,
             ffnagent_count=ffnagent_count,
@@ -135,6 +152,8 @@ def run_fabric_topology(
             executor_lane_count=executor_lane_count,
             forward_modes=forward_modes,
             layer_kind=layer_kind,
+            hidden_size=hidden_size,
+            intermediate_size=selected_intermediate_size,
         )
         for index in range(ffnagent_count)
     )
@@ -146,6 +165,8 @@ def run_fabric_topology(
     task_scope = None
     participants_ready = False
     participant_reports: tuple[FabricParticipantReport, ...] = ()
+    plan_dispatch_started = False
+    early_cleanup_failures: list[Exception] = []
     cleanup_deadline: float | None = None
     cancelled: int | None = None
     handlers = ExitStack()
@@ -184,6 +205,29 @@ def run_fabric_topology(
                     )
                 )
             participants[-1].start()
+        execution_contracts = tuple(
+            process.receive(FfnExecutionContract, timeout_seconds=FABRIC_TIMEOUT_SECONDS)
+            for process in participants[atnagent_count:]
+        )
+        fabric_plan = execution_fabric_plan(
+            uid=uid.value,
+            atnagent_count=atnagent_count,
+            ffnagent_count=ffnagent_count,
+            ffn_tp_size=selected_tp_size,
+            executor_lane_count=executor_lane_count,
+            instance_count=len(forward_modes),
+            execution_kind=layer_kind,
+            ffn_execution_contracts=execution_contracts,
+            layer_count=execution_layer_count,
+            decode_payload_row_capacity=decode_payload_row_capacity,
+            prefill_payload_row_capacity=prefill_payload_row_capacity,
+            payload_dtype=payload_dtype,
+            hidden_size=hidden_size,
+            intermediate_size=selected_intermediate_size,
+        )
+        plan_dispatch_started = True
+        for process in participants:
+            process.send(fabric_plan)
         for spec, process in zip(participant_specs, participants, strict=True):
             if spec.role is RuntimeRole.FFNAGENT:
                 process.receive(FabricParticipantReady, timeout_seconds=FABRIC_TIMEOUT_SECONDS)
@@ -212,7 +256,6 @@ def run_fabric_topology(
                 atnagent_pe=atnagent_pe,
                 arena=arena,
                 forward_mode=forward_modes[instance_index],
-                ffnagent_count=ffnagent_count,
                 execution_tp_size=selected_tp_size,
                 atnagent_count=atnagent_count,
                 output_requirement=output_requirement,
@@ -225,6 +268,8 @@ def run_fabric_topology(
                 stop_on_command=quiesce_after_first_request,
                 start_barrier=start_barrier,
                 layer_kind=layer_kind,
+                hidden_size=hidden_size,
+                intermediate_size=selected_intermediate_size,
                 pre_admission_rejection=pre_admission_rejection,
             )
             with defer_signal_exceptions():
@@ -262,7 +307,37 @@ def run_fabric_topology(
         if cleanup_deadline is None:
             cleanup_deadline = time.monotonic() + MPS_CLEANUP_TIMEOUT_S
         try:
-            if any(process.process.is_alive() for process in participants):
+            if not plan_dispatch_started:
+                for process in participants:
+                    if process.process.is_alive():
+                        try:
+                            process.send(FabricParticipantCommand.STOP)
+                        except Exception as error:
+                            early_cleanup_failures.append(error)
+                for process in participants:
+                    if process.process.pid is None:
+                        continue
+                    if process.process.is_alive():
+                        try:
+                            while True:
+                                message = process.receive(
+                                    object, timeout_seconds=remaining_seconds(cleanup_deadline, "Fabric setup stop")
+                                )
+                                if isinstance(message, FabricParticipantStopped):
+                                    break
+                                if not isinstance(message, FfnExecutionContract):
+                                    raise RuntimeError(f"unexpected Fabric setup stop reply: {message!r}")
+                        except Exception as error:
+                            early_cleanup_failures.append(error)
+                    try:
+                        process.wait(timeout_seconds=remaining_seconds(cleanup_deadline, "Fabric setup exit"))
+                    except Exception as error:
+                        early_cleanup_failures.append(error)
+                if any(process.process.is_alive() for process in participants):
+                    raise RuntimeError("Fabric setup process exit is unconfirmed")
+                for error in early_cleanup_failures:
+                    logger.error("Fabric setup cleanup failed: %s", error)
+            elif any(process.process.is_alive() for process in participants):
                 if not participants_ready:
                     raise RuntimeError("Fabric startup did not publish a complete participant world")
                 live_instances = [
@@ -310,6 +385,8 @@ def run_fabric_topology(
                 time.sleep(1.0)
         handlers.close()
 
+    if early_cleanup_failures:
+        raise ExceptionGroup("Fabric setup cleanup failed", early_cleanup_failures)
     return FabricTopologyReport(
         atnagent_count=atnagent_count,
         ffnagent_count=ffnagent_count,

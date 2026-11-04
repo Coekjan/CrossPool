@@ -17,6 +17,7 @@ FABRIC_TIMEOUT_SECONDS = 120.0
 class FabricParticipantCommand(StrEnum):
     """Lifecycle commands accepted by one Fabric participant."""
 
+    STOP = "stop"
     QUIESCE = "quiesce"
     DRAIN = "drain"
 
@@ -47,13 +48,17 @@ class FabricBootstrapStopped:
 
 
 @dataclass(frozen=True, slots=True)
+class FabricParticipantStopped:
+    """Acknowledgement of stopping before receiving deployment configuration."""
+
+
+@dataclass(frozen=True, slots=True)
 class FabricParticipantSpec:
     """Complete startup configuration for one Fabric PE."""
 
     role: RuntimeRole
     device: int
     environment: Mapping[str, str]
-    uid: str
     pe: int
     atnagent_count: int
     ffnagent_count: int
@@ -65,6 +70,8 @@ class FabricParticipantSpec:
     executor_lane_count: int
     forward_modes: tuple[ForwardMode, ...]
     layer_kind: LayerKind
+    hidden_size: int
+    intermediate_size: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,7 +215,6 @@ class FabricInstanceSpec:
     atnagent_pe: int
     arena: str
     forward_mode: ForwardMode
-    ffnagent_count: int
     execution_tp_size: int
     atnagent_count: int
     output_requirement: OutputRequirement
@@ -221,6 +227,8 @@ class FabricInstanceSpec:
     stop_on_command: bool
     start_barrier: Barrier
     layer_kind: LayerKind
+    hidden_size: int
+    intermediate_size: int
     pre_admission_rejection: bool
 
 

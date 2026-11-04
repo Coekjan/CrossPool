@@ -22,7 +22,7 @@ from xpool.runtime.atnagent import (
 )
 from xpool.service.wire import AgentStartupAdmission, HeartbeatResponse, InstanceRankRegistration
 from xpool.transport import TransportArenaHandle
-from xtest.harness.support.config import install_test_config
+from xtest.harness.support.config import TEST_CALIBRATION_ENVIRONMENT, install_test_config
 from xtest.harness.support.ecs import context_state_profile
 
 
@@ -108,6 +108,9 @@ def reset_atnagent_runtime(
     """Install AtnAgent-specific native and heartbeat test doubles."""
 
     monkeypatch.setattr(xpool.runtime.atnagent, "AgentHeartbeat", SynchronousAgentHeartbeat)
+    monkeypatch.setattr(
+        xpool.runtime.atnagent.memory_calibration, "observe_environment", lambda device: TEST_CALIBRATION_ENVIRONMENT
+    )
     yield
 
 

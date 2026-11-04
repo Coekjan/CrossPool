@@ -1,17 +1,14 @@
-"""Persistent environment-qualified device-memory calibration Profiles."""
+"""FFN resource contracts and optional environment-qualified memory calibration."""
 
 from __future__ import annotations
 
-import importlib.metadata
 from dataclasses import dataclass, field, fields
-from typing import Literal
+from pathlib import Path
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, ValidationError, model_validator, with_config
 
-from xpool.config import get_global_config
-from xpool.native import ABI_VERSION
 from xpool.utils import align_up
-from xpool.utils.cuda import cuda_versions
 from xpool.utils.files import atomic_write_text
 from xpool.utils.integer import SINT64_MAX, ensure_sint64_nonnegative
 
@@ -193,35 +190,20 @@ class FfnExecutionContract(BaseModel):
         return self
 
 
-class MemoryCalibrationDevice(BaseModel):
-    """One ordered FfnAgent device recorded by a calibration run."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    name: str = Field(min_length=1, description="device marketing name.")
-    compute_capability: tuple[int, int] = Field(description="CUDA major and minor compute capability.")
-    total_memory_bytes: int = Field(ge=1, description="Total device memory in bytes.")
-    uuid: str = Field(min_length=1, description="device UUID retained as non-matching provenance.")
-
-    @model_validator(mode="after")
-    def validate_compute_capability(self) -> MemoryCalibrationDevice:
-        """Reject negative compute-capability components."""
-
-        if any(value < 0 for value in self.compute_capability):
-            raise ValueError("device compute capability must contain non-negative integers")
-        return self
-
-
 class MemoryCalibrationEnvironment(BaseModel):
-    """Hardware and software compatibility facts for one calibration Profile."""
+    """One PE's address-free device, software and observed configuration inputs.
+
+    Inputs identify compatible measurements, rather than a qualified physical
+    cost rule. A missing input has value None; observation fails when inputs
+    cannot be inspected. Device UUIDs belong to experiment evidence, not matching.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    native_abi_version: int = Field(ge=1, description="CrossPool native ABI used for calibration.")
-    ffnagent_devices: tuple[MemoryCalibrationDevice, ...] = Field(
-        min_length=1,
-        description="FfnAgent devices in configured FfnAgent index order.",
-    )
+    name: str = Field(min_length=1, description="Device marketing name.")
+    compute_capability: tuple[int, int] = Field(strict=False, description="CUDA major and minor compute capability.")
+    total_memory_bytes: int = Field(ge=1, description="Total device memory in bytes.")
+    native_abi_version: int = Field(ge=1, description="CrossPool native ABI.")
     cuda_driver_version: int = Field(ge=1, description="CUDA driver API integer version.")
     cuda_runtime_version: int = Field(ge=1, description="CUDA runtime API integer version.")
     torch_version: str = Field(min_length=1, description="Installed Torch distribution version.")
@@ -229,6 +211,43 @@ class MemoryCalibrationEnvironment(BaseModel):
     sglang_version: str = Field(min_length=1, description="Installed SGLang distribution version.")
     sglang_kernel_version: str = Field(min_length=1, description="Installed sglang-kernel distribution version.")
     nvshmem_version: str = Field(min_length=1, description="Installed NVIDIA NVSHMEM distribution version.")
+    nccl_version: tuple[int, int, int] = Field(strict=False, description="Version reported by the loaded NCCL library.")
+    configuration_inputs: tuple[Annotated[tuple[str, str | None], Field(strict=False)], ...] = Field(
+        strict=False,
+        description="Sorted process inputs, effective BLAS settings and file content identities; None means absent.",
+    )
+
+    @model_validator(mode="after")
+    def validate_facts(self) -> MemoryCalibrationEnvironment:
+        """Keep observed inputs canonical without confusing absence with inspection failure."""
+
+        if any(value < 0 for value in (*self.compute_capability, *self.nccl_version)):
+            raise ValueError("device capability and library version components must be nonnegative")
+        names = tuple(name for name, _ in self.configuration_inputs)
+        if names != tuple(sorted(set(names))) or any(not name for name in names):
+            raise ValueError("configuration inputs must have unique sorted nonempty names")
+        return self
+
+
+class FabricMemoryContext(BaseModel):
+    """Required FFN facts and optional complete PE compatibility observations."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    participants: tuple[MemoryCalibrationEnvironment, ...] | None = Field(
+        min_length=2, strict=False, description="Complete compatibility facts in PE order, or no observation."
+    )
+    ffn_execution: tuple[FfnExecutionContract, ...] = Field(
+        min_length=1, strict=False, description="Facts in FfnAgent order."
+    )
+
+    @model_validator(mode="after")
+    def validate_roles(self) -> FabricMemoryContext:
+        """Retain room for the required attention prefix before the FFN suffix."""
+
+        if self.participants is not None and len(self.ffn_execution) >= len(self.participants):
+            raise ValueError("Fabric memory context requires at least one attention participant")
+        return self
 
 
 class FfnMemoryCalibration(BaseModel):
@@ -236,7 +255,6 @@ class FfnMemoryCalibration(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    atnagent_count: int = Field(ge=1, description="Configured AtnAgent count used by every calibration world.")
     executor_lane_count: int = Field(ge=1, description="Configured Executor Lane count used by every world.")
     minimum_held_out_headroom_bytes: int = Field(
         ge=0,
@@ -251,8 +269,30 @@ class XpoolMemoryCalibrationProfile(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    environment: MemoryCalibrationEnvironment = Field(description="Profile compatibility evidence.")
+    memory_context: FabricMemoryContext = Field(description="Complete world compatibility evidence.")
     ffn: FfnMemoryCalibration = Field(description="Current FFN calibration payload.")
+
+    @model_validator(mode="after")
+    def validate_observations(self) -> XpoolMemoryCalibrationProfile:
+        """Require complete, inspectable participant compatibility evidence."""
+
+        participants = self.memory_context.participants
+        if participants is None:
+            raise ValueError("memory calibration Profile requires complete participant observations")
+        return self
+
+    def require_compatible(self, *, context: FabricMemoryContext, executor_lane_count: int) -> None:
+        """Require inspectable current facts, matching context and the measured Lane count."""
+
+        if context.participants is None:
+            raise RuntimeError("memory calibration requires current participant observations")
+        if self.memory_context != context:
+            raise RuntimeError("memory calibration Profile is incompatible with the current Fabric memory context")
+        if self.ffn.executor_lane_count != executor_lane_count:
+            raise RuntimeError(
+                f"memory calibration Profile requires {self.ffn.executor_lane_count} Executor Lanes, "
+                f"found {executor_lane_count}"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,94 +310,28 @@ class DeviceMemoryEstimate:
             raise ValueError("retained device memory cannot exceed startup peak memory")
 
 
-def validate_memory_calibration_profile(profile: XpoolMemoryCalibrationProfile) -> None:
-    """Require one Profile to match the installed Host and configured geometry.
+def load_memory_calibration_profile(*, path: Path | None) -> XpoolMemoryCalibrationProfile | None:
+    """Read and strictly parse a Profile, or return None for an absent path.
 
-    Args:
-        profile: Strict Profile parsed from the configured path.
-
-    Raises:
-        RuntimeError: If the Profile is incompatible or Host evidence cannot be
-            observed.
-
+    Deployment compatibility is checked separately against current Fabric facts.
+    Unreadable or malformed configured files raise RuntimeError.
     """
 
-    config = get_global_config()
-    driver_version, runtime_version = cuda_versions()
-    environment = profile.environment
-    expected = {
-        "native ABI": ABI_VERSION,
-        "FfnAgent count": len(config.ffn.devices),
-        "AtnAgent count": len(config.atn.devices),
-        "Executor Lane count": config.scheduler.ffn_concurrency,
-        "CUDA driver": driver_version,
-        "CUDA runtime": runtime_version,
-        "Torch": importlib.metadata.version("torch"),
-        "Triton": importlib.metadata.version("triton"),
-        "SGLang": importlib.metadata.version("sglang"),
-        "sglang-kernel": importlib.metadata.version("sglang-kernel"),
-        "NVSHMEM": importlib.metadata.version("nvidia-nvshmem-cu13"),
-    }
-    actual = {
-        "native ABI": environment.native_abi_version,
-        "FfnAgent count": len(environment.ffnagent_devices),
-        "AtnAgent count": profile.ffn.atnagent_count,
-        "Executor Lane count": profile.ffn.executor_lane_count,
-        "CUDA driver": environment.cuda_driver_version,
-        "CUDA runtime": environment.cuda_runtime_version,
-        "Torch": environment.torch_version,
-        "Triton": environment.triton_version,
-        "SGLang": environment.sglang_version,
-        "sglang-kernel": environment.sglang_kernel_version,
-        "NVSHMEM": environment.nvshmem_version,
-    }
-    mismatches = [
-        f"{name}: expected {value!r}, found {actual[name]!r}"
-        for name, value in expected.items()
-        if actual[name] != value
-    ]
-    if mismatches:
-        raise RuntimeError("memory calibration Profile is incompatible: " + "; ".join(mismatches))
-
-
-def load_memory_calibration_profile() -> XpoolMemoryCalibrationProfile | None:
-    """Load and validate the configured memory calibration Profile.
-
-    Returns:
-        ``None`` when no Profile path is configured, otherwise the compatible
-        strict Profile.
-
-    Raises:
-        RuntimeError: If the configured Profile cannot be read, parsed, or
-            validated against the current Host and configuration.
-    """
-
-    path = get_global_config().ffn.device_memory_calibration
     if path is None:
         return None
     try:
-        profile = XpoolMemoryCalibrationProfile.model_validate_json(path.read_text(encoding="utf-8"))
-    except (OSError, ValidationError) as error:
+        return XpoolMemoryCalibrationProfile.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValidationError) as error:
         raise RuntimeError(f"failed to load memory calibration Profile {path}: {error}") from error
-    validate_memory_calibration_profile(profile)
-    return profile
 
 
-def write_memory_calibration_profile(profile: XpoolMemoryCalibrationProfile) -> None:
-    """Atomically publish one complete Profile to the configured path.
+def write_memory_calibration_profile(profile: XpoolMemoryCalibrationProfile, *, path: Path | None) -> None:
+    """Atomically publish a complete Profile at the explicit output path.
 
-    Args:
-        profile: Complete held-out-qualified Profile to serialize.
-
-    Raises:
-        RuntimeError: If no output path is configured or publication fails.
-
-    Side Effects:
-        Writes one temporary sibling file and atomically replaces the configured
-        destination after serialization completes.
+    A missing output path or failed publication raises RuntimeError. A temporary
+    sibling replaces the destination only after serialization completes.
     """
 
-    path = get_global_config().ffn.device_memory_calibration
     if path is None:
         raise RuntimeError("ffn.device_memory_calibration is required to write a calibration Profile")
     try:

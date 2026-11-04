@@ -120,6 +120,11 @@ from Prefill token-row partitioning and does not by itself define a new FFN
 row partition.
 _Avoid_: Prefill Context Parallelism, Decode TP
 
+**Fabric Plan**:
+The participants, FFN layer placement and execution capacity agreed for one
+Fabric Generation.
+_Avoid_: Task plan, implementation plan, FFN Execution Resource Plan
+
 **Fabric Executable**:
 A Fabric generation whose participants have activated their data-plane
 resources, allowing Instance Ranks to attach Transport. It does not imply that
@@ -237,6 +242,16 @@ _Avoid_: KV resize, capacity application, VMM policy
 The generation-scoped assembly of FFN computation and the resources needed to
 run it.
 _Avoid_: Graph install, backend install
+
+**FFN Execution Resource**:
+Storage an FFN installation needs, identified by its source, owner and
+permitted uses independently of its device address.
+_Avoid_: Allocator pool, captured address, workspace family
+
+**FFN Execution Resource Plan**:
+An address-free inventory of the Lane and shared backings required by the
+selected Execution Signatures.
+_Avoid_: Captured workspace list, allocator snapshot, runtime owner graph
 
 **FFN Semantics**:
 The closed vocabulary shared across CrossPool for describing an FFN invocation,
@@ -364,10 +379,20 @@ The stage-live sum of CrossPool-owned logical Tensor requests and native device
 allocations whose sizes follow stable formulas.
 _Avoid_: Exact allocation demand, safe estimate
 
+**Fabric Memory Context**:
+A Fabric generation's per-FFN execution contracts and optional participant
+observations used to match a calibration Profile.
+_Avoid_: Local free-memory observation, predicted memory usage
+
 **Analytic Allocator Allowance**:
-A history-independent upper bound for allocator overhead beyond the Exact
-Resource Ledger.
+A prospective estimate of allocator overhead beyond the Exact Resource Ledger,
+under the declared allocation conditions.
 _Avoid_: Allocation error tolerance, allocator simulator
+
+**Analytic Device-Memory Estimate**:
+Incremental physical Device memory predicted from known allocations and their
+lifetimes. Library and driver costs can exceed this estimate.
+_Avoid_: Complete physical bound, exact logical requests, operator margin
 
 **Calibration Sample**:
 A synthetic FFN structure with fixed geometry and mathematical behavior, chosen
@@ -380,8 +405,8 @@ with their placement and execution configuration.
 _Avoid_: Model family, FFN structure kind
 
 **Calibrated Overhead Envelope**:
-An environment-qualified empirical bound for device-memory overhead not covered
-by the Exact Resource Ledger and Analytic Allocator Allowance.
+An empirical correction to the analytic estimate, fitted for a specific
+environment and checked on independent observations.
 _Avoid_: Universal overhead, default reserve
 
 **Device Observation Quantum**:
@@ -393,6 +418,7 @@ An explicit deployment reserve added after the predicted startup peak.
 _Avoid_: Estimator correction, calibration allowance
 
 **Resource Qualification**:
-Real-model evidence that the memory estimate admits startup without hiding
-systematic underprediction.
+Real-model evidence of memory-estimation accuracy, startup behavior and safe
+resource retirement, with analytic-only and calibrated predictions identified
+separately.
 _Avoid_: Memory profiling, calibration fitting

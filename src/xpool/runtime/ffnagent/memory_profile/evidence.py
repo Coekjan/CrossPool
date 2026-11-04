@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from xpool.config import get_global_config
-from xpool.memory import FfnMemoryCalibrationCoefficients, MemoryCalibrationDevice, XpoolMemoryCalibrationProfile
+from xpool.memory import FabricMemoryContext, FfnMemoryCalibrationCoefficients, XpoolMemoryCalibrationProfile
 from xpool.runtime.ffnagent.device_memory import DeviceMemoryPoint
 from xpool.runtime.ffnagent.memory_profile.experiment import CalibrationExperiment
 from xpool.utils.files import atomic_write_text
@@ -22,26 +22,11 @@ class MemoryObservation:
 
 
 @dataclass(frozen=True, slots=True)
-class MemoryProfileSoftwareEnvironment:
-    """Software compatibility facts observed by every FfnAgent child."""
-
-    native_abi_version: int
-    cuda_driver_version: int
-    cuda_runtime_version: int
-    torch_version: str
-    triton_version: str
-    sglang_version: str
-    sglang_kernel_version: str
-    nvshmem_version: str
-
-
-@dataclass(frozen=True, slots=True)
 class MemoryProfileParticipantEvidence:
     """One FfnAgent child's complete ephemeral evidence."""
 
     ffnagent_index: int
-    device: MemoryCalibrationDevice
-    environment: MemoryProfileSoftwareEnvironment
+    device_uuid: str
     observations: tuple[MemoryObservation, ...]
 
 
@@ -51,6 +36,7 @@ class MemoryProfileWorld:
 
     experiment: CalibrationExperiment
     repetition: int
+    memory_context: FabricMemoryContext
     participants: tuple[MemoryProfileParticipantEvidence, ...]
 
     def __post_init__(self) -> None:
@@ -58,16 +44,12 @@ class MemoryProfileWorld:
             range(len(self.participants))
         ):
             raise ValueError("memory-profile evidence must contain ordered complete FfnAgent indices")
-        if any(row.environment != self.environment for row in self.participants[1:]):
-            raise RuntimeError("memory-profile participants disagree on the software environment")
-
-    @property
-    def devices(self) -> tuple[MemoryCalibrationDevice, ...]:
-        return tuple(row.device for row in self.participants)
-
-    @property
-    def environment(self) -> MemoryProfileSoftwareEnvironment:
-        return self.participants[0].environment
+        if len(self.participants) != len(self.memory_context.ffn_execution):
+            raise ValueError("memory-profile observations do not cover the frozen FFN context")
+        if self.memory_context.participants is None:
+            raise ValueError("memory-profile evidence requires complete participant observations")
+        if any(not row.device_uuid for row in self.participants):
+            raise ValueError("memory-profile observations require device UUID provenance")
 
     @property
     def observations(self) -> tuple[MemoryObservation, ...]:
@@ -81,7 +63,7 @@ class MemoryProfileWorld:
             observations = []
             for observation in participant.observations:
                 point = observation.point
-                analytic = point.exact_resource_ledger_bytes + point.allocator_allowance_bytes
+                analytic = point.analytic_estimate_bytes
                 calibrated = analytic + coefficients.evaluate(point.features)
                 observations.append(
                     {
@@ -89,9 +71,17 @@ class MemoryProfileWorld:
                         "observed_device_bytes": observation.observed_device_bytes,
                         "analytic_prediction_bytes": analytic,
                         "calibrated_prediction_bytes": calibrated,
+                        "analytic_error_bytes": observation.observed_device_bytes - analytic,
+                        "calibrated_error_bytes": observation.observed_device_bytes - calibrated,
                     }
                 )
-            participants.append({"ffnagent_index": participant.ffnagent_index, "observations": observations})
+            participants.append(
+                {
+                    "ffnagent_index": participant.ffnagent_index,
+                    "device_uuid": participant.device_uuid,
+                    "observations": observations,
+                }
+            )
         return {
             "experiment": self.experiment.to_json_mapping(),
             "repetition": self.repetition,

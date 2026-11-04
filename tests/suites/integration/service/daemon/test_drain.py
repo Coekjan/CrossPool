@@ -6,7 +6,7 @@ import pytest
 
 import xpool.service.daemon.control
 from xpool.config import XpoolConfig
-from xpool.fabric import FabricPlan
+from xpool.fabric import FabricDeploymentPlan
 from xpool.native import ABI_VERSION
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
 from xtest.harness.support.service.daemon import (
@@ -43,7 +43,7 @@ def test_daemon_quiesce_atnagent_transport_leases_blocks_new_acquires_and_report
     assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/instance/register", registration).status_code == HTTPStatus.NO_CONTENT
-    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+    plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
     assert (
         request(
@@ -136,7 +136,7 @@ def test_daemon_lease_quiesce_reports_all_live_owners() -> None:
         for model_id, (owner, owner_id) in zip(("test/a", "test/b"), owner_processes, strict=True):
             registration = instance_registration(model_id=model_id, pid=owner_id.pid)
             assert register(app, "/instance/register", registration).status_code == HTTPStatus.NO_CONTENT
-        plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+        plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
         activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
 
         bindings = atnagent_transport_arena_bindings(("test/a", 0), ("test/b", 0))
@@ -188,7 +188,7 @@ def test_daemon_allows_stale_atnagent_to_quiesce_transport_leases(
     assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/instance/register", registration).status_code == HTTPStatus.NO_CONTENT
-    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+    plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
     assert (
         request(

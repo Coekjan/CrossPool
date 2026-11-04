@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import xpool.runtime.agent
-from xpool.fabric import FabricGenerationId, FabricGenerationPhase, FabricParticipantPhase, FabricPlan
+from xpool.fabric import FabricDeploymentPlan, FabricGenerationId, FabricGenerationPhase, FabricParticipantPhase
 from xpool.native import RuntimeRole
 from xpool.runtime.agent import Agent, AgentError
 from xpool.service.client import XpoolClient, XpoolClientError
@@ -336,7 +336,7 @@ def test_unjoined_agent_shutdown_releases_local_owners(
     agent = RunLoopAgent(events=events, request_shutdown=lambda: None, shutdown_point="advance")
     generation = FabricGenerationId.create()
     # Shutdown consumes only generation identity at this retained-plan seam.
-    agent.fabric_plan = cast(FabricPlan, SimpleNamespace(generation=generation))
+    agent.fabric_plan = cast(FabricDeploymentPlan, SimpleNamespace(generation=generation))
     if participant_phase is not None:
         agent.participant_report = FabricParticipantReport(
             owner=agent.process_ref,
@@ -376,7 +376,7 @@ def test_agent_shutdown_reconciles_control_outage_before_native_retirement(
         phase=FabricParticipantPhase.JOINED,
     )
     # Only generation identity is consumed; placement is substituted at its owner.
-    agent.fabric_plan = cast(FabricPlan, SimpleNamespace(generation=generation))
+    agent.fabric_plan = cast(FabricDeploymentPlan, SimpleNamespace(generation=generation))
     agent.fabric_phase = FabricGenerationPhase.PREPARING_EXECUTION
     attempts = 0
     snapshots = 0
@@ -459,7 +459,7 @@ def test_failed_agent_reports_drain_and_waits_for_authoritative_stop(
         phase=FabricParticipantPhase.ACTIVE,
     )
     # Only generation identity is consumed; placement is substituted at its owner.
-    agent.fabric_plan = cast(FabricPlan, SimpleNamespace(generation=agent.participant_report.generation))
+    agent.fabric_plan = cast(FabricDeploymentPlan, SimpleNamespace(generation=agent.participant_report.generation))
     agent.fabric_phase = FabricGenerationPhase.ABORTING
 
     def fail_control(shutdown_requested: threading.Event) -> None:
@@ -607,7 +607,7 @@ def test_agent_fails_when_registration_disappears_after_plan(monkeypatch: pytest
         shutdown_point="advance",
     )
     agent.registered = True
-    agent.fabric_plan = cast(FabricPlan, object())
+    agent.fabric_plan = cast(FabricDeploymentPlan, object())
     monkeypatch.setattr(agent.heartbeat_worker, "consume_registration_missing", lambda: True)
 
     with pytest.raises(AgentError):

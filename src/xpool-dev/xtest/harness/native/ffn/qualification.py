@@ -21,6 +21,7 @@ from xpool.fabric import (
     InstanceRankTopology,
     MoeFfnLayerPlan,
 )
+from xpool.memory import FfnExecutionContract
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind, OutputRequirement
 from xpool.quantization import Unquantized
@@ -81,6 +82,8 @@ def execution_model_specs(
     instance_count: int,
     execution_kind: LayerKind,
     layer_count: int,
+    hidden_size: int = EXECUTION_HIDDEN_SIZE,
+    intermediate_size: int | None = None,
 ) -> tuple[ffn.FfnModelSpec, ...]:
     """Build the co-indexed Model Specs used by deterministic qualification."""
 
@@ -91,6 +94,11 @@ def execution_model_specs(
             down=ffn.ProjectionSpec(quantization=Unquantized(), values_key=f"{prefix}.down.weight"),
         )
 
+    width = (
+        intermediate_size
+        if intermediate_size is not None
+        else (DENSE_INTERMEDIATE_SIZE if execution_kind is LayerKind.DENSE else MOE_INTERMEDIATE_SIZE)
+    )
     result = []
     for instance_index in range(instance_count):
         layers: list[ffn.FfnLayerSpec] = []
@@ -101,7 +109,7 @@ def execution_model_specs(
                     ffn.DenseFfnSpec(
                         kind=execution_kind,
                         layer_id=layer_ordinal,
-                        intermediate_size=DENSE_INTERMEDIATE_SIZE,
+                        intermediate_size=width,
                         projections=gated_projections(prefix),
                     )
                 )
@@ -112,7 +120,7 @@ def execution_model_specs(
                         router_algorithm=ffn.RouterAlgorithm.SOFTMAX,
                         router_projection_precision=ffn.RouterProjectionPrecision.PAYLOAD,
                         layer_id=layer_ordinal,
-                        expert_intermediate_size=MOE_INTERMEDIATE_SIZE,
+                        expert_intermediate_size=width,
                         routed_expert_count=MOE_EXPERT_COUNT,
                         shared_expert_count=0,
                         routed_topk=MOE_TOPK,
@@ -132,7 +140,7 @@ def execution_model_specs(
         result.append(
             ffn.FfnModelSpec(
                 model_id=ModelId(f"qualification/{execution_kind.name.lower()}-{instance_index}"),
-                hidden_size=EXECUTION_HIDDEN_SIZE,
+                hidden_size=hidden_size,
                 activation=ffn.SiluActivation(),
                 layers=tuple(layers),
             )
@@ -149,10 +157,13 @@ def execution_fabric_plan(
     executor_lane_count: int,
     instance_count: int,
     execution_kind: LayerKind,
+    ffn_execution_contracts: tuple[FfnExecutionContract, ...],
     layer_count: int = 1,
     decode_payload_row_capacity: int = 4,
     prefill_payload_row_capacity: int = 4,
     payload_dtype: torch.dtype,
+    hidden_size: int = EXECUTION_HIDDEN_SIZE,
+    intermediate_size: int | None = None,
 ) -> FabricPlan:
     """Build one explicit canonical Plan for deterministic FFN execution."""
 
@@ -160,13 +171,19 @@ def execution_fabric_plan(
         instance_count=instance_count,
         execution_kind=execution_kind,
         layer_count=layer_count,
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
     )
-    intermediate_size = DENSE_INTERMEDIATE_SIZE if execution_kind is LayerKind.DENSE else MOE_INTERMEDIATE_SIZE
+    intermediate_size = (
+        intermediate_size
+        if intermediate_size is not None
+        else (DENSE_INTERMEDIATE_SIZE if execution_kind is LayerKind.DENSE else MOE_INTERMEDIATE_SIZE)
+    )
     if intermediate_size % ffn_tp_size:
         raise ValueError("qualification FFN width must divide evenly across FfnAgents")
     profile = InstanceFfnProfile(
         payload_dtype=payload_dtype,
-        hidden_size=EXECUTION_HIDDEN_SIZE,
+        hidden_size=hidden_size,
         layers=tuple(InstanceFfnLayerProfile(layer_id=ordinal, kind=execution_kind) for ordinal in range(layer_count)),
         decode_payload_row_capacity=decode_payload_row_capacity,
         prefill_payload_row_capacity=prefill_payload_row_capacity,
@@ -176,17 +193,18 @@ def execution_fabric_plan(
     layer = (
         DenseFfnLayerPlan(
             ffnagent_indices=execution_group,
-            local_intermediate_size=DENSE_INTERMEDIATE_SIZE // ffn_tp_size,
+            local_intermediate_size=intermediate_size // ffn_tp_size,
         )
         if execution_kind is LayerKind.DENSE
         else MoeFfnLayerPlan(
             ffnagent_indices=execution_group,
-            local_intermediate_size=MOE_INTERMEDIATE_SIZE // ffn_tp_size,
+            local_intermediate_size=intermediate_size // ffn_tp_size,
             effective_topk=MOE_TOPK,
         )
     )
     return FabricPlan(
         generation=FabricGenerationId(high=1, low=1),
+        ffn_execution_contracts=ffn_execution_contracts,
         uid=FabricUid(uid),
         pe_placements=tuple(
             FabricPePlacement(role=FabricRole.ATNAGENT, device=index) for index in range(atnagent_count)
@@ -217,14 +235,27 @@ def execution_fabric_plan(
 
 
 def dense_layer_weights(
-    *, ffnagent_index: int, ffnagent_count: int, device: int, payload_dtype: torch.dtype, layer_ordinal: int = 0
+    *,
+    ffnagent_index: int,
+    ffnagent_count: int,
+    device: int,
+    payload_dtype: torch.dtype,
+    layer_ordinal: int = 0,
+    hidden_size: int = EXECUTION_HIDDEN_SIZE,
+    intermediate_size: int = DENSE_INTERMEDIATE_SIZE,
 ) -> DenseFfnWeights:
     """Materialize one deterministic true-TP Dense shard directly on a device."""
 
-    local_width = DENSE_INTERMEDIATE_SIZE // ffnagent_count
+    local_width = intermediate_size // ffnagent_count
     begin = ffnagent_index * local_width
     end = begin + local_width
-    gate, up, down = dense_full_weights(device=device, payload_dtype=payload_dtype, layer_ordinal=layer_ordinal)
+    gate, up, down = dense_full_weights(
+        device=device,
+        payload_dtype=payload_dtype,
+        layer_ordinal=layer_ordinal,
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+    )
     return DenseFfnWeights(
         gate_up=ProjectionWeights(
             values=torch.cat((gate[begin:end], up[begin:end])).contiguous(), scales=None, bias=None
@@ -233,7 +264,13 @@ def dense_layer_weights(
     )
 
 
-def dense_reference(hidden_states: torch.Tensor, *, ffnagent_count: int, layer_ordinal: int = 0) -> torch.Tensor:
+def dense_reference(
+    hidden_states: torch.Tensor,
+    *,
+    ffnagent_count: int,
+    layer_ordinal: int = 0,
+    intermediate_size: int = DENSE_INTERMEDIATE_SIZE,
+) -> torch.Tensor:
     """Evaluate the exact ordered sum of deterministic true-TP partials."""
 
     result = torch.zeros_like(hidden_states, dtype=torch.float32)
@@ -244,6 +281,7 @@ def dense_reference(hidden_states: torch.Tensor, *, ffnagent_count: int, layer_o
                 ffnagent_index=ffnagent_index,
                 ffnagent_count=ffnagent_count,
                 layer_ordinal=layer_ordinal,
+                intermediate_size=intermediate_size,
             )
         )
     return result.to(hidden_states.dtype)
@@ -255,6 +293,7 @@ def dense_partial_reference(
     ffnagent_index: int,
     ffnagent_count: int,
     layer_ordinal: int = 0,
+    intermediate_size: int = DENSE_INTERMEDIATE_SIZE,
 ) -> torch.Tensor:
     """Evaluate one deterministic rank-local Dense partial in payload dtype."""
 
@@ -262,8 +301,10 @@ def dense_partial_reference(
         device=hidden_states.device.index,
         payload_dtype=hidden_states.dtype,
         layer_ordinal=layer_ordinal,
+        hidden_size=hidden_states.shape[-1],
+        intermediate_size=intermediate_size,
     )
-    local_width = DENSE_INTERMEDIATE_SIZE // ffnagent_count
+    local_width = intermediate_size // ffnagent_count
     begin = ffnagent_index * local_width
     end = begin + local_width
     gate_values = torch.mm(hidden_states, gate[begin:end].t())
@@ -273,7 +314,12 @@ def dense_partial_reference(
 
 
 def dense_full_weights(
-    *, device: int | None, payload_dtype: torch.dtype, layer_ordinal: int = 0
+    *,
+    device: int | None,
+    payload_dtype: torch.dtype,
+    layer_ordinal: int = 0,
+    hidden_size: int = EXECUTION_HIDDEN_SIZE,
+    intermediate_size: int = DENSE_INTERMEDIATE_SIZE,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Create deterministic full Dense tensors shared by producers and Reference."""
 
@@ -283,21 +329,34 @@ def dense_full_weights(
         return (((data + offset).remainder(29) - 14) / 64).reshape(shape).to(payload_dtype)
 
     return (
-        values((DENSE_INTERMEDIATE_SIZE, EXECUTION_HIDDEN_SIZE), 3 + layer_ordinal * 5),
-        values((DENSE_INTERMEDIATE_SIZE, EXECUTION_HIDDEN_SIZE), 11 + layer_ordinal * 7),
-        values((EXECUTION_HIDDEN_SIZE, DENSE_INTERMEDIATE_SIZE), 19 + layer_ordinal * 11),
+        values((intermediate_size, hidden_size), 3 + layer_ordinal * 5),
+        values((intermediate_size, hidden_size), 11 + layer_ordinal * 7),
+        values((hidden_size, intermediate_size), 19 + layer_ordinal * 11),
     )
 
 
 def moe_layer_weights(
-    *, ffnagent_index: int, ffnagent_count: int, device: int, payload_dtype: torch.dtype, layer_ordinal: int = 0
+    *,
+    ffnagent_index: int,
+    ffnagent_count: int,
+    device: int,
+    payload_dtype: torch.dtype,
+    layer_ordinal: int = 0,
+    hidden_size: int = EXECUTION_HIDDEN_SIZE,
+    intermediate_size: int = MOE_INTERMEDIATE_SIZE,
 ) -> MoeFfnWeights:
     """Materialize one deterministic true-TP MoE shard directly on a device."""
 
-    local_width = MOE_INTERMEDIATE_SIZE // ffnagent_count
+    local_width = intermediate_size // ffnagent_count
     begin = ffnagent_index * local_width
     end = begin + local_width
-    router, gate, up, down = moe_full_weights(device=device, payload_dtype=payload_dtype, layer_ordinal=layer_ordinal)
+    router, gate, up, down = moe_full_weights(
+        device=device,
+        payload_dtype=payload_dtype,
+        layer_ordinal=layer_ordinal,
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+    )
     return MoeFfnWeights(
         gate_up=ProjectionWeights(
             values=torch.cat((gate[:, begin:end], up[:, begin:end]), dim=1).contiguous(), scales=None, bias=None
@@ -311,7 +370,13 @@ def moe_layer_weights(
     )
 
 
-def moe_reference(hidden_states: torch.Tensor, *, ffnagent_count: int, layer_ordinal: int = 0) -> torch.Tensor:
+def moe_reference(
+    hidden_states: torch.Tensor,
+    *,
+    ffnagent_count: int,
+    layer_ordinal: int = 0,
+    intermediate_size: int = MOE_INTERMEDIATE_SIZE,
+) -> torch.Tensor:
     """Evaluate deterministic routing and ordered true-TP MoE partials."""
 
     result = torch.zeros_like(hidden_states, dtype=torch.float32)
@@ -322,6 +387,7 @@ def moe_reference(hidden_states: torch.Tensor, *, ffnagent_count: int, layer_ord
                 ffnagent_index=ffnagent_index,
                 ffnagent_count=ffnagent_count,
                 layer_ordinal=layer_ordinal,
+                intermediate_size=intermediate_size,
             )
         )
     return result.to(hidden_states.dtype)
@@ -333,6 +399,7 @@ def moe_partial_reference(
     ffnagent_index: int,
     ffnagent_count: int,
     layer_ordinal: int = 0,
+    intermediate_size: int = MOE_INTERMEDIATE_SIZE,
 ) -> torch.Tensor:
     """Evaluate one deterministic rank-local MoE partial in payload dtype."""
 
@@ -340,11 +407,13 @@ def moe_partial_reference(
         device=hidden_states.device.index,
         payload_dtype=hidden_states.dtype,
         layer_ordinal=layer_ordinal,
+        hidden_size=hidden_states.shape[-1],
+        intermediate_size=intermediate_size,
     )
     scores = torch.softmax(torch.mm(hidden_states, router.t()).float(), dim=-1)
     route_weights, route_ids = torch.topk(scores, MOE_TOPK, dim=-1)
     route_weights /= route_weights.sum(dim=-1, keepdim=True)
-    local_width = MOE_INTERMEDIATE_SIZE // ffnagent_count
+    local_width = intermediate_size // ffnagent_count
     begin = ffnagent_index * local_width
     end = begin + local_width
     partial = torch.zeros_like(hidden_states, dtype=torch.float32)
@@ -368,14 +437,25 @@ def execution_reference(
     output_rank: int,
     output_requirement: OutputRequirement,
     layer_ordinal: int = 0,
+    intermediate_size: int | None = None,
 ) -> torch.Tensor:
     """Project one complete or direct-partial result to an Output rank."""
 
+    intermediate_size = (
+        intermediate_size
+        if intermediate_size is not None
+        else (DENSE_INTERMEDIATE_SIZE if execution_kind is LayerKind.DENSE else MOE_INTERMEDIATE_SIZE)
+    )
     complete = dense_reference if execution_kind is LayerKind.DENSE else moe_reference
     partial = dense_partial_reference if execution_kind is LayerKind.DENSE else moe_partial_reference
     if output_requirement is OutputRequirement.PER_RANK_COMPLETE or ffn_tp_size > output_count:
         return (
-            complete(hidden_states, ffnagent_count=ffn_tp_size, layer_ordinal=layer_ordinal)
+            complete(
+                hidden_states,
+                ffnagent_count=ffn_tp_size,
+                layer_ordinal=layer_ordinal,
+                intermediate_size=intermediate_size,
+            )
             if output_rank == 0 or output_requirement is OutputRequirement.PER_RANK_COMPLETE
             else torch.zeros_like(hidden_states)
         )
@@ -386,11 +466,17 @@ def execution_reference(
         ffnagent_index=output_rank,
         ffnagent_count=ffn_tp_size,
         layer_ordinal=layer_ordinal,
+        intermediate_size=intermediate_size,
     )
 
 
 def moe_full_weights(
-    *, device: int | None, payload_dtype: torch.dtype, layer_ordinal: int = 0
+    *,
+    device: int | None,
+    payload_dtype: torch.dtype,
+    layer_ordinal: int = 0,
+    hidden_size: int = EXECUTION_HIDDEN_SIZE,
+    intermediate_size: int = MOE_INTERMEDIATE_SIZE,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Create deterministic full MoE tensors shared by producers and Reference."""
 
@@ -400,8 +486,8 @@ def moe_full_weights(
         return (((data + offset).remainder(31) - 15) / 96).reshape(shape).to(payload_dtype)
 
     return (
-        values((MOE_EXPERT_COUNT, EXECUTION_HIDDEN_SIZE), 5 + layer_ordinal * 3),
-        values((MOE_EXPERT_COUNT, MOE_INTERMEDIATE_SIZE, EXECUTION_HIDDEN_SIZE), 7 + layer_ordinal * 5),
-        values((MOE_EXPERT_COUNT, MOE_INTERMEDIATE_SIZE, EXECUTION_HIDDEN_SIZE), 13 + layer_ordinal * 7),
-        values((MOE_EXPERT_COUNT, EXECUTION_HIDDEN_SIZE, MOE_INTERMEDIATE_SIZE), 23 + layer_ordinal * 11),
+        values((MOE_EXPERT_COUNT, hidden_size), 5 + layer_ordinal * 3),
+        values((MOE_EXPERT_COUNT, intermediate_size, hidden_size), 7 + layer_ordinal * 5),
+        values((MOE_EXPERT_COUNT, intermediate_size, hidden_size), 13 + layer_ordinal * 7),
+        values((MOE_EXPERT_COUNT, hidden_size, intermediate_size), 23 + layer_ordinal * 11),
     )

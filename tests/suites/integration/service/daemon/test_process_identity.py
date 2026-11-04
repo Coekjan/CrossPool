@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 from http import HTTPStatus
 
 import pytest
 
-from xpool.fabric import FabricPlan
+from xpool.fabric import FabricDeploymentPlan
 from xpool.native import ABI_VERSION
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
 from xtest.harness.support.service.daemon import (
@@ -118,7 +119,7 @@ def test_daemon_rejects_transport_arenas_from_non_owner_atnagent() -> None:
     config = synthetic_config()
     app = create_app(config)
     atnagent = atnagent_registration(device=0)
-    non_owner = {**atnagent, "pid": int(atnagent["pid"]) + 1}
+    non_owner = {**atnagent, "pid": os.getpid() + 1}
     assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
 
@@ -143,7 +144,7 @@ def test_daemon_preserves_atnagent_transport_arenas_after_same_process_reregiste
     assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
-    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+    plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
     assert (
         request(

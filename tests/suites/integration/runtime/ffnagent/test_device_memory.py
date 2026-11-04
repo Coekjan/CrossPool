@@ -9,7 +9,6 @@ from xpool.runtime.ffnagent import device_memory, weights
 
 @xtest.requirements(device_count=1)
 def test_canonical_dense_reservation_covers_inactive_segment_splits() -> None:
-    device_memory.ensure_supported_cuda_allocator()
     torch.cuda.synchronize()
     torch.cuda.empty_cache()
     before = torch.cuda.memory_reserved()

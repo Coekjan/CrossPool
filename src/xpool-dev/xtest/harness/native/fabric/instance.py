@@ -22,7 +22,7 @@ from xtest.harness.native.fabric.protocol import (
     FabricInstanceSpec,
 )
 from xtest.harness.native.fabric.trace import fabric_debug_options
-from xtest.harness.native.ffn.qualification import EXECUTION_HIDDEN_SIZE, execution_reference
+from xtest.harness.native.ffn.qualification import execution_reference
 
 
 def run_fabric_instance(connection: Connection, spec: FabricInstanceSpec) -> None:
@@ -37,7 +37,7 @@ def run_fabric_instance(connection: Connection, spec: FabricInstanceSpec) -> Non
         spec.device,
         fabric_debug_options(),
     )
-    hidden_size = EXECUTION_HIDDEN_SIZE
+    hidden_size = spec.hidden_size
     hidden_states = (
         torch.arange(spec.payload_rows * hidden_size, device=spec.device, dtype=spec.payload_dtype)
         + spec.payload_offset
@@ -100,6 +100,7 @@ def run_fabric_instance(connection: Connection, spec: FabricInstanceSpec) -> Non
                     output_rank=spec.atnagent_pe,
                     output_requirement=spec.output_requirement,
                     layer_ordinal=layer_ordinal,
+                    intermediate_size=spec.intermediate_size,
                 )
                 actual_values.extend(output.float().cpu().flatten().tolist())
                 expected_values.extend(expected.float().cpu().flatten().tolist())
@@ -120,6 +121,7 @@ def run_fabric_instance(connection: Connection, spec: FabricInstanceSpec) -> Non
                 output_rank=spec.atnagent_pe,
                 output_requirement=spec.output_requirement,
                 layer_ordinal=spec.layer_ordinals[(repetitions_completed - 1) % len(spec.layer_ordinals)],
+                intermediate_size=spec.intermediate_size,
             )
             actual_result = tuple(output.float().cpu().flatten().tolist())
             expected_result = tuple(expected.float().cpu().flatten().tolist())

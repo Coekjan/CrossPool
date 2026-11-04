@@ -14,12 +14,12 @@ import xpool.runtime.ffnagent.agent
 from xpool.config import XpoolConfig
 from xpool.fabric import (
     DenseFfnLayerPlan,
+    FabricDeploymentPlan,
     FabricGenerationId,
     FabricGenerationPhase,
     FabricInstancePlan,
     FabricParticipantPhase,
     FabricPePlacement,
-    FabricPlan,
     FabricRole,
     FabricUid,
     FfnModelPlan,
@@ -29,6 +29,8 @@ from xpool.fabric import (
     InstanceRankTopology,
 )
 from xpool.ffn import FfnModelSpec
+from xpool.memory import DeviceMemoryEstimate
+from xpool.model import ModelId
 from xpool.native import RuntimeRole
 from xpool.native.ffn import LayerKind
 from xpool.runtime.agent import AgentError
@@ -36,7 +38,14 @@ from xpool.runtime.atnagent import AtnAgent
 from xpool.runtime.ffnagent import FfnAgent
 from xpool.service.client import XpoolClient, XpoolClientError
 from xpool.service.wire import ElasticContextStateControlChannelRef, FabricParticipantReport
-from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config, synthetic_config
+from xtest.harness.support.config import (
+    TEST_CALIBRATION_ENVIRONMENT,
+    TEST_EXECUTION_CONTRACT,
+    TEST_MODEL_ID,
+    install_test_config,
+    reset_global_config,
+    synthetic_config,
+)
 from xtest.harness.support.runtime.atnagent import (
     create_atnagent,
     reset_agent_runtime,
@@ -51,12 +60,14 @@ pytestmark = pytest.mark.usefixtures(
 )
 
 
-def fabric_plan(profile: InstanceFfnProfile) -> FabricPlan:
+def fabric_plan(profile: InstanceFfnProfile) -> FabricDeploymentPlan:
     """Build the final one-Instance Plan used by Agent lifecycle tests."""
 
-    return FabricPlan(
+    return FabricDeploymentPlan(
         generation=FabricGenerationId(high=1, low=2),
         uid=FabricUid(value="ab" * 128),
+        ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,),
+        ffn_memory_estimates=(DeviceMemoryEstimate(retained_bytes=1, peak_bytes=10),),
         pe_placements=(
             FabricPePlacement(role=FabricRole.ATNAGENT, device=0),
             FabricPePlacement(role=FabricRole.FFNAGENT, device=1),
@@ -124,10 +135,22 @@ def test_agent_construction_initializes_role_and_devkit(
         lambda **kwargs: FfnModelSpec.model_validate(ffn_model_spec()),
     )
     if agent_type is FfnAgent:
+        monkeypatch.setattr(
+            xpool.runtime.ffnagent.agent.capture_workspace,
+            "prepare_execution_sources",
+            lambda: (TEST_EXECUTION_CONTRACT, ()),
+        )
+        monkeypatch.setattr(
+            xpool.runtime.ffnagent.agent.memory_calibration,
+            "observe_environment",
+            lambda device: TEST_CALIBRATION_ENVIRONMENT,
+        )
         monkeypatch.setattr(torch.cuda, "is_initialized", lambda: False)
         monkeypatch.setattr(torch.cuda, "synchronize", lambda device: None)
         monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
-        monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (1, 2))
+        monkeypatch.setattr(
+            torch.cuda, "mem_get_info", lambda device: (1, TEST_CALIBRATION_ENVIRONMENT.total_memory_bytes)
+        )
 
     agent = agent_type(device=device)
 
@@ -174,6 +197,23 @@ def test_device_selection_rejects_unknown_device() -> None:
 
     with pytest.raises(AgentError, match="device 9 is not configured for atnagent"):
         create_atnagent(config, device=9)
+
+
+def test_transport_preparation_projects_local_instance_ranks(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = create_atnagent(synthetic_config(), device=0)
+    profile = InstanceFfnProfile(
+        payload_dtype=torch.bfloat16,
+        hidden_size=4,
+        layers=(InstanceFfnLayerProfile(layer_id=0, kind=LayerKind.DENSE),),
+        decode_payload_row_capacity=1,
+        prefill_payload_row_capacity=1,
+        group_sum_complete_admitted=False,
+    )
+    agent.fabric_plan = fabric_plan(profile)
+    prepared: list[tuple[int, dict[ModelId, int]]] = []
+    monkeypatch.setattr(agent.transport, "prepare", lambda epoch, ranks: prepared.append((epoch, ranks)) or True)
+    assert agent.prepare_fabric_join()
+    assert prepared == [(agent.registration_epoch, {TEST_MODEL_ID: 0})]
 
 
 def test_participant_report_commits_only_after_daemon_acknowledgement(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -281,7 +321,7 @@ def test_atnagent_joins_fabric_before_activating_transport(monkeypatch: pytest.M
     events: list[object] = []
 
     class FabricClient:
-        def fabric_plan(self) -> FabricPlan:
+        def fabric_plan(self) -> FabricDeploymentPlan:
             events.append("plan")
             return plan
 

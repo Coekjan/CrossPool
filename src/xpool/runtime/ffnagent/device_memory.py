@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
+import logging
 from dataclasses import dataclass
-
-import torch
+from typing import Literal
 
 import xpool.native
 from xpool import ffn
@@ -15,37 +14,66 @@ from xpool.memory import (
     MIB,
     DeviceMemoryEstimate,
     DeviceMemoryFeatures,
+    FfnExecutionContract,
     FfnMemoryCalibrationCoefficients,
-    load_memory_calibration_profile,
 )
 from xpool.runtime.ffnagent import execution, preparation
 from xpool.utils import align_up
 from xpool.utils.integer import ensure_sint64_nonnegative
 
+logger = logging.getLogger(__name__)
+
+type StartupPoint = Literal[
+    "weight_materialization",
+    "fabric_join",
+    "graph_capture",
+    "execution_installation",
+    "retained",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceMemoryCharge:
+    """One disjoint physical-cost estimate, with any unmodeled overhead named."""
+
+    domain: str
+    exact_logical_bytes: int
+    estimated_physical_bytes: int
+    unmodeled_costs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        ensure_sint64_nonnegative(self.exact_logical_bytes, self.estimated_physical_bytes)
+        if not self.domain or any(not cost for cost in self.unmodeled_costs):
+            raise ValueError("memory charge needs a domain and nonempty unmodeled-cost names")
+
 
 @dataclass(frozen=True, slots=True)
 class DeviceMemoryPoint:
-    """Resource ledger, allocator allowance, and features at one observation."""
+    """Disjoint physical charges and resource-derived features at one stage."""
 
-    point: str
-    exact_resource_ledger_bytes: int
-    allocator_allowance_bytes: int
+    point: StartupPoint
+    charges: tuple[DeviceMemoryCharge, ...]
     features: DeviceMemoryFeatures
 
+    def __post_init__(self) -> None:
+        if len({charge.domain for charge in self.charges}) != len(self.charges):
+            raise ValueError("device memory point charges a physical domain more than once")
 
-def ensure_supported_cuda_allocator() -> None:
-    """Require the dependency-pinned default native PyTorch CUDA allocator."""
+    @property
+    def exact_resource_ledger_bytes(self) -> int:
+        return sum(charge.exact_logical_bytes for charge in self.charges)
 
-    for name in (
-        "PYTORCH_CUDA_ALLOC_CONF",
-        "PYTORCH_ALLOC_CONF",
-        "PYTORCH_NO_CUDA_MEMORY_CACHING",
-    ):
-        if name in os.environ:
-            raise RuntimeError(f"unsupported PyTorch CUDA allocator environment variable {name}")
-    backend = torch.cuda.memory.get_allocator_backend()
-    if backend != "native":
-        raise RuntimeError(f"unsupported PyTorch CUDA allocator backend {backend!r}; expected 'native'")
+    @property
+    def unmodeled_costs(self) -> tuple[str, ...]:
+        return tuple(sorted({source for charge in self.charges for source in charge.unmodeled_costs}))
+
+    @property
+    def analytic_estimate_bytes(self) -> int:
+        """Sum known contributions; unmodeled overhead remains explicit evidence."""
+
+        result = sum(charge.estimated_physical_bytes for charge in self.charges)
+        ensure_sint64_nonnegative(result)
+        return result
 
 
 def allocator_reservation_bytes(storage_bytes: tuple[int, ...]) -> int:
@@ -102,12 +130,16 @@ class DeviceMemoryEstimator:
         *,
         model_specs: tuple[ffn.FfnModelSpec, ...],
         instance_profiles: tuple[InstanceFfnProfile, ...],
+        ffn_execution_contracts: tuple[FfnExecutionContract, ...],
+        coefficients: FfnMemoryCalibrationCoefficients | None,
     ) -> None:
-        """Retain co-indexed semantics and one process-global configuration."""
+        """Retain co-indexed semantics and the generation's selected correction."""
 
         if not model_specs or len(model_specs) != len(instance_profiles):
             raise ValueError("device-memory estimation requires nonempty co-indexed Models and Profiles")
         config = get_global_config()
+        if len(ffn_execution_contracts) != len(config.ffn.devices):
+            raise ValueError("execution contracts do not match configured FfnAgent count")
         if len(model_specs) != len(config.models):
             raise ValueError("device-memory Models do not match configured Model count")
         for index, (model, spec, profile) in enumerate(zip(config.models, model_specs, instance_profiles, strict=True)):
@@ -116,17 +148,14 @@ class DeviceMemoryEstimator:
             profile.require_compatible_model(spec)
         self.model_specs = model_specs
         self.instance_profiles = instance_profiles
-        self.config = config
-        profile = load_memory_calibration_profile()
-        self.coefficients: FfnMemoryCalibrationCoefficients | None = (
-            None if profile is None else profile.ffn.coefficients
-        )
+        self.ffn_execution_contracts = ffn_execution_contracts
+        self.coefficients = coefficients
 
     def tp_size(self, model_plan_index: int) -> int:
         """Resolve one configured Model's fixed FFN TP width."""
 
-        model = self.config.models[model_plan_index]
-        return model.ffn_tp_size or len(self.config.ffn.devices)
+        model = get_global_config().models[model_plan_index]
+        return model.ffn_tp_size or len(get_global_config().ffn.devices)
 
     def execution_runtime_bytes(
         self,
@@ -139,7 +168,7 @@ class DeviceMemoryEstimator:
         """Return exact native readiness, lookup, binding, and Lane storage."""
 
         ensure_sint64_nonnegative(local_layer_count, local_layer_capacity_count, local_signature_count)
-        lanes = self.config.scheduler.ffn_concurrency
+        lanes = get_global_config().scheduler.ffn_concurrency
         return xpool.native.fabric.ffnagent_control_allocation_bytes(
             coordinator,
             len(self.model_specs),
@@ -161,16 +190,16 @@ class DeviceMemoryEstimator:
 
         return xpool.native.devkit.fabric_observer.allocation_bytes(
             len(self.model_specs),
-            self.config.scheduler.ffn_concurrency,
+            get_global_config().scheduler.ffn_concurrency,
         )
 
     def fabric_arena_bytes(self) -> int:
         """Return exact native Fabric Arena bytes from semantic geometry."""
 
-        atnagent_count = len(self.config.atn.devices)
-        ffnagent_count = len(self.config.ffn.devices)
+        atnagent_count = len(get_global_config().atn.devices)
+        ffnagent_count = len(get_global_config().ffn.devices)
         instance_count = len(self.model_specs)
-        executor_lane_count = self.config.scheduler.ffn_concurrency
+        executor_lane_count = get_global_config().scheduler.ffn_concurrency
         layer_count = sum(len(spec.layers) for spec in self.model_specs)
         atnagent_pe_count = atnagent_count * instance_count
         ffnagent_pe_count = sum(len(spec.layers) * self.tp_size(index) for index, spec in enumerate(self.model_specs))
@@ -204,7 +233,7 @@ class DeviceMemoryEstimator:
     def allocation_ledger(self, *, fabric_plan: FabricPlan, ffnagent_index: int) -> tuple[DeviceMemoryPoint, ...]:
         """Compose the five exact startup ledgers and feature rows."""
 
-        if fabric_plan.executor_lane_count != self.config.scheduler.ffn_concurrency:
+        if fabric_plan.executor_lane_count != get_global_config().scheduler.ffn_concurrency:
             raise ValueError("Fabric Plan executor Lane count disagrees with the process configuration")
         return self.allocation_ledger_for_model_plans(
             model_plans=fabric_plan.model_plans,
@@ -219,7 +248,7 @@ class DeviceMemoryEstimator:
     ) -> tuple[DeviceMemoryPoint, ...]:
         """Compose ledgers from Model Plans before their Fabric Plan is installed."""
 
-        ffnagent_count = len(self.config.ffn.devices)
+        ffnagent_count = len(get_global_config().ffn.devices)
         if not 0 <= ffnagent_index < ffnagent_count:
             raise ValueError("device-memory FfnAgent index is outside the configured Fleet")
         if len(model_plans) != len(self.model_specs):
@@ -272,7 +301,7 @@ class DeviceMemoryEstimator:
         moe_graph_capture_count = len(signatures) - dense_graph_capture_count
         dense_present = dense_graph_capture_count != 0
         moe_present = moe_graph_capture_count != 0
-        executor_lane_count = self.config.scheduler.ffn_concurrency
+        executor_lane_count = get_global_config().scheduler.ffn_concurrency
         compute_branch_count = executor_lane_count * len(signatures)
         lane_workspace_bytes = executor_lane_count * max(
             (preparation.compute_workspace_bytes(signature) for signature in signatures), default=0
@@ -323,32 +352,64 @@ class DeviceMemoryEstimator:
         return (
             DeviceMemoryPoint(
                 point="weight_materialization",
-                exact_resource_ledger_bytes=packed_weight_bytes,
-                allocator_allowance_bytes=packed_weight_allowance,
+                charges=(
+                    DeviceMemoryCharge(
+                        domain="execution",
+                        exact_logical_bytes=packed_weight_bytes,
+                        estimated_physical_bytes=(packed_weight_bytes) + (packed_weight_allowance),
+                        unmodeled_costs=(),
+                    ),
+                ),
                 features=features(graph_capture=False, lanes=False, joined=False),
             ),
             DeviceMemoryPoint(
                 point="fabric_join",
-                exact_resource_ledger_bytes=packed_weight_bytes + fabric_join_bytes,
-                allocator_allowance_bytes=packed_weight_allowance,
+                charges=(
+                    DeviceMemoryCharge(
+                        domain="execution",
+                        exact_logical_bytes=packed_weight_bytes + fabric_join_bytes,
+                        estimated_physical_bytes=(packed_weight_bytes + fabric_join_bytes) + (packed_weight_allowance),
+                        unmodeled_costs=(),
+                    ),
+                ),
                 features=features(graph_capture=False, lanes=False, joined=True),
             ),
             DeviceMemoryPoint(
                 point="graph_capture",
-                exact_resource_ledger_bytes=packed_weight_bytes + fabric_join_bytes + graph_capture_bytes,
-                allocator_allowance_bytes=packed_weight_allowance + graph_capture_allowance,
+                charges=(
+                    DeviceMemoryCharge(
+                        domain="execution",
+                        exact_logical_bytes=packed_weight_bytes + fabric_join_bytes + graph_capture_bytes,
+                        estimated_physical_bytes=(packed_weight_bytes + fabric_join_bytes + graph_capture_bytes)
+                        + (packed_weight_allowance + graph_capture_allowance),
+                        unmodeled_costs=("cuda.graph_driver",),
+                    ),
+                ),
                 features=features(graph_capture=True, lanes=False, joined=True),
             ),
             DeviceMemoryPoint(
                 point="execution_installation",
-                exact_resource_ledger_bytes=retained_exact + graph_capture_bytes,
-                allocator_allowance_bytes=packed_weight_allowance + graph_capture_allowance,
+                charges=(
+                    DeviceMemoryCharge(
+                        domain="execution",
+                        exact_logical_bytes=retained_exact + graph_capture_bytes,
+                        estimated_physical_bytes=(retained_exact + graph_capture_bytes)
+                        + (packed_weight_allowance + graph_capture_allowance),
+                        unmodeled_costs=("cuda.graph_driver",),
+                    ),
+                ),
                 features=features(graph_capture=True, lanes=True, joined=True),
             ),
             DeviceMemoryPoint(
                 point="retained",
-                exact_resource_ledger_bytes=retained_exact,
-                allocator_allowance_bytes=packed_weight_allowance,
+                charges=(
+                    DeviceMemoryCharge(
+                        domain="execution",
+                        exact_logical_bytes=retained_exact,
+                        estimated_physical_bytes=(retained_exact) + (packed_weight_allowance),
+                        unmodeled_costs=("cuda.graph_driver",),
+                    ),
+                ),
                 features=features(graph_capture=False, lanes=True, joined=True),
             ),
         )
@@ -376,25 +437,23 @@ class DeviceMemoryEstimator:
     def estimate_points(self, points: tuple[DeviceMemoryPoint, ...]) -> DeviceMemoryEstimate:
         """Reduce one five-point ledger to retained and peak bytes."""
 
-        estimates = []
+        estimates: dict[StartupPoint, int] = {}
         for point in points:
-            calibrated_overhead = (
-                0
-                if self.coefficients is None
-                else self.coefficients.evaluate(
-                    DeviceMemoryFeatures(
-                        tensor_storage_bytes=point.features.tensor_storage_bytes,
-                        tensor_storage_allocation_count=point.features.tensor_storage_allocation_count,
-                        dense_graph_capture_count=point.features.dense_graph_capture_count,
-                        moe_graph_capture_count=point.features.moe_graph_capture_count,
-                        executor_lane_count=point.features.executor_lane_count,
-                        compute_branch_count=point.features.compute_branch_count,
-                        dense_implementation_present=point.features.dense_implementation_present,
-                        moe_implementation_present=point.features.moe_implementation_present,
-                        joined_ffnagent=point.features.joined_ffnagent,
-                    )
-                )
+            calibrated_overhead = 0 if self.coefficients is None else self.coefficients.evaluate(point.features)
+            estimates[point.point] = point.analytic_estimate_bytes + calibrated_overhead
+            logger.debug(
+                "memory stage estimated point=%s analytic_bytes=%s correction_bytes=%s unmodeled_costs=%s",
+                point.point,
+                point.analytic_estimate_bytes,
+                calibrated_overhead,
+                point.unmodeled_costs,
             )
-            estimates.append(point.exact_resource_ledger_bytes + point.allocator_allowance_bytes + calibrated_overhead)
-        ensure_sint64_nonnegative(*estimates)
-        return DeviceMemoryEstimate(retained_bytes=estimates[-1], peak_bytes=max(estimates))
+        ensure_sint64_nonnegative(*estimates.values())
+        logger.info(
+            "memory estimated peak_bytes=%s retained_bytes=%s calibrated=%s unmodeled_costs=%s",
+            max(estimates.values()),
+            estimates["retained"],
+            self.coefficients is not None,
+            tuple(sorted({cost for point in points for cost in point.unmodeled_costs})),
+        )
+        return DeviceMemoryEstimate(retained_bytes=estimates["retained"], peak_bytes=max(estimates.values()))

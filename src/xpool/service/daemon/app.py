@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 from xpool import bootstrap
 from xpool.config import XpoolConfig, get_global_config
-from xpool.fabric import FabricGenerationId, FabricPlan
+from xpool.fabric import FabricDeploymentPlan, FabricGenerationId
 from xpool.model import ModelId
 from xpool.native import RuntimeRole
 from xpool.service.daemon.control import ControlPlane
@@ -36,11 +36,13 @@ from xpool.service.wire import (
     AtnAgentRegistration,
     AtnAgentTransportArenaUpsertRequest,
     AtnAgentTransportLeaseQuiesceResponse,
+    AtnAgentView,
     ConfigCheckRequest,
     ElasticContextStateControlChannelRef,
     FabricParticipantReport,
     FabricQuiesceRequest,
     FfnAgentRegistration,
+    FfnAgentView,
     HeartbeatResponse,
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
@@ -246,7 +248,7 @@ def create_daemon() -> FastAPI:
         return get_global_config()
 
     @app.get("/fabric/plan")
-    async def get_fabric_plan() -> FabricPlan:
+    async def get_fabric_plan() -> FabricDeploymentPlan:
         """Return the retained Fabric plan once a complete generation exists.
 
         Raises:
@@ -349,7 +351,7 @@ def create_daemon() -> FastAPI:
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
     @app.get("/atnagents")
-    async def list_atnagents() -> list[AtnAgentRegistration]:
+    async def list_atnagents() -> list[AtnAgentView]:
         """List retained AtnAgent registrations."""
 
         return await asyncio.to_thread(control_plane.list_atnagents)
@@ -361,7 +363,7 @@ def create_daemon() -> FastAPI:
         return await asyncio.to_thread(control_plane.list_instances)
 
     @app.get("/ffnagents")
-    async def list_ffnagents() -> list[FfnAgentRegistration]:
+    async def list_ffnagents() -> list[FfnAgentView]:
         """List retained FfnAgent registrations."""
 
         return await asyncio.to_thread(control_plane.list_ffnagents)
@@ -382,6 +384,7 @@ def create_daemon() -> FastAPI:
             control_plane.register_atnagent,
             AtnAgentRegistrationState(
                 device=request.device,
+                calibration_environment=request.calibration_environment,
                 abi_version=request.abi_version,
                 pid=request.pid,
                 now=monotonic(),
@@ -416,8 +419,10 @@ def create_daemon() -> FastAPI:
             control_plane.register_ffnagent,
             FfnAgentRegistrationState(
                 device=request.device,
-                device_total_memory_bytes=request.device_total_memory_bytes,
+                calibration_environment=request.calibration_environment,
                 device_free_memory_bytes=request.device_free_memory_bytes,
+                device_total_memory_bytes=request.device_total_memory_bytes,
+                execution_contract=request.execution_contract,
                 abi_version=request.abi_version,
                 pid=request.pid,
                 now=monotonic(),

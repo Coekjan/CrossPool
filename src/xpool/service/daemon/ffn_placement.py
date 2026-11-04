@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from time import monotonic
 
 from ortools.graph.python import max_flow
 from ortools.sat.python import cp_model
 
 from xpool import ffn
+from xpool.config import get_global_config
 from xpool.fabric import (
     FabricInstancePlan,
     FfnModelPlan,
     place_ffn_layer,
 )
-from xpool.memory import MIB, DeviceMemoryFeatures
+from xpool.memory import (
+    MIB,
+    DeviceMemoryEstimate,
+    DeviceMemoryFeatures,
+    FfnExecutionContract,
+    FfnMemoryCalibrationCoefficients,
+)
 from xpool.runtime.ffnagent import execution, preparation
 from xpool.runtime.ffnagent.device_memory import (
     DeviceMemoryEstimator,
@@ -23,6 +31,14 @@ from xpool.runtime.ffnagent.device_memory import (
 from xpool.service.errors import XpoolDaemonError
 from xpool.utils import align_up
 from xpool.utils.integer import ensure_sint64_nonnegative
+
+
+@dataclass(frozen=True, slots=True)
+class FfnPlacementResult:
+    """Model-ordered placement and independently audited FfnAgent-ordered budgets."""
+
+    model_plans: tuple[FfnModelPlan, ...]
+    memory_estimates: tuple[DeviceMemoryEstimate, ...]
 
 
 def remaining_placement_seconds(deadline: float, phase: str) -> float:
@@ -134,22 +150,26 @@ def place_ffn_models(
     model_specs: tuple[ffn.FfnModelSpec, ...],
     instance_plans: tuple[FabricInstancePlan, ...],
     ffnagent_free_memory_bytes: tuple[int, ...],
-) -> tuple[FfnModelPlan, ...]:
+    ffn_execution_contracts: tuple[FfnExecutionContract, ...],
+    coefficients: FfnMemoryCalibrationCoefficients | None,
+) -> FfnPlacementResult:
     """Validate one Placement request and solve it before the shared deadline."""
 
     try:
         estimator = DeviceMemoryEstimator(
+            ffn_execution_contracts=ffn_execution_contracts,
             model_specs=model_specs,
             instance_profiles=tuple(instance.ffn_profile for instance in instance_plans),
+            coefficients=coefficients,
         )
     except ValueError as error:
         raise XpoolDaemonError("conflict", str(error)) from error
-    config = estimator.config
+    config = get_global_config()
     ffnagent_count = len(config.ffn.devices)
-    if len(instance_plans) != len(config.models) or len(ffnagent_free_memory_bytes) != ffnagent_count:
+    if len(ffnagent_free_memory_bytes) != ffnagent_count:
         raise XpoolDaemonError(
             "conflict",
-            "configured Models, Instance Plans, and FfnAgent memory are not co-indexed",
+            "FfnAgent free-memory observations do not match configured count",
         )
     try:
         ensure_sint64_nonnegative(*ffnagent_free_memory_bytes)
@@ -175,7 +195,7 @@ def solve_placement(
     ffnagent_free_memory_bytes: tuple[int, ...],
     estimator: DeviceMemoryEstimator,
     deadline: float,
-) -> tuple[FfnModelPlan, ...]:
+) -> FfnPlacementResult:
     """Solve one Placement with ordered objectives and deterministic projection.
 
     Parallel CP-SAT solves fix each objective value in priority order. A final
@@ -183,7 +203,7 @@ def solve_placement(
     aggregate assignment counts are decomposed into concrete TP groups.
     """
 
-    config = estimator.config
+    config = get_global_config()
     ffnagent_count = len(config.ffn.devices)
 
     # Layers with identical per-rank resources and Graph
@@ -887,6 +907,7 @@ def solve_placement(
         ]
         if projected_counts != solved_counts:
             raise RuntimeError("FFN Placement projection does not reproduce solved assignment counts")
+    estimates = []
     for ffnagent_index in range(ffnagent_count):
         estimate = estimator.estimate_model_plans(
             model_plans=model_plans,
@@ -896,5 +917,6 @@ def solve_placement(
             retained_bytes[ffnagent_index]
         ) or estimate.peak_bytes != solver.value(peak_bytes[ffnagent_index]):
             raise RuntimeError(f"FFN Placement memory mismatch for FfnAgent {ffnagent_index}")
+        estimates.append(estimate)
     remaining_placement_seconds(deadline, "postsolve validation")
-    return model_plans
+    return FfnPlacementResult(model_plans, tuple(estimates))

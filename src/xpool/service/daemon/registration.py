@@ -10,13 +10,14 @@ import psutil
 
 from xpool import ffn
 from xpool.fabric import FabricRole, InstanceFfnProfile
+from xpool.memory import FfnExecutionContract, MemoryCalibrationEnvironment
 from xpool.model import ModelId
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
-    AtnAgentRegistration,
+    AtnAgentView,
     ElasticContextStatePartitionProfile,
-    FfnAgentRegistration,
+    FfnAgentView,
     InstanceRankRegistration,
     ProcessRef,
     ReadinessStatus,
@@ -161,17 +162,27 @@ class InstanceRankRegistrationState(CommonRegistration):
 class AtnAgentRegistrationState(CommonRegistration):
     """One live AtnAgent registration."""
 
-    __slots__ = ("abi_version", "device")
+    __slots__ = ("abi_version", "calibration_environment", "device")
 
     abi_version: int
     device: int
+    calibration_environment: MemoryCalibrationEnvironment | None
 
-    def __init__(self, *, device: int, abi_version: int, pid: int, now: float) -> None:
+    def __init__(
+        self,
+        *,
+        device: int,
+        calibration_environment: MemoryCalibrationEnvironment | None,
+        abi_version: int,
+        pid: int,
+        now: float,
+    ) -> None:
         """Create one AtnAgent registration."""
 
         super().__init__(pid, now=now)
         self.abi_version = abi_version
         self.device = device
+        self.calibration_environment = calibration_environment
 
     def key(self) -> int:
         """Return the owned device."""
@@ -187,6 +198,7 @@ class AtnAgentRegistrationState(CommonRegistration):
             super().conflicts_with(candidate)
             or self.device != candidate.device
             or self.abi_version != candidate.abi_version
+            or self.calibration_environment != candidate.calibration_environment
         )
 
 
@@ -195,22 +207,28 @@ class FfnAgentRegistrationState(CommonRegistration):
 
     __slots__ = (
         "abi_version",
+        "calibration_environment",
         "device",
         "device_free_memory_bytes",
         "device_total_memory_bytes",
+        "execution_contract",
     )
 
     abi_version: int
     device: int
-    device_total_memory_bytes: int
+    calibration_environment: MemoryCalibrationEnvironment | None
     device_free_memory_bytes: int
+    device_total_memory_bytes: int
+    execution_contract: FfnExecutionContract
 
     def __init__(
         self,
         *,
         device: int,
-        device_total_memory_bytes: int,
+        calibration_environment: MemoryCalibrationEnvironment | None,
         device_free_memory_bytes: int,
+        device_total_memory_bytes: int,
+        execution_contract: FfnExecutionContract,
         abi_version: int,
         pid: int,
         now: float,
@@ -220,8 +238,10 @@ class FfnAgentRegistrationState(CommonRegistration):
         super().__init__(pid, now=now)
         self.abi_version = abi_version
         self.device = device
-        self.device_total_memory_bytes = device_total_memory_bytes
+        self.calibration_environment = calibration_environment
         self.device_free_memory_bytes = device_free_memory_bytes
+        self.device_total_memory_bytes = device_total_memory_bytes
+        self.execution_contract = execution_contract
 
     def key(self) -> int:
         """Return the owned device."""
@@ -237,8 +257,10 @@ class FfnAgentRegistrationState(CommonRegistration):
             super().conflicts_with(candidate)
             or self.device != candidate.device
             or self.abi_version != candidate.abi_version
-            or self.device_total_memory_bytes != candidate.device_total_memory_bytes
+            or self.calibration_environment != candidate.calibration_environment
             or self.device_free_memory_bytes != candidate.device_free_memory_bytes
+            or self.device_total_memory_bytes != candidate.device_total_memory_bytes
+            or self.execution_contract != candidate.execution_contract
         )
 
 
@@ -331,11 +353,11 @@ class RegistrationBook:
             for registration in self.instances.values()
         ]
 
-    def atnagent_views(self) -> list[AtnAgentRegistration]:
+    def atnagent_views(self) -> list[AtnAgentView]:
         """Project AtnAgent records to wire views."""
 
         return [
-            AtnAgentRegistration(
+            AtnAgentView(
                 pid=registration.proc.pid,
                 device=registration.device,
                 abi_version=registration.abi_version,
@@ -343,18 +365,18 @@ class RegistrationBook:
             for registration in self.atnagents.values()
         ]
 
-    def ffnagent_views(self) -> list[FfnAgentRegistration]:
+    def ffnagent_views(self) -> list[FfnAgentView]:
         """Project FfnAgent records to wire views."""
 
         model_specs = self.ffn_model_specs
         if model_specs is None and self.ffnagents.values():
             raise RuntimeError("FfnAgent registrations exist without canonical Model Specs")
         return [
-            FfnAgentRegistration(
+            FfnAgentView(
                 pid=registration.proc.pid,
                 device=registration.device,
-                device_total_memory_bytes=registration.device_total_memory_bytes,
                 device_free_memory_bytes=registration.device_free_memory_bytes,
+                device_total_memory_bytes=registration.device_total_memory_bytes,
                 model_specs=() if model_specs is None else model_specs,
                 abi_version=registration.abi_version,
             )

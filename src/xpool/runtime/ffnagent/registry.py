@@ -325,6 +325,33 @@ class FfnExecutionRegistry:
         model_specs: tuple[ffn.FfnModelSpec, ...],
         ffnagent_index: int,
     ) -> None:
+        """Complete local construction and retained cleanup before readiness.
+
+        Consume one attempt. Every failure retains this Registry's remaining
+        owners until native retirement; success preserves borrowed service storage.
+        """
+
+        if self.materialization_started:
+            raise RuntimeError("FFN execution materialization cannot be retried")
+        self.materialization_started = True
+        device = torch.cuda.current_device()
+        self.construct_execution(
+            fabric_plan=fabric_plan,
+            model_specs=model_specs,
+            ffnagent_index=ffnagent_index,
+        )
+        # Construction locals have exited; trim only releasable default-domain cache.
+        torch.cuda.synchronize(device)
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize(device)
+
+    def construct_execution(
+        self,
+        *,
+        fabric_plan: FabricPlan,
+        model_specs: tuple[ffn.FfnModelSpec, ...],
+        ffnagent_index: int,
+    ) -> None:
         """Capture, install, and retain the Plan-selected local execution.
 
         Equal execution signatures share one captured compute body. Capture
@@ -332,9 +359,6 @@ class FfnExecutionRegistry:
         returned Registry retains the service weights borrowed by Lane GraphExecs.
         """
 
-        if self.materialization_started:
-            raise RuntimeError("FFN execution preparation cannot be retried")
-        self.materialization_started = True
         layer_weights = self.layer_weights
         ffnagent_count = sum(placement.role is FabricRole.FFNAGENT for placement in fabric_plan.pe_placements)
         if not 0 <= ffnagent_index < ffnagent_count:

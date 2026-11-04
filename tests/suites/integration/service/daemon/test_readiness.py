@@ -5,7 +5,7 @@ from http import HTTPStatus
 import pytest
 
 import xpool.service.daemon.control
-from xpool.fabric import FabricPlan
+from xpool.fabric import FabricDeploymentPlan
 from xpool.utils.mps import MpsProbeResult, MpsScope
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
 from xtest.harness.support.service.daemon import (
@@ -51,7 +51,10 @@ def test_participant_list_preserves_stale_registrations(participant: str) -> Non
     response = request(app, "GET", list_path)
 
     assert response.status_code == HTTPStatus.OK
-    assert response.json() == [registration]
+    expected = registration.copy()
+    if participant == "atnagent":
+        expected.pop("calibration_environment")
+    assert response.json() == [expected]
 
 
 def test_daemon_ready_marks_stale_live_registrations_stale_without_pruning(
@@ -161,7 +164,7 @@ def test_daemon_preserves_stale_registration_but_blocks_stale_transport_arenas()
         )
         assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
         assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
-        plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+        plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
         activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
         assert (
             request(

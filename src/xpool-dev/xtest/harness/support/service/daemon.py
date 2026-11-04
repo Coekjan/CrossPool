@@ -19,7 +19,7 @@ import xpool.service.daemon.control
 import xpool.service.daemon.ecs
 from xpool import ffn
 from xpool.config import XpoolConfig, get_global_config
-from xpool.fabric import FabricGenerationId, FabricParticipantPhase, FabricPlan, FabricRole
+from xpool.fabric import FabricDeploymentPlan, FabricGenerationId, FabricParticipantPhase, FabricPlan, FabricRole
 from xpool.model import ModelId
 from xpool.native import ABI_VERSION
 from xpool.quantization import Unquantized
@@ -27,7 +27,12 @@ from xpool.service.daemon.app import create_daemon
 from xpool.service.wire import ElasticContextStateControlChannelRef
 from xpool.utils.mps import MpsEndpoint, MpsProbeResult, MpsScope
 from xpool.utils.procs import ProcUniqId
-from xtest.harness.support.config import TEST_MODEL_ID, install_test_config
+from xtest.harness.support.config import (
+    TEST_CALIBRATION_ENVIRONMENT,
+    TEST_EXECUTION_CONTRACT,
+    TEST_MODEL_ID,
+    install_test_config,
+)
 from xtest.harness.support.ecs import context_state_profile
 
 
@@ -177,10 +182,11 @@ def atnagent_registration(
     device: int,
     pid: int | None = None,
     abi_version: int = ABI_VERSION,
-) -> dict[str, int | float]:
+) -> dict[str, object]:
     pid = process_pid(pid)
     return {
         "device": device,
+        "calibration_environment": TEST_CALIBRATION_ENVIRONMENT.model_dump(mode="json"),
         "abi_version": abi_version,
         "pid": pid,
     }
@@ -199,8 +205,10 @@ def ffnagent_registration(
         "pid": process_pid(pid),
         "abi_version": abi_version,
         "device": device,
-        "device_total_memory_bytes": 16 * 1024**3,
+        "calibration_environment": TEST_CALIBRATION_ENVIRONMENT.model_dump(mode="json"),
         "device_free_memory_bytes": 12 * 1024**3,
+        "device_total_memory_bytes": TEST_CALIBRATION_ENVIRONMENT.total_memory_bytes,
+        "execution_contract": TEST_EXECUTION_CONTRACT.model_dump(mode="json"),
         "model_specs": [ffn_model_spec(model_id=model_id) for model_id in model_ids],
     }
 
@@ -289,7 +297,7 @@ def register_fabric_world(
     atnagent: Mapping[str, object] | None = None,
     ffnagent: Mapping[str, object] | None = None,
     instance: Mapping[str, object] | None = None,
-) -> tuple[dict[str, object], dict[str, object], dict[str, object], FabricPlan]:
+) -> tuple[dict[str, object], dict[str, object], dict[str, object], FabricDeploymentPlan]:
     """Register one complete 1x1x1 generation and return its plan."""
 
     instance_payload = dict(instance or instance_registration(model_id=str(TEST_MODEL_ID)))
@@ -299,7 +307,7 @@ def register_fabric_world(
     assert register(app, "/ffnagent/register", ffnagent_payload).status_code == HTTPStatus.NO_CONTENT
     response = register(app, "/instance/register", instance_payload)
     assert response.status_code == HTTPStatus.NO_CONTENT, response.text
-    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+    plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     return atnagent_payload, ffnagent_payload, instance_payload, plan
 
 

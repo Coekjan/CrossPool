@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 import xpool.native
 from xpool import ffn
 from xpool.config import FfnSchedulingPolicy
+from xpool.memory import DeviceMemoryEstimate, FfnExecutionContract
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
 from xpool.utils.dtype import TorchDtype
@@ -21,6 +22,7 @@ from xpool.utils.integer import UINT64_MAX, ensure_uint64
 __all__ = [
     "FABRIC_UID_HEX_LENGTH",
     "DenseFfnLayerPlan",
+    "FabricDeploymentPlan",
     "FabricGenerationId",
     "FabricGenerationPhase",
     "FabricInstancePlan",
@@ -431,6 +433,9 @@ class FabricPlan(FabricModel):
 
     generation: FabricGenerationId = Field(description="Daemon-authoritative generation identity.")
     uid: FabricUid = Field(description="NVSHMEM unique id used to bootstrap the generation.")
+    ffn_execution_contracts: tuple[FfnExecutionContract, ...] = Field(
+        description="Address-free resources in FfnAgent suffix order."
+    )
     pe_placements: tuple[FabricPePlacement, ...] = Field(
         min_length=2,
         description="Canonical AtnAgent-prefix and FfnAgent-suffix PE map.",
@@ -451,6 +456,8 @@ class FabricPlan(FabricModel):
         """Require exact co-indexing, topology, and placed Layer membership."""
 
         atnagent_count, ffnagent_count = FabricPePlacement.validate_order(self.pe_placements)
+        if len(self.ffn_execution_contracts) != ffnagent_count:
+            raise ValueError("Execution contracts and FfnAgents must be co-indexed")
         if len(self.model_plans) != len(self.instance_plans):
             raise ValueError("Model Plans and Instance Plans must be co-indexed")
         model_ids = tuple(plan.model_id for plan in self.instance_plans)
@@ -471,4 +478,20 @@ class FabricPlan(FabricModel):
                 for planned, declared in zip(model_plan.layers, profile.layers, strict=True)
             ):
                 raise ValueError("Model Plan and Instance FFN Profile layer kinds differ")
+        return self
+
+
+class FabricDeploymentPlan(FabricPlan):
+    """Serving execution plan with the daemon's independently audited FFN budgets."""
+
+    ffn_memory_estimates: tuple[DeviceMemoryEstimate, ...] = Field(
+        description="Retained and peak incremental bytes in FfnAgent suffix order, excluding operator margin."
+    )
+
+    @model_validator(mode="after")
+    def validate_estimates(self) -> FabricDeploymentPlan:
+        """Require an admission result for every FfnAgent, including idle agents."""
+
+        if len(self.ffn_memory_estimates) != len(self.ffn_execution_contracts):
+            raise ValueError("Memory estimates and execution contracts must be co-indexed")
         return self

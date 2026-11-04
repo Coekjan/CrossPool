@@ -12,7 +12,7 @@ import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from xpool.config import get_global_config
-from xpool.fabric import FabricGenerationId, FabricPlan
+from xpool.fabric import FabricDeploymentPlan, FabricGenerationId
 from xpool.model import ModelId
 from xpool.service.errors import XpoolClientError, XpoolDaemonError
 from xpool.service.wire import (
@@ -208,11 +208,11 @@ class XpoolClient:
             ),
         )
 
-    def fabric_plan(self) -> FabricPlan:
+    def fabric_plan(self) -> FabricDeploymentPlan:
         """Return the immutable allocation and execution plan for the generation."""
 
         response = self.request("GET", "/fabric/plan")
-        return self.decode_model(response, FabricPlan, "fabric plan")
+        return self.decode_model(response, FabricDeploymentPlan, "fabric plan")
 
     def admit_agent_startup(self, request: AgentStartupAdmission) -> None:
         """Require retained exact ownership before initializing an Agent device.

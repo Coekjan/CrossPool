@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from xpool.fabric import (
     DenseFfnLayerPlan,
+    FabricDeploymentPlan,
     FabricGenerationId,
     FabricGenerationPhase,
     FabricInstancePlan,
@@ -22,8 +23,9 @@ from xpool.fabric import (
     InstanceFfnProfile,
     InstanceRankTopology,
 )
+from xpool.memory import DeviceMemoryEstimate
 from xpool.native.ffn import LayerKind
-from xtest.harness.support.config import TEST_MODEL_ID
+from xtest.harness.support.config import TEST_EXECUTION_CONTRACT, TEST_MODEL_ID
 
 
 def profile(payload_dtype: torch.dtype = torch.bfloat16) -> InstanceFfnProfile:
@@ -45,6 +47,7 @@ def fabric_plan() -> FabricPlan:
     return FabricPlan(
         generation=FabricGenerationId(high=1, low=2),
         uid=FabricUid(value="ab" * 128),
+        ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 2,
         pe_placements=(
             FabricPePlacement(role=FabricRole.ATNAGENT, device=0),
             FabricPePlacement(role=FabricRole.FFNAGENT, device=1),
@@ -190,3 +193,24 @@ def test_plan_rejects_non_coindexed_model_and_instance_tables() -> None:
         FabricPlan.model_validate(
             {**plan.model_dump(mode="python"), "instance_plans": (*plan.instance_plans, *plan.instance_plans)}
         )
+
+
+def test_deployment_retains_all_ffn_budgets_through_json() -> None:
+    plan = fabric_plan()
+    budgets = (
+        DeviceMemoryEstimate(retained_bytes=1024, peak_bytes=4096),
+        DeviceMemoryEstimate(retained_bytes=2048, peak_bytes=8192),
+    )
+    deployment = FabricDeploymentPlan(**plan.model_dump(), ffn_memory_estimates=budgets)
+    returned = FabricDeploymentPlan.model_validate_json(deployment.model_dump_json())
+    assert returned.ffn_memory_estimates == budgets
+    assert returned.ffn_execution_contracts == plan.ffn_execution_contracts
+
+
+@pytest.mark.parametrize("budgets", (None, (), (DeviceMemoryEstimate(retained_bytes=1, peak_bytes=2),)))
+def test_deployment_requires_one_budget_per_ffn(budgets: tuple[DeviceMemoryEstimate, ...] | None) -> None:
+    values = fabric_plan().model_dump()
+    if budgets is not None:
+        values["ffn_memory_estimates"] = budgets
+    with pytest.raises(ValidationError, match=r"ffn_memory_estimates|co-indexed"):
+        FabricDeploymentPlan.model_validate(values)

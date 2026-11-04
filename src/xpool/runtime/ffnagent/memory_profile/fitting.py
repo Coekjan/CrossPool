@@ -93,12 +93,9 @@ def fit_worlds(
     # residual so fitting cannot hide a high-water observation behind an average.
     for world in fit_worlds:
         for observation in world.observations:
-            observed_residual = observation.observed_device_bytes - observation.point.exact_resource_ledger_bytes
-            if observed_residual < 0:
-                raise ValueError("observed device bytes are below the exact allocation ledger")
             calibration_residual = max(
                 0,
-                observed_residual - observation.point.allocator_allowance_bytes,
+                observation.observed_device_bytes - observation.point.analytic_estimate_bytes,
             )
             vector = observation.point.features.calibration_values()
             targets[vector] = max(targets.get(vector, 0), calibration_residual)
@@ -116,12 +113,9 @@ def fit_worlds(
     minimum_headroom = SINT64_MAX
     for world in held_out_worlds:
         for observation in world.observations:
-            observed_residual = observation.observed_device_bytes - observation.point.exact_resource_ledger_bytes
-            if observed_residual < 0:
-                raise ValueError("held-out device bytes are below the exact allocation ledger")
             calibration_residual = max(
                 0,
-                observed_residual - observation.point.allocator_allowance_bytes,
+                observation.observed_device_bytes - observation.point.analytic_estimate_bytes,
             )
             prediction = coefficients.evaluate(observation.point.features)
             if prediction < calibration_residual:
@@ -132,7 +126,7 @@ def fit_worlds(
                 )
             minimum_headroom = min(
                 minimum_headroom,
-                observation.point.allocator_allowance_bytes + prediction - observed_residual,
+                observation.point.analytic_estimate_bytes + prediction - observation.observed_device_bytes,
             )
     if minimum_headroom == SINT64_MAX:
         raise ValueError("memory-profile held-out inventory is empty")

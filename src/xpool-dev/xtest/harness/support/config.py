@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 
@@ -13,16 +14,36 @@ import xpool.config
 from xkit.case import CaseId
 from xkit.config import ToolConfigRecord, XpoolDevConfig
 from xpool.config import XpoolConfig
-from xpool.memory import ExecutionResourceDeclaration, ExecutionResourceRequirement, FfnExecutionContract
+from xpool.memory import (
+    ExecutionResourceDeclaration,
+    ExecutionResourceRequirement,
+    FabricMemoryContext,
+    FfnExecutionContract,
+    MemoryCalibrationEnvironment,
+)
 from xpool.model import ModelId
+from xpool.native import ABI_VERSION
 from xtest.harness.runner.pytest_plugin import resolved_config_key
 from xtest.harness.runner.requirements import ResolvedConfig
 
 TEST_MODEL_ID = ModelId("test/test-model")
 TEST_CASE_ID = CaseId("550e8400-e29b-41d4-a716-446655440000")
-
-
 TEST_EXECUTION_CONTRACT = FfnExecutionContract(lane_resources=(), shared_resources=())
+TEST_CALIBRATION_ENVIRONMENT = MemoryCalibrationEnvironment(
+    name="test-device",
+    compute_capability=(8, 0),
+    total_memory_bytes=16 * 1024**3,
+    native_abi_version=ABI_VERSION,
+    cuda_driver_version=13030,
+    cuda_runtime_version=13030,
+    torch_version=importlib.metadata.version("torch"),
+    triton_version=importlib.metadata.version("triton"),
+    sglang_version=importlib.metadata.version("sglang"),
+    sglang_kernel_version=importlib.metadata.version("sglang-kernel"),
+    nvshmem_version=importlib.metadata.version("nvidia-nvshmem-cu13"),
+    nccl_version=(2, 29, 7),
+    configuration_inputs=(),
+)
 
 
 def lane_resource_declaration(
@@ -40,6 +61,15 @@ def lane_resource_declaration(
         ),
         aliases=aliases,
         uses=("dense", "moe_router"),
+    )
+
+
+def synthetic_memory_context(*, atnagent_count: int = 1, ffnagent_count: int = 1) -> FabricMemoryContext:
+    """Provide explicit facts for protocol/component tests without physical admission."""
+
+    return FabricMemoryContext(
+        participants=(TEST_CALIBRATION_ENVIRONMENT,) * (atnagent_count + ffnagent_count),
+        ffn_execution=(TEST_EXECUTION_CONTRACT,) * ffnagent_count,
     )
 
 

@@ -13,47 +13,25 @@ from xpool import ffn
 from xpool.config import XpoolConfig
 from xpool.fabric import FABRIC_UID_HEX_LENGTH, FabricRole
 from xpool.memory import (
+    DeviceMemoryFeatures,
     FfnMemoryCalibration,
     FfnMemoryCalibrationCoefficients,
-    MemoryCalibrationDevice,
-    MemoryCalibrationEnvironment,
     XpoolMemoryCalibrationProfile,
     load_memory_calibration_profile,
 )
-from xpool.native import ABI_VERSION
 from xpool.native.ffn import LayerKind
-from xpool.runtime.ffnagent.device_memory import DeviceMemoryFeatures, DeviceMemoryPoint
+from xpool.runtime.ffnagent.device_memory import DeviceMemoryCharge, DeviceMemoryPoint
 from xpool.runtime.ffnagent.memory_profile import corpus, evidence, fitting, runner
 from xpool.runtime.ffnagent.memory_profile.experiment import CalibrationExperiment
-from xtest.harness.support.config import install_test_config, reset_global_config, synthetic_config
+from xtest.harness.support.config import (
+    TEST_EXECUTION_CONTRACT,
+    install_test_config,
+    reset_global_config,
+    synthetic_config,
+    synthetic_memory_context,
+)
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
-
-
-def software_environment() -> evidence.MemoryProfileSoftwareEnvironment:
-    """Return one self-consistent synthetic software environment."""
-
-    return evidence.MemoryProfileSoftwareEnvironment(
-        native_abi_version=ABI_VERSION,
-        cuda_driver_version=1,
-        cuda_runtime_version=1,
-        torch_version="1",
-        triton_version="1",
-        sglang_version="1",
-        sglang_kernel_version="1",
-        nvshmem_version="1",
-    )
-
-
-def device(index: int) -> MemoryCalibrationDevice:
-    """Return one ordered synthetic device record."""
-
-    return MemoryCalibrationDevice(
-        name="device",
-        compute_capability=(8, 0),
-        total_memory_bytes=100,
-        uuid=f"device-{index}",
-    )
 
 
 def feature_row(index: int) -> DeviceMemoryFeatures:
@@ -82,11 +60,11 @@ def world(
     return evidence.MemoryProfileWorld(
         experiment=experiment,
         repetition=repetition,
+        memory_context=synthetic_memory_context(ffnagent_count=participant_count),
         participants=tuple(
             evidence.MemoryProfileParticipantEvidence(
                 ffnagent_index=index,
-                device=device(index),
-                environment=software_environment(),
+                device_uuid=f"device-{index}",
                 observations=observations,
             )
             for index in range(participant_count)
@@ -104,15 +82,14 @@ def test_solve_coefficients_preserves_canonical_tie_break() -> None:
     assert coefficients.values() == (0,) * (coefficient_count - 1) + (14,)
 
 
-@pytest.mark.parametrize("underpredict", (False, True))
-def test_fit_worlds_covers_all_features_and_held_out_evidence(underpredict: bool) -> None:
+@pytest.mark.parametrize(("underpredict", "unmodeled"), ((False, False), (False, True), (True, False)))
+def test_fit_worlds_covers_all_features_and_held_out_evidence(underpredict: bool, unmodeled: bool) -> None:
     experiments, held_out_experiment = corpus.calibration_experiments(synthetic_config())
     observations = tuple(
         evidence.MemoryObservation(
             point=DeviceMemoryPoint(
-                point=str(index),
-                exact_resource_ledger_bytes=0,
-                allocator_allowance_bytes=2,
+                point="retained",
+                charges=(DeviceMemoryCharge("baseline-shared", 10, 2, ("library.internal",) if unmodeled else ()),),
                 features=feature_row(index),
             ),
             observed_device_bytes=2 * (index + 1),
@@ -202,7 +179,7 @@ def test_profile_ffn_memory_runs_fixed_complete_fleet_matrix(
     assert measured == [
         (experiment, repetition) for experiment in (*experiments, held_out_experiment) for repetition in range(1, 4)
     ]
-    assert profile.environment.ffnagent_devices == tuple(device(index) for index in range(len(ffn_devices)))
+    assert profile.memory_context == synthetic_memory_context(ffnagent_count=len(ffn_devices))
     assert profile.ffn.minimum_held_out_headroom_bytes == 7
     assert profile.ffn.coefficients == coefficients
     assert tuple(fitted) == result.fit_worlds
@@ -227,7 +204,11 @@ def test_experiment_projections_preserve_models_placement_and_complete_fleet(
         path = tmp_path / f"world-{index}.toml"
         environment = runner.write_world_config(path, source, experiment)
         config = XpoolConfig.from_file(path, env=environment)
-        plan = experiment.fabric_plan("a" * FABRIC_UID_HEX_LENGTH, config=config)
+        plan = experiment.fabric_plan(
+            "a" * FABRIC_UID_HEX_LENGTH,
+            config=config,
+            ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * len(source.ffn.devices),
+        )
         definition = experiment.to_json_mapping()
 
         assert config.scheduler.slo == source.scheduler.slo
@@ -280,7 +261,7 @@ def test_experiment_snapshot_keeps_resolved_debug_and_omits_calibration_input(
     config = runner.init_global_config(config_path=path, env=environment)
 
     assert config.ffn.device_memory_calibration is None
-    assert load_memory_calibration_profile() is None
+    assert load_memory_calibration_profile(path=None) is None
     assert config.debug.graph_observer == source.debug.graph_observer
 
 
@@ -290,11 +271,8 @@ def candidate(
 ) -> evidence.MemoryProfileEvidence:
     return evidence.MemoryProfileEvidence(
         profile=XpoolMemoryCalibrationProfile(
-            environment=MemoryCalibrationEnvironment(
-                ffnagent_devices=fit_worlds[0].devices, **asdict(fit_worlds[0].environment)
-            ),
+            memory_context=fit_worlds[0].memory_context,
             ffn=FfnMemoryCalibration(
-                atnagent_count=1,
                 executor_lane_count=1,
                 minimum_held_out_headroom_bytes=0,
                 coefficients=FfnMemoryCalibrationCoefficients(*([1] * 10)),
@@ -308,7 +286,10 @@ def candidate(
 def test_evidence_preserves_world_rank_phase_and_before_after_predictions() -> None:
     experiments, held_out_experiment = corpus.calibration_experiments(synthetic_config(ffn_devices=(1, 2)))
     observations = tuple(
-        evidence.MemoryObservation(point=DeviceMemoryPoint(phase, 10, 7, feature_row(0)), observed_device_bytes=18)
+        evidence.MemoryObservation(
+            point=DeviceMemoryPoint(phase, (DeviceMemoryCharge("synthetic", 10, 17),), feature_row(0)),
+            observed_device_bytes=18,
+        )
         for phase in ("weight_materialization", "retained")
     )
     result = candidate(
@@ -322,11 +303,14 @@ def test_evidence_preserves_world_rank_phase_and_before_after_predictions() -> N
         assert len(retained[role]) == len(worlds)
         for definition, measured in zip(retained[role], worlds, strict=True):
             assert definition["experiment"] == measured.experiment.to_json_mapping()
+            assert "memory_context" not in definition
             assert definition["repetition"] == measured.repetition
             assert [row["ffnagent_index"] for row in definition["participants"]] == [0, 1]
             for participant in definition["participants"]:
                 rows = participant["observations"]
-                assert [row["point"] for row in rows] == [asdict(observation.point) for observation in observations]
+                assert [row["point"] for row in rows] == json.loads(
+                    json.dumps([asdict(observation.point) for observation in observations])
+                )
                 assert all(row["analytic_prediction_bytes"] == 17 for row in rows)
                 assert all(row["calibrated_prediction_bytes"] == row["observed_device_bytes"] == 18 for row in rows)
 

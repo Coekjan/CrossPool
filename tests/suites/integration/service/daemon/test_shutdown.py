@@ -27,6 +27,7 @@ from xpool.service.daemon.registration import AtnAgentRegistrationState
 from xpool.utils.mps import MpsEndpoint, MpsProbeResult, MpsScope
 from xpool.utils.procs import ProcUniqId
 from xtest.harness.support.config import (
+    TEST_CALIBRATION_ENVIRONMENT,
     install_test_config,
     reset_global_config,
     synthetic_config,
@@ -60,7 +61,13 @@ def test_admitted_agent_can_publish_pre_join_retirement_boundary_after_close_beg
         with ThreadPoolExecutor(max_workers=1) as executor:
             closed = executor.submit(control.close)
             control.register_atnagent(
-                AtnAgentRegistrationState(device=0, abi_version=ABI_VERSION, pid=agent.pid, now=time.monotonic())
+                AtnAgentRegistrationState(
+                    device=0,
+                    calibration_environment=TEST_CALIBRATION_ENVIRONMENT,
+                    abi_version=ABI_VERSION,
+                    pid=agent.pid,
+                    now=time.monotonic(),
+                )
             )
             closed.result(timeout=5)
         assert agent.wait(timeout=1) == 0

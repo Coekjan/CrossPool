@@ -16,6 +16,7 @@ from xpool import bootstrap, devkit
 from xpool.config import get_global_config
 from xpool.fabric import (
     DenseFfnLayerPlan,
+    FabricDeploymentPlan,
     FabricGenerationPhase,
     FabricParticipantPhase,
     FabricPlan,
@@ -163,7 +164,7 @@ class Agent(ABC):
             self.client.close()
             raise
         self.registered = False
-        self.fabric_plan: FabricPlan | None = None
+        self.fabric_plan: FabricDeploymentPlan | None = None
         self.fabric_arena_projection: xpool.native.fabric.ArenaProjection | None = None
         self.fabric_phase: FabricGenerationPhase | None = None
         self.participant_report: FabricParticipantReport | None = None

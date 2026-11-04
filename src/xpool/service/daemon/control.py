@@ -20,15 +20,16 @@ import xpool.native
 from xpool import ffn
 from xpool.config import FfnSchedulingPolicy, get_global_config
 from xpool.fabric import (
+    FabricDeploymentPlan,
     FabricGenerationId,
     FabricGenerationPhase,
     FabricParticipantPhase,
-    FabricPlan,
     FabricRole,
     FabricUid,
     FifoSchedulerPolicy,
     RandomSchedulerPolicy,
 )
+from xpool.memory import load_memory_calibration_profile
 from xpool.model import ModelId
 from xpool.native import ABI_VERSION
 from xpool.service.daemon import ecs
@@ -51,9 +52,9 @@ from xpool.service.daemon.transport import (
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
     AgentStartupAdmission,
-    AtnAgentRegistration,
     AtnAgentTransportArenaBinding,
     AtnAgentTransportLeaseQuiesceResponse,
+    AtnAgentView,
     ConfigCheckRequest,
     ControlPlaneWarning,
     ElasticContextStateControlChannelRef,
@@ -62,7 +63,7 @@ from xpool.service.wire import (
     FabricParticipantReport,
     FabricPeOwnerFailure,
     FabricQuiesceRequest,
-    FfnAgentRegistration,
+    FfnAgentView,
     HeartbeatResponse,
     InstanceRankInitializedPublication,
     InstanceRankRef,
@@ -364,13 +365,13 @@ class ControlPlane:
                 "client xpool config differs from daemon config:\n" + "\n".join(differences),
             )
 
-    def list_atnagents(self) -> list[AtnAgentRegistration]:
+    def list_atnagents(self) -> list[AtnAgentView]:
         """Return the current AtnAgent registration wire views."""
 
         with self.lock:
             return self.registrations.atnagent_views()
 
-    def list_ffnagents(self) -> list[FfnAgentRegistration]:
+    def list_ffnagents(self) -> list[FfnAgentView]:
         """Return the current FfnAgent registration wire views."""
 
         with self.lock:
@@ -692,7 +693,7 @@ class ControlPlane:
             registration.proc.pid,
         )
 
-    def ensure_fabric_plan(self) -> FabricPlan | None:
+    def ensure_fabric_plan(self) -> FabricDeploymentPlan | None:
         """Create a Fabric plan from one complete membership snapshot.
 
         Native UID creation runs outside the domain lock. The candidate is
@@ -725,20 +726,33 @@ class ControlPlane:
                 while seed is None or seed == 0:
                     seed = secrets.randbits(64)
                 scheduler = RandomSchedulerPolicy(seed=seed)
-            model_plans = place_ffn_models(
+            try:
+                profile = load_memory_calibration_profile(path=config.ffn.device_memory_calibration)
+                if profile is not None:
+                    profile.require_compatible(
+                        context=membership.memory_context, executor_lane_count=config.scheduler.ffn_concurrency
+                    )
+            except RuntimeError as error:
+                raise XpoolDaemonError("conflict", str(error)) from error
+            coefficients = None if profile is None else profile.ffn.coefficients
+            placement = place_ffn_models(
                 model_specs=membership.model_specs,
                 instance_plans=membership.instance_plans,
                 ffnagent_free_memory_bytes=membership.ffnagent_free_memory_bytes,
+                ffn_execution_contracts=membership.memory_context.ffn_execution,
+                coefficients=coefficients,
             )
             if not all(owner.is_alive() for owner in membership.owners()):
                 return None
-            plan = FabricPlan(
+            plan = FabricDeploymentPlan(
                 generation=FabricGenerationId.create(),
                 uid=FabricUid(value=xpool.native.fabric.create_uid()),
+                ffn_execution_contracts=membership.memory_context.ffn_execution,
+                ffn_memory_estimates=placement.memory_estimates,
                 pe_placements=membership.pe_placements,
                 executor_lane_count=config.scheduler.ffn_concurrency,
                 scheduler=scheduler,
-                model_plans=model_plans,
+                model_plans=placement.model_plans,
                 instance_plans=membership.instance_plans,
             )
             policy = ecs.CapacityPolicy.create(config, plan.generation)
@@ -774,7 +788,7 @@ class ControlPlane:
             )
             return installed_plan
 
-    def require_fabric_plan(self) -> FabricPlan:
+    def require_fabric_plan(self) -> FabricDeploymentPlan:
         """Return the installed immutable Fabric plan without forming one."""
 
         with self.lock:

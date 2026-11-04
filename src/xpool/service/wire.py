@@ -17,6 +17,7 @@ from xpool.fabric import (
     FabricRole,
     InstanceFfnProfile,
 )
+from xpool.memory import FfnExecutionContract, MemoryCalibrationEnvironment
 from xpool.model import ModelId
 from xpool.native.ffn import ResultCode
 from xpool.runtime.transport import InstanceRankTransportProfile
@@ -204,10 +205,18 @@ class FabricQuiesceRequest(WireModel):
     generation: FabricGenerationId = Field(description="Retained generation to quiesce.")
 
 
-class AtnAgentRegistration(ProcessRef):
-    """AtnAgent registration payload and list-entry view."""
+class AtnAgentView(ProcessRef):
+    """Operational AtnAgent fields returned by the list endpoint."""
 
     device: int = Field(ge=0, description="device index owned by the AtnAgent.")
+
+
+class AtnAgentRegistration(AtnAgentView):
+    """AtnAgent registration payload with optional Profile compatibility facts."""
+
+    calibration_environment: MemoryCalibrationEnvironment | None = Field(
+        description="Observed participant compatibility facts when Profile matching is requested."
+    )
 
 
 class ElasticContextStatePartitionProfile(WireModel):
@@ -236,19 +245,19 @@ class ElasticContextStateControlChannelRef(WireModel):
     name: str = Field(min_length=1, description="Opaque POSIX shared-memory channel name.")
 
 
-class FfnAgentRegistration(ProcessRef):
-    """FfnAgent registration payload and list-entry view."""
+class FfnAgentView(ProcessRef):
+    """Operational FfnAgent fields returned by the list endpoint."""
 
     device: int = Field(ge=0, description="device index owned by the FfnAgent.")
-    device_total_memory_bytes: int = Field(ge=1, description="Total bytes reported by the owned device.")
     device_free_memory_bytes: int = Field(ge=1, description="Free bytes reported by the owned device.")
+    device_total_memory_bytes: int = Field(ge=1, description="Total bytes reported by the owned device.")
     model_specs: tuple[ffn.FfnModelSpec, ...] = Field(
         min_length=1,
         description="Generation-independent FFN Model Specs loaded by this FfnAgent.",
     )
 
     @model_validator(mode="after")
-    def validate_memory_and_specs(self) -> FfnAgentRegistration:
+    def validate_memory_and_specs(self) -> FfnAgentView:
         """Require one legal memory observation and unique ordered Model IDs."""
 
         if self.device_free_memory_bytes > self.device_total_memory_bytes:
@@ -256,6 +265,27 @@ class FfnAgentRegistration(ProcessRef):
         model_ids = tuple(spec.model_id for spec in self.model_specs)
         if len(set(model_ids)) != len(model_ids):
             raise ValueError("FfnAgent Model Specs must have unique Model IDs")
+        return self
+
+
+class FfnAgentRegistration(FfnAgentView):
+    """FfnAgent registration with execution resources and optional Profile facts."""
+
+    execution_contract: FfnExecutionContract = Field(
+        description="Address-free execution compatibility and resource facts."
+    )
+    calibration_environment: MemoryCalibrationEnvironment | None = Field(
+        description="Observed participant compatibility facts when Profile matching is requested."
+    )
+
+    @model_validator(mode="after")
+    def validate_environment(self) -> FfnAgentRegistration:
+        """Require the environment and registration to describe the same device."""
+
+        if self.calibration_environment is not None and (
+            self.calibration_environment.total_memory_bytes != self.device_total_memory_bytes
+        ):
+            raise ValueError("FfnAgent device memory observations disagree")
         return self
 
 

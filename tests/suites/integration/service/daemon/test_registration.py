@@ -4,7 +4,13 @@ from http import HTTPStatus
 
 import pytest
 
-from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
+from xtest.harness.support.config import (
+    TEST_EXECUTION_CONTRACT,
+    TEST_MODEL_ID,
+    lane_resource_declaration,
+    reset_global_config,
+    synthetic_config,
+)
 from xtest.harness.support.service.daemon import (
     atnagent_registration,
     atnagent_transport_arenas,
@@ -20,6 +26,32 @@ from xtest.harness.support.service.daemon import (
 )
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
+
+
+@pytest.mark.parametrize(
+    "capacity",
+    (1024, "1024"),
+    ids=("integer", "reject-numeric-string"),
+)
+def test_ffn_resource_registration_requires_integer_capacity(capacity: int | str) -> None:
+    app = create_app(synthetic_config())
+    registration = ffnagent_registration()
+    declaration = lane_resource_declaration(
+        key="projection.scratch",
+        max_bytes=1024,
+        alignment_bytes=256,
+        aliases=("projection.scratch", "projection.alias"),
+    )
+    contract = TEST_EXECUTION_CONTRACT.model_copy(update={"lane_resources": (declaration,)}).model_dump(mode="json")
+    contract["lane_resources"][0]["requirement"]["request_bytes"] = [capacity]
+    contract["lane_resources"][0]["requirement"]["logical_extent_bound_bytes"] = capacity
+    registration["execution_contract"] = contract
+    response = register(app, "/ffnagent/register", registration)
+    if isinstance(capacity, str):
+        assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+        assert request(app, "GET", "/ffnagents").json() == []
+    else:
+        assert response.status_code == HTTPStatus.NO_CONTENT, response.text
 
 
 @pytest.mark.parametrize("physical_order", [(0, 2), (1, 0)], ids=["different-device", "reversed-order"])
@@ -83,6 +115,12 @@ def test_daemon_registration_flow() -> None:
     response = register(app, "/ffnagent/register", ffnagent0)
     assert response.status_code == HTTPStatus.NO_CONTENT
     assert response.content == b""
+
+    for endpoint, payload in (("/atnagents", atnagent0), ("/ffnagents", ffnagent0)):
+        expected = {
+            key: value for key, value in payload.items() if key not in {"calibration_environment", "execution_contract"}
+        }
+        assert request(app, "GET", endpoint).json() == [expected]
 
     registration = instance_registration()
     response = register(app, "/instance/register", registration)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from time import monotonic
 
 import torch
@@ -11,12 +10,11 @@ import torch
 import xpool.native
 from xpool.config import get_global_config
 from xpool.fabric import FabricGenerationPhase, FabricParticipantPhase, FabricRole
-from xpool.memory import load_memory_calibration_profile
 from xpool.native import ABI_VERSION, RuntimeRole
+from xpool.runtime import memory_calibration
 from xpool.runtime.agent import Agent, AgentError, AgentHeartbeat
-from xpool.runtime.ffnagent import execution
+from xpool.runtime.ffnagent import capture_workspace
 from xpool.runtime.ffnagent.architecture import load
-from xpool.runtime.ffnagent.device_memory import DeviceMemoryEstimator, ensure_supported_cuda_allocator
 from xpool.runtime.ffnagent.loader import materialize_layer_weights
 from xpool.runtime.ffnagent.registry import FfnExecutionRegistry
 from xpool.runtime.ffnagent.weights import FfnLayerWeights
@@ -33,44 +31,25 @@ class FfnAgent(Agent):
     def __init__(self, *, device: int) -> None:
         """Initialize native FFN role state and daemon ownership.
 
-        CUDA must not already be initialized. Construction installs the cuBLAS
-        workspace policy, initializes the native FfnAgent role, validates any
-        selected calibration profile against the local device, and loads every
-        configured model specification.
+        CUDA must not already be initialized. Construction initializes the native
+        FfnAgent role, discovers execution resource and common environment
+        facts, and loads every configured model specification.
 
         Raises:
-            AgentError: If CUDA is already initialized or calibration does not
-                match the configured FfnAgent device.
+            AgentError: If CUDA is already initialized.
+            pydantic.ValidationError: If registration memory observations disagree.
         """
 
         if torch.cuda.is_initialized():
-            raise AgentError("FfnAgent CUDA initialized before installing its cuBLAS workspace policy")
-        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":0:0"
+            raise AgentError("FfnAgent CUDA initialized before native FFN bootstrap")
         super().__init__(device=device, runtime_role=RuntimeRole.FFNAGENT)
-        ensure_supported_cuda_allocator()
+        execution_contract, self.external_resources = capture_workspace.prepare_execution_sources()
         config = get_global_config()
-        calibration_profile = load_memory_calibration_profile()
-        if calibration_profile is not None:
-            ffnagent = config.ffnagent_by_device.get(device)
-            if ffnagent is None:
-                raise AgentError(f"device {device} is not a configured FfnAgent")
-            expected = calibration_profile.environment.ffnagent_devices[ffnagent.rank]
-            properties = torch.cuda.get_device_properties(self.device)
-            mismatches = [
-                f"{name}: expected {expected_value!r}, found {actual_value!r}"
-                for name, expected_value, actual_value in (
-                    ("name", expected.name, properties.name),
-                    (
-                        "compute capability",
-                        expected.compute_capability,
-                        (properties.major, properties.minor),
-                    ),
-                    ("total memory", expected.total_memory_bytes, properties.total_memory),
-                )
-                if actual_value != expected_value
-            ]
-            if mismatches:
-                raise AgentError("memory calibration device is incompatible: " + "; ".join(mismatches))
+        calibration_environment = (
+            memory_calibration.observe_environment(self.device)
+            if config.ffn.device_memory_calibration is not None
+            else None
+        )
         model_specs = tuple(
             load(model_id=model.id, model_path=config.model_path_of(model.id)) for model in config.models
         )
@@ -79,13 +58,14 @@ class FfnAgent(Agent):
         device_free_memory_bytes, device_total_memory_bytes = torch.cuda.mem_get_info(self.device)
         self.registration = FfnAgentRegistration(
             device=device,
-            device_total_memory_bytes=device_total_memory_bytes,
+            calibration_environment=calibration_environment,
             device_free_memory_bytes=device_free_memory_bytes,
+            device_total_memory_bytes=device_total_memory_bytes,
+            execution_contract=execution_contract,
             model_specs=model_specs,
             abi_version=ABI_VERSION,
             pid=self.proc_id.pid,
         )
-        self.external_resources: tuple[execution.OwnedExecutionResource, ...] = ()
         self.layer_weights: tuple[tuple[FfnLayerWeights | None, ...], ...] | None = None
         self.execution_registry: FfnExecutionRegistry | None = None
         self.heartbeat_worker = AgentHeartbeat(agent=self)
@@ -130,18 +110,19 @@ class FfnAgent(Agent):
         plan = self.fabric_plan
         if plan is None:
             raise AgentError("FFN weight preparation requires a retained Fabric Plan")
+        config = get_global_config()
+        if plan.executor_lane_count != config.scheduler.ffn_concurrency:
+            raise AgentError("Fabric Plan executor Lane count disagrees with the process configuration")
         atnagent_count = sum(placement.role is FabricRole.ATNAGENT for placement in plan.pe_placements)
         ffnagent_index = self.fabric_pe() - atnagent_count
-        estimator = DeviceMemoryEstimator(
-            model_specs=self.registration.model_specs,
-            instance_profiles=tuple(instance.ffn_profile for instance in plan.instance_plans),
-        )
-        estimate = estimator.estimate(fabric_plan=plan, ffnagent_index=ffnagent_index)
+        if plan.ffn_execution_contracts[ffnagent_index] != self.registration.execution_contract:
+            raise AgentError("Fabric Plan differs from registered FfnAgent execution resources")
+        estimate = plan.ffn_memory_estimates[ffnagent_index]
         torch.cuda.empty_cache()
         free_memory_bytes, _ = torch.cuda.mem_get_info(self.device)
         extra_margin_bytes = get_global_config().ffn.device_memory_extra_margin_bytes
         required_bytes = estimate.peak_bytes + extra_margin_bytes
-        admission = "calibrated" if estimator.coefficients is not None else "analytic"
+        admission = "calibrated" if config.ffn.device_memory_calibration is not None else "analytic"
         if required_bytes > free_memory_bytes:
             raise AgentError(
                 f"FFN {admission} memory admission requires {required_bytes} bytes, "

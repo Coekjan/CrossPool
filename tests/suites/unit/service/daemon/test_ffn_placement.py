@@ -1,19 +1,24 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 import xpool.service.daemon.ffn_placement
 from xpool.config import XpoolConfig
 from xpool.fabric import FabricInstancePlan, InstanceFfnProfile, InstanceRankTopology
 from xpool.ffn import FfnModelSpec
-from xpool.memory import FfnMemoryCalibrationCoefficients
+from xpool.memory import (
+    FfnMemoryCalibrationCoefficients,
+)
 from xpool.model import ModelId
 from xpool.runtime.ffnagent import device_memory
 from xpool.service.daemon.ffn_placement import place_ffn_models
 from xpool.service.errors import XpoolDaemonError
-from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
+from xtest.harness.support.config import (
+    TEST_EXECUTION_CONTRACT,
+    TEST_MODEL_ID,
+    install_test_config,
+    reset_global_config,
+)
 from xtest.harness.support.native.sizing import install_native_allocation_sizing
 from xtest.harness.support.service.daemon import ffn_model_spec, ffn_profile
 
@@ -51,11 +56,10 @@ def instance_plan(model_id: ModelId = TEST_MODEL_ID) -> FabricInstancePlan:
     )
 
 
-def test_structural_placement_uses_one_common_lowest_index_group(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_placement_publishes_calibrated_budgets_for_idle_ffnagents() -> None:
+    tp_size = 1
     spec = FfnModelSpec.model_validate(ffn_model_spec(model_id=str(TEST_MODEL_ID)))
-    install_test_config(config())
+    install_test_config(config(tp_size=tp_size))
     coefficients = FfnMemoryCalibrationCoefficients(
         base_bytes=10,
         bytes_per_tensor_storage_mib=0,
@@ -64,25 +68,30 @@ def test_structural_placement_uses_one_common_lowest_index_group(
         bytes_per_moe_graph_capture=0,
         bytes_per_executor_lane=0,
         bytes_per_compute_branch=0,
-        dense_implementation_bytes=0,
-        moe_implementation_bytes=0,
+        dense_implementation_bytes=1024,
+        moe_implementation_bytes=4096,
         joined_ffnagent_bytes=0,
-    )
-    monkeypatch.setattr(
-        device_memory,
-        "load_memory_calibration_profile",
-        lambda: SimpleNamespace(ffn=SimpleNamespace(coefficients=coefficients)),
     )
 
     plans = place_ffn_models(
+        coefficients=coefficients,
         model_specs=(spec,),
         instance_plans=(instance_plan(),),
         ffnagent_free_memory_bytes=(1 << 30, 1 << 30),
+        ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 2,
     )
 
-    assert plans[0].tp_size == 2
-    assert plans[0].layers[0].ffnagent_indices == (0, 1)
-    assert plans[0].layers[0].local_intermediate_size == 4
+    assert plans.model_plans[0].tp_size == tp_size
+    assert plans.model_plans[0].layers[0].local_intermediate_size == 8 // tp_size
+    estimator = device_memory.DeviceMemoryEstimator(
+        coefficients=coefficients,
+        model_specs=(spec,),
+        instance_profiles=(instance_plan().ffn_profile,),
+        ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 2,
+    )
+    assert plans.memory_estimates == tuple(
+        estimator.estimate_model_plans(model_plans=plans.model_plans, ffnagent_index=index) for index in range(2)
+    )
 
 
 def test_equal_optimum_placement_uses_lowest_index_groups() -> None:
@@ -100,14 +109,16 @@ def test_equal_optimum_placement_uses_lowest_index_groups() -> None:
         )
     )
     plans = place_ffn_models(
+        coefficients=None,
         model_specs=tuple(
             FfnModelSpec.model_validate(ffn_model_spec(model_id=model_id)) for model_id in ("test/wide", "test/narrow")
         ),
         instance_plans=(instance_plan(ModelId("test/wide")), instance_plan(ModelId("test/narrow"))),
         ffnagent_free_memory_bytes=(1 << 40,) * 4,
+        ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 4,
     )
 
-    assert tuple(frozenset(plan.layers[0].ffnagent_indices) for plan in plans) == (
+    assert tuple(frozenset(plan.layers[0].ffnagent_indices) for plan in plans.model_plans) == (
         frozenset((0, 1, 2, 3)),
         frozenset((0, 1)),
     )
@@ -119,9 +130,11 @@ def test_structural_placement_rejects_tp_wider_than_fleet() -> None:
 
     with pytest.raises(XpoolDaemonError, match="exceeds the FfnAgent Fleet"):
         place_ffn_models(
+            coefficients=None,
             model_specs=(spec,),
             instance_plans=(instance_plan(),),
             ffnagent_free_memory_bytes=(1 << 30, 1 << 30),
+            ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 2,
         )
 
 
@@ -131,9 +144,11 @@ def test_placement_rejects_insufficient_memory_without_fallback() -> None:
 
     with pytest.raises(XpoolDaemonError, match="INFEASIBLE"):
         place_ffn_models(
+            coefficients=None,
             model_specs=(spec,),
             instance_plans=(instance_plan(),),
             ffnagent_free_memory_bytes=(1, 1),
+            ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 2,
         )
 
 
@@ -144,9 +159,11 @@ def test_placement_accounts_for_fabric_observer_memory(monkeypatch: pytest.Monke
 
     with pytest.raises(XpoolDaemonError, match="INFEASIBLE"):
         place_ffn_models(
+            coefficients=None,
             model_specs=(spec,),
             instance_plans=(instance_plan(),),
             ffnagent_free_memory_bytes=(1 << 30, 1 << 30),
+            ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 2,
         )
 
 
@@ -158,7 +175,9 @@ def test_placement_uses_one_deadline_before_solver_work(monkeypatch: pytest.Monk
 
     with pytest.raises(XpoolDaemonError, match="deadline expired during resource calculation"):
         place_ffn_models(
+            coefficients=None,
             model_specs=(spec,),
             instance_plans=(instance_plan(),),
             ffnagent_free_memory_bytes=(1 << 30, 1 << 30),
+            ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 2,
         )

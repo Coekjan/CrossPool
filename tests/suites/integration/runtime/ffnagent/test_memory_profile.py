@@ -16,11 +16,11 @@ import pytest
 
 from xpool import ffn
 from xpool.config import XpoolConfig
-from xpool.fabric import FABRIC_UID_HEX_LENGTH, FabricPlan, FabricRole
+from xpool.fabric import FABRIC_UID_HEX_LENGTH, FabricPePlacement, FabricPlan, FabricRole
 from xpool.runtime.ffnagent.memory_profile import corpus, runner
 from xpool.utils.mps import MpsEndpoint
 from xpool.utils.sighandler import block_signals, initialize_child_signals
-from xtest.harness.support.config import synthetic_config
+from xtest.harness.support.config import TEST_CALIBRATION_ENVIRONMENT, TEST_EXECUTION_CONTRACT, synthetic_config
 
 
 def uid_peer(
@@ -44,24 +44,38 @@ def participant_peer(
     config_path: Path,
     config_environment: dict[str, str],
     model_specs: tuple[ffn.FfnModelSpec, ...],
-    fabric_plan: FabricPlan,
+    placement: FabricPePlacement,
     pe: int,
     environment: dict[str, str],
     signal_mask: set[int],
     failure_stage: str,
 ) -> None:
     initialize_child_signals(signal_mask)
-    failed = fabric_plan.pe_placements[pe].role is FabricRole.FFNAGENT and failure_stage != "cancel"
+    failed = placement.role is FabricRole.FFNAGENT and failure_stage != "cancel"
     try:
-        if failed and failure_stage == "prepare":
-            connection.send(("failure", runner.ParticipantFailure("preparation failed", False)))
+        if failed and failure_stage in ("facts", "stop-ack"):
+            connection.send(("failure", runner.ParticipantFailure("fact observation failed", False)))
             raise SystemExit(1)
         if failure_stage == "cancel":
             # Withhold readiness briefly to observe whether stop is queued
             # independently of preparation, then let either implementation retire.
             (config_path.parent.parent / f"stop-before-prepared-pe{pe}").write_text(str(connection.poll(1.0)))
-        connection.send(("prepared", pe))
+        connection.send(
+            (
+                "facts",
+                runner.ParticipantMemoryFacts(
+                    calibration_environment=TEST_CALIBRATION_ENVIRONMENT,
+                    execution_contract=TEST_EXECUTION_CONTRACT if placement.role is FabricRole.FFNAGENT else None,
+                ),
+            )
+        )
         command = connection.recv()
+        if isinstance(command, FabricPlan):
+            if failed and failure_stage == "prepare":
+                connection.send(("failure", runner.ParticipantFailure("preparation failed", False)))
+                raise SystemExit(1)
+            connection.send(("prepared", pe))
+            command = connection.recv()
         if command == "join":
             connection.send(("joined", pe))
             if failed:
@@ -70,6 +84,8 @@ def participant_peer(
             runner.require_command(connection, "finalize")
         else:
             assert command == "stop"
+            if failure_stage == "stop-ack":
+                return
         connection.send(("stopped", pe))
     finally:
         (config_path.parent.parent / f"retired-pe{pe}").write_text(str(os.getpid()))
@@ -112,7 +128,7 @@ def host_world(
     return config, events, retired_at_mps_stop
 
 
-@pytest.mark.parametrize("failure_stage", ("prepare", "execute"))
+@pytest.mark.parametrize("failure_stage", ("facts", "stop-ack", "prepare", "execute"))
 def test_failed_world_reaps_participants_and_uid_before_releasing_mps(
     host_world: tuple[XpoolConfig, list[str], list[tuple[str, bool]]],
     monkeypatch: pytest.MonkeyPatch,
@@ -122,7 +138,13 @@ def test_failed_world_reaps_participants_and_uid_before_releasing_mps(
     monkeypatch.setattr(runner, "participant_child", functools.partial(participant_peer, failure_stage=failure_stage))
     experiments, _ = corpus.calibration_experiments(config)
 
-    with pytest.raises(RuntimeError, match="preparation failed" if failure_stage == "prepare" else "execution failed"):
+    expected_error = {
+        "facts": "fact observation failed",
+        "stop-ack": "fact observation failed",
+        "prepare": "preparation failed",
+        "execute": "execution failed",
+    }
+    with pytest.raises(RuntimeError, match=expected_error[failure_stage]):
         runner.run_world(experiments[0], config, repetition=1)
 
     assert events == ["mps started", "mps stopped"]

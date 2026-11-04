@@ -22,6 +22,7 @@ from xtest.harness.native.ffn.protocol import FfnInstanceCommand, FfnInstanceSpe
 from xtest.harness.native.ffn.qualification import execution_fabric_plan
 from xtest.harness.native.ffn.topology import ffn_cluster_environment, materialize_ffn_cluster_launch
 from xtest.harness.support.config import (
+    TEST_EXECUTION_CONTRACT,
     TEST_MODEL_ID,
     synthetic_config,
 )
@@ -141,6 +142,7 @@ def test_instance_failure_stops_later_invocations_and_retains_the_owner(
         instance_count=1,
         execution_kind=LayerKind.DENSE,
         payload_dtype=torch.bfloat16,
+        ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,),
     )
     profile = plan.instance_plans[0].ffn_profile
     spec = FfnInstanceSpec(

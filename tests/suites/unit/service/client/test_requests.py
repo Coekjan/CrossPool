@@ -21,7 +21,7 @@ from xpool.service.wire import (
     ProcessRef,
 )
 from xpool.utils.mps import MPS_STARTUP_TIMEOUT_S, MPS_TERMINATION_TIMEOUT_S
-from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
+from xtest.harness.support.config import TEST_CALIBRATION_ENVIRONMENT, TEST_MODEL_ID, reset_global_config
 from xtest.harness.support.ecs import context_state_profile
 from xtest.harness.support.runtime.instance import ffn_profile, transport_attributes
 from xtest.harness.support.service.client import (
@@ -113,7 +113,9 @@ def test_participant_registration_sends_declared_contract(
     client = XpoolClient()
     try:
         if participant == "atnagent":
-            registration = AtnAgentRegistration(pid=11, abi_version=ABI_VERSION, device=0)
+            registration = AtnAgentRegistration(
+                pid=11, abi_version=ABI_VERSION, device=0, calibration_environment=TEST_CALIBRATION_ENVIRONMENT
+            )
             client.register_atnagent(registration)
             expected_path = "/atnagent/register"
         elif participant == "ffnagent":

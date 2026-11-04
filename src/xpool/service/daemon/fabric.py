@@ -9,15 +9,16 @@ from typing import NoReturn
 from xpool import ffn
 from xpool.config import XpoolConfig
 from xpool.fabric import (
+    FabricDeploymentPlan,
     FabricGenerationId,
     FabricGenerationPhase,
     FabricInstancePlan,
     FabricParticipantPhase,
     FabricPePlacement,
-    FabricPlan,
     FabricRole,
     InstanceRankTopology,
 )
+from xpool.memory import FabricMemoryContext
 from xpool.service.daemon.registration import InstanceRankId, RegistrationBook
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
@@ -47,6 +48,7 @@ class FabricMembership:
     model_specs: tuple[ffn.FfnModelSpec, ...]
     instance_plans: tuple[FabricInstancePlan, ...]
     ffnagent_free_memory_bytes: tuple[int, ...]
+    memory_context: FabricMemoryContext
     pe_placements: tuple[FabricPePlacement, ...]
     agent_owners: tuple[tuple[int, ProcUniqId], ...]
     instance_owners: tuple[tuple[InstanceRankId, ProcUniqId], ...]
@@ -131,12 +133,22 @@ class FabricMembership:
             )
             for pe, placement in enumerate(placements)
         )
+        observations = tuple(
+            atnagent_by_device[device].calibration_environment for device in config.atn.devices
+        ) + tuple(ffnagent_by_device[device].calibration_environment for device in config.ffn.devices)
+        participants = tuple(observation for observation in observations if observation is not None)
+        if participants and len(participants) != len(observations):
+            raise XpoolDaemonError("conflict", "Fabric membership has partial memory compatibility observations")
         return cls(
             revision=revision,
             model_specs=model_specs,
             instance_plans=tuple(instance_plans),
             ffnagent_free_memory_bytes=tuple(
                 ffnagent_by_device[device].device_free_memory_bytes for device in config.ffn.devices
+            ),
+            memory_context=FabricMemoryContext(
+                participants=participants if participants else None,
+                ffn_execution=tuple(ffnagent_by_device[device].execution_contract for device in config.ffn.devices),
             ),
             pe_placements=placements,
             agent_owners=agent_owners,
@@ -153,7 +165,7 @@ class FabricMembership:
 class FabricGenerationState:
     """Authoritative state for one immutable Fabric generation."""
 
-    plan: FabricPlan
+    plan: FabricDeploymentPlan
     phase: FabricGenerationPhase
     phase_started_at: float
     invocation_failure: FabricInvocationFailure | None
@@ -219,12 +231,12 @@ class FabricController:
 
         self.generation: FabricGenerationState | None = None
 
-    def plan(self) -> FabricPlan | None:
+    def plan(self) -> FabricDeploymentPlan | None:
         """Return the installed immutable plan, if any."""
 
         return None if self.generation is None else self.generation.plan
 
-    def require_plan(self) -> FabricPlan:
+    def require_plan(self) -> FabricDeploymentPlan:
         """Return the installed plan or report incomplete membership."""
 
         plan = self.plan()
@@ -232,7 +244,7 @@ class FabricController:
             raise XpoolDaemonError("not_ready", "fabric plan requires every configured owner and ffn_profile")
         return plan
 
-    def install(self, generation: FabricGenerationState) -> FabricPlan:
+    def install(self, generation: FabricGenerationState) -> FabricDeploymentPlan:
         """Install a generation when no generation is retained."""
 
         if self.generation is not None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import importlib.metadata
 import logging
 import multiprocessing
 import os
@@ -31,19 +30,22 @@ from xpool.config import (
     get_global_config,
     init_global_config,
 )
-from xpool.fabric import FabricPlan, FabricRole
+from xpool.fabric import FabricPePlacement, FabricPlan, FabricRole
 from xpool.memory import (
+    FabricMemoryContext,
+    FfnExecutionContract,
     FfnMemoryCalibration,
-    MemoryCalibrationDevice,
     MemoryCalibrationEnvironment,
     XpoolMemoryCalibrationProfile,
 )
-from xpool.native import ABI_VERSION, RuntimeRole
+from xpool.native import RuntimeRole
+from xpool.runtime import memory_calibration
 from xpool.runtime.agent import project_fabric_arena
+from xpool.runtime.ffnagent import capture_workspace
 from xpool.runtime.ffnagent.device_memory import (
     DeviceMemoryEstimator,
     DeviceMemoryPoint,
-    ensure_supported_cuda_allocator,
+    StartupPoint,
 )
 from xpool.runtime.ffnagent.memory_profile.corpus import (
     calibration_experiments,
@@ -53,14 +55,13 @@ from xpool.runtime.ffnagent.memory_profile.evidence import (
     MemoryObservation,
     MemoryProfileEvidence,
     MemoryProfileParticipantEvidence,
-    MemoryProfileSoftwareEnvironment,
     MemoryProfileWorld,
 )
 from xpool.runtime.ffnagent.memory_profile.experiment import CalibrationExperiment
 from xpool.runtime.ffnagent.memory_profile.fitting import fit_worlds
 from xpool.runtime.ffnagent.registry import FfnExecutionRegistry
 from xpool.utils.config import ConfigSource, get_nested
-from xpool.utils.cuda import check_runtime, cuda_versions, is_terminal_device_error
+from xpool.utils.cuda import check_runtime, is_terminal_device_error
 from xpool.utils.device import visible_uuids
 from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S, MpsEndpoint, MpsScope
 from xpool.utils.sighandler import block_signals, initialize_child_signals, sighandle
@@ -80,8 +81,8 @@ class PhaseRecorder:
 
         self.device = device
         self.baseline_free_bytes = baseline_free_bytes
-        self.current_phase: str | None = None
-        self.minimum_free_bytes: dict[str, int] = {}
+        self.current_phase: StartupPoint | None = None
+        self.minimum_free_bytes: dict[StartupPoint, int] = {}
         self.lock = threading.Lock()
         self.stop_requested = threading.Event()
         self.ready = threading.Event()
@@ -114,7 +115,7 @@ class PhaseRecorder:
             self.ready.set()
 
     @contextlib.contextmanager
-    def phase(self, name: str) -> Iterator[None]:
+    def phase(self, name: StartupPoint) -> Iterator[None]:
         """Measure one ordinary permanent startup operation."""
 
         self.begin(name)
@@ -126,7 +127,7 @@ class PhaseRecorder:
         else:
             self.finish(name)
 
-    def begin(self, name: str) -> None:
+    def begin(self, name: StartupPoint) -> None:
         """Begin exactly one named phase."""
 
         with self.lock:
@@ -136,7 +137,7 @@ class PhaseRecorder:
             self.minimum_free_bytes[name] = memory_info()[0]
             self.current_phase = name
 
-    def finish(self, name: str) -> None:
+    def finish(self, name: StartupPoint) -> None:
         """Synchronize and close the active phase."""
 
         if self.current_phase != name:
@@ -218,11 +219,6 @@ def record_registry_phases(recorder: PhaseRecorder) -> Iterator[None]:
         if invocation_count != 1:
             raise RuntimeError("Registry did not invoke native execution installation exactly once")
         recorder.raise_if_failed()
-        torch.cuda.synchronize(recorder.device)
-        recorder.raise_if_failed()
-        torch.cuda.empty_cache()
-        recorder.raise_if_failed()
-        torch.cuda.synchronize(recorder.device)
         recorder.finish("execution_installation")
     finally:
         setattr(xpool.native.ffnagent, "install_execution", saved_install)
@@ -248,39 +244,6 @@ def write_world_config(path: Path, source: XpoolConfig, experiment: CalibrationE
     return config_environment
 
 
-def software_environment() -> MemoryProfileSoftwareEnvironment:
-    """Collect exact software compatibility facts in one participant."""
-
-    driver_version, runtime_version = cuda_versions()
-    return MemoryProfileSoftwareEnvironment(
-        native_abi_version=int(xpool.native.ABI_VERSION),
-        cuda_driver_version=driver_version,
-        cuda_runtime_version=runtime_version,
-        torch_version=importlib.metadata.version("torch"),
-        triton_version=importlib.metadata.version("triton"),
-        sglang_version=importlib.metadata.version("sglang"),
-        sglang_kernel_version=importlib.metadata.version("sglang-kernel"),
-        nvshmem_version=importlib.metadata.version("nvidia-nvshmem-cu13"),
-    )
-
-
-def device_record(device: int, total_memory_bytes: int) -> MemoryCalibrationDevice:
-    """Read one selected device's Profile identity and provenance UUID."""
-
-    properties = torch.cuda.get_device_properties(device)
-    uuid = str(properties.uuid).strip()
-    if not uuid:
-        raise RuntimeError("PyTorch returned an empty device UUID")
-    if properties.total_memory != total_memory_bytes:
-        raise RuntimeError("PyTorch and cudaMemGetInfo disagree on total device memory")
-    return MemoryCalibrationDevice(
-        name=properties.name,
-        compute_capability=(properties.major, properties.minor),
-        total_memory_bytes=properties.total_memory,
-        uuid=uuid,
-    )
-
-
 def drain_and_finalize() -> None:
     """Collectively drain and release one participant runtime."""
 
@@ -299,6 +262,14 @@ def require_command(connection: Connection, expected: str) -> None:
     command = connection.recv()
     if command != expected:
         raise RuntimeError(f"memory-profile participant expected {expected!r}, received {command!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class ParticipantMemoryFacts:
+    """Pre-allocation compatibility facts and execution-resource declarations."""
+
+    calibration_environment: MemoryCalibrationEnvironment
+    execution_contract: FfnExecutionContract | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,7 +310,7 @@ def participant_child(
     config_path: Path,
     config_environment: dict[str, str],
     model_specs: tuple[ffn.FfnModelSpec, ...],
-    fabric_plan: FabricPlan,
+    placement: FabricPePlacement,
     pe: int,
     environment: dict[str, str],
     signal_mask: set[int],
@@ -368,30 +339,57 @@ def participant_child(
     try:
         os.environ.update(environment)
         config = init_global_config(config_path=config_path, env=config_environment)
-        placement = fabric_plan.pe_placements[pe]
         role = RuntimeRole.ATNAGENT if placement.role is FabricRole.ATNAGENT else RuntimeRole.FFNAGENT
         device = placement.device
-        if role is RuntimeRole.FFNAGENT:
-            os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":0:0"
         bootstrap.init(device, role)
+        execution_contract = None
+        external_resources = ()
         if role is RuntimeRole.ATNAGENT:
             visibility = visible_uuids()
             MpsEndpoint(tuple(visibility[index] for index in config.atn.devices)).require_client()
         else:
-            ensure_supported_cuda_allocator()
-            warmup = torch.empty(1, dtype=torch.uint8, device="cuda")
+            execution_contract, external_resources = capture_workspace.prepare_execution_sources()
+        calibration_environment = memory_calibration.observe_environment(device)
+        device_uuid = str(torch.cuda.get_device_properties(device).uuid).strip()
+        if not device_uuid:
+            raise RuntimeError("PyTorch returned an empty device UUID")
+        if role is RuntimeRole.FFNAGENT:
             torch.cuda.synchronize(device)
-            del warmup
             torch.cuda.empty_cache()
-            torch.cuda.synchronize(device)
             baseline_free_bytes, baseline_total_bytes = memory_info()
-            estimator = DeviceMemoryEstimator(
-                model_specs=model_specs,
-                instance_profiles=tuple(instance.ffn_profile for instance in fabric_plan.instance_plans),
+            if baseline_total_bytes != calibration_environment.total_memory_bytes:
+                raise RuntimeError("participant device memory observations disagree")
+        connection.send(
+            (
+                "facts",
+                ParticipantMemoryFacts(calibration_environment, execution_contract),
             )
+        )
+        command = connection.recv()
+        if command == "stop":
+            connection.send(("stopped", pe))
+            return
+        if not isinstance(command, FabricPlan):
+            raise RuntimeError("memory-profile participant expected a complete Fabric Plan")
+        fabric_plan = command
+        if fabric_plan.pe_placements[pe] != placement:
+            raise RuntimeError("memory-profile Plan differs from local participant facts")
+        if role is RuntimeRole.FFNAGENT:
             atnagent_count = sum(item.role is FabricRole.ATNAGENT for item in fabric_plan.pe_placements)
             ffnagent_index = pe - atnagent_count
-            ledger = estimator.allocation_ledger(fabric_plan=fabric_plan, ffnagent_index=ffnagent_index)
+            if execution_contract is None or fabric_plan.ffn_execution_contracts[ffnagent_index] != execution_contract:
+                raise RuntimeError("memory-profile Plan differs from local execution facts")
+            if fabric_plan.executor_lane_count != config.scheduler.ffn_concurrency:
+                raise RuntimeError("Fabric Plan executor Lane count disagrees with the process configuration")
+            estimator = DeviceMemoryEstimator(
+                ffn_execution_contracts=fabric_plan.ffn_execution_contracts,
+                model_specs=model_specs,
+                instance_profiles=tuple(instance.ffn_profile for instance in fabric_plan.instance_plans),
+                coefficients=None,
+            )
+            ledger = estimator.allocation_ledger_for_model_plans(
+                model_plans=fabric_plan.model_plans, ffnagent_index=ffnagent_index
+            )
             recorder = PhaseRecorder(device=device, baseline_free_bytes=baseline_free_bytes)
             with recorder.phase("weight_materialization"):
                 layer_weights = materialize_calibration_weights(
@@ -420,22 +418,27 @@ def participant_child(
                 if recorder is None:
                     raise AssertionError("FFN participant lacks its sampler")
                 with record_registry_phases(recorder):
-                    execution_registry = FfnExecutionRegistry(layer_weights=layer_weights, external_resources=())
+                    execution_registry = FfnExecutionRegistry(
+                        layer_weights=layer_weights, external_resources=external_resources
+                    )
+                    del layer_weights
+                    external_resources = ()
                     execution_registry.materialize(
-                        fabric_plan=fabric_plan, model_specs=model_specs, ffnagent_index=ffnagent_index
+                        fabric_plan=fabric_plan,
+                        model_specs=model_specs,
+                        ffnagent_index=ffnagent_index,
                     )
                 recorder.close()
-                observations = (
-                    *(recorder.observation(point) for point in ledger[:-1]),
-                    recorder.retained_observation(ledger[-1]),
+                observations = tuple(
+                    recorder.retained_observation(point) if point.point == "retained" else recorder.observation(point)
+                    for point in ledger
                 )
                 connection.send(
                     (
                         "execution",
                         MemoryProfileParticipantEvidence(
                             ffnagent_index=ffnagent_index,
-                            device=device_record(device, baseline_total_bytes),
-                            environment=software_environment(),
+                            device_uuid=device_uuid,
                             observations=observations,
                         ),
                     )
@@ -449,6 +452,8 @@ def participant_child(
             recorder.close()
         finalize_started = True
         drain_and_finalize()
+        if execution_registry is not None:
+            execution_registry.close()
         finalized = True
         connection.send(("stopped", pe))
     except Exception as error:
@@ -468,6 +473,8 @@ def participant_child(
                 require_command(connection, "finalize")
                 finalize_started = True
                 drain_and_finalize()
+                if execution_registry is not None:
+                    execution_registry.close()
                 finalized = True
                 connection.send(("stopped", pe))
             except Exception as retirement_error:
@@ -533,7 +540,7 @@ def run_world(experiment: CalibrationExperiment, source: XpoolConfig, *, repetit
     def receive(connection: Connection, process: BaseProcess, expected: str) -> object:
         execution_deadline = time.monotonic() + CHILD_TIMEOUT_SECONDS
         while True:
-            if cancelled is not None and expected in ("uid", "prepared"):
+            if cancelled is not None and expected in ("uid", "facts", "prepared"):
                 raise KeyboardInterrupt(f"memory profiling cancelled by signal {cancelled}")
             deadline = execution_deadline if cleanup_deadline is None else min(execution_deadline, cleanup_deadline)
             remaining = deadline - time.monotonic()
@@ -557,7 +564,7 @@ def run_world(experiment: CalibrationExperiment, source: XpoolConfig, *, repetit
                 record_failure(f"memory-profile child {process.name} failed: {payload.message}")
                 return payload
             # A stop can be queued while a pre-join child is still preparing.
-            if expected == "stopped" and tag == "prepared" and not join_started:
+            if expected == "stopped" and tag in ("facts", "prepared") and not join_started:
                 continue
             if tag != expected:
                 raise RuntimeError(f"memory-profile child {process.name} returned {tag!r}, expected {expected!r}")
@@ -655,12 +662,14 @@ def run_world(experiment: CalibrationExperiment, source: XpoolConfig, *, repetit
             if not isinstance(uid, str):
                 raise RuntimeError("memory-profile UID child returned a non-string UID")
             uid_ready = True
-            fabric_plan = experiment.fabric_plan(uid, config=world_config)
+            placements = tuple(
+                FabricPePlacement(role=FabricRole.ATNAGENT, device=device) for device in world_config.atn.devices
+            ) + tuple(FabricPePlacement(role=FabricRole.FFNAGENT, device=device) for device in world_config.ffn.devices)
             model_description = ",".join(f"{model.spec.model_id}-tp{model.ffn_tp_size}" for model in experiment.models)
             if cancelled is not None:
                 raise KeyboardInterrupt(f"memory profiling cancelled by signal {cancelled}")
             scope.start()
-            for pe, placement in enumerate(fabric_plan.pe_placements):
+            for pe, placement in enumerate(placements):
                 if cancelled is not None:
                     raise KeyboardInterrupt(f"memory profiling cancelled by signal {cancelled}")
                 with block_signals({signal.SIGINT, signal.SIGTERM}) as mask:
@@ -672,7 +681,7 @@ def run_world(experiment: CalibrationExperiment, source: XpoolConfig, *, repetit
                             "config_path": config_path,
                             "config_environment": config_environment,
                             "model_specs": model_specs,
-                            "fabric_plan": fabric_plan,
+                            "placement": placement,
                             "pe": pe,
                             "signal_mask": mask,
                             "environment": attention_environment
@@ -686,13 +695,40 @@ def run_world(experiment: CalibrationExperiment, source: XpoolConfig, *, repetit
                     connections.append(parent)
                     child.close()
 
+            facts = []
             for index, (connection, process) in enumerate(zip(connections, processes, strict=True)):
-                response = receive(connection, process, "prepared")
+                response = receive(connection, process, "facts")
                 if isinstance(response, ParticipantFailure):
                     failed.add(index)
                     if response.ready_to_finalize:
                         join_started = True
                         raise RuntimeError("memory-profile participant reported join before its command")
+                elif isinstance(response, ParticipantMemoryFacts):
+                    if (response.execution_contract is None) != (placements[index].role is FabricRole.ATNAGENT):
+                        raise RuntimeError("memory-profile execution facts disagree with participant role")
+                    facts.append(response)
+                else:
+                    raise RuntimeError("memory-profile participant returned invalid memory facts")
+            memory_context = None
+            if failure is None and cancelled is None:
+                memory_context = FabricMemoryContext(
+                    participants=tuple(item.calibration_environment for item in facts),
+                    ffn_execution=tuple(
+                        item.execution_contract for item in facts if item.execution_contract is not None
+                    ),
+                )
+                fabric_plan = experiment.fabric_plan(
+                    uid, config=world_config, ffn_execution_contracts=memory_context.ffn_execution
+                )
+                for connection in connections:
+                    connection.send(fabric_plan)
+                for index, (connection, process) in enumerate(zip(connections, processes, strict=True)):
+                    response = receive(connection, process, "prepared")
+                    if isinstance(response, ParticipantFailure):
+                        failed.add(index)
+                        if response.ready_to_finalize:
+                            join_started = True
+                            raise RuntimeError("memory-profile participant reported join before its command")
             rows = []
             if failure is None and cancelled is None:
                 join_started = True
@@ -735,7 +771,14 @@ def run_world(experiment: CalibrationExperiment, source: XpoolConfig, *, repetit
                 ordered = tuple(sorted(rows, key=lambda row: row.ffnagent_index))
                 if len(ordered) != len(world_config.ffn.devices):
                     raise RuntimeError("memory-profile evidence does not cover every configured FfnAgent")
-                world = MemoryProfileWorld(experiment=experiment, repetition=repetition, participants=ordered)
+                if memory_context is None:
+                    raise AssertionError("successful memory-profile world lacks its frozen context")
+                world = MemoryProfileWorld(
+                    experiment=experiment,
+                    repetition=repetition,
+                    memory_context=memory_context,
+                    participants=ordered,
+                )
         except BaseException as error:
             if failure is not None and error is not failure:
                 raise failure from error
@@ -816,27 +859,13 @@ def profile_ffn_memory() -> MemoryProfileEvidence:
         run_world(held_out_experiment, config, repetition=repetition) for repetition in range(1, REPETITION_COUNT + 1)
     )
     all_worlds = (*fit_worlds_evidence, *held_out_worlds)
-    devices = all_worlds[0].devices
-    environment = all_worlds[0].environment
-    if any(world.devices != devices or world.environment != environment for world in all_worlds[1:]):
-        raise RuntimeError("xpool memory-profile worlds disagree on hardware or software environment")
+    memory_context = all_worlds[0].memory_context
+    if any(world.memory_context != memory_context for world in all_worlds[1:]):
+        raise RuntimeError("xpool memory-profile worlds disagree on their Fabric memory context")
     coefficients, minimum_headroom = fit_worlds(fit_worlds_evidence, held_out_worlds)
-    if environment.native_abi_version != ABI_VERSION:
-        raise RuntimeError("xpool memory-profile child native ABI disagrees with Python")
     profile = XpoolMemoryCalibrationProfile(
-        environment=MemoryCalibrationEnvironment(
-            native_abi_version=ABI_VERSION,
-            ffnagent_devices=devices,
-            cuda_driver_version=environment.cuda_driver_version,
-            cuda_runtime_version=environment.cuda_runtime_version,
-            torch_version=environment.torch_version,
-            triton_version=environment.triton_version,
-            sglang_version=environment.sglang_version,
-            sglang_kernel_version=environment.sglang_kernel_version,
-            nvshmem_version=environment.nvshmem_version,
-        ),
+        memory_context=memory_context,
         ffn=FfnMemoryCalibration(
-            atnagent_count=len(config.atn.devices),
             executor_lane_count=config.scheduler.ffn_concurrency,
             minimum_held_out_headroom_bytes=minimum_headroom,
             coefficients=coefficients,

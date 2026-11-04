@@ -28,7 +28,7 @@ class MemoryProfileCommand(RunnableCliCommand[XpoolConfig]):
         except RuntimeError as error:
             raise AgentError(f"xpool memory-profile failed: {error}") from error
         try:
-            write_memory_calibration_profile(evidence.profile)
+            write_memory_calibration_profile(evidence.profile, path=config.ffn.device_memory_calibration)
         except RuntimeError as error:
             raise AgentError(
                 f"xpool memory-profile failed: candidate evidence published at {evidence_path}; "

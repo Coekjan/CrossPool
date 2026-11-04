@@ -7,10 +7,10 @@ import pytest
 import xpool.service.daemon.control
 from xpool.config import FfnSchedulingPolicy, XpoolConfig
 from xpool.fabric import (
+    FabricDeploymentPlan,
     FabricGenerationId,
     FabricGenerationPhase,
     FabricParticipantPhase,
-    FabricPlan,
     FabricRole,
     FifoSchedulerPolicy,
     RandomSchedulerPolicy,
@@ -154,7 +154,7 @@ def test_instance_initialized_listener_mismatch_is_atomic() -> None:
         (rank1, "/instance/register"),
     ):
         assert register(app, path, payload).status_code == HTTPStatus.NO_CONTENT
-    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+    plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagent0, 0), (atnagent1, 1), (ffnagent, 2))
     generation = plan.model_dump(mode="json")["generation"]
     rank0_initialized = {
@@ -236,7 +236,7 @@ def test_plan_waits_for_every_model_while_transport_publication_is_incremental()
         register(app, "/instance/register", instance_registration(model_id="test/b")).status_code
         == HTTPStatus.NO_CONTENT
     )
-    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+    plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
 
     assert [instance.ffn_profile.hidden_size for instance in plan.instance_plans] == [4, 4]
     assert request(app, "GET", "/ready").json()["transport_ready"] is False
@@ -267,7 +267,7 @@ def test_random_scheduler_seed_is_generated_once_and_persisted_in_plan(monkeypat
 
     assert isinstance(plan.scheduler, RandomSchedulerPolicy)
     assert plan.scheduler.seed == 17
-    assert FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json()) == plan
+    assert FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json()) == plan
     assert generated == [17]
 
 
@@ -744,7 +744,7 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
         )
 
         assert all(process.poll() is None for process in processes)
-        assert FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json()) == old_plan
+        assert FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json()) == old_plan
 
         for process in (old_atnagent_process, old_ffnagent_process, old_instance_process):
             stop_proc(process)
@@ -771,7 +771,7 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
             assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
         assert request(app, "POST", "/instance/register", json=new_instance).status_code == HTTPStatus.NO_CONTENT
 
-        new_plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+        new_plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
         assert new_plan.generation != old_plan.generation
     finally:
         for process in processes:

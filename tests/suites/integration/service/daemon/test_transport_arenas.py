@@ -8,7 +8,7 @@ import pytest
 
 import xpool.service.daemon.registration
 from xpool.config import XpoolConfig
-from xpool.fabric import FabricPlan
+from xpool.fabric import FabricDeploymentPlan
 from xpool.service.wire import ProcessRef
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
 from xtest.harness.support.service.daemon import (
@@ -263,12 +263,10 @@ def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instan
         }
     )
     app = create_app(config)
-    atnagents: dict[int, dict[str, int | float]] = {}
-    for payload in (
-        atnagent_registration(device=0),
-        atnagent_registration(device=1),
-    ):
-        atnagents[int(payload["device"])] = payload
+    atnagents: dict[int, dict[str, object]] = {}
+    for device in (0, 1):
+        payload = atnagent_registration(device=device)
+        atnagents[device] = payload
         assert register(app, "/atnagent/register", payload).status_code == HTTPStatus.NO_CONTENT
     ffnagent = ffnagent_registration(device=2, model_ids=(str(TEST_MODEL_ID),))
     assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
@@ -285,7 +283,7 @@ def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instan
             ).status_code
             == HTTPStatus.NO_CONTENT
         )
-    plan = FabricPlan.model_validate(request(app, "GET", "/fabric/plan").json())
+    plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagents[0], 0), (atnagents[1], 1), (ffnagent, 2))
     for rank in (0, 1):
         assert (
