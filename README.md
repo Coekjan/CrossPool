@@ -83,6 +83,10 @@ MPS endpoints use a private per-user root at `/tmp/xpool-mps-<uid>/`.
 
 ## Configuration
 
+For offline observation validation, Perfetto export and trace queries, see
+[Observation traces](docs/tutorials/observation-traces.md). These commands use
+explicit artifact inputs and a prepared, pinned Trace Processor.
+
 For the complete user-facing reference, see
 [Configuration](docs/configuration.md). Start from
 [`configs/xpool.example.toml`](configs/xpool.example.toml) and
@@ -104,6 +108,14 @@ deployment visibility and prepares attention MPS before the target imports its
 runtime, preserving arguments, process identity and the inherited process group.
 
 ## Validation and Development
+
+The offline `xpool.observability` Python API reads versioned raw evidence and
+provides deterministic single-Host clock calibration, conditional uncertainty
+and JSON validation reports. Independent byte and numerical vectors live in
+[the versioned test resources](docs/plans/unified-timeline-observability/fixtures/README.md).
+See [Devkit](docs/designs/devkit.md#offline-clock-calibration)
+for explicit input declarations and examples. Runtime sampling and real Device
+timing qualification remain separate from the offline computation.
 
 `uv sync --group dev` installs the private `xpool-dev` workspace member editably
 alongside `xpool`, using the shared root lockfile and environment. Its console
