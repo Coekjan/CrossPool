@@ -52,6 +52,11 @@ their assignment; no substitute type label is required.
 
 ## Unified Timeline Observability
 
+The active [Shared Observability Contract](unified-timeline-observability/README.md)
+defines the single-Host Transport/Fabric/Graph/Routing target, versioned artifact interfaces,
+deterministic calibration, and fixed reference fixtures for parallel implementation.
+Runtime implementation and real Device qualification remain subsequent work.
+
 - **Class:** Platform Capability.
 - **Outcome:** One queryable and visualizable causal timeline spanning the
   daemon, serving Instances, AtnAgents, FfnAgents, CPUs, accelerators, and future
