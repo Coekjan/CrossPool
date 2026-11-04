@@ -309,3 +309,17 @@ def test_terminal_failure_in_a_stopped_sampler_prevents_collective_retirement(
     assert caught.value.code == 1
     assert "finalized" not in events
     assert all(not recorder.thread.is_alive() for recorder in recorders)
+
+
+def test_first_phase_failure_restores_native_installation() -> None:
+    original_install = runner.xpool.native.ffnagent.install_execution
+    original_error = RuntimeError("sampler failed before capture")
+
+    def fail_begin(point: str) -> None:
+        raise original_error
+
+    recorder = cast(runner.PhaseRecorder, SimpleNamespace(begin=fail_begin))
+    with pytest.raises(RuntimeError) as caught, runner.record_registry_phases(recorder):
+        pytest.fail("capture began after sampler failure")
+    assert caught.value is original_error
+    assert runner.xpool.native.ffnagent.install_execution is original_install

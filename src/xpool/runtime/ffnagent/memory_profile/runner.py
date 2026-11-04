@@ -212,8 +212,8 @@ def record_registry_phases(recorder: PhaseRecorder) -> Iterator[None]:
         saved_install(projection)
 
     setattr(xpool.native.ffnagent, "install_execution", install_forwarder)
-    recorder.begin("graph_capture")
     try:
+        recorder.begin("graph_capture")
         yield
         if invocation_count != 1:
             raise RuntimeError("Registry did not invoke native execution installation exactly once")
@@ -607,21 +607,32 @@ def run_world(experiment: CalibrationExperiment, source: XpoolConfig, *, repetit
             for index, (connection, process) in enumerate(zip(connections, processes, strict=True)):
                 if command == "stop" and index in failed:
                     continue
-                response = receive(connection, process, "stopped")
+                try:
+                    response = receive(connection, process, "stopped")
+                except (BrokenPipeError, EOFError, OSError, RuntimeError, TimeoutError) as error:
+                    if command != "stop":
+                        raise
+                    failed.add(index)
+                    record_failure(f"memory-profile child {process.name} stop acknowledgement failed: {error}")
+                    continue
                 if isinstance(response, ParticipantFailure):
                     failed.add(index)
                     if command == "finalize":
                         raise RuntimeError(
                             f"memory-profile child {process.name} retirement is unconfirmed: {response.message}"
                         )
+            unconfirmed = []
             for index, process in enumerate(processes):
                 process.join(max(0.0, cleanup_deadline - time.monotonic()))
                 if process.is_alive():
-                    raise TimeoutError(f"memory-profile child {process.name} retirement is unconfirmed")
+                    unconfirmed.append(process.name)
+                    continue
                 if process.exitcode != 0 and (index not in failed or process.exitcode != 1):
                     if command == "finalize":
                         raise RuntimeError(f"memory-profile child {process.name} exited with code {process.exitcode}")
                     record_failure(f"memory-profile child {process.name} exited with code {process.exitcode}")
+            if unconfirmed:
+                raise TimeoutError(f"memory-profile children retirement is unconfirmed: {', '.join(unconfirmed)}")
             stopped = True
 
         try:
