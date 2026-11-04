@@ -73,7 +73,9 @@ directly in [.pre-commit-config.yaml](.pre-commit-config.yaml).
 ## Workflow
 
 - Keep changes scoped to the accepted design.
-- Use `.codex/skills/git-commit/SKILL.md` for commit preparation.
+- Use [plan-commits](.codex/skills/plan-commits/SKILL.md) to plan a commit
+  series or branch split, and [git-commit](.codex/skills/git-commit/SKILL.md)
+  to carry out an authorized commit.
 - Use `.codex/skills/deep-review/SKILL.md` when the user requests delegated,
   deep, or pre-commit review. Commit preparation does not invoke it automatically.
 - Use reviewer agents only when the user asks for delegation or an invoked

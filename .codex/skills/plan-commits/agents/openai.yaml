@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Commits"
+  short_description: "Split working changes into reviewable commits"
+  default_prompt: "Use $plan-commits to summarize the changed files, explain each proposed commit in order, and show its patch preview."
