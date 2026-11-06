@@ -445,9 +445,9 @@ class Agent(ABC):
         try:
             self.report_fabric_phase(
                 self.participant_report.phase,
-                control_failure=message,
+                control_failure=message or "local control failure without a message",
             )
-        except AgentError:
+        except Exception:
             logger.exception("failed to report local fabric control failure")
 
     def fabric_pe(self) -> int:

@@ -444,13 +444,23 @@ def test_agent_shutdown_reconciles_control_outage_before_native_retirement(
     ]
 
 
-@pytest.mark.parametrize("quiesce_fails", [False, True])
+@pytest.mark.parametrize(
+    ("quiesce_fails", "failure_message", "diagnostic_fails"),
+    [
+        pytest.param(False, "control failure", False, id="drain"),
+        pytest.param(True, "control failure", False, id="retain"),
+        pytest.param(False, "", False, id="empty-failure"),
+        pytest.param(True, "", True, id="diagnostic-failure"),
+    ],
+)
 def test_failed_agent_reports_drain_and_waits_for_authoritative_stop(
     monkeypatch: pytest.MonkeyPatch,
     quiesce_fails: bool,
+    failure_message: str,
+    diagnostic_fails: bool,
 ) -> None:
     events: list[str] = []
-    failure = RuntimeError("control failure")
+    failure = RuntimeError(failure_message)
     agent = RunLoopAgent(events=events, request_shutdown=lambda: None, shutdown_point="advance")
     agent.participant_report = FabricParticipantReport(
         owner=agent.process_ref,
@@ -461,6 +471,15 @@ def test_failed_agent_reports_drain_and_waits_for_authoritative_stop(
     # Only generation identity is consumed; placement is substituted at its owner.
     agent.fabric_plan = cast(FabricDeploymentPlan, SimpleNamespace(generation=agent.participant_report.generation))
     agent.fabric_phase = FabricGenerationPhase.ABORTING
+    if diagnostic_fails:
+        publish = agent.client.report_fabric_participant
+
+        def report(candidate: FabricParticipantReport) -> None:
+            if candidate.control_failure is not None:
+                raise ValueError("diagnostic publication failed")
+            publish(candidate)
+
+        monkeypatch.setattr(agent.client, "report_fabric_participant", report)
 
     def fail_control(shutdown_requested: threading.Event) -> None:
         raise failure
@@ -511,7 +530,7 @@ def test_failed_agent_reports_drain_and_waits_for_authoritative_stop(
     if quiesce_fails:
         with pytest.raises(Retained):
             agent.run()
-        assert events == ["active", "fabric:quiesce", "role:quiesce"]
+        assert events == ([] if diagnostic_fails else ["active"]) + ["fabric:quiesce", "role:quiesce"]
     else:
         with pytest.raises(SystemExit) as exit_result:
             agent.run()
@@ -527,6 +546,10 @@ def test_failed_agent_reports_drain_and_waits_for_authoritative_stop(
             "drained",
         ]
     assert agent.failure is failure
+    assert agent.participant_report is not None
+    assert agent.participant_report.control_failure == (
+        None if diagnostic_fails else failure_message or "local control failure without a message"
+    )
 
 
 def test_agent_preserves_background_failure_after_confirmed_retirement(monkeypatch: pytest.MonkeyPatch) -> None:
