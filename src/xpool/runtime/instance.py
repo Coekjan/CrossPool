@@ -51,7 +51,6 @@ class InstanceRankFailureMonitor:
 
     Args:
         model_id: Model ID used in fatal diagnostics.
-        instance_index: Integer instance index used by the native arena map.
         rank: Rank-local process index within the instance.
         on_failure: Lifecycle callback receiving the retained original error.
 
@@ -63,14 +62,12 @@ class InstanceRankFailureMonitor:
         self,
         *,
         model_id: ModelId,
-        instance_index: int,
         rank: int,
         on_failure: Callable[[BaseException], None],
     ) -> None:
         """Create a stopped instance failure monitor."""
 
         self.model_id = model_id
-        self.instance_index = instance_index
         self.rank = rank
         self.worker = BackgroundThread.periodic(
             name=f"xpool-instance-failure-monitor-{model_id}-{rank}",
@@ -529,7 +526,6 @@ class InstanceRankRuntime:
         if self.failure_monitor is None:
             self.failure_monitor = InstanceRankFailureMonitor(
                 model_id=self.model_id,
-                instance_index=self.instance_index,
                 rank=self.rank,
                 on_failure=self.on_failure,
             )

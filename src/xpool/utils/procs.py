@@ -74,37 +74,6 @@ class ProcUniqId:
         except psutil.NoSuchProcess:
             return False
 
-    def terminate_tree(self, *, term_grace_s: float) -> bool:
-        """Terminate this process and its currently known children.
-
-        Args:
-            term_grace_s: Seconds to wait after SIGTERM before sending SIGKILL.
-
-        Returns:
-            Whether this exact root process is no longer alive after the
-            termination attempt.
-
-        Side Effects:
-            Sends SIGTERM, waits for ``term_grace_s``, then sends SIGKILL to the
-            root process and recursive children that still match their captured
-            pid/create-time identities.
-        """
-
-        if not self.is_alive():
-            return True
-        children = self.child_process_ids()
-        targets = [*children, self]
-        for target in targets:
-            target.send_signal(signal.SIGTERM)
-        deadline = time.monotonic() + term_grace_s
-        while time.monotonic() < deadline:
-            if not any(target.is_alive() for target in targets):
-                return True
-            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
-        for target in targets:
-            target.send_signal(signal.SIGKILL)
-        return not self.is_alive()
-
     def kill_tree(self) -> bool:
         """Directly kill this exact process tree and report whether it exited.
 

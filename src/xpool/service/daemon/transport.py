@@ -106,12 +106,8 @@ class TransportBroker:
         self,
         instance: InstanceRankId,
         lease: TransportArenaLease,
-        *,
-        last_seen_at: float,
-        now: float,
-        heartbeat_timeout_s: float,
     ) -> None:
-        """Acquire an exact publication, replacing only an abandoned lease."""
+        """Acquire a publication; retry the same lease or reject a different one."""
 
         existing = self.leases.get(instance)
         if existing is not None:
@@ -121,8 +117,7 @@ class TransportBroker:
                 and existing.publisher == lease.publisher
             ):
                 return
-            if now - last_seen_at <= heartbeat_timeout_s:
-                raise XpoolDaemonError("conflict", "instance rank already holds different transport arena handle")
+            raise XpoolDaemonError("conflict", "instance rank already holds different transport arena handle")
         self.leases[instance] = lease
 
     def remove_instance(self, instance: InstanceRankId) -> TransportArenaLease | None:

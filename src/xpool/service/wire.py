@@ -300,7 +300,7 @@ class AtnAgentTransportLeaseQuiesceResponse(WireModel):
     """Result of closing one AtnAgent generation's lease admission."""
 
     in_use: list[InstanceRankRef] = Field(
-        description="Instance ranks that still hold fresh acquired arena leases.",
+        description="Instance ranks whose live owner processes still hold acquired arena leases.",
     )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from time import perf_counter_ns
+from typing import cast
 
 import xpool.native
 from xpool.config import XpoolConfig, get_global_config
@@ -17,14 +18,6 @@ from xpool.service.wire import ElasticContextStateControlChannelRef, ElasticCont
 __all__ = ["CapacityPolicy"]
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class CapacityOperation:
-    """One immutable group grant; old permission remains charged until completion."""
-
-    command: xpool.native.ecs.QuotaCommand
-    start_quota_bytes: tuple[int, ...]
 
 
 @dataclass(slots=True)
@@ -45,10 +38,9 @@ class CapacityPolicy:
 
     generation: FabricGenerationId
     channel: xpool.native.ecs.DaemonControlChannel
-    command_sequences: list[int] = field(init=False)
     applied_sequences: list[int] = field(init=False)
     active_quotas: list[tuple[int, ...] | None] = field(init=False)
-    operations: list[CapacityOperation | None] = field(init=False)
+    operations: list[xpool.native.ecs.QuotaCommand | None] = field(init=False)
     demands: list[xpool.native.ecs.QuotaDemand | None] = field(init=False)
     completed_grant_orders: list[int | None] = field(init=False)
     service_ceilings: list[tuple[int, ...] | None] = field(init=False)
@@ -58,7 +50,6 @@ class CapacityPolicy:
 
     def __post_init__(self) -> None:
         group_count = sum(model.atn_dp_size for model in get_global_config().models)
-        self.command_sequences = [0] * group_count
         self.applied_sequences = [0] * group_count
         self.active_quotas = [None] * group_count
         self.operations = [None] * group_count
@@ -234,7 +225,7 @@ class CapacityPolicy:
             if active is None:
                 continue
             operation = self.operations[group_index]
-            target = operation.command.quota_bytes if operation is not None else active
+            target = operation.quota_bytes if operation is not None else active
             for (device_index, _), old, new in zip(
                 self.group_profiles(registrations, fabric, instance_index, dp_rank), active, target, strict=True
             ):
@@ -267,10 +258,9 @@ class CapacityPolicy:
         active = self.active_quotas[group_index]
         if active is None or self.operations[group_index] is not None:
             raise RuntimeError("elastic context state quota operation requires one initialized idle group")
-        command = xpool.native.ecs.QuotaCommand(self.command_sequences[group_index] + 1, quota_bytes)
+        command = xpool.native.ecs.QuotaCommand(self.applied_sequences[group_index] + 1, quota_bytes)
         self.channel.publish_command(group_index, command)
-        self.command_sequences[group_index] = command.sequence
-        self.operations[group_index] = CapacityOperation(command, active)
+        self.operations[group_index] = command
         logger.info(
             "elastic context state quota requested group=%s sequence=%s from_bytes=%s quota_bytes=%s",
             group_index,
@@ -284,33 +274,34 @@ class CapacityPolicy:
         registrations: RegistrationBook,
         fabric: FabricGenerationState,
         completions: list[xpool.native.ecs.QuotaCompletion | None],
-    ) -> list[tuple[int, CapacityOperation]]:
+    ) -> list[int]:
         """Credit a shrink only after all ranks adopted the grant and fit it physically."""
 
-        retired: list[tuple[int, CapacityOperation]] = []
+        retired: list[int] = []
         for group_index, instance_index, dp_rank in self.capacity_groups(fabric):
             operation = self.operations[group_index]
             if operation is None:
                 continue
-            sequence = operation.command.sequence
+            sequence = operation.sequence
             replies = tuple(
                 completions[index] for index in self.group_partition_indices(fabric, instance_index, dp_rank)
             )
             if not all(reply is not None and reply.sequence == sequence for reply in replies):
                 continue
-            target = operation.command.quota_bytes
+            target = operation.quota_bytes
             for reply, (_, profile), quota in zip(
                 replies, self.group_profiles(registrations, fabric, instance_index, dp_rank), target, strict=True
             ):
                 if reply is None or not profile.floor_bytes <= reply.backed_bytes <= quota:
                     raise RuntimeError("elastic context state quota completion is outside its floor and adopted grant")
+            old_quota = cast(tuple[int, ...], self.active_quotas[group_index])
             self.active_quotas[group_index] = target
             self.applied_sequences[group_index] = sequence
             self.operations[group_index] = None
-            if sequence != 1 and any(new > old for old, new in zip(operation.start_quota_bytes, target, strict=True)):
+            if sequence != 1 and any(new > old for old, new in zip(old_quota, target, strict=True)):
                 self.completed_grant_orders[group_index] = self.next_grant_order
                 self.next_grant_order += 1
-            retired.append((group_index, operation))
+            retired.append(group_index)
         return retired
 
     def publish_next_initial_operation(self, registrations: RegistrationBook, fabric: FabricGenerationState) -> bool:
@@ -319,7 +310,7 @@ class CapacityPolicy:
         if any(operation is not None for operation in self.operations):
             return False
         for group_index, instance_index, dp_rank in self.capacity_groups(fabric):
-            if self.command_sequences[group_index] == 0:
+            if self.applied_sequences[group_index] == 0:
                 self.publish_operation(group_index, self.initial_target(registrations, fabric, instance_index, dp_rank))
                 return True
         return False
@@ -332,7 +323,9 @@ class CapacityPolicy:
             demand = publications[group_index]
             if demand is None:
                 continue
-            if demand.evaluated_sequence > self.command_sequences[group_index]:
+            operation = self.operations[group_index]
+            last_issued_sequence = self.applied_sequences[group_index] if operation is None else operation.sequence
+            if demand.evaluated_sequence > last_issued_sequence:
                 raise RuntimeError("elastic context state demand refers to an unpublished operation")
             active = self.active_quotas[group_index]
             required = demand.required_bytes
@@ -487,13 +480,11 @@ class CapacityPolicy:
             return
         if self.pool_capacity_bytes is None:
             self.freeze_pools(registrations, fabric, backing, reports)
-        for group_index, _ in self.retire_operations(registrations, fabric, self.channel.read_completions()):
+        for group_index in self.retire_operations(registrations, fabric, self.channel.read_completions()):
             self.note_retired_donor(group_index)
         groups = self.capacity_groups(fabric)
-        if any(self.command_sequences[group] == 0 for group, _, _ in groups):
+        if any(self.applied_sequences[group] == 0 for group, _, _ in groups):
             self.publish_next_initial_operation(registrations, fabric)
-            return
-        if any(operation is not None and operation.command.sequence == 1 for operation in self.operations):
             return
         self.consume_demands(fabric)
         attempt = self.funding_attempt

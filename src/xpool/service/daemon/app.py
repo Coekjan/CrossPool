@@ -281,9 +281,7 @@ def create_daemon() -> FastAPI:
             Empty 204 response after quiesce is accepted.
 
         Raises:
-            404: The retained generation or participant does not exist.
             409: Generation identity or participant ownership conflicts.
-            503: The generation cannot enter quiesce from its current phase.
         """
 
         await asyncio.to_thread(control_plane.request_fabric_quiesce, request)
@@ -297,9 +295,7 @@ def create_daemon() -> FastAPI:
             Empty 204 response after the report is committed.
 
         Raises:
-            404: The reported generation or participant does not exist.
             409: Owner identity, report sequence, or phase transition conflicts.
-            503: The generation is unavailable for participant reports.
         """
 
         await asyncio.to_thread(control_plane.record_fabric_participant, request)
@@ -376,8 +372,9 @@ def create_daemon() -> FastAPI:
             Empty 204 response after registration.
 
         Raises:
-            409: ABI, placement, or existing process ownership conflicts.
-            503: A predecessor owner has not completed replacement cleanup.
+            404: The device is not configured for an AtnAgent.
+            409: ABI, startup identity, or retained process ownership conflicts.
+            503: Participant admission, owned MPS, or registration is unavailable.
         """
 
         await asyncio.to_thread(
@@ -397,8 +394,8 @@ def create_daemon() -> FastAPI:
         """Refresh one authenticated AtnAgent registration and return desired state.
 
         Raises:
-            404: No AtnAgent owns the requested device.
-            409: The process identity does not own that registration.
+            409: The process identity or ABI does not own that registration.
+            503: The registration is absent or changed during the heartbeat.
         """
 
         return await asyncio.to_thread(control_plane.heartbeat_atnagent, device, request)
@@ -411,8 +408,9 @@ def create_daemon() -> FastAPI:
             Empty 204 response after registration.
 
         Raises:
-            409: ABI, placement, or existing process ownership conflicts.
-            503: A predecessor owner has not completed replacement cleanup.
+            404: The device is not configured for an FfnAgent.
+            409: ABI, startup ownership, Model Specs, or execution contracts conflict.
+            503: Participant admission or registration is unavailable.
         """
 
         await asyncio.to_thread(
@@ -436,8 +434,8 @@ def create_daemon() -> FastAPI:
         """Refresh one authenticated FfnAgent registration and return desired state.
 
         Raises:
-            404: No FfnAgent owns the requested device.
-            409: The process identity does not own that registration.
+            409: The process identity or ABI does not own that registration.
+            503: The registration is absent or changed during the heartbeat.
         """
 
         return await asyncio.to_thread(control_plane.heartbeat_ffnagent, device, request)
@@ -453,9 +451,9 @@ def create_daemon() -> FastAPI:
             Empty 204 response after publications are committed.
 
         Raises:
-            404: The publishing AtnAgent is not registered.
+            404: The AtnAgent device is not configured.
             409: Publisher ownership or an immutable arena binding conflicts.
-            503: The AtnAgent is unavailable for Transport publication.
+            503: The registration or Transport publication admission is unavailable.
         """
 
         await asyncio.to_thread(
@@ -474,9 +472,9 @@ def create_daemon() -> FastAPI:
         """Stop admission and return the current lease-drain state for one AtnAgent.
 
         Raises:
-            404: The AtnAgent registration does not exist.
-            409: The process identity does not own the registration.
-            503: Transport lease quiesce cannot currently progress.
+            404: The AtnAgent device is not configured.
+            409: The process identity or ABI does not own the registration.
+            503: The registration is absent, changed, or its process is offline.
         """
 
         return await asyncio.to_thread(control_plane.quiesce_atnagent_transport_leases, device, request)
@@ -489,9 +487,9 @@ def create_daemon() -> FastAPI:
             Empty 204 response after registration.
 
         Raises:
-            404: The configured Model ID or Instance rank is unknown.
-            409: ABI, ffn_profile, placement, or process ownership conflicts.
-            503: A predecessor registration has not completed cleanup.
+            404: The configured Model ID is unknown.
+            409: ABI, rank, topology, FFN profile, or process ownership conflicts.
+            503: Participant admission, owned MPS, or registration is unavailable.
         """
 
         await asyncio.to_thread(
@@ -521,8 +519,9 @@ def create_daemon() -> FastAPI:
             Empty 204 response after deregistration.
 
         Raises:
-            404: The Instance rank is not registered.
-            409: The process identity does not own that registration.
+            404: The Model ID or Instance-rank registration is absent.
+            409: The process identity, ABI, or configured rank conflicts.
+            503: The registration changes before removal.
         """
 
         await asyncio.to_thread(control_plane.deregister_instance, model_id, rank, request)
@@ -540,9 +539,9 @@ def create_daemon() -> FastAPI:
             Empty 204 response after initialization is published.
 
         Raises:
-            404: The Instance rank or Fabric generation does not exist.
-            409: Owner, generation, or initialization facts conflict.
-            503: Fabric is not ready to accept Instance-rank initialization.
+            404: The configured Model ID is unknown.
+            409: Rank, owner, generation, or initialization facts conflict.
+            503: The registration or Fabric generation is absent or changed.
         """
 
         await asyncio.to_thread(
@@ -562,8 +561,9 @@ def create_daemon() -> FastAPI:
         """Refresh one authenticated Instance-rank registration and return desired state.
 
         Raises:
-            404: The Instance rank is not registered.
-            409: The process identity does not own that registration.
+            404: The configured Model ID path is unknown.
+            409: The process identity or ABI does not own that registration.
+            503: The registration is absent or changed during the heartbeat.
         """
 
         return await asyncio.to_thread(control_plane.heartbeat_instance, model_id, rank, request)
@@ -577,9 +577,9 @@ def create_daemon() -> FastAPI:
         """Acquire the admitted rank-local Transport arena lease for one Instance rank.
 
         Raises:
-            404: The configured Instance or its Transport publication is unknown.
-            409: Process, generation, or publication ownership conflicts.
-            503: Registration, Fabric, or Transport admission is not ready.
+            404: The configured Model ID or AtnAgent device is unknown.
+            409: Rank, process, or existing lease ownership conflicts.
+            503: Registration, Fabric, or Transport publication/admission is unavailable.
         """
 
         return await asyncio.to_thread(

@@ -76,9 +76,6 @@ class FabricMembership:
         instance_plans: list[FabricInstancePlan] = []
         instance_owners: list[tuple[InstanceRankId, ProcUniqId]] = []
         for instance in config.instances:
-            rank_zero = instance_by_rank.get(InstanceRankId(model_id=instance.model_id, rank=0))
-            if rank_zero is None:
-                return None
             model = config.model_by_id[instance.model_id]
             atn_tp_size = config.atn_tp_size_of(instance.model_id)
             atn_dp_size = model.atn_dp_size
@@ -231,18 +228,13 @@ class FabricController:
 
         self.generation: FabricGenerationState | None = None
 
-    def plan(self) -> FabricDeploymentPlan | None:
-        """Return the installed immutable plan, if any."""
-
-        return None if self.generation is None else self.generation.plan
-
     def require_plan(self) -> FabricDeploymentPlan:
         """Return the installed plan or report incomplete membership."""
 
-        plan = self.plan()
-        if plan is None:
+        generation = self.generation
+        if generation is None:
             raise XpoolDaemonError("not_ready", "fabric plan requires every configured owner and ffn_profile")
-        return plan
+        return generation.plan
 
     def install(self, generation: FabricGenerationState) -> FabricDeploymentPlan:
         """Install a generation when no generation is retained."""

@@ -131,7 +131,7 @@ def service_policy(
     policy.pool_capacity_bytes = pool_capacity_bytes
     for group_index, instance_index, dp_rank in policy.capacity_groups(fabric):
         policy.active_quotas[group_index] = active_by_group[group_index]
-        policy.command_sequences[group_index] = policy.applied_sequences[group_index] = 1
+        policy.applied_sequences[group_index] = 1
         policy.service_ceilings[group_index] = policy.service_ceiling(
             control.registrations, fabric, instance_index, dp_rank
         )
@@ -154,10 +154,10 @@ def complete_operation(
     location = next((instance, dp) for group, instance, dp in policy.capacity_groups(fabric) if group == group_index)
     for index, backing in zip(
         policy.group_partition_indices(fabric, *location),
-        operation.command.quota_bytes if backed_bytes is None else backed_bytes,
+        operation.quota_bytes if backed_bytes is None else backed_bytes,
         strict=True,
     ):
-        channel.completions[index] = QuotaCompletion(operation.command.sequence, backing)
+        channel.completions[index] = QuotaCompletion(operation.sequence, backing)
 
 
 def test_initial_policy_waits_for_every_tp_completion_without_eager_backing() -> None:

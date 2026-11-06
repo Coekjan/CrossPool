@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from http import HTTPStatus
 
 import pytest
 
-import xpool.service.daemon.control
+import xpool.service.daemon.registration
 from xpool.config import XpoolConfig
 from xpool.fabric import FabricDeploymentPlan
 from xpool.native import ABI_VERSION
@@ -63,7 +64,7 @@ def test_daemon_quiesce_atnagent_transport_leases_blocks_new_acquires_and_report
         ).status_code
         == HTTPStatus.OK
     )
-    deterministic_daemon_dependencies.advance(xpool.service.daemon.control.HEARTBEAT_WARNING_WATERMARK_S + 1.0)
+    deterministic_daemon_dependencies.advance(xpool.service.daemon.registration.HEARTBEAT_WARNING_WATERMARK_S + 1.0)
     request(app, "POST", "/atnagent/0/heartbeat", json=process_ref(atnagent))
 
     quiesce = request(
@@ -128,9 +129,13 @@ def test_daemon_lease_quiesce_reports_all_live_owners() -> None:
     app = create_app(config)
     atnagent = atnagent_registration(device=0)
     ffnagent = ffnagent_registration(model_ids=("test/a", "test/b"))
-    owner_processes = [start_sleeping_proc(), start_sleeping_proc()]
-    owner_ids = {owner_id.pid for owner, owner_id in owner_processes}
-    try:
+    with ExitStack() as stack:
+        owner_processes = []
+        for _ in range(2):
+            owner, owner_id = start_sleeping_proc()
+            stack.callback(stop_proc, owner)
+            owner_processes.append((owner, owner_id))
+        owner_ids = {owner_id.pid for owner, owner_id in owner_processes}
         assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
         assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
         for model_id, (owner, owner_id) in zip(("test/a", "test/b"), owner_processes, strict=True):
@@ -171,9 +176,6 @@ def test_daemon_lease_quiesce_reports_all_live_owners() -> None:
         assert response.status_code == HTTPStatus.OK
         assert {entry["pid"] for entry in response.json()["in_use"]} == owner_ids
         assert all(owner.poll() is None for owner, owner_id in owner_processes)
-    finally:
-        for owner, owner_id in owner_processes:
-            stop_proc(owner)
 
 
 def test_daemon_allows_stale_atnagent_to_quiesce_transport_leases(
@@ -208,7 +210,7 @@ def test_daemon_allows_stale_atnagent_to_quiesce_transport_leases(
         ).status_code
         == HTTPStatus.OK
     )
-    deterministic_daemon_dependencies.advance(xpool.service.daemon.control.HEARTBEAT_WARNING_WATERMARK_S + 1.0)
+    deterministic_daemon_dependencies.advance(xpool.service.daemon.registration.HEARTBEAT_WARNING_WATERMARK_S + 1.0)
     request(
         app,
         "POST",

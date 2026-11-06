@@ -39,26 +39,26 @@ from xtest.harness.support.service.daemon import atnagent_registration, instance
 @pytest.mark.usefixtures(reset_global_config.__name__)
 def test_admitted_agent_can_publish_pre_join_retirement_boundary_after_close_begins() -> None:
     install_test_config(synthetic_config())
-    agent = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            "import signal, sys, time; signal.signal(signal.SIGTERM, lambda *args: sys.exit(0)); "
-            "print('ready', flush=True); time.sleep(60)",
-        ],
-        stdout=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
-    assert agent.stdout is not None and agent.stdout.readline().strip() == "ready"
-    control = ControlPlane()
-    scope = MpsScope(MpsEndpoint(("GPU-00000000-0000-0000-0000-000000000001",)))
-    control.mps_scope = scope
-    identity = ProcUniqId(agent.pid)
-    control.registrations.agent_startups[(FabricRole.ATNAGENT, 0)] = identity
-    deadline = control.begin_close(deadline=time.monotonic() + 5)
-    try:
-        with ThreadPoolExecutor(max_workers=1) as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        agent = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import signal, sys, time; signal.signal(signal.SIGTERM, lambda *args: sys.exit(0)); "
+                "print('ready', flush=True); time.sleep(60)",
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            assert agent.stdout is not None and agent.stdout.readline().strip() == "ready"
+            control = ControlPlane()
+            scope = MpsScope(MpsEndpoint(("GPU-00000000-0000-0000-0000-000000000001",)))
+            control.mps_scope = scope
+            identity = ProcUniqId(agent.pid)
+            control.registrations.agent_startups[(FabricRole.ATNAGENT, 0)] = identity
+            deadline = control.begin_close(deadline=time.monotonic() + 5)
             closed = executor.submit(control.close)
             control.register_atnagent(
                 AtnAgentRegistrationState(
@@ -70,14 +70,15 @@ def test_admitted_agent_can_publish_pre_join_retirement_boundary_after_close_beg
                 )
             )
             closed.result(timeout=5)
-        assert agent.wait(timeout=1) == 0
-        assert control.closed and scope.closed
-        assert control.cleanup_deadline == deadline
-    finally:
-        if agent.poll() is None:
-            agent.terminate()
-            agent.wait(timeout=5)
-        agent.stdout.close()
+            assert agent.wait(timeout=1) == 0
+            assert control.closed and scope.closed
+            assert control.cleanup_deadline == deadline
+        finally:
+            if agent.poll() is None:
+                agent.terminate()
+                agent.wait(timeout=5)
+            if agent.stdout is not None:
+                agent.stdout.close()
 
 
 @dataclass(frozen=True, slots=True)

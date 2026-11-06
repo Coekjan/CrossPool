@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from http import HTTPStatus
 
 import pytest
@@ -414,9 +415,11 @@ def test_quiesce_requires_current_agent_owner_and_generation() -> None:
         }
     )
     app = create_app(config)
-    atnagent_process, atnagent_proc_id = start_sleeping_proc()
-    ffnagent_process, ffnagent_proc_id = start_sleeping_proc()
-    try:
+    with ExitStack() as stack:
+        atnagent_process, atnagent_proc_id = start_sleeping_proc()
+        stack.callback(stop_proc, atnagent_process)
+        ffnagent_process, ffnagent_proc_id = start_sleeping_proc()
+        stack.callback(stop_proc, ffnagent_process)
         atnagent, _, instance, plan = register_fabric_world(
             app,
             atnagent=atnagent_registration(device=0, pid=atnagent_proc_id.pid),
@@ -437,9 +440,6 @@ def test_quiesce_requires_current_agent_owner_and_generation() -> None:
         assert request(app, "POST", "/fabric/quiesce", json=valid_payload).status_code == HTTPStatus.NO_CONTENT
         assert request(app, "GET", "/ready").json()["fabric_phase"] == FabricGenerationPhase.ABORTING
         assert request(app, "POST", "/fabric/quiesce", json=valid_payload).status_code == HTTPStatus.NO_CONTENT
-    finally:
-        stop_proc(atnagent_process)
-        stop_proc(ffnagent_process)
 
 
 def test_transition_timeout_records_control_failure_and_selects_abort(
@@ -483,13 +483,16 @@ def test_finalized_agent_exit_does_not_convert_cooperative_cleanup_to_abort() ->
         }
     )
     app = create_app(config)
-    atnagent_process, atnagent_id = start_sleeping_proc()
-    ffnagent_process, ffnagent_id = start_sleeping_proc()
-    instance_process, instance_id = start_sleeping_proc()
-    atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
-    instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
-    try:
+    with ExitStack() as stack:
+        atnagent_process, atnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, atnagent_process)
+        ffnagent_process, ffnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, ffnagent_process)
+        instance_process, instance_id = start_sleeping_proc()
+        stack.callback(stop_proc, instance_process)
+        atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
+        ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+        instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
         _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
         activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
         assert (
@@ -519,10 +522,6 @@ def test_finalized_agent_exit_does_not_convert_cooperative_cleanup_to_abort() ->
 
         assert readiness["fabric_phase"] == FabricGenerationPhase.FINALIZING
         assert readiness["fabric_owner_failure"] is None
-    finally:
-        for process in (atnagent_process, ffnagent_process, instance_process):
-            if process.poll() is None:
-                stop_proc(process)
 
 
 def test_leased_instance_retirement_during_quiesce_does_not_record_owner_failure() -> None:
@@ -534,13 +533,16 @@ def test_leased_instance_retirement_during_quiesce_does_not_record_owner_failure
         }
     )
     app = create_app(config)
-    atnagent_process, atnagent_id = start_sleeping_proc()
-    ffnagent_process, ffnagent_id = start_sleeping_proc()
-    instance_process, instance_id = start_sleeping_proc()
-    atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
-    instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
-    try:
+    with ExitStack() as stack:
+        atnagent_process, atnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, atnagent_process)
+        ffnagent_process, ffnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, ffnagent_process)
+        instance_process, instance_id = start_sleeping_proc()
+        stack.callback(stop_proc, instance_process)
+        atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
+        ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+        instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
         _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
         activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
         assert (
@@ -587,10 +589,6 @@ def test_leased_instance_retirement_during_quiesce_does_not_record_owner_failure
 
         assert readiness["fabric_phase"] == FabricGenerationPhase.QUIESCING
         assert readiness["fabric_owner_failure"] is None
-    finally:
-        for process in (atnagent_process, ffnagent_process, instance_process):
-            if process.poll() is None:
-                stop_proc(process)
 
 
 def test_unrequested_instance_exit_during_quiesce_records_owner_failure() -> None:
@@ -602,13 +600,16 @@ def test_unrequested_instance_exit_during_quiesce_records_owner_failure() -> Non
         }
     )
     app = create_app(config)
-    atnagent_process, atnagent_id = start_sleeping_proc()
-    ffnagent_process, ffnagent_id = start_sleeping_proc()
-    instance_process, instance_id = start_sleeping_proc()
-    atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
-    instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
-    try:
+    with ExitStack() as stack:
+        atnagent_process, atnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, atnagent_process)
+        ffnagent_process, ffnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, ffnagent_process)
+        instance_process, instance_id = start_sleeping_proc()
+        stack.callback(stop_proc, instance_process)
+        atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
+        ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+        instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
         _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
         activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
         assert (
@@ -632,10 +633,6 @@ def test_unrequested_instance_exit_during_quiesce_records_owner_failure() -> Non
             "rank": 0,
             "reason": "exited",
         }
-    finally:
-        for process in (atnagent_process, ffnagent_process, instance_process):
-            if process.poll() is None:
-                stop_proc(process)
 
 
 def test_instance_exit_after_activation_completes_cooperative_shutdown() -> None:
@@ -649,13 +646,16 @@ def test_instance_exit_after_activation_completes_cooperative_shutdown() -> None
         }
     )
     app = create_app(config)
-    atnagent_process, atnagent_id = start_sleeping_proc()
-    ffnagent_process, ffnagent_id = start_sleeping_proc()
-    instance_process, instance_id = start_sleeping_proc()
-    atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
-    instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
-    try:
+    with ExitStack() as stack:
+        atnagent_process, atnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, atnagent_process)
+        ffnagent_process, ffnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, ffnagent_process)
+        instance_process, instance_id = start_sleeping_proc()
+        stack.callback(stop_proc, instance_process)
+        atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
+        ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+        instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
         _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
         activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
 
@@ -687,10 +687,6 @@ def test_instance_exit_after_activation_completes_cooperative_shutdown() -> None
         assert readiness["fabric_phase"] == FabricGenerationPhase.STOPPED
         assert readiness["fabric_owner_failure"]["role"] == "instance"
         assert readiness["fabric_invocation_failure"] is None
-    finally:
-        for process in (atnagent_process, ffnagent_process, instance_process):
-            if process.poll() is None:
-                stop_proc(process)
 
 
 def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
@@ -704,27 +700,33 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
         }
     )
     app = create_app(config)
-    old_atnagent_process, old_atnagent_id = start_sleeping_proc()
-    old_ffnagent_process, old_ffnagent_id = start_sleeping_proc()
-    old_instance_process, old_instance_id = start_sleeping_proc()
-    new_atnagent_process, new_atnagent_id = start_sleeping_proc()
-    new_ffnagent_process, new_ffnagent_id = start_sleeping_proc()
-    new_instance_process, new_instance_id = start_sleeping_proc()
-    old_atnagent = atnagent_registration(device=0, pid=old_atnagent_id.pid)
-    old_ffnagent = ffnagent_registration(device=1, pid=old_ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
-    old_instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=old_instance_id.pid)
-    new_atnagent = atnagent_registration(device=0, pid=new_atnagent_id.pid)
-    new_ffnagent = ffnagent_registration(device=1, pid=new_ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
-    new_instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=new_instance_id.pid)
-    processes = (
-        old_atnagent_process,
-        old_ffnagent_process,
-        old_instance_process,
-        new_atnagent_process,
-        new_ffnagent_process,
-        new_instance_process,
-    )
-    try:
+    with ExitStack() as stack:
+        old_atnagent_process, old_atnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, old_atnagent_process)
+        old_ffnagent_process, old_ffnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, old_ffnagent_process)
+        old_instance_process, old_instance_id = start_sleeping_proc()
+        stack.callback(stop_proc, old_instance_process)
+        new_atnagent_process, new_atnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, new_atnagent_process)
+        new_ffnagent_process, new_ffnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, new_ffnagent_process)
+        new_instance_process, new_instance_id = start_sleeping_proc()
+        stack.callback(stop_proc, new_instance_process)
+        old_atnagent = atnagent_registration(device=0, pid=old_atnagent_id.pid)
+        old_ffnagent = ffnagent_registration(device=1, pid=old_ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+        old_instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=old_instance_id.pid)
+        new_atnagent = atnagent_registration(device=0, pid=new_atnagent_id.pid)
+        new_ffnagent = ffnagent_registration(device=1, pid=new_ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+        new_instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=new_instance_id.pid)
+        processes = (
+            old_atnagent_process,
+            old_ffnagent_process,
+            old_instance_process,
+            new_atnagent_process,
+            new_ffnagent_process,
+            new_instance_process,
+        )
         _, _, _, old_plan = register_fabric_world(
             app,
             atnagent=old_atnagent,
@@ -773,10 +775,6 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
 
         new_plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
         assert new_plan.generation != old_plan.generation
-    finally:
-        for process in processes:
-            if process.poll() is None:
-                stop_proc(process)
 
 
 @pytest.mark.parametrize(
@@ -798,13 +796,16 @@ def test_fabric_pe_exit_records_owner_failure_and_selects_fail_stop(
         }
     )
     app = create_app(config)
-    atnagent_process, atnagent_id = start_sleeping_proc()
-    ffnagent_process, ffnagent_id = start_sleeping_proc()
-    instance_process, instance_id = start_sleeping_proc()
-    atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
-    ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
-    instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
-    try:
+    with ExitStack() as stack:
+        atnagent_process, atnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, atnagent_process)
+        ffnagent_process, ffnagent_id = start_sleeping_proc()
+        stack.callback(stop_proc, ffnagent_process)
+        instance_process, instance_id = start_sleeping_proc()
+        stack.callback(stop_proc, instance_process)
+        atnagent = atnagent_registration(device=0, pid=atnagent_id.pid)
+        ffnagent = ffnagent_registration(device=1, pid=ffnagent_id.pid, model_ids=(str(TEST_MODEL_ID),))
+        instance = instance_registration(model_id=str(TEST_MODEL_ID), pid=instance_id.pid)
         _, _, _, plan = register_fabric_world(app, atnagent=atnagent, ffnagent=ffnagent, instance=instance)
         activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
         target_process = atnagent_process if target_role == "atnagent" else ffnagent_process
@@ -841,7 +842,3 @@ def test_fabric_pe_exit_records_owner_failure_and_selects_fail_stop(
         stop_proc(ffnagent_process if target_role == "atnagent" else atnagent_process)
         app.state.control_plane.watchdog()
         assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
-    finally:
-        for process in (atnagent_process, ffnagent_process, instance_process):
-            if process.poll() is None:
-                stop_proc(process)

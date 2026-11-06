@@ -5,6 +5,7 @@ from http import HTTPStatus
 import pytest
 
 import xpool.service.daemon.control
+import xpool.service.daemon.registration
 from xpool.fabric import FabricDeploymentPlan
 from xpool.utils.mps import MpsProbeResult, MpsScope
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
@@ -35,16 +36,16 @@ def test_participant_list_preserves_stale_registrations(participant: str) -> Non
     config = synthetic_config()
     app = create_app(config)
     stale_proc, stale_proc_id = start_sleeping_proc()
-    if participant == "atnagent":
-        registration = atnagent_registration(device=0, pid=stale_proc_id.pid)
-        register_path = "/atnagent/register"
-        list_path = "/atnagents"
-    else:
-        registration = instance_registration(pid=stale_proc_id.pid)
-        register_path = "/instance/register"
-        list_path = "/instances"
-
     try:
+        if participant == "atnagent":
+            registration = atnagent_registration(device=0, pid=stale_proc_id.pid)
+            register_path = "/atnagent/register"
+            list_path = "/atnagents"
+        else:
+            registration = instance_registration(pid=stale_proc_id.pid)
+            register_path = "/instance/register"
+            list_path = "/instances"
+
         assert register(app, register_path, registration).status_code == HTTPStatus.NO_CONTENT
     finally:
         stop_proc(stale_proc)
@@ -63,10 +64,9 @@ def test_daemon_ready_marks_stale_live_registrations_stale_without_pruning(
     config = synthetic_config()
     app = create_app(config)
     stale_proc, stale_proc_id = start_sleeping_proc()
-
-    atnagent0 = atnagent_registration(device=0)
-    assert register(app, "/atnagent/register", atnagent0).status_code == HTTPStatus.NO_CONTENT
     try:
+        atnagent0 = atnagent_registration(device=0)
+        assert register(app, "/atnagent/register", atnagent0).status_code == HTTPStatus.NO_CONTENT
         assert (
             register(
                 app,
@@ -75,7 +75,7 @@ def test_daemon_ready_marks_stale_live_registrations_stale_without_pruning(
             ).status_code
             == HTTPStatus.NO_CONTENT
         )
-        deterministic_daemon_dependencies.advance(xpool.service.daemon.control.HEARTBEAT_WARNING_WATERMARK_S + 1.0)
+        deterministic_daemon_dependencies.advance(xpool.service.daemon.registration.HEARTBEAT_WARNING_WATERMARK_S + 1.0)
         request(app, "POST", "/atnagent/0/heartbeat", json=process_ref(atnagent0))
         run_watchdog(app)
         ready = request(app, "GET", "/ready").json()
@@ -151,9 +151,9 @@ def test_daemon_preserves_stale_registration_but_blocks_stale_transport_arenas()
     config = synthetic_config()
     app = create_app(config)
     atnagent_proc, atnagent_proc_id = start_sleeping_proc()
-    atnagent = atnagent_registration(device=0, pid=atnagent_proc_id.pid)
-    ffnagent = ffnagent_registration()
     try:
+        atnagent = atnagent_registration(device=0, pid=atnagent_proc_id.pid)
+        ffnagent = ffnagent_registration()
         assert (
             register(
                 app,

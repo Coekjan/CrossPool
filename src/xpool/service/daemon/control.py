@@ -9,7 +9,6 @@ import secrets
 import signal
 import subprocess
 import threading
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic, sleep
@@ -37,7 +36,6 @@ from xpool.service.daemon.fabric import FabricController, FabricGenerationState,
 from xpool.service.daemon.ffn_placement import place_ffn_models
 from xpool.service.daemon.readiness import ControlPlaneProjection
 from xpool.service.daemon.registration import (
-    HEARTBEAT_WARNING_WATERMARK_S,
     AtnAgentRegistrationState,
     FfnAgentRegistrationState,
     InstanceRankId,
@@ -80,7 +78,6 @@ from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S, MpsEndpoint, MpsProbeResult, 
 from xpool.utils.procs import ProcUniqId
 from xpool.utils.sighandler import defer_signal_exceptions
 
-TRANSPORT_ARENA_LEASE_HEARTBEAT_TIMEOUT_S = 2.0 * HEARTBEAT_WARNING_WATERMARK_S
 FABRIC_PHASE_TIMEOUT_S = {
     FabricGenerationPhase.JOINING: 60.0,
     FabricGenerationPhase.QUIESCING: 60.0,
@@ -114,7 +111,6 @@ class ControlPlane:
     """Authoritative daemon control plane shared by FastAPI route handlers.
 
     Attributes:
-        started_at: Unix timestamp recorded when the daemon state was created.
         registrations: Process identities and declared registration contracts.
         transport_broker: Transport publications and Instance-rank leases.
         fabric_controller: Installed Fabric generation state.
@@ -132,7 +128,6 @@ class ControlPlane:
     def __init__(self) -> None:
         """Create an empty control plane with one reentrant domain lock."""
 
-        self.started_at = time.time()
         self.lock = threading.RLock()
         self.fabric_plan_formation_lock = threading.Lock()
         self.registrations = RegistrationBook()
@@ -576,10 +571,9 @@ class ControlPlane:
         self.ensure_fabric_plan()
 
     def register_instance(self, registration: InstanceRankRegistrationState) -> None:
-        """Install a live Instance worker with matching physical placement.
+        """Install a live Instance worker with matching topology and contracts.
 
-        Ordered attention UUIDs must match the retained endpoint. Registration
-        commit shares the domain lock with closing participant admission.
+        Registration commit shares the domain lock with closing participant admission.
         """
 
         self.retire_terminal_generation()
@@ -1434,9 +1428,6 @@ class ControlPlane:
                     handle=publication.handle,
                     publisher=atnagent_registration.proc,
                 ),
-                last_seen_at=registration.last_seen_at,
-                now=now,
-                heartbeat_timeout_s=TRANSPORT_ARENA_LEASE_HEARTBEAT_TIMEOUT_S,
             )
         return publication.handle
 

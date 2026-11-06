@@ -499,7 +499,7 @@ class SglangElasticContextState:
             node = cache_eviction.resolve(self.cache)
             if node is None:
                 return None
-        bundles = self.empty_bundle_ids(release_bytes)
+        bundles = self.empty_bundle_ids(release_bytes) if cache_eviction is None else ((),) * len(self.components)
         if cache_eviction is None and not any(bundles):
             return None
         return SglangReclaimPlan(release_bytes, cache_eviction, node, bundles)
