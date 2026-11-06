@@ -195,6 +195,11 @@ development policy and the runtime-owned cache location before collection. CTest
 declare a `devices` resource and execute directly. Role-aware deployment and
 topology owners prepare MPS when their actual execution needs it.
 
+In strict mode, a selected native case reported as skipped also fails the CTest
+stage, even when CTest exits zero. Retained evidence preserves that skipped
+status, its reason and the raw process completion. Non-strict execution retains
+CTest's verdict.
+
 A missing or ABI-incompatible native extension fails the session, including
 Unit-only sessions. Resource preflight handles unavailable external resources.
 E2E tests run without strict mode

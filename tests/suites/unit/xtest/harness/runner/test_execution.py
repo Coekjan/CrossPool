@@ -12,7 +12,62 @@ import xtest.harness.runner.plan
 import xtest.harness.runner.selection
 from xkit import ResourceRequirements
 from xkit.config import ToolConfigRecord
+from xkit.device import DevicePool
+from xkit.supervisor import TaskCompletion, TaskCompletionKind
+from xtest.harness.report import TestResultWriter, TestRunManifest
+from xtest.harness.runner.ctest import CtestRunResult, CtestSuite
+from xtest.harness.runner.pytest_report import PytestCaseStatus
 from xtest.harness.support.config import reset_development_config
+
+
+@pytest.mark.usefixtures(reset_development_config.__name__)
+@pytest.mark.parametrize("strict", (False, True))
+@pytest.mark.parametrize("record_results", (False, True))
+def test_native_skip_fails_strict_stage_without_changing_original_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, strict: bool, record_results: bool
+) -> None:
+    config = xkit.config.init_global_config()
+    pool = DevicePool((), {})
+    junit = tmp_path / "ctest.xml"
+    junit.write_text(
+        '<testsuite><testcase name="cext.skipped"><skipped message="device unavailable">'
+        "device unavailable</skipped></testcase></testsuite>",
+        encoding="utf-8",
+    )
+    completion = TaskCompletion(TaskCompletionKind.EXITED, 0, None)
+    native = CtestRunResult(0, tmp_path / "ctest.log", junit, completion, 0.1)
+    monkeypatch.setattr(xtest.harness.runner.execution, "collect_plan", lambda *args, **kwargs: None)
+    monkeypatch.setattr(DevicePool, "from_environment", classmethod(lambda cls: pool))
+    monkeypatch.setattr(CtestSuite, "inventory", lambda self: ("cext.skipped",))
+    monkeypatch.setattr(CtestSuite, "run", lambda self, **kwargs: native)
+    writer = (
+        TestResultWriter(
+            tmp_path,
+            TestRunManifest(
+                run_id="native-skip",
+                tool_config=config.record(),
+                selected_suites=("cext",),
+                strict_requirements=strict,
+            ),
+        )
+        if record_results
+        else None
+    )
+
+    result = xtest.harness.runner.execution.execute_test_run(
+        ("cext",), (), strict_requirements=strict, run_directory=tmp_path, result_writer=writer
+    )
+
+    assert result == int(strict)
+    assert pool.closed
+    if writer is not None:
+        task = writer.results.tasks[0]
+        assert task.completion == completion
+        assert task.result_code == int(strict)
+        assert task.cases[0].status is PytestCaseStatus.SKIPPED
+        assert task.cases[0].detail == "device unavailable"
+        assert writer.results.stages == {"cext": int(strict)}
+        assert writer.results.cleanup_verified
 
 
 @pytest.mark.usefixtures(reset_development_config.__name__)

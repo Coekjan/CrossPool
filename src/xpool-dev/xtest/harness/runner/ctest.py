@@ -15,8 +15,7 @@ import xml.etree.ElementTree
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
-from typing import Literal, Self
+from typing import Literal
 
 from pydantic import JsonValue
 
@@ -31,27 +30,18 @@ logger = logging.getLogger("xtest.ctest")
 DEVICE_ASSIGNMENT_PATTERN = re.compile(r"DEVICE ASSIGNMENT devices=([^\s]+)")
 
 
-@dataclass(frozen=True, slots=True)
-class CtestResourceSpec:
-    """One CTest resource file and its reversible device-ID mapping."""
+def write_ctest_resource_spec(path: Path, device_uuids: Sequence[str]) -> None:
+    """Atomically write one single-slot CTest resource per physical device."""
 
-    path: Path
-    id_to_uuid: Mapping[str, str]
-
-    @classmethod
-    def write(cls, path: Path, device_uuids: Sequence[str]) -> Self:
-        """Atomically write one single-slot CTest resource per physical device."""
-
-        identifiers = {ctest_device_id(uuid): uuid for uuid in device_uuids}
-        if len(identifiers) != len(device_uuids):
-            raise ValueError("physical device UUIDs do not have unique CTest resource IDs")
-        payload = {
-            "version": {"major": 1, "minor": 0},
-            "local": [{"devices": [{"id": identifier, "slots": 1} for identifier in identifiers]}],
-        }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        write_json(path, payload)
-        return cls(path, MappingProxyType(identifiers))
+    identifiers = tuple(ctest_device_id(uuid) for uuid in device_uuids)
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError("physical device UUIDs do not have unique CTest resource IDs")
+    payload = {
+        "version": {"major": 1, "minor": 0},
+        "local": [{"devices": [{"id": identifier, "slots": 1} for identifier in identifiers]}],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(path, payload)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +97,8 @@ class CtestSuite:
         if not manifest.is_file():
             raise RuntimeError(f"current native build has no CTest manifest: {build_directory}")
         run_directory.mkdir(parents=True, exist_ok=False)
-        resource_spec = CtestResourceSpec.write(run_directory / "resources.json", device_pool.uuids)
+        resource_spec_path = run_directory / "resources.json"
+        write_ctest_resource_spec(resource_spec_path, device_pool.uuids)
         log_path = run_directory / "ctest.log"
         junit_path = run_directory / "ctest.xml"
         sentinel_path = run_directory / "infrastructure-failure.txt"
@@ -123,7 +114,7 @@ class CtestSuite:
             "--output-junit",
             str(junit_path),
             "--resource-spec-file",
-            str(resource_spec.path),
+            str(resource_spec_path),
             "--parallel",
             str(len(device_pool.uuids)),
         ]

@@ -242,14 +242,20 @@ class TestCatalog(Catalog):
                     raise ConfigError("the catalogue table name is the sole case identity")
                 if not declaration.get("module"):
                     raise ConfigError(f"{id}: catalogue cases require module")
-                model_ids = (
-                    tuple(ModelId(value) for value in declaration["models"])
-                    if family is CaseFamily.SERVING
-                    else tuple(ModelId(value["model_id"]) for value in declaration["instances"])
-                )
+                try:
+                    model_ids = (
+                        tuple(ModelId(value) for value in declaration["models"])
+                        if family is CaseFamily.SERVING
+                        else tuple(ModelId(value["model_id"]) for value in declaration["instances"])
+                    )
+                    deployment_name = declaration["deployment"]
+                except (KeyError, TypeError) as error:
+                    raise ConfigError(
+                        f"{family.table_name}.{id}: invalid model/deployment declaration: {error}"
+                    ) from error
                 declaration.update(
                     id=id,
-                    deployment=str(resolve_deployment_path(path, model_ids, declaration["deployment"])),
+                    deployment=str(resolve_deployment_path(path, model_ids, deployment_name)),
                 )
                 value_type = E2eServingCase if family is CaseFamily.SERVING else E2eFfnTopologyCase
                 case = value_type.model_validate_json(json.dumps(declaration, allow_nan=False))

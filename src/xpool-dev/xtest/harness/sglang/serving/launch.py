@@ -12,6 +12,7 @@ from xkit.serving.sglang.graph import SglangGraphMode, SglangGraphSettings
 from xkit.serving.sglang.launch import ServingLaunch, SglangLaunchModel
 from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.sglang.catalog import E2eServingCase
+from xtest.harness.support.environment import qualification_environment
 
 SERVING_OBSERVER_RECORD_CAPACITY = 32768
 
@@ -93,40 +94,7 @@ def runtime_environment(
 ) -> dict[str, str]:
     """Return a sanitized process environment for the E2E runtime tree."""
 
-    inherited_names = (
-        "PATH",
-        "HOME",
-        "LOGNAME",
-        "USER",
-        "LANG",
-        "LC_ALL",
-        "TMPDIR",
-        "LD_LIBRARY_PATH",
-        "CUDA_HOME",
-        "CUDA_VISIBLE_DEVICES",
-        "CUDA_MPS_PIPE_DIRECTORY",
-        "CUDA_MPS_LOG_DIRECTORY",
-        "PYTORCH_ALLOC_CONF",
-        "PYTORCH_CUDA_ALLOC_CONF",
-        "PYTORCH_NO_CUDA_MEMORY_CACHING",
-    )
-    compute_prefixes = ("NVSHMEM_", "NCCL_", "CUBLAS_", "CUBLASLT_", "TORCH_BLAS_", "TORCH_CUBLAS", "CUDA_MODULE_")
-    diagnostics = {
-        "CUBLAS_LOGINFO_DBG",
-        "CUBLAS_LOGDEST_DBG",
-        "NVSHMEM_INFO",
-        "NVSHMEM_VERSION",
-        "NVSHMEM_DEBUG",
-        "NCCL_DEBUG",
-        "NCCL_DEBUG_SUBSYS",
-        "NCCL_DEBUG_FILE",
-        "NCCL_TOPO_DUMP_FILE",
-    }
-    environment = {
-        name: value
-        for name, value in os.environ.items()
-        if name in inherited_names or (name.startswith(compute_prefixes) and name not in diagnostics)
-    }
+    environment = qualification_environment()
     environment.update(
         {
             "XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE": "1",

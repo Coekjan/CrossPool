@@ -9,7 +9,6 @@ from typing import cast
 import psutil
 import pytest
 
-import xkit.process
 import xkit.supervisor
 from xkit.supervisor import (
     SupervisedTaskScope,

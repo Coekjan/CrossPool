@@ -11,11 +11,12 @@ from xkit.device import DevicePool
 from xkit.supervisor import TaskCompletion, TaskCompletionKind
 from xtest.envs import CTEST_INFRASTRUCTURE_SENTINEL
 from xtest.harness.runner.ctest import (
-    CtestResourceSpec,
     CtestSuite,
     ctest_case_timings,
     current_build_directory,
+    write_ctest_resource_spec,
 )
+from xtest.harness.runner.ctest_launcher import decode_ctest_device_id
 
 
 def test_current_build_directory_is_rooted_at_repository_build() -> None:
@@ -40,24 +41,15 @@ def test_ctest_resource_spec_preserves_reversible_gpu_mapping(tmp_path: Path) ->
         "GPU-11111111-2222-3333-4444-555555555555",
     )
 
-    spec = CtestResourceSpec.write(tmp_path / "resources.json", uuids)
-    payload = json.loads(spec.path.read_text(encoding="utf-8"))
+    path = tmp_path / "resources.json"
+    write_ctest_resource_spec(path, uuids)
+    payload = json.loads(path.read_text(encoding="utf-8"))
 
-    assert spec.id_to_uuid == {
-        "device_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee": uuids[0],
-        "device_11111111_2222_3333_4444_555555555555": uuids[1],
-    }
-    assert payload == {
-        "version": {"major": 1, "minor": 0},
-        "local": [
-            {
-                "devices": [
-                    {"id": "device_aaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee", "slots": 1},
-                    {"id": "device_11111111_2222_3333_4444_555555555555", "slots": 1},
-                ]
-            }
-        ],
-    }
+    assert payload["version"] == {"major": 1, "minor": 0}
+    assert len(payload["local"]) == 1
+    devices = payload["local"][0]["devices"]
+    assert tuple(device["slots"] for device in devices) == (1, 1)
+    assert tuple(decode_ctest_device_id(device["id"]) for device in devices) == uuids
 
 
 def test_ctest_suite_classifies_ordinary_failure_with_junit(

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from tests import TEST_CATALOG_PATH
 
 from xkit.serving.sglang.graph import SglangGraphMode
+from xpool.config import ConfigError
 from xpool.model import ModelId
 from xtest.harness.sglang.catalog import (
     E2eElasticKvWorkload,
@@ -38,6 +39,25 @@ def test_catalogue_rejects_unknown_fields() -> None:
     declaration["serving_cases"][0]["unknown"] = True
     with pytest.raises(ValidationError, match="unknown"):
         TestCatalog.model_validate(declaration)
+
+
+@pytest.mark.parametrize(
+    ("table", "fields", "cause"),
+    [
+        ("serving_cases", 'module = "example"\ndeployment = "scene"', KeyError),
+        ("serving_cases", 'module = "example"\nmodels = ["test/model"]', KeyError),
+        ("topology_cases", 'module = "example"\ndeployment = "scene"\ninstances = [1]', TypeError),
+        ("topology_cases", 'module = "example"\ndeployment = "scene"\ninstances = [{}]', KeyError),
+    ],
+)
+def test_catalogue_classifies_malformed_model_deployment_declarations(
+    tmp_path: Path, table: str, fields: str, cause: type[Exception]
+) -> None:
+    path = tmp_path / "tests.toml"
+    path.write_text(f'[{table}."4c410873-88b0-427f-a635-d9572dddd057"]\n{fields}\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match=rf"{table}.*invalid model/deployment declaration") as error:
+        TestCatalog.from_file(path)
+    assert isinstance(error.value.__cause__, cause)
 
 
 def test_serving_case_allows_fewer_executors_than_ffnagents() -> None:

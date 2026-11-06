@@ -320,26 +320,36 @@ def test_clean_applies_explicit_dry_run_and_all(source_checkout: Path, monkeypat
         (("tests/suites/integration/test_scope.py",), ("integration",), 1),
     ],
 )
+@pytest.mark.timeout(60)
 def test_run_resolves_python_filters_and_paths_within_declared_scope(
-    source_checkout: Path, arguments: tuple[str, ...], expected_scope: tuple[str, ...], expected_count: int
+    source_checkout: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: tuple[str, ...],
+    expected_scope: tuple[str, ...],
+    expected_count: int,
 ) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    monkeypatch.setenv("CUDA_MPS_PIPE_DIRECTORY", str(source_checkout / "missing-mps"))
     suite = source_checkout / "tests/suites/integration"
     suite.mkdir()
     (suite / "test_scope.py").write_text("def test_pass(): pass\n", encoding="utf-8")
     configuration = source_checkout / "xkit.toml"
     configuration.write_text('[xtest]\nsuites = ["unit", "integration"]\n', encoding="utf-8")
-    completed = command(source_checkout, "run", "--config", str(configuration), *arguments)
-    assert completed.returncode == 0, completed.stderr
+    assert xtest.cli.main(["run", "--config", str(configuration), *arguments]) == 0
     run = next(path for path in (source_checkout / ".xpool-cache/test-runs").iterdir() if path.is_dir())
     report = TestRunReport.load(run)
     assert report.manifest.selected_suites == expected_scope
     assert report.summary()["passed"] == expected_count
 
 
-def test_explicit_pytest_path_must_belong_to_explicit_suite(source_checkout: Path) -> None:
+@pytest.mark.timeout(60)
+def test_explicit_pytest_path_must_belong_to_explicit_suite(
+    source_checkout: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    monkeypatch.setenv("CUDA_MPS_PIPE_DIRECTORY", str(source_checkout / "missing-mps"))
     suite = source_checkout / "tests/suites/integration"
     suite.mkdir()
     (suite / "test_scope.py").write_text("def test_pass(): pass\n", encoding="utf-8")
-    completed = command(source_checkout, "list", "--suite", "unit", "tests/suites/integration/test_scope.py")
-    assert completed.returncode == 2
-    assert "outside selected suites" in completed.stderr
+    assert xtest.cli.main(["list", "--suite", "unit", "tests/suites/integration/test_scope.py"]) == 2
+    assert "outside selected suites" in capsys.readouterr().err

@@ -79,7 +79,12 @@ def test_report_regeneration_applies_presentation_without_changing_evidence(tmp_
     run, repetition = retained_run(tmp_path)
     run.complete()
     series = load_series(repetition, "the retained run")
-    output = render_report(series, config=get_global_config().xbench.report)
+    output = repetition / "report"
+    output.mkdir()
+    for plot in ("ttft-cdf", "itl-cdf", "throughput"):
+        for extension in ("pdf", "svg", "png"):
+            (output / f"{plot}.{extension}").write_text("old plot", encoding="utf-8")
+    (output / "report.md").write_text("old report", encoding="utf-8")
     (output / "notes.txt").write_text("retain these notes", encoding="utf-8")
     evidence = {path: path.read_bytes() for path in repetition.iterdir() if path.is_file()}
     config = XpoolDevConfig.from_mapping(

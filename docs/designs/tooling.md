@@ -503,6 +503,9 @@ Models in canonical order. Device tasks are ordered by resource count and estima
 duration and backfilled over idle leases. Test strictness, JUnit classification
 and cross-task qualification verdicts remain test-owned.
 
+Native skip handling under `--strict-requirements` follows
+[Test Architecture](../../tests/README.md#requirements).
+
 Canonical CTest execution sets `XTEST_CTEST_CANONICAL` in a copied child
 environment. Only exact `"1"` enables projection of the assigned device resource;
 missing or other values leave the caller's visibility unchanged. Launcher

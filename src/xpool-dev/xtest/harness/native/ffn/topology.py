@@ -44,6 +44,7 @@ from xtest.harness.native.ffn.protocol import (
 )
 from xtest.harness.native.mps import MpsServerObservation, query_mps_servers
 from xtest.harness.support.ecs import context_state_profile
+from xtest.harness.support.environment import qualification_environment
 from xtest.harness.support.wait import remaining_seconds
 
 logger = logging.getLogger(__name__)
@@ -91,40 +92,7 @@ def materialize_ffn_cluster_launch(
 def ffn_cluster_environment(*, config_path: Path, observer_outdir: Path) -> dict[str, str]:
     """Return the sanitized environment shared by every qualification entity."""
 
-    inherited_names = (
-        "PATH",
-        "HOME",
-        "LOGNAME",
-        "USER",
-        "LANG",
-        "LC_ALL",
-        "TMPDIR",
-        "LD_LIBRARY_PATH",
-        "CUDA_HOME",
-        "CUDA_VISIBLE_DEVICES",
-        "CUDA_MPS_PIPE_DIRECTORY",
-        "CUDA_MPS_LOG_DIRECTORY",
-        "PYTORCH_ALLOC_CONF",
-        "PYTORCH_CUDA_ALLOC_CONF",
-        "PYTORCH_NO_CUDA_MEMORY_CACHING",
-    )
-    compute_prefixes = ("NVSHMEM_", "NCCL_", "CUBLAS_", "CUBLASLT_", "TORCH_BLAS_", "TORCH_CUBLAS", "CUDA_MODULE_")
-    diagnostics = {
-        "CUBLAS_LOGINFO_DBG",
-        "CUBLAS_LOGDEST_DBG",
-        "NVSHMEM_INFO",
-        "NVSHMEM_VERSION",
-        "NVSHMEM_DEBUG",
-        "NCCL_DEBUG",
-        "NCCL_DEBUG_SUBSYS",
-        "NCCL_DEBUG_FILE",
-        "NCCL_TOPO_DUMP_FILE",
-    }
-    environment = {
-        name: value
-        for name, value in os.environ.items()
-        if name in inherited_names or (name.startswith(compute_prefixes) and name not in diagnostics)
-    }
+    environment = qualification_environment()
     environment.update(
         {
             "HF_HUB_OFFLINE": "1",

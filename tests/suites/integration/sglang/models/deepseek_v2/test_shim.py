@@ -11,23 +11,18 @@ from sglang.srt.models.deepseek_v2 import DeepseekV2ForCausalLM, DeepseekV2MLP, 
 from sglang.srt.runtime_context import get_forward
 from torch import nn
 
-import xpool.config
 import xpool.ops
-from xpool.config import XpoolConfig
 from xpool.integrations.sglang.adapter import SglangInstanceRankBinding
 from xpool.integrations.sglang.models.deepseek_v2 import DeepseekV2ShimAdapter, XpoolDeepseekV2MLP, XpoolDeepseekV2MoE
 from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError, iter_ffn_shims
 from xpool.native.ffn import DpRowLayout, LayerKind, OutputRequirement
 from xpool.transport import FfnRequestMetadata
-from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
+from xtest.harness.support.config import TEST_MODEL_ID
 from xtest.harness.support.sglang.deepseek import (
     bound_shim,
     deepseek_config,
-    install_adapter_config,
 )
 from xtest.harness.support.sglang.fakes import FakeDecoderLayer, forward_batch, loaded_model, runner_with_architecture
-
-pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_adapter_config.__name__)
 
 
 def test_ffn_shim_module_reports_identity() -> None:
@@ -236,17 +231,6 @@ def test_shim_forward_passes_structured_native_request(monkeypatch: pytest.Monke
         assert request_metadata.forward_mode == 2
         return hidden_states + 1
 
-    monkeypatch.setattr(xpool.config, "global_config", None)
-    install_test_config(
-        config=XpoolConfig.from_mapping(
-            {
-                "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
-                "atn": {"devices": [0]},
-                "ffn": {"devices": [1]},
-                "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
-            },
-        )
-    )
     shim = bound_shim(layer_id=4)
     hidden_states = torch.zeros((1, 2048), dtype=torch.bfloat16)
     monkeypatch.setattr(xpool.ops, "ffn_shim", fake_ffn_shim)

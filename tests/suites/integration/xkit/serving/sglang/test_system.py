@@ -110,39 +110,46 @@ def test_system_complete_startup_or_partial_rollback(
     monkeypatch.setattr(XpoolServingSystem, "wait_for_readiness", lambda self, deadline: events.append("ready"))
     with ExitStack() as foreign:
         system = XpoolServingSystem()
-        if startup == "conflict":
-            with pytest.raises(TcpEndpointConflict) as error:
-                system.start(launch, workdir=tmp_path / "run", startup_timeout_seconds=10)
-            assert error.value.addresses == tuple(
-                reservation.address
-                for reservation in leases[-1].tcp_reservations
-                if reservation.port == leases[-1].family.nccl_port
-            )
-            assert isinstance(error.value.__cause__, RuntimeError)
-            assert "second server failed" in str(error.value.__cause__)
-            assert events == ["cluster-start", "start-test/a", "start-test/b", "close-test/a", "cluster-close"]
-        elif startup == "failure":
-            with pytest.raises(RuntimeError, match="second server failed"):
-                system.start(launch, workdir=tmp_path / "run", startup_timeout_seconds=10)
-            assert events == ["cluster-start", "start-test/a", "start-test/b", "close-test/a", "cluster-close"]
-        else:
-            system.start(launch, workdir=tmp_path / "run", startup_timeout_seconds=10)
-            assert tuple(endpoint.model_id for endpoint in system.endpoints) == (ModelId("test/a"), ModelId("test/b"))
-            system.check_alive()
-            if startup == "deployment-failure":
-                listener = foreign.enter_context(socket.socket())
-                listener.bind((leases[-1].family.host, leases[-1].family.nccl_port))
-                listener.listen()
-                with pytest.raises(RuntimeError) as error:
-                    system.close()
-                assert error.value is deployment_failure
+        try:
+            if startup == "conflict":
+                with pytest.raises(TcpEndpointConflict) as error:
+                    system.start(launch, workdir=tmp_path / "run", startup_timeout_seconds=10)
+                assert error.value.addresses == tuple(
+                    reservation.address
+                    for reservation in leases[-1].tcp_reservations
+                    if reservation.port == leases[-1].family.nccl_port
+                )
+                assert isinstance(error.value.__cause__, RuntimeError)
+                assert "second server failed" in str(error.value.__cause__)
+                assert events == ["cluster-start", "start-test/a", "start-test/b", "close-test/a", "cluster-close"]
+            elif startup == "failure":
+                with pytest.raises(RuntimeError, match="second server failed"):
+                    system.start(launch, workdir=tmp_path / "run", startup_timeout_seconds=10)
+                assert events == ["cluster-start", "start-test/a", "start-test/b", "close-test/a", "cluster-close"]
             else:
+                system.start(launch, workdir=tmp_path / "run", startup_timeout_seconds=10)
+                assert tuple(endpoint.model_id for endpoint in system.endpoints) == (
+                    ModelId("test/a"),
+                    ModelId("test/b"),
+                )
+                system.check_alive()
+                if startup == "deployment-failure":
+                    listener = foreign.enter_context(socket.socket())
+                    listener.bind((leases[-1].family.host, leases[-1].family.nccl_port))
+                    listener.listen()
+                    with pytest.raises(RuntimeError) as error:
+                        system.close()
+                    assert error.value is deployment_failure
+                else:
+                    system.close()
+                    system.close()
+                assert events[:4] == ["cluster-start", "start-test/a", "start-test/b", "ready"]
+                assert set(events[4:6]) == {"close-test/a", "close-test/b"}
+                assert events[-1] == "cluster-close"
+            assert system.closed
+        finally:
+            if not system.closed:
                 system.close()
-                system.close()
-            assert events[:4] == ["cluster-start", "start-test/a", "start-test/b", "ready"]
-            assert set(events[4:6]) == {"close-test/a", "close-test/b"}
-            assert events[-1] == "cluster-close"
-        assert system.closed
     assert all(lease.closed and all(item.listener is None for item in lease.tcp_reservations) for lease in leases)
 
 

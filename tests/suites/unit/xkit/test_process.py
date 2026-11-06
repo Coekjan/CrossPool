@@ -9,7 +9,6 @@ from typing import cast
 import pytest
 
 import xkit.process
-import xkit.supervisor
 from xkit.process import (
     OwnedProcess,
     OwnedProcessGroup,

@@ -20,6 +20,7 @@ from xtest.harness.report import TaskReportRecord, TestResultWriter, TestRunMani
 from xtest.harness.runner.collection import CollectionFailure
 from xtest.harness.runner.console import configure_console
 from xtest.harness.runner.ctest import CtestSuite, ctest_case_reports
+from xtest.harness.runner.pytest_report import PytestCaseStatus
 from xtest.harness.runner.selection import collect_plan, select_suites
 from xtest.harness.runner.suite import SuiteRunner
 from xtest.harness.runner.task import compile_execution_tasks
@@ -142,25 +143,30 @@ def execute_test_run(
         if "cext" in selected_suites:
             assert device_pool is not None
             ctest_result = CtestSuite(Path.cwd()).run(device_pool=device_pool, run_directory=run_directory / "cext")
+            cases = ctest_case_reports(ctest_result.junit_path) if ctest_result.junit_path.exists() else ()
+            stage_result = ctest_result.result_code
+            if (
+                stage_result == 0
+                and strict_requirements
+                and any(case.status is PytestCaseStatus.SKIPPED for case in cases)
+            ):
+                stage_result = 1
             if result_writer is not None:
                 result_writer.task(
                     TaskReportRecord(
                         key="cext",
                         stage="cext",
                         completion=ctest_result.completion,
-                        result_code=ctest_result.result_code,
+                        result_code=stage_result,
                         elapsed_seconds=ctest_result.elapsed_seconds,
-                        cases=ctest_case_reports(ctest_result.junit_path) if ctest_result.junit_path.exists() else (),
+                        cases=cases,
                         artifact_directory="cext",
                     )
                 )
-                result_writer.stage("cext", ctest_result.result_code)
-            print(
-                f"STAGE cext: code={ctest_result.result_code}; "
-                f"log={ctest_result.log_path} junit={ctest_result.junit_path}"
-            )
-            if ctest_result.result_code:
-                return ctest_result.result_code
+                result_writer.stage("cext", stage_result)
+            print(f"STAGE cext: code={stage_result}; log={ctest_result.log_path} junit={ctest_result.junit_path}")
+            if stage_result:
+                return stage_result
         if plan is None:
             return 0
         runner = SuiteRunner(

@@ -61,7 +61,7 @@ def configure_device_visibility(environment: dict[str, str]) -> None:
 
 
 def decode_ctest_device_id(identifier: str) -> str:
-    """Decode one resource identifier written by ``CtestResourceSpec``."""
+    """Decode one reversible physical-device UUID from its CTest resource ID."""
 
     if not identifier.startswith("device_"):
         raise ValueError(f"invalid CTest device resource ID: {identifier!r}")
