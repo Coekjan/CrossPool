@@ -1,0 +1,4 @@
+interface:
+  display_name: "Find Simplifications"
+  short_description: "Find evidence-backed simplifications in xpool"
+  default_prompt: "Use $find-simplifications to investigate removable complexity and explain the trade-offs before making changes."

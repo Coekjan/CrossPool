@@ -61,6 +61,19 @@ Write current behavior in direct, positive sentences. Use negative wording when
 the prohibited behavior is itself the contract; avoid stacking `not`, `no`,
 `without`, `neither`, or `nor` in one explanation.
 
+Before editing, identify every proposition in the passage. Preserve each relevant
+actor and action; condition, timing and ordering; modality such as must, may or
+never; negative guarantee and exception; ownership, side effect, failure mode
+and consequence. Remove adjectives, repetition and narration only when every
+factual clause survives and the result is clearer. A smaller word count alone
+is not an improvement.
+
+For suspect references, ask whether a reader at the current revision, with no
+access to a session transcript, PR thread or uncommitted draft, can resolve every
+reference and verify every claim. Restate the surviving facts from the
+repository's perspective and delete the transcript around them. Preserve
+resolvable standards, issue references, measured bounds and non-obvious rationale.
+
 Runtime logs are low-frequency operational records, not a second protocol or
 trace stream. Keep messages and field names lowercase, include process identity
 relevant to the event owner explicitly, and write runtime logs to stderr while
@@ -128,6 +141,11 @@ Nest exception handling only when compensation or reconciliation can fail
 independently and both failures affect diagnostics or resource safety. Preserve
 the original operation failure unless cleanup cannot prove resources safe to
 release; suppress only explicitly ignorable idempotent cleanup outcomes.
+
+Catching limits exception propagation, not mutations. Only the affected state's
+owner can establish safe continuation. Otherwise stop dependent work, discard
+invalid state or instances, or escalate. Logging alone is not recovery. Retries
+require safe repetition, cancellation and an explicit owner.
 
 Use repository terminology consistently. `AtnAgent` and `FfnAgent` are
 indivisible role names in PascalCase identifiers. Use `ATNAGENT` and `FFNAGENT`

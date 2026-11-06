@@ -103,6 +103,41 @@ at the save boundary. One real multi-format export verifies file signatures and
 embedded fonts. Rendering failure, active-lock protection and source-preserving
 publication retain separate checks without re-exporting every format.
 
+## Reliability And Isolation
+
+Build tests that remain correct under the repository's real execution topology,
+not only when run alone on a quiet workstation. Process isolation does not isolate
+host ports, predictable filesystem paths, external services, sockets or inherited
+child processes. For every acquired resource, identify its owner, atomic
+allocation mechanism, observable readiness signal, registered cleanup and
+quiescent completion signal. Reuse the existing harness owners and resource
+declarations rather than serializing an entire suite to compensate for one
+fixture's missing isolation.
+
+Use the resource owner's allocator instead of checking availability and claiming
+it later. Literal paths and URLs used only as parser inputs or expected values
+are not acquired resources. Treat environment variables, working directories,
+module mocks and clocks as process-global resources; restore their exact prior
+state and keep mutation scoped to the test's owner.
+
+A fixed sleep is not evidence that setup completed or cleanup settled. Wait for
+an explicit readiness event, handshake, state transition or externally observable
+condition. Use barriers to place a race at a deterministic point and prove the
+relevant operations overlap. Use a timeout only to bound a wait, never as the
+condition that makes the assertion correct. Follow the module-clock convention
+in [code style](../docs/code-style.md#ownership-and-abstraction).
+
+Register cleanup immediately after acquisition so assertion failures also release
+the resource. Calling abort, close or kill without awaiting the owned completion
+signal is incomplete teardown. Use the existing supervisor and managed cleanup
+owners for process and device resources.
+
+Stress runs supplement a deterministic regression; they do not replace one. Add
+topology-specific evidence only when the change owns that risk: independent
+concurrent processes can establish cross-process isolation, while repeated
+execution alone cannot prove that a particular race occurred. Do not present
+retries, weakened assertions or an unexplained larger timeout as a root-cause fix.
+
 ## Requirements
 
 Repository-owned Python tests declare external resources on each function with

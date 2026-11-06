@@ -32,6 +32,13 @@ target that is still being designed or implemented remains under `docs/plans/`.
    instruction-only tasks, update the owning instructions without inventing a
    runtime architecture change. Retain the task directory pending the user's
    cleanup decision, following the completion rule below.
+8. Review documentation by whether a reader completes an outcome, not by whether
+   every template heading exists. An engineer with no chat context should be
+   able to find what the feature does, how to use it, where its state lives,
+   which component owns it, and how it fails. Review factual completeness as
+   well as brevity; apply the editing rules in [code style](../../../docs/code-style.md#documentation).
+   Reuse valid evidence and identify unverified operational claims rather than
+   starting deployments or device experiments solely for a prose review.
 
 ## Completion And Cleanup
 

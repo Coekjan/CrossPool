@@ -73,6 +73,10 @@ directly in [.pre-commit-config.yaml](.pre-commit-config.yaml).
 ## Workflow
 
 - Keep changes scoped to the accepted design.
+- Use [find-simplifications](.codex/skills/find-simplifications/SKILL.md) to
+  investigate removable complexity and
+  [optimize-performance](.codex/skills/optimize-performance/SKILL.md) for
+  measured optimization of an existing runtime or tooling path.
 - Use [plan-commits](.codex/skills/plan-commits/SKILL.md) to plan a commit
   series or branch split, and [git-commit](.codex/skills/git-commit/SKILL.md)
   to carry out an authorized commit.

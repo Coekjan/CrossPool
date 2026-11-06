@@ -17,7 +17,10 @@ persist memory, commit, or push.
    State the selected scope and inspect its diff and any new files.
 2. Identify the intended change, whether it is format-only, the relevant
    current documents under `docs/designs/`, and any applicable target delta
-   under `docs/plans/`.
+   under `docs/plans/`. Follow changed interfaces through their actual producers
+   and consumers, including dynamic discovery and generated interfaces where
+   relevant. Tests and declarations can show a contract without proving a
+   shipped producer or consumer.
 3. Group applicable axes by the evidence they inspect. Combine overlapping
    concerns and separate independent, substantial concerns; honor explicit
    requests for six independent reviewers. Spawn `reviewer` subagents for those
@@ -49,6 +52,13 @@ its complete current rules. Read [CONTEXT.md](../../../CONTEXT.md),
 they are relevant to the selected scope. Reviewer prompts must reference the
 owning files rather than embedding copied checklists. Treat documented blocking
 requirements as blocking unless an applicable plan records a scoped exception.
+
+For test and fixture changes, use [Reliability And Isolation](../../../tests/README.md#reliability-and-isolation)
+to assess the concurrency and cleanup actually exercised. For failure and
+lifecycle changes, apply the failure-ownership rules in
+[code style](../../../docs/code-style.md#ownership-and-abstraction) to the affected
+state and its consumers. Substantiate a finding with a reachable execution path
+and consequence.
 
 ## Subagent Constraints
 

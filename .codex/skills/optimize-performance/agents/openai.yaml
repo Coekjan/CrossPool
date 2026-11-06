@@ -1,0 +1,4 @@
+interface:
+  display_name: "Optimize Performance"
+  short_description: "Measure and optimize existing xpool execution paths"
+  default_prompt: "Use $optimize-performance to measure an existing xpool execution path, locate its dominant cost, and verify an authorized optimization."
