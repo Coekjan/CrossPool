@@ -124,7 +124,6 @@ reference:
 | `scheduler.ffn_concurrency` | Sets the Executor Lane count, not a row or token budget. |
 | `scheduler.ffn_policy` | Selects `fifo` or `random` admission. |
 | `atn.device_memory_utilization` | Sets the maximum attention-device memory fraction used to freeze the Elastic Context State Capacity Pool. |
-| `scheduler.atn_concurrency` | Reserved for future attention compute admission; currently has no runtime effect. |
 | `logging.level` / `logging.color` | Sets runtime log level and enables terminal-aware color on stderr. |
 | `ffn.loader.parallelism` | Sets the number of checkpoint readers per FfnAgent. |
 | `ffn.placement.parallelism` / `ffn.placement.timeout_seconds` | Sets solver workers and the whole-solve timeout in seconds. |

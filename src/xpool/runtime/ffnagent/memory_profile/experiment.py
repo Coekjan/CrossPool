@@ -105,9 +105,7 @@ class CalibrationExperiment:
 
         return source.model_copy(
             update={
-                "scheduler": source.scheduler.model_copy(
-                    update={"atn_concurrency": 1, "ffn_policy": FfnSchedulingPolicy.FIFO}
-                ),
+                "scheduler": source.scheduler.model_copy(update={"ffn_policy": FfnSchedulingPolicy.FIFO}),
                 "ffn": source.ffn.model_copy(
                     update={"device_memory_calibration": None, "device_memory_extra_margin_bytes": 0}
                 ),

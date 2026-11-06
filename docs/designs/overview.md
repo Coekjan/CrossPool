@@ -42,8 +42,7 @@ and one active FFN invocation per Instance at a time. Cross-host IB, expert
 parallelism, Unary FFN, service-time placement changes, model migration,
 rolling updates, mixed-ABI generations, and request-time fallback require a
 separate accepted design and qualification before they become supported
-capabilities. The `scheduler.atn_concurrency` setting remains reserved for
-future attention admission as described in [Control Plane](control-plane.md).
+capabilities.
 
 ### Process roles
 

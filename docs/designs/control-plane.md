@@ -132,10 +132,6 @@ per-request TTFT/TBT objective. Priority remains an ordering hint. See
 [Elastic Context State](elastic-context-state.md) for the demand and deadline
 contract.
 
-`scheduler.atn_concurrency` is retained as an explicitly reserved attention-side
-compute-admission budget. The current runtime ignores it; future attention
-admission will define its owner and resource unit before making it operational.
-
 The core runtime contains engine-neutral model, topology, transport, execution,
 and failure values. Serving-engine runtime imports, hooks, objects, and
 compatibility behavior remain under `xpool.integrations.sglang`. The integration

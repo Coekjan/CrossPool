@@ -334,15 +334,6 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         description="Daemon control-plane bind port.",
     ),
     ConfigSetting(
-        name="scheduler_atn_concurrency",
-        path=("scheduler", "atn_concurrency"),
-        parser="int",
-        allowed_sources=TOP_LEVEL_SOURCES,
-        default=1,
-        cli="--atn-concurrency",
-        description="Reserved attention-side concurrency setting for future attention compute admission.",
-    ),
-    ConfigSetting(
         name="scheduler_ffn_concurrency",
         path=("scheduler", "ffn_concurrency"),
         parser="int",
@@ -478,14 +469,10 @@ class LatencySloConfig(BaseModel):
 
 
 class SchedulerConfig(BaseModel):
-    """FFN lane scheduling and reserved attention admission settings."""
+    """FFN lane scheduling and scheduler-local latency objectives."""
 
     model_config = ConfigDict(extra="forbid")
 
-    atn_concurrency: int = Field(
-        ge=1,
-        description="Reserved attention-side concurrency setting for future attention compute admission.",
-    )
     ffn_concurrency: int = Field(
         ge=1,
         description="Number of FFN Executor Lanes instantiated per Fabric generation.",
@@ -1130,14 +1117,7 @@ class XpoolConfig(ConfigModel):
         for model in self.models:
             if model.id in model_path_by_id:
                 raise ValueError("model ids must be unique")
-            model_path = model.path
-            if model_path is None:
-                if self.vendor.model_base_uri is None:
-                    raise MissingRequiredConfig(
-                        f"missing required model path for {model.id}: set models[].path or vendor.model_base_uri"
-                    )
-                model_path = self.vendor.model_base_uri / model.id.relative_path
-            model_path_by_id[model.id] = model_path
+            model_path_by_id[model.id] = self.model_path_of(model.id)
         model_paths = [model_path.resolve() for model_path in model_path_by_id.values()]
         if len(model_paths) != len(set(model_paths)):
             raise ValueError("model paths must be unique")

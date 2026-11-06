@@ -191,7 +191,6 @@ host = "127.0.0.1"
 port = 9810
 
 [scheduler]
-atn_concurrency = 1
 ffn_concurrency = 1
 slo = {{ ttft_ms = 1000, tbt_ms = 50 }}
 

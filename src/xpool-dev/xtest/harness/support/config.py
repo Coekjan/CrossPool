@@ -145,7 +145,6 @@ def synthetic_config(
         {
             "daemon": {"host": "127.0.0.1", "port": 9810},
             "scheduler": {
-                "atn_concurrency": 1,
                 "ffn_concurrency": 1,
                 "ffn_policy": "fifo",
                 "slo": {"ttft_ms": 1000, "tbt_ms": 50},
@@ -173,7 +172,6 @@ def write_minimal_config(
     *,
     daemon_host: str = "127.0.0.1",
     daemon_port: int = 9810,
-    atn_concurrency: int = 1,
     ffn_concurrency: int = 1,
     model_path: Path | None = None,
     atn_devices: tuple[int, ...] = (0, 1),
@@ -198,7 +196,6 @@ def write_minimal_config(
     payload = {
         "daemon": {"host": daemon_host, "port": daemon_port},
         "scheduler": {
-            "atn_concurrency": atn_concurrency,
             "ffn_concurrency": ffn_concurrency,
             "slo": {"ttft_ms": 1000, "tbt_ms": 50},
         },

@@ -35,8 +35,6 @@ The integration derives runtime headroom from the complement of resolved
 `mem_fraction_static`. It also retains SGLang's eager-activation reserve when
 Decode Graph coverage is smaller than explicit or model-derived request
 concurrency. SGLang retains ownership of post-capture eligibility.
-`scheduler.atn_concurrency` is reserved for attention compute admission and is
-independent of this memory budget.
 
 Initial grants preserve every floor, split the remaining device budget equally,
 and cap each share at its reservation. Capped shares and integer remainders

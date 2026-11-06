@@ -33,7 +33,6 @@ def test_cli_config_default_precedence_without_config_field_env(
         tmp_path,
         daemon_host="127.0.0.2",
         daemon_port=1000,
-        atn_concurrency=1,
         ffn_concurrency=1,
     )
 
@@ -42,14 +41,13 @@ def test_cli_config_default_precedence_without_config_field_env(
         config_path=config_path,
         cli={
             "daemon_host": "127.0.0.3",
-            "scheduler_atn_concurrency": 3,
+            "scheduler_ffn_concurrency": 3,
         },
     )
 
     assert config.daemon.host == "127.0.0.3"
     assert config.daemon.port == 1000
-    assert config.scheduler.atn_concurrency == 3
-    assert config.scheduler.ffn_concurrency == 1
+    assert config.scheduler.ffn_concurrency == 3
 
 
 def test_defaults_fill_missing_optional_sections() -> None:
@@ -61,7 +59,6 @@ def test_defaults_fill_missing_optional_sections() -> None:
     assert config.debug.prefill_logit_observer.outdir is None
     assert config.daemon.host == "127.0.0.1"
     assert config.daemon.port == 9810
-    assert config.scheduler.atn_concurrency == 1
     assert config.scheduler.ffn_concurrency == 1
     assert config.ffn.loader.parallelism == 4
     assert config.logging.level == "info"
