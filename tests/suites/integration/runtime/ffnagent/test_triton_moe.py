@@ -79,7 +79,7 @@ def test_packed_experts_keep_dynamic_routes_and_capacity_tails_without_capture_a
         bias_dtype=TritonKernelsExperts.bias_dtype,
     )
     device = torch.device("cuda", torch.cuda.current_device())
-    gate_up, down = layout.gate_up.allocate(device), layout.down.allocate(device)
+    gate_up, down = layout.gate_up.zero_probe(device), layout.down.zero_probe(device)
     for projection in (gate_up, down):
         assert projection.scales is not None and projection.bias is not None
         projection.values.copy_(

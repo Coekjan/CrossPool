@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
-from pathlib import Path
-
 import pytest
 import torch
 from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig, PhaseConfig
@@ -21,7 +18,7 @@ from xtest.harness.support.sglang.runtime import published_sglang_config
 pytestmark = pytest.mark.usefixtures(published_sglang_config.__name__)
 
 
-def test_ffn_profile_includes_only_enabled_graph_capacities(tmp_path: Path) -> None:
+def test_ffn_profile_includes_only_enabled_graph_capacities() -> None:
     args = server_args(
         max_prefill_tokens=48,
         cuda_graph_config=CudaGraphConfig(
@@ -30,7 +27,6 @@ def test_ffn_profile_includes_only_enabled_graph_capacities(tmp_path: Path) -> N
         ),
     )
     runner, model_binding = workload_inputs(
-        tmp_path,
         args,
         max_running_requests=16,
     )
@@ -47,7 +43,7 @@ def test_ffn_profile_includes_only_enabled_graph_capacities(tmp_path: Path) -> N
     assert profile.group_sum_complete_admitted is False
 
 
-def test_ffn_profile_ignores_retained_buckets_for_disabled_graph_paths(tmp_path: Path) -> None:
+def test_ffn_profile_ignores_retained_buckets_for_disabled_graph_paths() -> None:
     args = server_args(
         max_prefill_tokens=33,
         cuda_graph_config=CudaGraphConfig(
@@ -56,7 +52,6 @@ def test_ffn_profile_ignores_retained_buckets_for_disabled_graph_paths(tmp_path:
         ),
     )
     runner, model_binding = workload_inputs(
-        tmp_path,
         args,
         max_running_requests=17,
     )
@@ -85,10 +80,9 @@ def test_ffn_profile_ignores_retained_buckets_for_disabled_graph_paths(tmp_path:
     ],
 )
 def test_ffn_profile_rejects_invalid_enabled_graph_geometry(
-    tmp_path: Path,
     args: ServerArgs,
 ) -> None:
-    runner, model_binding = workload_inputs(tmp_path, args)
+    runner, model_binding = workload_inputs(args)
 
     with pytest.raises(RuntimeError, match="positive"):
         derive_instance_ffn_profile(runner.as_model_runner(), model_binding)
@@ -102,14 +96,12 @@ def test_ffn_profile_rejects_invalid_enabled_graph_geometry(
     ],
 )
 def test_ffn_profile_rejects_boolean_eager_capacity(
-    tmp_path: Path,
     max_running_requests: int,
     max_prefill_tokens: int,
     message: str,
 ) -> None:
     args = server_args(max_prefill_tokens=max_prefill_tokens)
     runner, model_binding = workload_inputs(
-        tmp_path,
         args,
         max_running_requests=max_running_requests,
     )
@@ -119,16 +111,12 @@ def test_ffn_profile_rejects_boolean_eager_capacity(
 
 
 def workload_inputs(
-    tmp_path: Path,
     args: ServerArgs,
     *,
     max_running_requests: int = 8,
 ) -> tuple[FakeModelRunner, SglangInstanceRankBinding]:
     get_context().override("test", cuda_graph_config=args.cuda_graph_config, max_prefill_tokens=args.max_prefill_tokens)
-    model_path = tmp_path / "synthetic-model"
-    model_path.mkdir(exist_ok=True)
-    config_bytes = b'{"model_type":"synthetic"}'
-    (model_path / "config.json").write_bytes(config_bytes)
+    model_binding = binding()
 
     model = nn.Module()
     model.shims = nn.ModuleList(
@@ -138,13 +126,9 @@ def workload_inputs(
         ]
     )
     runner = FakeModelRunner(
-        model_config=FakeModelConfig(model_path=str(model_path), dtype=torch.float16),
+        model_config=FakeModelConfig(model_path=str(model_binding.model_path), dtype=torch.float16),
         server_args=args,
         max_running_requests=max_running_requests,
         model=model,
-    )
-    model_binding = replace(
-        binding(),
-        model_path=model_path,
     )
     return runner, model_binding

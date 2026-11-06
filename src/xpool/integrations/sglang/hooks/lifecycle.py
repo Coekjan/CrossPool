@@ -414,9 +414,8 @@ def derive_instance_ffn_profile(
         Strict rank-independent ffn_profile registered with the daemon.
 
     Raises:
-        RuntimeError: If dtype, layers, bucket ceilings, or model config bytes
-            cannot be resolved without guessing.
-        OSError: If the model's config file cannot be read.
+        RuntimeError: If payload dtype, installed FFN shims, or resolved eager
+            and graph capacities are missing or invalid.
     """
 
     dtype = model_runner.model_config.dtype

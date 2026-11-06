@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
@@ -15,7 +14,6 @@ from xpool import ffn
 
 INDEX_FILENAME = "model.safetensors.index.json"
 SINGLE_FILE_NAME = "model.safetensors"
-MAIN_FFN_KEY_PATTERN = re.compile(r"^model\.layers\.(?P<layer_id>[0-9]+)\.mlp\.")
 
 
 def parse_json_object(payload: bytes, *, source: Path) -> dict[str, JsonValue]:
@@ -80,8 +78,6 @@ def read_checkpoint_key_view(model_path: Path) -> dict[str, Path]:
 def validate_ffn_coverage(
     spec: ffn.FfnModelSpec,
     key_view: Mapping[str, Path],
-    *,
-    allow_trailing_ffn_layers: bool,
 ) -> None:
     """Require exact family-owned FFN keys for every main decoder layer."""
 
@@ -94,13 +90,3 @@ def validate_ffn_coverage(
             missing = sorted(expected_keys - actual_keys)
             extra = sorted(actual_keys - expected_keys)
             raise ValueError(f"FFN checkpoint namespace for layer {layer_id} differs: missing={missing}, extra={extra}")
-
-    if allow_trailing_ffn_layers:
-        return
-    trailing_keys = []
-    for key in all_checkpoint_keys:
-        match = MAIN_FFN_KEY_PATTERN.match(key)
-        if match is not None and int(match.group("layer_id")) not in expected_by_layer:
-            trailing_keys.append(key)
-    if trailing_keys:
-        raise ValueError(f"checkpoint contains FFN keys outside main decoder layers: {sorted(trailing_keys)}")

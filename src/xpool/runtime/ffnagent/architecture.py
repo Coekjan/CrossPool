@@ -44,8 +44,6 @@ class FfnSourceConfig:
         *,
         gt: int | float | None = None,
         ge: int | float | None = None,
-        lt: int | float | None = None,
-        le: int | float | None = None,
     ) -> T:
         """Read one required source field with strict type and numeric constraints."""
 
@@ -65,17 +63,13 @@ class FfnSourceConfig:
         elif not isinstance(value, expected_type):
             raise ValueError(f"{field_name} must be a JSON {expected_name}")
 
-        if any(bound is not None for bound in (gt, ge, lt, le)):
+        if gt is not None or ge is not None:
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 raise ValueError(f"{field_name} must be numeric to apply bounds")
             if gt is not None and value <= gt:
                 raise ValueError(f"{field_name} must be greater than {gt}")
             if ge is not None and value < ge:
                 raise ValueError(f"{field_name} must be greater than or equal to {ge}")
-            if lt is not None and value >= lt:
-                raise ValueError(f"{field_name} must be less than {lt}")
-            if le is not None and value > le:
-                raise ValueError(f"{field_name} must be less than or equal to {le}")
         return cast(T, value)
 
     def optional(self, field_name: str, expected_type: type[T], *, allow_none: bool = False) -> T | None:
@@ -194,11 +188,7 @@ def load(*, model_id: ModelId, model_path: pathlib.Path) -> ffn.FfnModelSpec:
             raise ValueError("FFN Architecture Adapter returned inconsistent model identity")
 
         key_view = checkpoint.read_checkpoint_key_view(model_path)
-        checkpoint.validate_ffn_coverage(
-            spec,
-            key_view,
-            allow_trailing_ffn_layers=architecture_name == "Glm4MoeLiteForCausalLM",
-        )
+        checkpoint.validate_ffn_coverage(spec, key_view)
         return spec
     except Exception as error:
         raise RuntimeError(f"failed to compile FFN model {model_id!r} at {model_path}: {error}") from error

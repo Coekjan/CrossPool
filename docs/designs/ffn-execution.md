@@ -27,11 +27,13 @@ names a source dtype field, the checkpoint must declare BF16 or FP16. Original
 GPT-OSS configs omit that field. `InstanceFfnProfile` independently requires
 BF16 or FP16 payloads. See [checkpoint qualification](qualification.md#numerical-and-graph-evidence).
 
-Before checkpoint I/O the loader checks Model/Instance identity and ordered
-layer geometry. Weights are read from explicit safetensors keys. The bounded
-reader verifies each original source shape, forms its declared canonical view,
-then applies the selected TP slice. Matrix and scale-blocked views are declared
-per projection, allowing gate/up and down to use different source-axis layouts.
+Compilation validates exact FFN key coverage for each Spec-declared layer.
+Before materializing weight tensors, the loader checks Model/Instance identity
+and ordered layer geometry. Weights are read from explicit safetensors keys.
+The bounded reader verifies each original source shape, forms its declared
+canonical view, then applies the selected TP slice. Matrix and scale-blocked
+views are declared per projection, allowing gate/up and down to use different
+source-axis layouts.
 Floating sources may convert to another floating dtype; encoded values and
 scales require matching dtypes and are
 copied unchanged. Layer loading also checks key coverage and TP geometry. Each

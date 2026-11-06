@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -124,15 +122,6 @@ class SglangModelMetadata(BaseModel):
     num_atn_heads: int = Field(ge=1, description="Total query-head count reported by SGLang.")
     num_key_value_heads: int = Field(ge=1, description="Total KV-head count reported by SGLang.")
     atn_kind: SglangAttentionKind = Field(description="Attention topology derived from SGLang metadata.")
-    dense_intermediate_size: int | None = Field(
-        default=None,
-        description="Dense FFN intermediate width from config.json, when present.",
-    )
-    moe_intermediate_size: int | None = Field(
-        default=None,
-        description="MoE expert intermediate width from config.json, when present.",
-    )
-    num_experts: int | None = Field(default=None, description="MoE routed expert count from config.json, if present.")
     raw_config_path: Path = Field(description="Resolved config.json path used to derive this metadata.")
 
     def validate_attention_tp(self, size: int) -> None:
@@ -166,37 +155,12 @@ class SglangModelMetadata(BaseModel):
             model_id: Configured model id used in diagnostics.
 
         Returns:
-            Model metadata resolved through SGLang plus FFN shape hints.
+            Attention shape and family metadata resolved through SGLang.
         """
 
         path = Path(model_path).expanduser()
-        config_path = path if path.is_file() else path / "config.json"
-        with config_path.open("r", encoding="utf-8") as config_file:
-            raw = json.load(config_file)
-        if not isinstance(raw, dict):
-            raise ConfigError(f"{model_id}: config.json must contain an object")
-        return cls.from_raw(raw, model_id=model_id, config_path=config_path.resolve())
-
-    @classmethod
-    def from_raw(cls, raw: Mapping[str, object], *, model_id: ModelId, config_path: Path) -> SglangModelMetadata:
-        """Derive model metadata from parsed ``config.json`` content.
-
-        Args:
-            raw: Parsed JSON mapping.
-            model_id: Configured model id used in diagnostics.
-            config_path: Resolved path that produced ``raw``.
-
-        Returns:
-            CrossPool model metadata and FFN width hints.
-
-        Raises:
-            ConfigError: If SGLang metadata or raw integer fields are invalid.
-        """
-
+        config_path = (path if path.is_file() else path / "config.json").resolve()
         sglang = SglangModelShape.load(config_path, model_id=model_id)
-        num_experts = optional_int(raw, "num_experts")
-        if num_experts is None:
-            num_experts = optional_int(raw, "n_routed_experts")
         return cls(
             model_id=model_id,
             family=sglang.family,
@@ -204,9 +168,6 @@ class SglangModelMetadata(BaseModel):
             num_atn_heads=sglang.num_atn_heads,
             num_key_value_heads=sglang.num_key_value_heads,
             atn_kind=sglang.atn_kind,
-            dense_intermediate_size=optional_int(raw, "intermediate_size"),
-            moe_intermediate_size=optional_int(raw, "moe_intermediate_size"),
-            num_experts=num_experts,
             raw_config_path=config_path,
         )
 
@@ -292,28 +253,6 @@ class SglangAttentionTopology(BaseModel):
             atn_tp_size=atn_tp_size,
             atn_dp_size=atn_dp_size,
         )
-
-
-def optional_int(raw: Mapping[str, object], key: str) -> int | None:
-    """Return an optional integer field from raw model config data.
-
-    Args:
-        raw: Raw parsed model config mapping.
-        key: Field name to read.
-
-    Returns:
-        Parsed integer value, or ``None`` when the field is missing or null.
-
-    Raises:
-        ConfigError: If the field exists but is not an integer.
-    """
-
-    if key not in raw:
-        return None
-    value = raw[key]
-    if value is None:
-        return None
-    return coerce_config_int(value, key)
 
 
 def coerce_config_int(value: object, key: str) -> int:

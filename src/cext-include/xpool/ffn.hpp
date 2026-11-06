@@ -23,7 +23,7 @@ enum class ForwardMode : std::uint32_t {
 
 /// Mathematical output requirement for one FFN invocation.
 enum class OutputRequirement : std::uint32_t {
-  /// Preserve the rank-local Partial for reduction by the consumer.
+  /// Require complete FFN output at each consuming rank.
   PerRankComplete = 1,
   /// Deliver the sum of every participating FfnAgent Partial.
   GroupSumComplete = 2,

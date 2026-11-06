@@ -117,23 +117,18 @@ def test_projection_resources_match_layout_and_use_encoding_correct_zero_probe()
         bias=TensorLayout((32,), torch.float32, 0),
     )
     device = torch.device("cuda", torch.cuda.current_device())
-    loaded = layout.allocate(device)
     probe = layout.zero_probe(device)
-    loaded.validate(layout)
     probe.validate(layout)
-    assert loaded.scales is not None and loaded.bias is not None
     assert probe.scales is not None and probe.bias is not None
-    assert tuple(tensor.nbytes for tensor in (loaded.values, loaded.scales, loaded.bias)) == layout.allocation_bytes()
-    assert loaded.values.data_ptr() != probe.values.data_ptr()
+    assert tuple(tensor.nbytes for tensor in (probe.values, probe.scales, probe.bias)) == layout.allocation_bytes()
     torch.testing.assert_close(probe.values, torch.zeros_like(probe.values))
     torch.testing.assert_close(probe.scales, torch.full_like(probe.scales, 127))
     torch.testing.assert_close(probe.bias, torch.zeros_like(probe.bias))
-    loaded.binding_view()
     probe.binding_view()
     with pytest.raises(ValueError, match="presence disagrees"):
-        loaded.validate(weights.ProjectionLayout(values=layout.values, scales=None, bias=layout.bias))
+        probe.validate(weights.ProjectionLayout(values=layout.values, scales=None, bias=layout.bias))
     with pytest.raises(ValueError, match="shape or dtype disagrees"):
-        loaded.validate(
+        probe.validate(
             weights.ProjectionLayout(
                 values=TensorLayout((32, 16), torch.uint8, 0),
                 scales=layout.scales,

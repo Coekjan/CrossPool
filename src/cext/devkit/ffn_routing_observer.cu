@@ -31,8 +31,6 @@ namespace {
 struct RecordHeader {
   xpool::fabric::InvocationKey key;
   std::size_t layer_ordinal;
-  std::size_t executor_lane_index;
-  std::uint64_t executor_lease_sequence;
   std::uint32_t rows;
   std::uint32_t effective_topk;
 };
@@ -173,8 +171,6 @@ XPOOL_DEVICE_HOOK_FN(xpool::hooks::FabricFfnAgentProtocolEvent, DeviceAdapter::o
       entry->record() = RecordHeader{
           .key = execution.key,
           .layer_ordinal = execution.layer_ordinal,
-          .executor_lane_index = context.executor_lane_index,
-          .executor_lease_sequence = execution.executor_lease_sequence,
           .rows = static_cast<std::uint32_t>(execution.payload_rows),
           .effective_topk = static_cast<std::uint32_t>(layer.effective_topk),
       };

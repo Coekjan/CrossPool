@@ -603,7 +603,8 @@ class FfnExecutionRegistry:
                     )
                 )
 
-        # Every Lane owns its capture domain; only read-only weight probes share storage.
+        # Lane streams and pools are private; representative weights and
+        # Control Capture Probes are shared read-only.
         resource_plan = preparation.ExecutionResourcePlan.from_signatures(
             tuple(signatures), contract=execution_contract
         )

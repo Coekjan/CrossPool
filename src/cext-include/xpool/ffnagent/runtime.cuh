@@ -85,8 +85,6 @@ struct LaneRuntimeState {
   xpool::fabric::LaneExecution execution;
   /// Most recently completed lease sequence.
   std::uint64_t last_lease_sequence;
-  /// Capacity selected for the current execution.
-  std::size_t selected_payload_row_capacity;
   /// Signature selected for the current execution.
   std::size_t selected_execution_signature_index;
   /// Local layer table index selected for the current execution.
@@ -96,8 +94,6 @@ struct LaneRuntimeState {
   /// GPU global-timer nanoseconds captured before waiting for peer partials;
   /// zero means the current execution has not started that wait.
   std::uint64_t peer_partial_wait_started_at;
-  /// Result code produced by the current execution.
-  xpool::ffn::ResultCode result_code;
   /// Whether the resident lane graph must exit after the current iteration.
   bool terminal;
 };

@@ -172,7 +172,6 @@ namespace {
 XPOOL_DEVICE_FN void terminate_lane(xpool::fabric::ArenaView arena, LaneRuntimeState &state,
                                     cudaGraphConditionalHandle while_handle, cudaGraphConditionalHandle compute_handle,
                                     std::uint32_t compute_empty_branch_index, xpool::ffn::ResultCode result) {
-  state.result_code = result;
   state.terminal = true;
   cudaGraphSetConditional(compute_handle, compute_empty_branch_index);
   cudaGraphSetConditional(while_handle, 0);
@@ -185,7 +184,6 @@ XPOOL_DEVICE_FN void terminate_lane(xpool::fabric::ArenaView arena, LaneRuntimeS
 XPOOL_DEVICE_FN void terminate_delivery(xpool::fabric::ArenaView arena, LaneRuntimeState &state,
                                         cudaGraphConditionalHandle while_handle,
                                         cudaGraphConditionalHandle observation_handle, xpool::ffn::ResultCode result) {
-  state.result_code = result;
   state.terminal = true;
   cudaGraphSetConditional(observation_handle, 0);
   cudaGraphSetConditional(while_handle, 0);
@@ -207,7 +205,6 @@ XPOOL_KERNEL_FN void wait_pre_compute(xpool::fabric::ArenaView arena, std::size_
                                       std::uint32_t compute_empty_branch_index) {
   cudaGraphSetConditional(compute_handle, compute_empty_branch_index);
   state->terminal = false;
-  state->result_code = xpool::ffn::ResultCode::Ok;
 
   // Phase: Observe Execution - A Lane accepts only the next monotonic lease;
   // shutdown or canonical failure terminates its resident loop.
@@ -274,7 +271,6 @@ XPOOL_KERNEL_FN void wait_pre_compute(xpool::fabric::ArenaView arena, std::size_
   }
   const auto local_tp_rank = static_cast<std::size_t>(member - ffnagent_pes.begin());
 
-  state->selected_payload_row_capacity = selected->payload_row_capacity;
   state->selected_execution_signature_index = selected->execution_signature_index;
   state->selected_layer_entry_index = layer_index;
   state->local_tp_rank = local_tp_rank;

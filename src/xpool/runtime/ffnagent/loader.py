@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import concurrent.futures
-import math
 import queue
 import threading
 from collections import defaultdict
@@ -43,7 +42,6 @@ class TensorReadDescriptor:
     source_shape: tuple[int, ...]
     view_shape: tuple[int, ...]
     selection: TensorSlice | None
-    staged_shape: tuple[int, ...]
     destination: torch.Tensor
 
     @classmethod
@@ -68,20 +66,19 @@ class TensorReadDescriptor:
             source_shape=source_shape,
             view_shape=source_shape if view_shape is None else view_shape,
             selection=selection,
-            staged_shape=tuple(destination.shape),
             destination=destination,
         )
 
     def slot_view(self, slot: torch.Tensor) -> torch.Tensor:
         """Interpret the typed prefix of one byte-addressable pinned slot."""
 
-        return slot[: self.staged_bytes].view(self.destination.dtype).view(self.staged_shape)
+        return slot[: self.staged_bytes].view(self.destination.dtype).view(self.destination.shape)
 
     @property
     def staged_bytes(self) -> int:
         """Return exact local-TP staging bytes."""
 
-        return math.prod(self.staged_shape) * self.destination.element_size()
+        return self.destination.numel() * self.destination.element_size()
 
     def copy_from(self, slot: torch.Tensor) -> None:
         """Finish a pinned Host transfer on the destination's current stream.
@@ -657,7 +654,7 @@ def stage_shard(
                     projected = source.view(descriptor.view_shape)
                     if descriptor.selection is not None:
                         projected = projected[descriptor.selection.indices()]
-                    if tuple(projected.shape) != descriptor.staged_shape:
+                    if projected.shape != descriptor.destination.shape:
                         raise ValueError(f"checkpoint tensor {descriptor.weight_key!r} local TP shape is invalid")
                     descriptor.slot_view(slot).copy_(projected)
                 except Exception:

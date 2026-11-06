@@ -26,7 +26,7 @@ def test_model_metadata_rejects_non_object_config(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     config_path.write_text("[]", encoding="utf-8")
 
-    with pytest.raises(ConfigError, match=r"config.json must contain an object"):
+    with pytest.raises(ConfigError, match="SGLang failed to resolve model config"):
         SglangModelMetadata.load(config_path, model_id=TEST_MODEL_ID)
 
 
@@ -417,28 +417,6 @@ def test_mla_attention_tp_ignores_ordinary_kv_head_geometry() -> None:
     )
 
     spec.validate_attention_tp(2)
-
-
-def test_model_config_preserves_explicit_zero_num_experts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    patch_sglang_metadata(
-        monkeypatch,
-        family="dense",
-        hidden_size=2048,
-        atn_heads=16,
-        kv_heads=16,
-        atn_kind=SglangAttentionKind.MHA,
-    )
-
-    spec = SglangModelMetadata.from_raw(
-        {"num_experts": 0, "n_routed_experts": 64},
-        model_id=TEST_MODEL_ID,
-        config_path=tmp_path / "config.json",
-    )
-
-    assert spec.num_experts == 0
 
 
 def write_model_config(path: Path, payload: Mapping[str, object]) -> Path:

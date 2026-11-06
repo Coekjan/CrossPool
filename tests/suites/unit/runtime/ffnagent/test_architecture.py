@@ -52,15 +52,22 @@ def common_config(*, architecture_name: str, model_type: str, dtype_field: str) 
     }
 
 
-def test_load_rejects_extra_main_layer_ffn_key(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("layer_keys", "message"),
+    [
+        ((*dense_keys(0), "model.layers.0.mlp.unowned.weight"), r"extra=.*unowned"),
+        (dense_keys(0)[1:], r"missing=.*gate_proj"),
+    ],
+)
+def test_load_requires_exact_declared_ffn_keys(tmp_path: Path, layer_keys: tuple[str, ...], message: str) -> None:
     config = {
         **common_config(architecture_name="Qwen3ForCausalLM", model_type="qwen3", dtype_field="torch_dtype"),
         "intermediate_size": 32,
     }
-    keys = tuple(key for layer_id in range(3) for key in dense_keys(layer_id))
-    write_indexed_model(tmp_path / "model", config, (*keys, "model.layers.0.mlp.unowned.weight"))
+    keys = (*layer_keys, *(key for layer_id in range(1, 3) for key in dense_keys(layer_id)))
+    write_indexed_model(tmp_path / "model", config, keys)
 
-    with pytest.raises(RuntimeError, match=r"extra=.*unowned"):
+    with pytest.raises(RuntimeError, match=message):
         architecture.load(model_id=TEST_MODEL_ID, model_path=tmp_path / "model")
 
 
@@ -94,7 +101,7 @@ def test_load_compiles_llama_dense_layers(
     }
     keys = tuple(key for layer_id in range(layer_count) for key in dense_keys(layer_id))
     model_path = tmp_path / "model"
-    write_indexed_model(model_path, config, keys)
+    write_indexed_model(model_path, config, (*keys, *dense_keys(layer_count)))
 
     spec = architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
 

@@ -62,21 +62,6 @@ class ProjectionLayout:
     scales: TensorLayout | None
     bias: TensorLayout | None
 
-    def allocate(self, device: torch.device) -> ProjectionWeights:
-        """Allocate uninitialized values, scales and bias in their declared order.
-
-        The loading owner fills every source and neutral padding region before
-        execution. These storages stay alive under the layer's weight owner.
-        """
-
-        return ProjectionWeights(
-            values=torch.empty(self.values.shape, dtype=self.values.dtype, device=device),
-            scales=None
-            if self.scales is None
-            else torch.empty(self.scales.shape, dtype=self.scales.dtype, device=device),
-            bias=None if self.bias is None else torch.empty(self.bias.shape, dtype=self.bias.dtype, device=device),
-        )
-
     def zero_probe(self, device: torch.device) -> ProjectionWeights:
         """Allocate shape-equivalent, encoding-correct zero resources for capture."""
 
