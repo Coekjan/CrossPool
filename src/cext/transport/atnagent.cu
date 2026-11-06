@@ -164,32 +164,28 @@ XPOOL_KERNEL_FN void transport_resident_kernel(cuda::std::span<const ArenaView> 
       if (group.thread_rank() == 0) {
         resident_state->request_drain();
       }
+    } else if (status == MailboxStatus::Published) {
+      if (group.thread_rank() == 0) {
+        xpool::hooks::TransportAtnAgentProtocolEvent::hooks(
+            {.arena = arena,
+             .kind = xpool::hooks::TransportProtocolEventKind::RequestObserved,
+             .payload_rows = arena.mailbox().payload_rows,
+             .request = &arena.mailbox().request});
+      }
       group.sync();
-      continue;
-    }
-    if (status != MailboxStatus::Published) {
+      const auto result = execute_request(group, arena, fabric_arena);
+      if (group.thread_rank() == 0 &&
+          (publish_fabric_failure(arena, fabric_arena) || result == xpool::ffn::ResultCode::ProtocolMismatch ||
+           result == xpool::ffn::ResultCode::Timeout)) {
+        resident_state->request_drain();
+      }
+    } else {
       if (group.thread_rank() == 0) {
         xpool::utils::wait::relax();
       }
-      continue;
     }
-
-    if (group.thread_rank() == 0) {
-      xpool::hooks::TransportAtnAgentProtocolEvent::hooks(
-          {.arena = arena,
-           .kind = xpool::hooks::TransportProtocolEventKind::RequestObserved,
-           .payload_rows = arena.mailbox().payload_rows,
-           .request = &arena.mailbox().request});
-    }
+    // All warps finish reading this iteration before its shared observations are reused.
     group.sync();
-    const auto result = execute_request(group, arena, fabric_arena);
-    if (publish_fabric_failure(arena, fabric_arena) || result == xpool::ffn::ResultCode::ProtocolMismatch ||
-        result == xpool::ffn::ResultCode::Timeout) {
-      if (group.thread_rank() == 0) {
-        resident_state->request_drain();
-      }
-      group.sync();
-    }
   }
 
   // Phase: Drain - All arena blocks converge before the cooperative Resident exits.

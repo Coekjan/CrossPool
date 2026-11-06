@@ -238,6 +238,8 @@ tables. It borrows compute storage. Fixed-table sizing counts native requests;
 driver graph storage, variable binding arrays and allocator reservation can
 add physical cost. Each Lane runs its own wait, binding, compute, delivery
 and lease re-arm sequence. A GraphExec never runs concurrently with itself.
+Lane terminal branches follow the block-wide decision contract in
+[Fabric](fabric.md#scheduler-and-failures).
 
 Installation is synchronous and consumes one attempt. On success the Registry
 synchronizes capture streams, resets the source graphs, clears stream-local

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <cooperative_groups.h>
 #include <cooperative_groups/memcpy_async.h>
 #include <cuda/memory>
 #include <cuda/std/span>
@@ -22,6 +23,13 @@ concept CooperativeGroup = requires(Group group) {
   { group.thread_rank() } -> std::integral;
   { group.size() } -> std::integral;
 };
+
+/// Return the same any-predicate decision to every thread in a complete block.
+/// \pre Every block thread participates in the same call.
+XPOOL_DEVICE_FN inline bool any(const cooperative_groups::thread_block &, bool predicate) {
+  // Runtime-sized thread_block has no boolean collective.
+  return __syncthreads_or(predicate) != 0;
+}
 
 /// Copy bytes across one cooperative group and wait for completion.
 /// \pre Source and destination ranges do not overlap.

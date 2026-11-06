@@ -400,7 +400,7 @@ XPOOL_DEVICE_FN void publish_scheduled_invocation(const ArenaView &arena, const 
 XPOOL_DEVICE_FN void coordinator_loop(const ArenaView &arena, const cooperative_groups::thread_block &group,
                                       Scheduler &scheduler) {
   while (true) {
-    if (arena.state().failure.published()) {
+    if (xpool::utils::cooperative::any(group, group.thread_rank() == 0 && arena.state().failure.published())) {
       if (group.thread_rank() == 0) {
         arena.state().failure.publish_to_all(
             static_cast<int>(arena.layout().atnagent_count + arena.layout().ffnagent_count));
@@ -408,19 +408,19 @@ XPOOL_DEVICE_FN void coordinator_loop(const ArenaView &arena, const cooperative_
       group.sync();
       return;
     }
-    if (arena.shutdown_requested()) {
+    if (xpool::utils::cooperative::any(group, group.thread_rank() == 0 && arena.shutdown_requested())) {
       return;
     }
     // Phase: Discover - Complete AtnAgent Submission rendezvous become FIFO
     // scheduler entries; incomplete rendezvous remain invisible to scheduling.
     discover_invocations(arena, group, scheduler);
-    if (arena.state().failure.published()) {
+    if (xpool::utils::cooperative::any(group, group.thread_rank() == 0 && arena.state().failure.published())) {
       continue;
     }
     // Phase: Progress - Active invocations advance through commit and
     // acknowledgement before their Lane becomes reusable.
     progress_active_invocations(arena, group, scheduler);
-    if (arena.state().failure.published()) {
+    if (xpool::utils::cooperative::any(group, group.thread_rank() == 0 && arena.state().failure.published())) {
       continue;
     }
 

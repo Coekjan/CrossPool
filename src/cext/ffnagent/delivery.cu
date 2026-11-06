@@ -20,6 +20,7 @@
 #include <xpool/fabric/arena.cuh>
 #include <xpool/fabric/protocol.cuh>
 #include <xpool/macros.hpp>
+#include <xpool/utils/cooperative.cuh>
 
 namespace xpool::ffnagent {
 
@@ -185,7 +186,9 @@ XPOOL_KERNEL_FN void deliver_direct_partial_output(xpool::fabric::ArenaView aren
 }
 
 XPOOL_KERNEL_FN void deliver_complete_output_range(xpool::fabric::ArenaView arena, std::size_t executor_lane_index) {
-  if (arena.shutdown_requested() || arena.state().failure.published()) {
+  const auto group = cooperative_groups::this_thread_block();
+  if (xpool::utils::cooperative::any(group, group.thread_rank() == 0 &&
+                                                (arena.shutdown_requested() || arena.state().failure.published()))) {
     return;
   }
   const auto context = resolve_context(arena, executor_lane_index);
@@ -205,7 +208,6 @@ XPOOL_KERNEL_FN void deliver_complete_output_range(xpool::fabric::ArenaView aren
   const auto begin_element = begin_row * context.instance.hidden_size;
   const auto element_count = row_count * context.instance.hidden_size;
   const auto destinations = per_rank_complete ? context.atnagent_pes : context.atnagent_pes.first(1);
-  const auto group = cooperative_groups::this_thread_block();
   switch (context.instance.payload_dtype) {
   case c10::ScalarType::Half:
     deliver_complete_range<c10::Half>(context, group, begin_element, element_count, destinations);

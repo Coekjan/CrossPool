@@ -13,10 +13,13 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <xpool/abort.hpp>
 #include <xpool/fabric/arena.hpp>
 #include <xpool/ffn.hpp>
-#include <xpool/transport/arena.hpp>
+#include <xpool/macros.hpp>
+#include <xpool/transport/arena.cuh>
 #include <xpool/transport/atnagent.hpp>
+#include <xpool/transport/protocol.cuh>
 #include <xpool/utils/cuda.hpp>
 
 namespace {
@@ -167,6 +170,26 @@ protected:
   }
 };
 
+XPOOL_KERNEL_FN void publish_oversized_request(xpool::transport::ArenaView arena) {
+  auto &mailbox = arena.mailbox();
+  xpool::abort_if(!mailbox.try_begin_staging());
+  mailbox.payload_rows = arena.layout().payload_row_capacity + 1;
+  mailbox.request = {
+      .layer_ordinal = 0,
+      .forward_mode = xpool::ffn::ForwardMode::Decode,
+      .output_requirement = xpool::ffn::OutputRequirement::PerRankComplete,
+      .dp_row_layout = xpool::ffn::DpRowLayout::None,
+  };
+  mailbox.publish_request();
+}
+
+XPOOL_KERNEL_FN void consume_rejected_request(xpool::transport::ArenaView arena) {
+  auto &mailbox = arena.mailbox();
+  xpool::abort_if(mailbox.observe() != xpool::transport::MailboxStatus::Evaluated ||
+                  mailbox.result_code != xpool::ffn::ResultCode::ProtocolMismatch);
+  mailbox.close_evaluated();
+}
+
 } // namespace
 
 TEST_F(TransportShutdownCudaTest, OpensAndDrainsAllArenas) {
@@ -191,6 +214,39 @@ TEST_F(TransportShutdownCudaTest, OpensAndDrainsAllArenas) {
   EXPECT_EQ(second_arena.read_generation_failure(), xpool::ffn::ResultCode::Ok);
 
   ASSERT_NO_THROW(resident.release());
+  EXPECT_NO_THROW(first_arena.destroy());
+  EXPECT_NO_THROW(second_arena.destroy());
+}
+
+TEST_F(TransportShutdownCudaTest, PublishedRejectionDrainsIdlePeerArena) {
+  // Load producers before the persistent kernel can block lazy module loading.
+  auto attributes = cudaFuncAttributes{};
+  ASSERT_TRUE(cuda_succeeded(cudaFuncGetAttributes(&attributes, publish_oversized_request)));
+  ASSERT_TRUE(cuda_succeeded(cudaFuncGetAttributes(&attributes, consume_rejected_request)));
+  const auto first_layout = xpool::transport::ArenaLayout::create(0, 0, 0, 1, 0, 1, 1, 2, c10::ScalarType::Half);
+  const auto second_layout = xpool::transport::ArenaLayout::create(1, 0, 0, 1, 0, 1, 1, 2, c10::ScalarType::Half);
+  auto first_arena = xpool::transport::Arena::create(0, first_layout);
+  auto second_arena = xpool::transport::Arena::create(0, second_layout);
+  const auto views = std::array{first_arena.view(), second_arena.view()};
+  auto resident = TransportResident{views};
+  auto producer = xpool::utils::cuda::OwnedCudaStream::create();
+  ASSERT_TRUE(wait_for_mailbox_status(first_arena, xpool::transport::MailboxStatus::Idle));
+  ASSERT_TRUE(wait_for_mailbox_status(second_arena, xpool::transport::MailboxStatus::Idle));
+
+  publish_oversized_request<<<1, 1, 0, producer.get()>>>(first_arena.view());
+  ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
+  ASSERT_TRUE(wait_for_mailbox_status(first_arena, xpool::transport::MailboxStatus::Evaluated));
+  consume_rejected_request<<<1, 1, 0, producer.get()>>>(first_arena.view());
+  ASSERT_TRUE(cuda_succeeded(cudaGetLastError()));
+  ASSERT_TRUE(cuda_succeeded(cudaStreamSynchronize(producer.get())));
+  ASSERT_TRUE(resident.wait());
+  EXPECT_EQ(first_arena.mailbox_status(), xpool::transport::MailboxStatus::Closed);
+  EXPECT_EQ(second_arena.mailbox_status(), xpool::transport::MailboxStatus::Closed);
+
+  resident.drain_async();
+  ASSERT_TRUE(resident.wait());
+  ASSERT_NO_THROW(resident.release());
+  producer.destroy();
   EXPECT_NO_THROW(first_arena.destroy());
   EXPECT_NO_THROW(second_arena.destroy());
 }

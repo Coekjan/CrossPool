@@ -30,6 +30,7 @@
 #include <xpool/hooks.hpp>
 #include <xpool/macros.hpp>
 #include <xpool/utils/checked.hpp>
+#include <xpool/utils/cooperative.cuh>
 #include <xpool/utils/cuda/graph.hpp>
 #include <xpool/utils/wait.cuh>
 
@@ -418,7 +419,9 @@ XPOOL_KERNEL_FN void prepare_delivery(xpool::fabric::ArenaView arena, std::size_
     state->peer_partial_wait_started_at = 0;
   }
   group.sync();
-  if (state->terminal || arena.shutdown_requested() || arena.state().failure.published()) {
+  if (xpool::utils::cooperative::any(
+          group, group.thread_rank() == 0 &&
+                     (state->terminal || arena.shutdown_requested() || arena.state().failure.published()))) {
     if (group.thread_rank() == 0) {
       state->terminal = true;
       cudaGraphSetConditional(while_handle, 0);
@@ -529,7 +532,9 @@ XPOOL_KERNEL_FN void probe_peer_partials(xpool::fabric::ArenaView arena, std::si
 XPOOL_KERNEL_FN void complete_lane_execution(xpool::fabric::ArenaView arena, std::size_t executor_lane_index,
                                              cudaGraphConditionalHandle while_handle, LaneRuntimeState *state) {
   const auto group = cooperative_groups::this_thread_block();
-  if (state->terminal || arena.shutdown_requested() || arena.state().failure.published()) {
+  if (xpool::utils::cooperative::any(
+          group, group.thread_rank() == 0 &&
+                     (state->terminal || arena.shutdown_requested() || arena.state().failure.published()))) {
     group.sync();
     if (group.thread_rank() == 0) {
       nvshmem_quiet();

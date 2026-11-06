@@ -115,6 +115,11 @@ Host and Python failure readout exposes only the validated immutable failure
 payload. Atomic claim and publication words remain internal Fabric storage and
 are not part of the control-plane interface.
 
+Where asynchronous failure or shutdown selects a collective path or an early
+return, the Coordinator and FFN control/delivery blocks first broadcast the
+leader's observation through a full-block vote. Every block thread participates
+and receives the same branch decision.
+
 The Coordinator inspects submissions, completions, and acknowledgements without
 blocking its outer progress loop. An inspection is Pending, Ready, or a Protocol
 Mismatch. This is deliberately distinct from a timed wait: inspection has no

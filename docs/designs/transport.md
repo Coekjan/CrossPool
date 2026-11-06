@@ -28,3 +28,9 @@ Block-shared typed state communicates leader observations to the block. Fabric
 publication uses block-collective NVSHMEM operations and preserves the required
 payload-before-release and remote-completion-before-signal ordering. The block
 size is a production constant rather than configuration or an alternate path.
+
+The leader samples drain and mailbox state for each service iteration. A block
+barrier publishes those observations; a second barrier at every continuing
+iteration's end prevents reuse before all warps finish reading them. Only the
+leader requests process-local drain after execution. All arena blocks converge
+at the grid barrier before Resident exit.
