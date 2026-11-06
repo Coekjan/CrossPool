@@ -36,6 +36,8 @@ def test_transport_unattached_operations_fail_closed() -> None:
 
 def isolated_transport_arena_geometry_overflow() -> None:
     xpool.native.initialize(RuntimeRole.ATNAGENT, torch.cuda.current_device(), None)
+    with pytest.raises(RuntimeError, match="payload dtype"):
+        xpool.native.transport.create_arena(0, 0, 8, 4, torch.float32, 0, 1, 0, 1)
     with pytest.raises(RuntimeError, match="overflows result type"):
         xpool.native.transport.create_arena(
             0,

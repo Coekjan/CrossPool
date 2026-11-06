@@ -24,6 +24,7 @@ void bind_transport(py::module_ &module) {
         xpool::RuntimeState::singleton().require_role(xpool::RuntimeRole::AtnAgent,
                                                       "xpool.native.transport.create_arena");
         const auto payload_dtype = require_payload_dtype(dtype, "Transport");
+        const auto gil_release = py::gil_scoped_release{};
         return xpool::transport::AtnAgentRuntime::singleton()
             .create_arena(xpool::RuntimeState::singleton().device("xpool.native.transport.create_arena"),
                           instance_index, instance_rank, payload_row_capacity, hidden_size, payload_dtype, atn_tp_rank,
@@ -32,7 +33,7 @@ void bind_transport(py::module_ &module) {
       },
       py::arg("instance_index"), py::arg("instance_rank"), py::arg("payload_row_capacity"), py::arg("hidden_size"),
       py::arg("dtype"), py::arg("atn_tp_rank"), py::arg("atn_tp_size"), py::arg("atn_dp_rank"), py::arg("atn_dp_size"),
-      "Create one AtnAgent-owned CUDA IPC Transport arena.", py::call_guard<py::gil_scoped_release>());
+      "Create one AtnAgent-owned CUDA IPC Transport arena.");
   transport.def(
       "activate",
       []() {
