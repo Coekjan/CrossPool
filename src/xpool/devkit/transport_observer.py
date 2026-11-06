@@ -18,6 +18,7 @@ from xpool.native import RuntimeRole
 from xpool.runtime.atnagent import AtnAgentTransportRuntime
 from xpool.runtime.instance import InstanceRankRuntime
 from xpool.transport import TransportArenaHandle
+from xpool.utils.files import atomic_write_text
 
 runtime_roles = frozenset({RuntimeRole.INSTANCE, RuntimeRole.ATNAGENT})
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ class TransportRecordJson(TypedDict):
 
 
 class TransportPhaseSummaryJson(TypedDict):
-    """Count and nearest-rank duration statistics for one mailbox phase."""
+    """Count and observed duration statistics for one mailbox phase."""
 
     count: int
     min_ns: int
@@ -184,7 +185,10 @@ def install_instance_observer() -> None:
 
 
 def transport_phase_summary(records: list[TransportRecordJson]) -> dict[str, TransportPhaseSummaryJson]:
-    """Aggregate observer phase durations with nearest-rank percentiles.
+    """Aggregate observer phase durations from sorted observations.
+
+    For n observations, the median selects zero-based index ``(n - 1) // 2``.
+    P95 and p99 select ``round((n - 1) * p)`` for p=0.95 and p=0.99.
 
     Args:
         records: Serialized transport records containing ``durations_ns`` maps.
@@ -302,7 +306,5 @@ def write_transport_snapshot(
     }
     filename_model_id = model_id.uri_encode()
     path = outdir / f"xpool.transport-observer.{os.getpid()}.{site}.{filename_model_id}.{rank}.json"
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    temporary_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    temporary_path.replace(path)
+    atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True))
     return path

@@ -17,6 +17,7 @@ from xpool.config import get_global_config
 from xpool.fabric import FabricGenerationId, FabricParticipantPhase
 from xpool.native import RuntimeRole
 from xpool.runtime.agent import Agent
+from xpool.utils.files import atomic_write_text
 
 runtime_roles = frozenset({RuntimeRole.ATNAGENT, RuntimeRole.FFNAGENT})
 logger = logging.getLogger(__name__)
@@ -329,9 +330,7 @@ def write_fabric_snapshot(
         "records": records,
     }
     path = outdir / f"xpool.fabric-observer.{generation_text}.{snapshot.pe}.json"
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    temporary_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    temporary_path.replace(path)
+    atomic_write_text(path, json.dumps(payload, indent=2))
     return path
 
 

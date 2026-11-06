@@ -16,6 +16,7 @@ from xpool.config import get_global_config
 from xpool.fabric import FabricGenerationId
 from xpool.native import RuntimeRole
 from xpool.runtime.ffnagent.agent import FfnAgent
+from xpool.utils.files import atomic_write_text
 
 runtime_roles = frozenset({RuntimeRole.FFNAGENT})
 install_lock = Lock()
@@ -104,9 +105,7 @@ def write_graph_snapshot(agent: FfnAgent, snapshot: xpool.native.devkit.graph_ob
     observer_snapshot = graph_snapshot(agent, snapshot)
     generation = observer_snapshot.generation.format()
     path = outdir / f"xpool.graph-observer.{generation}.{observer_snapshot.pe}.json"
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    temporary_path.write_text(observer_snapshot.model_dump_json(indent=2), encoding="utf-8")
-    temporary_path.replace(path)
+    atomic_write_text(path, observer_snapshot.model_dump_json(indent=2))
     return path
 
 
