@@ -9,6 +9,8 @@ from pathlib import Path
 from threading import Barrier
 
 import httpx
+import torch
+from safetensors.torch import load_file
 
 import xtest
 from xkit.results import write_json
@@ -16,6 +18,7 @@ from xkit.serving.sglang.graph import SglangGraphSettings
 from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.sglang.catalog import E2eServingCase
 from xtest.harness.sglang.serving import qualification
+from xtest.harness.sglang.serving.alignment import assert_prefill_alignment
 from xtest.harness.sglang.serving.probe import run_probe
 from xtest.harness.sglang.serving.server import NEW_TOKENS, SglangProbeServer, SglangServerResult
 from xtest.harness.support.native.observer import (
@@ -37,8 +40,8 @@ def generate(
     token_count: int,
     *,
     input_token_id: int = 1,
-) -> tuple[int, tuple[int, ...]]:
-    """Run one deterministic request and return its cache hit and output IDs."""
+) -> tuple[int, torch.Tensor]:
+    """Run one request and return its cache hit and completed-Prefill logits."""
 
     response = httpx.post(
         f"{server.url()}/generate",
@@ -69,7 +72,10 @@ def generate(
     cached_tokens = meta_info.get("cached_tokens")
     if not isinstance(cached_tokens, int):
         raise AssertionError(f"SGLang returned invalid cached_tokens: {cached_tokens!r}")
-    return cached_tokens, tuple(output_ids)
+    logits_path = server.read_prefill_logits_path(request_id)
+    if logits_path is None:
+        raise AssertionError(f"missing prefill-logit evidence for {request_id}")
+    return cached_tokens, load_file(logits_path)["next_token_logits"]
 
 
 @xtest.parameterize("case")
@@ -103,35 +109,35 @@ def test_e2e_elastic_kv(
         ):
             raise AssertionError(f"SGLang returned invalid max_req_input_len: {max_input_tokens!r}")
         pressure_tokens = max_input_tokens - NEW_TOKENS
-        primary_initial, primary_expected_output_ids = generate(
+        primary_initial, primary_reference_logits = generate(
             prefix_server,
             "xpool-elastic-kv-primary-fill",
             workload.prefix_tokens,
         )
-        competing_initial, competing_expected_output_ids = generate(
+        competing_initial, competing_reference_logits = generate(
             prefix_server,
             "xpool-elastic-kv-competing-fill",
             workload.prefix_tokens,
             input_token_id=2,
         )
-        primary_hit, primary_hit_output_ids = generate(
+        primary_hit, primary_hit_logits = generate(
             prefix_server,
             "xpool-elastic-kv-primary-hit",
             workload.prefix_tokens,
         )
-        competing_hit, competing_hit_output_ids = generate(
+        competing_hit, competing_hit_logits = generate(
             prefix_server,
             "xpool-elastic-kv-competing-hit",
             workload.prefix_tokens,
             input_token_id=2,
         )
         generate(pressure_server, "xpool-elastic-kv-pressure", pressure_tokens)
-        primary_after_pressure, primary_after_pressure_output_ids = generate(
+        primary_after_pressure, primary_after_pressure_logits = generate(
             prefix_server,
             "xpool-elastic-kv-primary-after-pressure",
             workload.prefix_tokens,
         )
-        competing_after_pressure, competing_after_pressure_output_ids = generate(
+        competing_after_pressure, competing_after_pressure_logits = generate(
             prefix_server,
             "xpool-elastic-kv-competing-after-pressure",
             workload.prefix_tokens,
@@ -141,22 +147,22 @@ def test_e2e_elastic_kv(
         if primary_after_pressure < primary_hit:
             victim_before_pressure = primary_hit
             victim_after_pressure = primary_after_pressure
-            restored_expected_output_ids = primary_expected_output_ids
+            restored_reference_logits = primary_reference_logits
             restored_token_id = 1
         elif competing_after_pressure < competing_hit:
             victim_before_pressure = competing_hit
             victim_after_pressure = competing_after_pressure
-            restored_expected_output_ids = competing_expected_output_ids
+            restored_reference_logits = competing_reference_logits
             restored_token_id = 2
         else:
             raise AssertionError("peer pressure did not reclaim either confirmed prefix")
-        restored_fill, restored_fill_output_ids = generate(
+        restored_fill, restored_fill_logits = generate(
             prefix_server,
             "xpool-elastic-kv-restored-fill",
             workload.prefix_tokens,
             input_token_id=restored_token_id,
         )
-        restored, restored_output_ids = generate(
+        restored, restored_logits = generate(
             prefix_server,
             "xpool-elastic-kv-restored-hit",
             workload.prefix_tokens,
@@ -195,9 +201,12 @@ def test_e2e_elastic_kv(
         assert restored > 0
         assert restored >= restored_fill
         assert completed == (SUSTAINED_REQUEST_COUNT, SUSTAINED_REQUEST_COUNT)
-        assert primary_hit_output_ids == primary_after_pressure_output_ids == primary_expected_output_ids
-        assert competing_hit_output_ids == competing_after_pressure_output_ids == competing_expected_output_ids
-        assert restored_fill_output_ids == restored_output_ids == restored_expected_output_ids
+        assert_prefill_alignment(primary_reference_logits, primary_hit_logits)
+        assert_prefill_alignment(primary_reference_logits, primary_after_pressure_logits)
+        assert_prefill_alignment(competing_reference_logits, competing_hit_logits)
+        assert_prefill_alignment(competing_reference_logits, competing_after_pressure_logits)
+        assert_prefill_alignment(restored_reference_logits, restored_fill_logits)
+        assert_prefill_alignment(restored_reference_logits, restored_logits)
         return results
 
     run = run_probe(

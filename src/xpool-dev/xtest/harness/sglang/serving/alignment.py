@@ -97,6 +97,36 @@ class ServingGraphArtifact:
             output.write(TypeAdapter(type(self)).dump_json(self, indent=2))
 
 
+def assert_prefill_alignment(reference: torch.Tensor, actual: torch.Tensor) -> None:
+    """Require matching finite FP32 ``[1, V]`` logits and bounded forward KL.
+
+    Computes KL(reference || actual) across the complete vocabulary. Both input
+    validation and the finite-divergence check belong to this shared boundary.
+    """
+
+    for name, logits in (("reference", reference), ("actual", actual)):
+        if logits.dtype is not torch.float32:
+            raise AssertionError(f"prefill logits for {name} must use torch.float32")
+        if logits.ndim != 2 or logits.shape[0] != 1 or logits.numel() == 0:
+            raise AssertionError(f"prefill logits for {name} must have nonempty [1, V] shape")
+        if not torch.isfinite(logits).all():
+            raise AssertionError(f"prefill logits for {name} must be finite")
+    if reference.shape != actual.shape:
+        raise AssertionError(
+            f"prefill logits shapes differ: reference {tuple(reference.shape)}, actual {tuple(actual.shape)}"
+        )
+    reference_log_probs = torch.nn.functional.log_softmax(reference, dim=-1)
+    actual_log_probs = torch.nn.functional.log_softmax(actual, dim=-1)
+    divergence = torch.nn.functional.kl_div(
+        actual_log_probs, reference_log_probs, reduction="batchmean", log_target=True
+    )
+    if not torch.isfinite(divergence) or divergence > PREFILL_DISTRIBUTION_KL_LIMIT:
+        raise AssertionError(
+            f"prefill distribution KL divergence failed: observed {divergence.item():.9f}, "
+            f"limit {PREFILL_DISTRIBUTION_KL_LIMIT:.9f}"
+        )
+
+
 def assert_serving_graph_alignment(
     artifacts: Sequence[ServingGraphArtifact],
     prefill_logits: Mapping[SglangGraphSettings, torch.Tensor],
@@ -143,31 +173,7 @@ def assert_serving_graph_alignment(
         raise AssertionError("combined serving graph alignment requires exactly one model")
     if set(prefill_logits) != {eager_settings, combined_settings}:
         raise AssertionError("combined serving graph alignment requires exactly Eager and combined-mode logits")
-    for settings, logits in prefill_logits.items():
-        if logits.dtype is not torch.float32:
-            raise AssertionError(f"prefill logits for {settings.id()} must use torch.float32")
-        if logits.ndim != 2 or logits.shape[0] != 1 or logits.numel() == 0:
-            raise AssertionError(f"prefill logits for {settings.id()} must have nonempty [1, V] shape")
-        if not torch.isfinite(logits).all():
-            raise AssertionError(f"prefill logits for {settings.id()} must be finite")
-    if prefill_logits[eager_settings].shape != prefill_logits[combined_settings].shape:
-        raise AssertionError(
-            f"prefill logits shapes differ: Eager {tuple(prefill_logits[eager_settings].shape)}, "
-            f"combined {tuple(prefill_logits[combined_settings].shape)}"
-        )
-    eager_log_probs = torch.nn.functional.log_softmax(prefill_logits[eager_settings], dim=-1)
-    breakable_log_probs = torch.nn.functional.log_softmax(prefill_logits[combined_settings], dim=-1)
-    prefill_kl_divergence = torch.nn.functional.kl_div(
-        breakable_log_probs,
-        eager_log_probs,
-        reduction="batchmean",
-        log_target=True,
-    )
-    if prefill_kl_divergence > PREFILL_DISTRIBUTION_KL_LIMIT:
-        raise AssertionError(
-            f"prefill distribution KL divergence failed: observed {prefill_kl_divergence.item():.9f}, "
-            f"limit {PREFILL_DISTRIBUTION_KL_LIMIT:.9f}"
-        )
+    assert_prefill_alignment(prefill_logits[eager_settings], prefill_logits[combined_settings])
 
 
 def evaluate_serving_graph_group(

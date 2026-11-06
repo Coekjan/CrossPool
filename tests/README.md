@@ -248,8 +248,8 @@ It contains the exact public `/generate` request and response and is written
 before HTTP-status and token-shape validation. JUnit describes case outcome,
 `*.duration.json` records timing and resolved graph mode. Explicit Models
 qualification compares Eager and Decode Full token output plus Eager and
-combined-mode first-prefill logits. Model suites own numerical parity; routine
-E2E owns installed serving, observed graph structure, and Transport/Fabric
+combined-mode logits at the end of Prefill. Model suites own numerical parity;
+routine E2E owns installed serving, observed graph structure, and Transport/Fabric
 behavior.
 
 ## Commands

@@ -17,6 +17,7 @@ from xtest.harness.sglang.serving.alignment import (
     ServingGraphAdapter,
     ServingGraphArtifact,
     TokenOutput,
+    assert_prefill_alignment,
     assert_serving_graph_alignment,
 )
 from xtest.harness.support.config import TEST_MODEL_ID
@@ -43,6 +44,10 @@ def test_serving_graph_artifact_round_trips_and_rejects_overwrite(tmp_path: Path
     path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(ValueError, match="nonnegative"):
         ServingGraphArtifact.read(path)
+
+
+def test_prefill_alignment_accepts_close_distributions_with_different_argmax() -> None:
+    assert_prefill_alignment(torch.tensor([[0.0, 0.001]]), torch.tensor([[0.001, 0.0]]))
 
 
 def test_serving_graph_alignment_compares_decode_tokens_and_prefill_distributions() -> None:
@@ -79,6 +84,22 @@ def test_serving_graph_alignment_rejects_prefill_distribution_divergence() -> No
             {
                 SglangGraphMode.EAGER.settings(): eager_logits,
                 SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings(): breakable_logits,
+            },
+        )
+
+
+def test_serving_graph_alignment_rejects_nonfinite_kl_from_finite_logits() -> None:
+    logits = torch.tensor([[3e38, -3e38]], dtype=torch.float32)
+    with pytest.raises(AssertionError, match="prefill distribution KL divergence failed"):
+        assert_serving_graph_alignment(
+            (
+                artifact(SglangGraphMode.EAGER),
+                artifact(SglangGraphMode.DECODE_FULL),
+                artifact(SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE),
+            ),
+            {
+                SglangGraphMode.EAGER.settings(): logits,
+                SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings(): logits.flip(-1),
             },
         )
 

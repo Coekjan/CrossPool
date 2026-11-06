@@ -67,9 +67,12 @@ def prepare(
     environment = runtime_environment(
         observer_outdir=observer_outdir,
         prefill_logit_observer=(
-            {SglangGraphMode.EAGER, SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE}.issubset(case.graph_modes)
-            and graph_settings
-            in {SglangGraphMode.EAGER.settings(), SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings()}
+            case.elastic_kv is not None
+            or (
+                {SglangGraphMode.EAGER, SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE}.issubset(case.graph_modes)
+                and graph_settings
+                in {SglangGraphMode.EAGER.settings(), SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings()}
+            )
         ),
     )
     config = assemble_config(

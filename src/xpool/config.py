@@ -147,7 +147,7 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
         default=False,
         env_var="XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE",
-        description="Development-only switch that records first-prefill logits from SGLang.",
+        description="Development-only switch that records request-prefill logits from SGLang.",
     ),
     ConfigSetting(
         name="debug_prefill_logit_observer_outdir",
@@ -730,13 +730,13 @@ class GraphObserverDebugConfig(BaseModel):
 
 
 class PrefillLogitObserverDebugConfig(BaseModel):
-    """Debug-only first-prefill logit observer settings."""
+    """Debug-only request-prefill logit observer settings."""
 
     model_config = ConfigDict(extra="forbid")
 
     enable: bool = Field(
         default=False,
-        description="Whether the SGLang plugin should record first-prefill next-token logits.",
+        description="Whether the SGLang plugin should record request-prefill next-token logits.",
     )
     outdir: Path | None = Field(
         default=None,
@@ -867,7 +867,7 @@ class DebugConfig(BaseModel):
     )
     prefill_logit_observer: PrefillLogitObserverDebugConfig = Field(
         default_factory=PrefillLogitObserverDebugConfig,
-        description="SGLang first-prefill logit observer debug settings.",
+        description="SGLang request-prefill logit observer debug settings.",
     )
     transport_observer: TransportObserverDebugConfig = Field(
         default_factory=TransportObserverDebugConfig,

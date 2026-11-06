@@ -1,4 +1,4 @@
-"""SGLang Devkit observer for first-prefill next-token logits."""
+"""SGLang Devkit observer for request-prefill next-token logits."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import logging
 import os
 from collections.abc import Callable
 from typing import Concatenate
+from urllib.parse import quote
 
 import torch
 from safetensors.torch import save_file
@@ -22,11 +23,10 @@ __all__ = ["install"]
 runtime_roles = frozenset({RuntimeRole.INSTANCE})
 logger = logging.getLogger(__name__)
 installed = False
-captured = False
 
 
 def install() -> None:
-    """Install first-prefill logit capture on SGLang's model runner."""
+    """Install request-prefill logit capture on SGLang's model runner."""
 
     config = get_global_config()
     outdir = config.debug.prefill_logit_observer.outdir
@@ -44,7 +44,7 @@ def install() -> None:
 def wrap_forward[**P](
     original: Callable[Concatenate[ModelRunner, ForwardBatch, P], ModelRunnerOutput],
 ) -> Callable[Concatenate[ModelRunner, ForwardBatch, P], ModelRunnerOutput]:
-    """Return a model-forward wrapper that records one qualifying output."""
+    """Return a model-forward wrapper that records qualifying Prefill outputs."""
 
     @functools.wraps(original)
     def wrapped(
@@ -65,10 +65,13 @@ def capture_prefill_logits(
     forward_batch: ForwardBatch,
     result: ModelRunnerOutput,
 ) -> None:
-    """Record one rank-zero, single-request EXTEND result without affecting serving."""
+    """Retain each request's latest rank-zero, single-request EXTEND logits.
 
-    global captured
-    if captured or model_runner.ps.tp_rank != 0 or forward_batch.forward_mode is not ForwardMode.EXTEND:
+    Replacing the same request snapshot across chunks leaves its final Prefill
+    distribution available when the HTTP response completes.
+    """
+
+    if model_runner.ps.tp_rank != 0 or forward_batch.forward_mode is not ForwardMode.EXTEND:
         return
     rids = forward_batch.rids
     if not rids:
@@ -76,7 +79,8 @@ def capture_prefill_logits(
     try:
         if len(rids) != 1:
             raise ValueError(f"prefill-logit observer expected one request id, received {len(rids)}")
-        if not rids[0].startswith("xpool-serving-graph-"):
+        request_id = rids[0]
+        if not request_id.startswith(("xpool-serving-graph-", "xpool-elastic-kv-")):
             return
         logits_output = result.logits_output
         if not isinstance(logits_output, LogitsProcessorOutput) or logits_output.next_token_logits is None:
@@ -91,9 +95,8 @@ def capture_prefill_logits(
             raise RuntimeError("xpool prefill-logit observer output directory became unavailable")
         save_file(
             {"next_token_logits": logits.detach().to(device="cpu").contiguous()},
-            outdir / f"xpool.prefill-logits.{os.getpid()}.safetensors",
-            metadata={"rid": rids[0]},
+            outdir / f"xpool.prefill-logits.{os.getpid()}.{quote(request_id, safe='')}.safetensors",
+            metadata={"rid": request_id},
         )
-        captured = True
     except Exception:
-        logger.warning("failed to record xpool first-prefill logits", exc_info=True)
+        logger.warning("failed to record xpool prefill logits", exc_info=True)

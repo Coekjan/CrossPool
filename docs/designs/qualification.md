@@ -38,7 +38,7 @@ Checkpoint metadata does not implicitly select the qualification payload dtype.
 
 Serving graph qualification has two verdicts. Decode compares Eager and Decode
 Full token IDs with eager prefill in both runs. Prefill compares Eager and the
-combined Decode Full plus Prefill Breakable mode's first-prefill logits with
+combined Decode Full plus Prefill Breakable mode's final Prefill logits with
 full-distribution forward KL while the Graph Observer proves that Breakable
 execution actually occurred. Prefill token identity is diagnostic, not a
 correctness requirement.
@@ -135,13 +135,18 @@ mandatory Elastic Context State startup under the combined graph mode. The dedic
 Elastic Context State E2E observes a confirmed prefix-cache hit decrease after peer
 pressure, a positive stable hit after repopulation within the current active
 capacity, and concurrent request completion by both models on the same device
-under Decode Full plus Prefill Breakable. Absolute `cached_tokens` counts are
-diagnostic evidence, not fixed qualification thresholds. Native and
-integration tests own capacity commands, terminal completions, and physical
-map/unmap. Operational logs are diagnostics rather than a correctness
-assertion surface. Qualification cases provide evidence rather than an
-adapter allowlist. Runtime compatibility follows the SGLang memory and cache
-contract, with structural incompatibility at that seam determining rejection.
+under Decode Full plus Prefill Breakable. Cross-path Prefill numerical checks
+compare each prompt's initial full-vocabulary next-token logits with its
+cache-hit, post-pressure and restored Prefill logits. They use the same
+finite-input, shape and forward-KL contract as serving graph qualification.
+Greedy output IDs remain diagnostic across different Prefill geometries.
+Absolute `cached_tokens` counts are diagnostic evidence, not fixed qualification
+thresholds. Native and integration tests own capacity commands, terminal
+completions, and physical map/unmap. Operational logs are diagnostics rather
+than a correctness assertion surface. Qualification cases provide evidence
+rather than an adapter allowlist. Runtime compatibility follows the SGLang
+memory and cache contract, with structural incompatibility at that seam
+determining rejection.
 
 Computation errors, missing ownership and unconfirmed reclamation invalidate
 either route. Preserve the failing case, discrepancy and raw evidence.

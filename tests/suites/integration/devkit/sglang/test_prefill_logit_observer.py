@@ -8,7 +8,6 @@ from typing import cast
 import pytest
 import torch
 from safetensors import safe_open
-from safetensors.torch import load_file
 from sglang.srt.distributed.parallel_state_wrapper import ParallelState
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
@@ -22,7 +21,6 @@ from xtest.harness.support.devkit import observer_enabled_config
 @pytest.fixture
 def reset_prefill_logit_observer(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(xpool.integrations.sglang.devkit.prefill_logit_observer, "installed", False)
-    monkeypatch.setattr(xpool.integrations.sglang.devkit.prefill_logit_observer, "captured", False)
     yield
 
 
@@ -32,7 +30,7 @@ pytestmark = pytest.mark.usefixtures(
 )
 
 
-def test_prefill_logit_observer_records_first_rank_zero_extend(
+def test_prefill_logit_observer_records_latest_extend_per_request(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -52,15 +50,23 @@ def test_prefill_logit_observer_records_first_rank_zero_extend(
     ModelRunner.forward(runner, forward_batch(ForwardMode.EXTEND, ["warmup-rid"]))
     assert not tuple(tmp_path.glob("xpool.prefill-logits.*.safetensors"))
 
-    ModelRunner.forward(runner, forward_batch(ForwardMode.EXTEND, ["xpool-serving-graph-request-rid"]))
-    ModelRunner.forward(runner, forward_batch(ForwardMode.EXTEND, ["xpool-serving-graph-later-rid"]))
+    graph_id = "xpool-serving-graph-Qwen/Qwen2.5-0.5B"
+    ecs_id = "xpool-elastic-kv-primary-fill"
+    ModelRunner.forward(runner, forward_batch(ForwardMode.EXTEND, [graph_id]))
+    logits.add_(1)
+    ModelRunner.forward(runner, forward_batch(ForwardMode.EXTEND, [graph_id]))
+    logits.add_(1)
+    ModelRunner.forward(runner, forward_batch(ForwardMode.EXTEND, [ecs_id]))
 
-    (path,) = tuple(tmp_path.glob("xpool.prefill-logits.*.safetensors"))
-    saved = load_file(path)
-    assert tuple(saved) == ("next_token_logits",)
-    torch.testing.assert_close(saved["next_token_logits"], logits)
-    with safe_open(path, framework="pt", device="cpu") as file:
-        assert file.metadata() == {"rid": "xpool-serving-graph-request-rid"}
+    saved = {}
+    for path in tmp_path.glob("xpool.prefill-logits.*.safetensors"):
+        with safe_open(path, framework="pt", device="cpu") as file:
+            metadata = file.metadata()
+            assert metadata is not None
+            saved[metadata["rid"]] = file.get_tensor("next_token_logits")
+    assert set(saved) == {graph_id, ecs_id}
+    torch.testing.assert_close(saved[graph_id], logits - 1)
+    torch.testing.assert_close(saved[ecs_id], logits)
 
 
 def test_prefill_logit_observer_skips_nonzero_tp_rank(

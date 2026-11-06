@@ -55,8 +55,8 @@ def test_prepare_applies_deployment_policy_and_sanitizes_environment(
     assert "SGLANG_GRPC_PORT" not in launch.environment
     assert launch.config.debug.transport_observer.record_capacity == SERVING_OBSERVER_RECORD_CAPACITY
     assert launch.config.debug.fabric_observer.record_capacity == SERVING_OBSERVER_RECORD_CAPACITY
-    assert not launch.config.debug.prefill_logit_observer.enable
-    assert "XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE" not in launch.environment
+    assert launch.config.debug.prefill_logit_observer.enable is (case.elastic_kv is not None)
+    assert ("XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE" in launch.environment) is (case.elastic_kv is not None)
 
 
 @pytest.mark.parametrize(
@@ -90,6 +90,7 @@ def test_prepare_elastic_kv_preserves_absolute_memory_budget(
     )
 
     assert launch.config.atn.device_memory_utilization == pytest.approx(expected_utilization)
+    assert launch.config.debug.prefill_logit_observer.enable
 
 
 @pytest.mark.parametrize(
