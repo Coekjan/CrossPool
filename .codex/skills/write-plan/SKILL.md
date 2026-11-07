@@ -7,7 +7,7 @@ description: Create or revise a decision-complete xpool change plan under docs/p
 
 Write one self-contained target delta for one active task. A simple local change
 that neither needs design decisions nor coordinates multiple implementation
-steps does not need a tracked plan.
+steps does not need a separate task plan.
 
 ## Workflow
 
@@ -23,13 +23,19 @@ steps does not need a tracked plan.
    the user requests review before implementation. Existing authorization does
    not require repeated approval; permission to write a plan alone does not
    authorize its implementation.
-4. Create or revise `docs/plans/<task>/README.md`. Use a descriptive kebab-case
+4. Before creating a new `docs/plans/<task>/` directory, ask whether to ignore
+   it in Git. Recommend ignoring it so the plan stays local. Wait for the
+   answer before creating the directory, unless the user has already made an
+   explicit choice for this task. If they choose ignore, create the directory
+   and then write its `.gitignore` with the single line `*` before writing plan
+   files. Preserve an existing plan's ignore policy when revising it.
+5. Create or revise `docs/plans/<task>/README.md`. Use a descriptive kebab-case
    task name; add directly named supporting documents in that directory only
    when the main plan cannot carry an independently useful decision, research
    result, or prototype result clearly.
-5. Record resolved domain terms in the root `CONTEXT.md`. Keep implementation
+6. Record resolved domain terms in the root `CONTEXT.md`. Keep implementation
    details and decisions in the task directory.
-6. Stop before source changes while any material question remains open.
+7. Stop before source changes while any material question remains open.
 
 ## Plan Contract
 
