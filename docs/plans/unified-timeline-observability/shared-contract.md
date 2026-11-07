@@ -1,0 +1,999 @@
+# Shared Observability Contract v4
+
+This is the target contract linked from the [task plan](README.md). Version 4
+supersedes versions 1, 2, and 3 as one coordinated specification/fixture revision.
+Readers and participants accept only version 4; no compatibility interpretation is
+provided. This revision defines Generation-scoped Producer-to-PE membership,
+limits Producer registration to observed runtime processes, and places Coordinator
+evidence in its actual FfnAgent process. Field availability, per-snapshot evidence
+reports, and path-dependent completeness remain explicit. The 256-byte Event
+layout, IPC field layout, and calibration mathematics are unchanged; versioned
+artifacts and IPC descriptors use version 4.
+All integers on disk are little-endian except opaque UUID bytes. Native struct padding,
+`size_t`, pointers, CUDA handles, and enum ordinals inferred from C++ layout are
+never wire representations. Fixture JSON uses exact integer tokens; consumers
+must not round them through IEEE-754 doubles.
+
+## Identity and Metadata
+
+| Identity | Type and scope | Allocation and isolation |
+| --- | --- | --- |
+| Run | 16-byte UUID | New launch Attempt; never PID or wall time alone |
+| Process creation | 16-byte UUID | New OS process creation, even after PID reuse |
+| Producer | Positive u64 within Run | Launcher registers one Host source per observed Instance Rank, AtnAgent, or FfnAgent process, and one Device source per such process/Device; retries never reuse IDs |
+| Generation | Positive u64 metadata reference within Run | Resolves to the exact production FabricGenerationId string |
+| Endpoint | `(owner_producer, endpoint_sequence)` | `owner_producer` is the AtnAgent process's Device Producer; the AtnAgent Device source allocates a positive sequence for each new IPC observation region. One region is exported per Transport Arena pairing, matching the existing one-Arena-per-Instance-rank export granularity; it is never shared across TP/DP ranks |
+| Operation | `(Run, Endpoint, operation_sequence)` | Positive Device counter after successful Mailbox Claim; independent of event reservations |
+| Graph template | `(Run, graph_owner, template_sequence)` | Host source registers a fresh template when capturing/installing; actual CUDA handles are not identity |
+| Graph execution | `(Run, graph_owner, execution_sequence)` | Fresh positive sequence per actual invocation of the execution path; Eager has no template |
+| Invocation | `(Run, Generation, instance_index, invocation_sequence)` | Uses production InvocationKey; index may be zero, sequence is positive |
+| Lane/Lease | `(Run, Generation, lane_index, lease_sequence)` | Uses production assignment; Lane zero is valid, lease is positive |
+| Routing attachment | `(Run, attachment_owner, attachment_sequence)` | Device publication allocates sequence independently of event/tensor capacity |
+| Clock domain | Positive u64 within Run | Host CLOCK_MONOTONIC reference; Device domain additionally names process, physical UUID, and raw-clock Epoch |
+| Event | `(Run, Producer, event_sequence)` | Positive attempted-event counter; never a buffer slot or operation sequence |
+
+Producer IDs and metadata references are registered before Capture and copied
+as immutable observation configuration. Endpoint sequences are not local arena
+indices. The Endpoint owner is shared by the Instance and AtnAgent, although
+their event Producers differ. Each Producer has exactly one clock domain;
+one process can have several Producers. Physical UUIDs, process creation,
+logical-device mapping, model IDs, Instance topology, scheduler policy,
+capabilities, and artifact references live in metadata.
+
+The Daemon allocates and distributes observation identities and brokers IPC
+descriptors; it is not an event source in this contract. It registers no Host
+Producer for itself and owns no observation Collector/Writer or associated
+collection budget. An absent Daemon Producer artifact is not an evidence gap.
+Run-level missing-process checks range only over registered observation sources.
+`coordinator` and `collector` are Event roles, not additional process roles:
+the Coordinator executes in the first FfnAgent PE, and calibration collection
+uses the observed process's Host Producer. Future Daemon control-plane events
+require a separately specified contract extension.
+
+The launcher distributes one Run and the registered Producer/Generation/clock
+IDs through the existing preparation/bootstrap path. IPC exports add optional
+`observation_region` with exactly version:u32=4, owner_producer:u64,
+endpoint_sequence:u64, generation:u64, allocation_bytes:u64, and handle.
+Handle uses the existing canonical hexadecimal CUDA IPC handle representation;
+it is never persisted in raw timeline metadata. Disabled related observation
+exports null and allocates no region. Version or preparation-policy mismatch
+fails startup; all participants use the same Native ABI, with no old-worker
+fallback.
+
+### Endpoint allocation, export, and attachment
+
+One `observation_region` is allocated per Transport Arena pairing, in the same
+`cudaMalloc` call sequence that creates that Arena (the existing
+`Arena::create()` allocation path). The AtnAgent process's Device Producer
+assigns a fresh positive `endpoint_sequence` immediately before this
+allocation; sequences are never reused within a process lifetime. The region's
+IPC handle is exported through `cudaIpcGetMemHandle` and encoded with the
+existing `xpool::utils::hex::HexValue<cudaIpcMemHandle_t>` convention,
+identical to the Transport Arena handle encoding (`Arena::handle()`). It is
+published to the Daemon broker as additional sibling fields on the same
+descriptor record already used for the Arena handle (the existing
+`TransportBroker.publish()` path); no new RPC is introduced. The Instance
+fetches and attaches it with `cudaIpcOpenMemHandle` at the same call site
+where it already attaches the Transport Arena handle. Preparation derives one
+immutable `transport_identity_required` policy for
+both participants: it is true when Unified Timeline or Transport Observer is
+enabled, or another enabled observation consumer explicitly requires shared
+Endpoint/Operation identity. Only when it is false is `observation_region` null
+and no region allocated. A required region missing from a descriptor, or a
+participant policy/version mismatch, fails startup. Graph-only and Routing-only
+observation do not require this region merely because they are enabled;
+process-local Context and sampler storage are separate resources. Independent
+mode accounts for the region in its observation allocation budget as well.
+
+### Endpoint recreation
+
+A new region and a new `endpoint_sequence` are allocated whenever the
+underlying Transport Arena is itself recreated: an AtnAgent process restart
+(new process-creation identity), or an explicit Arena re-pairing following a
+Fabric Generation rollover. `generation` in the descriptor is the Generation
+reference current at the moment of this allocation. The prior region's CUDA
+allocation and IPC mapping retire only after the Instance has detached
+(`cudaIpcCloseMemHandle`) and any Collector or snapshot-reconstruction work
+still reading the prior generation's events has drained, following the
+general rule above that mappings retire after IPC detach and in-flight work.
+The hot descriptor itself carries no "superseded" field; Endpoint lineage
+across recreation is a metadata concern (see Metadata revision below), not a
+per-export wire concern.
+
+### Operation word and write/read timing
+
+The versioned public prefix contains only `operation_sequence:u64` at offset
+zero, naturally eight-byte aligned. Its size is eight bytes; allocation-alignment
+rounding is accounted separately. There is no Graph identity or Graph relay in
+this region. Graph relationships are immutable events recorded by the actual
+execution owners, not a last-resolved Graph tuple on an Endpoint.
+
+The Instance writes the fresh positive sequence after successful Claim
+(`try_begin_staging()` returns true), before `publish_request()`. The AtnAgent
+reads it after `observe()` returns `Published`. Visibility reuses the Mailbox's
+existing release-acquire pair, which already protects `payload_rows` and
+`request`. No new atomic primitive is required for this protocol-owned access.
+A subsequent Claim can overwrite the word only after the previous cycle's
+`acknowledge()` changes Evaluated to Idle. The AtnAgent must copy the identity
+into every event that needs it before `publish_result()` permits reuse; the
+background Collector never rereads this mutable word to complete an event.
+
+The successful claimant increments the operation counter independently of
+event reservations. Exhaustion follows the identity-exhaustion policy below;
+it must not wrap or abort production. Endpoint recreation creates a new region
+and sequence. Observation state stays out of production RequestMetadata and
+the production Arena allocation. Mappings retire after IPC detach and in-flight
+work.
+
+### Diagnostic reads
+
+Online diagnostics consume immutable committed events through the Collector.
+Direct inspection of `observation_region` or Dynamic Context storage is valid
+only after the relevant writers and readers are quiesced or explicitly
+synchronized. A diagnostic request without that precondition reports
+`unavailable`; it must not accept a live raw-memory sample as a consistent
+snapshot. If execution is stuck and synchronization cannot complete, diagnostics
+can show already collected evidence and unknown tails, not a fabricated current
+snapshot.
+
+`context_generation` identifies Context slot reuse; it is not a seqlock or a
+snapshot version. Equal reads do not exclude an Operation update, an unfinished
+Context write, or a mixed-field sample. This version defines no live IPC
+snapshot API. Adding one requires a separately specified publication protocol
+covering all writers, atomic access and memory ordering, cross-process
+visibility, bounded retries, and slot lifetime during reads. A version check or
+double buffer alone is insufficient.
+
+### Dynamic Context storage: process-wide, not per-Endpoint
+
+Context identity `(graph_owner, execution_sequence, template_sequence,
+context_generation)` is scoped to the actual Graph-owning process's Host Producer
+(`graph_owner`): the Instance Rank for SGLang execution, and the FfnAgent for
+native FFN execution. AtnAgent does not own either Graph family. This scope is
+independent of any single Endpoint: a `lane_service` execution can
+serve multiple Invocations over its lifetime, and TP/DP activity under one
+Invocation is not attributable to exactly one Endpoint. The canonical bounded
+Context slot array is therefore a separate, process-wide Device allocation
+owned by the Graph Observer, sized once per `graph_owner`, independent of how
+many Endpoints that process currently has open. Its recommended default
+layout:
+
+| Offset | Field | Type | Purpose |
+| --- | --- | --- | --- |
+| 0 | `slot_generation` | u64 | Incremented on every reuse; the generation a reader must match |
+| 8 | `execution_sequence` | u64 | Owning Graph execution identity |
+| 16 | `template_sequence` | u64 | Zero for Eager |
+| 24 | `stream_ordinal` | u64 | Process-local monotonic registration ID of the owning Stream; never a raw `CUstream` handle |
+| 32 | `state` | u32 | `Free=0`, `Reserved=1`, `Committed=2` |
+| 36 | (padding) | u32 | Zero |
+
+Slot size is 40 bytes. Default capacity (`context_slot_capacity`) is **64**
+per process, sized for the worst-case concurrent-Stream count across all
+observed execution paths in the owning Instance Rank or FfnAgent process.
+`context_slots_bytes = 64 * 40 = 2560` bytes. Concurrent Streams use distinct live slots; slot reuse
+follows the existing completion-boundary rule. Context overflow increments
+`context_unavailable` and leaves association unavailable; it never overwrites
+an in-flight slot. Disabled Graph observation allocates no Context array.
+
+An alternative of folding this array into each `observation_region` (one full
+Context array per Endpoint) was evaluated and rejected: it requires either
+duplicating `lane_service` Context across every Endpoint it serves or picking
+one arbitrary "owning" Endpoint for it, both of which conflict with the
+Context identity's process-wide scope. FfnAgents have no Transport Endpoint in which to store such Context.
+
+### Calibration sampler storage: per-process Device Producer, not inside observation_region
+
+A sampler's identity is `(Run, Host Producer, Device clock_domain_id)` and
+must exist for every process with a Device Producer, including FfnAgent
+processes that never create an `observation_region` at all (FfnAgent has no
+Transport Endpoint). Sampler storage is therefore a separate, non-IPC,
+per-process Device allocation, parallel to `observation_region` rather than
+inside it:
+
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `raw_g_ns` | u64 | Written by the short sampling Kernel on the dedicated Stream; read back by the Host via `cudaMemcpyAsync` after completion confirmation |
+
+Default `sampler_slot_capacity` is **1** per process (one clock domain per
+Device Producer in the common case), configurable up to a small bound for a
+process observing more than one Device. `sampler_bytes =
+sampler_slot_capacity * 8`. All other sampler bookkeeping (`in_flight` flag,
+last `attempt_sequence`, stashed `H_before`, current Epoch id) is ordinary
+Host-process memory, not a Device allocation, and is accounted under the
+existing Host collection budget, not the Device budget.
+
+### Device collection budget composition
+
+`debug.timeline.device_bytes` (default 8388608) must cover, per
+process/Device:
+
+```text
+logical_device_bytes =
+    device_event_slot_capacity * (256 + 16)  # event ring payload + control
+  + endpoint_capacity * 8                   # Operation IPC region(s)
+  + context_slot_capacity * 40              # process-wide Dynamic Context
+  + sampler_slot_capacity * 8               # calibration raw-G buffers
+  + 256                                    # fixed Collector control
+
+device_bytes_required = logical_device_bytes + allocation_alignment_bytes
+```
+
+Recommended defaults: `device_event_slot_capacity=16384`, `endpoint_capacity=8`,
+`context_slot_capacity=64`, `sampler_slot_capacity=1`. Substituting these
+values:
+
+```text
+16384 * 272 = 4,456,448
+     8 * 8  =        64
+      2,560 =     2,560
+          8 =         8
+        256 =       256
+total        = 4,459,336 bytes
+```
+
+This logical byte total is below the 8,388,608-byte default. Startup includes
+per-allocation alignment rounding in addition to these logical sizes before
+comparing the complete requirement with the budget. It computes
+`device_bytes_required` from the active configuration and rejects the process if it exceeds `device_bytes`,
+per the existing rule that startup rejects a configuration whose minimum
+allocations exceed its budget. The example includes all listed resources;
+actual per-process admission includes only active categories and counts each
+physical allocation once. FfnAgents have no Endpoint IPC regions. Context is
+charged to its actual Graph owner, while sampler storage exists only when
+calibration is enabled. Independent observers include their required identity
+allocations even when Unified Timeline is disabled.
+
+Every identity/counter exhaustion is explicit: stop observation in the affected
+identity domain, set `identity_exhausted`, and preserve production results.
+Saturate quality counters with `counter_exhausted`; never wrap or abort a
+production kernel because an observation counter exhausted. Exhausted Context
+capacity reports unavailable Graph association; it never overwrites an in-flight
+Context or blocks the production path waiting for observation storage.
+
+### Metadata revision
+
+Each immutable `metadata.<producer>.<revision>.json` contains exactly:
+`contract_version`, `run_id`, `producer_id`, `revision`, `process`,
+`clock_domain_id`, `producers`, `generations`, `clock_domains`, `endpoints`,
+`graph_templates`, `artifacts`, `capabilities`, and `configuration`.
+UUIDs use lowercase canonical text. Process contains `creation_id`, `pid`, and
+`runtime_role`, restricted to `instance`, `atnagent`, or `ffnagent`.
+Producer entries include their complete Process, source kind,
+and clock domain so remote roles can reconstruct their own snapshots. Array
+entries use positive integer `id` keys where applicable;
+Endpoint and template entries use their composite identities. References are
+immutable across revisions. Import metadata for every referenced remote owner
+and identity before publishing a referencing chunk. Graph executions and
+operation sequences are dynamic identities, not per-operation dictionary entries.
+Endpoint entries optionally carry `supersedes_endpoint_sequence` naming the
+prior Endpoint this one replaces under the same `owner_producer`, letting
+offline reconstruction stitch Endpoint-recreation lineage without widening the
+hot IPC descriptor.
+
+Revision starts at one and increases. Hash the exact UTF-8 file bytes, including
+its final newline; chunk headers contain the first 16 bytes of SHA-256.
+Metadata is published before its chunks. Revision updates are bounded by Host
+and disk budgets. If metadata cannot be published, do not publish undecodable
+chunks; report `metadata_unavailable` and stop the affected collection source.
+An entirely absent registered observation-source process artifact is a run-level
+evidence gap; the Daemon is excluded. A present chunk
+with missing/mismatched required metadata is a structured parse error.
+
+### Fabric membership
+
+Every Generation entry has a required `pe_members` array in ascending PE order.
+Each member contains exactly `pe:i32`, `host_producer:u64`, and
+`device_producer:u64`. PE is nonnegative; both Producer references are positive.
+The array covers exactly `0 .. atnagent_count + ffnagent_count - 1`, without
+duplicates or gaps. Members before `atnagent_count` belong to AtnAgent processes;
+the remaining members belong to FfnAgent processes. The Coordinator executes on
+PE `atnagent_count`, the first FfnAgent PE; it has no separate Producer or PE.
+
+Member references resolve to registered Host and Device sources, respectively,
+with identical complete Process identity. The Device clock domain belongs to
+that same process creation. A Producer may appear in only one member of a
+Generation. Instance sources never directly own Fabric PEs: an Endpoint's
+AtnAgent peer is not the Instance's own PE. Membership identifies process owners,
+not physical Device UUIDs or process-local Device indices.
+
+Preparation derives membership from the Daemon's authoritative Fabric Plan and
+the registered process owners, never from observed event order. Publish the
+complete member table and imported Producer/clock definitions before any chunk
+references that Generation. The table is immutable across metadata revisions
+for an existing Generation. A new Generation may assign a different PE to the
+same Producer, without changing that Producer's process/source/clock identity;
+lookup is always `(Run, Generation, Producer)`, never Producer alone.
+
+Snapshot Generation/PE/topology come from this metadata. An Event's present PE
+must agree with the member containing its recording Producer in its Generation.
+Fabric AtnAgent/FfnAgent roles require the corresponding process role;
+Coordinator events require the first FfnAgent member. Graph and other events
+without PE may resolve membership only when their own Generation and recording
+Producer identify a member; an Instance event remains a nonmember. No missing
+Generation or membership is repaired by timestamps, logical Device numbers,
+other events, or an associated remote owner.
+
+Missing required membership, an uncovered PE, out-of-range PE, unresolved
+references, wrong source kinds, mismatched process/clock ownership, or invalid
+role placement fail with `invalid_event`. Duplicate PE or Producer bindings,
+redefinition of an existing Generation's table, and a present Event PE conflicting
+with membership fail with `identity_conflict`. Validate table shape/coverage,
+references/ownership, then Event membership, in that order; duplicate bindings
+are checked before coverage. Errors include the metadata field path and
+Generation, Producer, and PE when available, in addition to ordinary parse
+context. These checks are part of metadata semantic validation after identity/hash
+verification and before payload semantic decoding; Event checks follow ordinary
+width/presence/enum/reference validation. Missing membership is malformed
+metadata, not missing normal evidence.
+
+## Event Vocabulary and Boundaries
+
+These IDs are stable wire values. Hook enum values are mapped explicitly.
+The name arrays in [the layout fixture](fixtures/layout.json) are normative.
+
+| IDs | Source and ordered names | Meaning |
+| --- | --- | --- |
+| 100–110 | Transport: RequestStagingStarted, RequestStagingCompleted, RequestPublished, RequestObserved, ExecutionStarted, ExecutionCompleted, ResultPublished, ResultObserved, OutputCopied, ResultAcknowledged, Closed | Existing `TransportProtocolEventKind` boundaries, unchanged |
+| 200–205 | AtnAgent Fabric: SubmissionPrepared, SubmissionPublished, AdmissionObserved, InputReadyPublished, OutputCommitObserved, OutputAcknowledgementPublished | Local preparation/publication/observation, not a remote acknowledgement inferred from time |
+| 300–307 | Coordinator: Enqueued, Scheduled, AdmissionPublished, LaneExecutionPublished, FfnAgentCompletionsObserved, OutputCommitPublished, OutputAcknowledgementsObserved, LaneReleased | Existing aggregate conditions; they do not contain individual participant observation times |
+| 400–408 | FfnAgent: LaneExecutionObserved, InputReadyObserved, RoutingMetadataPublished, RoutingMetadataObserved, ComputeStarted, ComputeCompleted, PartialReadyPublished, PeerPartialsReadyObserved, CompletionPublished | Observed protocol and compute facts of this PE |
+| 450 | TransportFabricAssociated | Actual entry into Submission preparation with the real key; does not imply SubmissionPublished |
+| 500–503 | GraphCaptureBegin, GraphCaptureEnd, GraphCaptureError, GraphTemplateInstalled | Template lifecycle; Capture is construction activity |
+| 504–506 | GraphHostCallBegin, GraphHostCallEnd, GraphHostCallError | Host call boundaries; return does not prove Device completion |
+| 507–508 | GraphDeviceActivityBegin, GraphDeviceActivityEnd | Device record points installed in the actual execution path; only the measured activity is enclosed |
+| 509–512 | GraphTemplateRetired, GraphInstallBegin, GraphInstallEnd, GraphInstallError | Installation and retirement lifecycle |
+| 550 | RoutingPublished | Same real RoutingMetadataPublished boundary, enriched with attachment identity |
+| 600–601 | CalibrationSampleSucceeded, CalibrationSampleFailed | Host-published asynchronous sampling outcome, not production-stream synchronization |
+
+Transport events retain their site. Before Fabric entry, rejection, shutdown, or
+timeout can produce a Transport terminal event without an association. Missing
+association evidence remains `association_missing`; matching metadata values
+or nearby timestamps never repairs it. A retained association proves entry;
+a missing publication event makes publication unknown. TP/DP contribution
+operations remain separate and can share one Invocation.
+
+`TransportFabricAssociated` is committed at actual Submission preparation:
+after production validation succeeds and the real InvocationKey and Submission
+facts are available, before Submission publication or any Admission/output
+wait. The existing SubmissionPrepared Hook is the concrete boundary. Constructing
+a candidate key or calling the outer Fabric function alone does not prove entry.
+The association contains no guessed Graph identity. SubmissionPublished separately
+proves local publication. After `fabric::atnagent::execute()` returns, Transport
+records ExecutionCompleted and its result publication; these are completion
+facts, not a second association or the first opportunity to establish one.
+A failed or non-returning execution can therefore retain its entry association
+without a completion event. Early event commit does not guarantee recovery
+from Device/process failure: capacity losses and untransferred tails remain
+explicitly missing or unknown.
+
+Graph Host events have execution mode `replay=1`, `eager=2`, or
+`lane_service=3`, and phase `decode=1`, `prefill=2`, or `native_ffn=3`.
+Capture events have a template identity; calls and Device activities have a
+fresh execution identity. Eager carries no template identity. Native Primary
+parameterization maps to GraphTemplateInstalled; Lane build registers a
+separate `lane_service` template referencing its selectable compute templates.
+Existing installation lifecycle Hooks map to GraphInstallBegin/End and retirement.
+New dynamic boundaries are installed by their production execution owners.
+`graph_owner` is the registered Host Producer of the process that owns the
+Graph lifecycle, including Device-issued activities. The recording `Producer`
+and its clock domain still identify the actual Host/Device event source;
+Device Graph events must resolve to a Host owner in the same process creation.
+Instance events associate SGLang execution with each Operation at its actual
+Transport execution boundary. AtnAgent associates that Operation with Invocation
+at Submission preparation. FfnAgent events associate the actual selected Graph
+activity with Invocation/Lease at Compute Branch selection. No owner infers
+another process's Graph mode or selected template from Fabric return.
+These explicit edges preserve one Graph execution to many Operations and one
+Invocation to multiple participating Graph activities. The registered Graph
+owner has disjoint execution-sequence ranges: Host-issued
+sequences are 1 through 2^63-1; Device-issued activities use 2^63 plus a local
+counter in 1 through 2^63-1. Both local counters stop before overflow. This
+permits native activity allocation on Device while templates remain Host-owned.
+Compute Branch selection records the actual chosen template, Invocation, and
+Lane/Lease at GraphDeviceActivityBegin; its End encloses that activity only.
+A long-lived Lane service launch is a separate execution, not one launch per
+Invocation. Repeated templates do not imply repeated Capture.
+
+Dynamic Context is `(graph_owner, execution_sequence, template_sequence,
+context_generation)` in bounded Device storage. Stream-ordered installation
+precedes the actual execution, and slot reuse follows its completion boundary.
+Capture warmup uses construction-only Context with no production execution ID;
+Replay resolves fresh Context from Device storage. Concurrent Streams use
+distinct live slots. A Context overflow leaves association unavailable and
+increments quality; no stale Capture ID or guessed replacement is allowed.
+This storage is process-wide per `graph_owner`, not per `observation_region`;
+see "Dynamic Context storage: process-wide, not per-Endpoint" above for its
+default layout and capacity.
+
+## Fixed Event Layout
+
+Every record is 256 bytes. The Producer and Run are supplied by the chunk.
+All unlisted presence bits and all absent fields are zero. Zero is a valid
+timestamp; only legacy projections use zero as their missing-time sentinel.
+
+| Offset | Field | Type |
+| --- | --- | --- |
+| 0, 8, 16 | event_sequence, raw_time_ns, clock_domain_id | u64 each |
+| 24, 28 | kind, presence | u32 each |
+| 32 | generation | u64 |
+| 40, 48, 56 | endpoint_owner, endpoint_sequence, operation_sequence | u64 each |
+| 64, 72, 80 | graph_owner, graph_template, graph_execution | u64 each |
+| 88, 96 | instance_index, invocation_sequence | u64 each |
+| 104, 112 | lane_index, lease_sequence | u64 each |
+| 120, 128 | attachment_owner, attachment_sequence | u64 each |
+| 136 | local_trace_id | u64 |
+| 144, 152, 160, 168, 176 | layer_ordinal, payload_rows, dp_rank_payload_rows, payload_row_capacity, ready_ticket | u64 each |
+| 184, 188, 192, 196, 200 | forward_mode, output_requirement, dp_row_layout, delivery, result_code | u32 each |
+| 204, 208, 212 | role, instance_rank, pe | u32, u32, i32 |
+| 216, 224, 232, 240, 248 | data0, data1, data2, data3, data4 | u64 each |
+
+Presence bits group fields:
+
+| Bit | Fields made present |
+| --- | --- |
+| 0 | generation |
+| 1 | endpoint_owner, endpoint_sequence |
+| 2 | operation_sequence; requires bit 1 |
+| 3 | graph_owner, graph_template |
+| 4 | graph_owner, graph_execution |
+| 5 | instance_index, invocation_sequence; requires bit 0 |
+| 6 | lane_index, lease_sequence; requires bit 0 |
+| 7 | attachment_owner, attachment_sequence |
+| 8 | local_trace_id |
+| 9 | layer_ordinal, payload_rows, forward_mode, output_requirement, dp_row_layout |
+| 10 | layer_ordinal, payload_rows, output_requirement |
+| 11–17 | dp_rank_payload_rows, payload_row_capacity, ready_ticket, delivery, result_code, instance_rank, pe, respectively |
+
+Bit 9 implies bit 10; both bits are set in the canonical request encoding.
+Bit 17 requires bit 0: PE is meaningful only in an explicit Generation.
+Shared fields such as graph_owner are absent only when every containing group
+is absent. Identity components are positive except the explicitly zero-based
+Instance/Lane/rank/PE indices. Domain references must match the Event's Producer.
+
+Role is always present: `instance=1`, `atnagent=2`, `coordinator=3`,
+`ffnagent=4`, `collector=5`. Absent PE stores zero, not minus one.
+Preserve FFN wire values from `xpool/ffn.hpp`: Prefill 1, Decode 2, Idle 4;
+PerRankComplete 1, GroupSumComplete 2; None/UniformByRank/PackedByRank 0/1/2;
+Ok/Shutdown/ProtocolMismatch/Timeout 0/1/2/3. Delivery uses
+DirectPartial/SingleComplete/ReplicatedComplete 1/2/3.
+
+Transport records require Generation, Endpoint, Operation, local trace ID,
+request facts, and Instance Rank. Fabric records require Generation,
+Invocation, local trace ID, invocation facts, and PE. AtnAgent records also
+carry request facts and DP rows; FfnAgent records carry Lease, row capacity,
+and delivery. Coordinator ticket is present for FIFO scheduling and absent for
+random; scheduler policy is immutable metadata so loss cannot turn FIFO into
+random. AtnAgent Lease becomes known at AdmissionObserved; Coordinator Lease
+at Scheduled. Each later event repeats already known facts. A result becomes
+known only when observed/published/closed at that site; never borrow another
+site's effective result.
+
+TransportFabricAssociated requires both Operation and Invocation and repeats
+request/submission facts. It uses role atnagent. Graph protocol activity carries
+its corresponding Operation or Invocation/Lease; Hosting alone does not prove
+the relation. RoutingPublished requires Invocation, Lease, attachment identity,
+invocation facts, and publisher PE. Identity-bearing fields must resolve to
+metadata in the referencing revision. Any not-applicable payload word is zero.
+
+| Kind family | data0…data4 interpretation |
+| --- | --- |
+| Transport, Fabric, association | All zero |
+| Graph | mode, phase, artifact_id (zero if unavailable), context_generation (zero on Host), error_code |
+| RoutingPublished | attachment_state, effective_topk, artifact_id (zero until publication), 0, 0 |
+| CalibrationSampleSucceeded | H_before, G, H_after, Device clock_domain_id, attempt_sequence |
+| CalibrationSampleFailed | H_before, 0, failure_code, Device clock_domain_id, attempt_sequence |
+
+Graph error_code: `none=0`, `capture_failed=1`, `install_failed=2`,
+`host_call_failed=3`, `context_unavailable=4`, `device_boundary_unavailable=5`.
+Routing attachment_state: `reserved=1`, `not_collected=2`, `capacity_exhausted=3`,
+`payload_oversize=4`; final published/missing/I/O-failed status comes from the
+attachment index, not by mutating an event. Sample failure_code:
+`enqueue_failed=1`, `completion_failed=2`, `timed_out=3`, `shutdown=4`.
+Samples use collector role and the Host Producer/domain. Their raw time is
+completion-confirmation time on success and outcome-report time on failure.
+Sample Device resources remain owned until completion despite timeout.
+
+## Native Collection Boundary
+
+Proposed declarations live under `xpool::devkit::timeline`; implementation
+headers follow the repository's native naming convention. Public field layout
+above is independent of private ring-slot layout.
+
+```cpp
+enum class ReserveStatus : std::uint32_t {
+  Reserved = 0, Full = 1, Stopped = 2, IdentityExhausted = 3,
+};
+enum class CommitStatus : std::uint32_t {
+  Committed = 0, StaleToken = 1, AlreadyCommitted = 2,
+};
+enum class AbandonStatus : std::uint32_t {
+  Abandoned = 0, StaleToken = 1, AlreadyCommitted = 2,
+};
+enum class CollectionErrorCode : std::uint32_t {
+  ResourceBudget = 1, Allocation = 2, Transfer = 3, InvalidRelease = 4,
+  Io = 5, MetadataUnavailable = 6,
+};
+struct WriteToken {
+  std::uint64_t slot;
+  std::uint64_t slot_generation;
+  std::uint64_t event_sequence;
+};
+struct ReserveResult { ReserveStatus status; WriteToken token; };
+struct ConsumeToken { std::uint64_t batch; std::uint64_t generation; };
+struct PollResult {
+  std::optional<ConsumeToken> token;
+  std::span<const Event> events;
+};
+
+XPOOL_DEVICE_FN ReserveResult try_reserve_device(BufferView buffer);
+XPOOL_DEVICE_FN CommitStatus commit_device(BufferView buffer, WriteToken token,
+                                           const Event &event);
+XPOOL_DEVICE_FN AbandonStatus abandon_device(BufferView buffer, WriteToken token);
+ReserveResult try_reserve_host(HostBuffer &buffer);
+CommitStatus commit_host(HostBuffer &buffer, WriteToken token, const Event &event);
+AbandonStatus abandon_host(HostBuffer &buffer, WriteToken token);
+PollResult poll(Collector &collector, std::uint32_t max_events);
+void release(Collector &collector, ConsumeToken token);
+QualitySnapshot quality(const Collector &collector);
+```
+
+`Event` is a trivially copyable field declaration matching the 256-byte layout;
+compile-time size/offset assertions guard it. Serialization explicitly encodes
+fields. Host APIs throw `CollectionError`, derived from `c10::Error`, with
+typed CollectionErrorCode, Producer, optional path, and root cause. Python
+bindings preserve those fields and expose enum names as resource_budget,
+allocation, transfer, invalid_release, io, and metadata_unavailable. Device
+statuses never change production control flow. `abandon` retires an uncommitted
+reservation and increments abandoned; it does not publish an Event.
+Non-Reserved ReserveResult tokens are all zero and grant no ownership.
+
+Reservation is bounded and nonblocking; Full consumes an attempted-event
+sequence and increments dropped_full. Stopped allocates no sequence after a
+source has stopped. Disabled mode installs no collection work. A successful
+token grants exclusive ownership of one slot generation. Commit verifies the
+token, writes the entire Event, then release-publishes completion. Token checks
+cannot race reclamation: reserved slots are ineligible for reclamation.
+Stale/double commits are observation failures, with explicit counters.
+
+Each process owns a background collection thread that runs during serving,
+using `collection_interval_ms` (default 100 ms) to drive collection. It submits
+asynchronous Device-to-Host event copies and checks their completion so that
+Device slots can be reclaimed promptly rather than only at shutdown. This
+reduces capacity pressure but does not guarantee loss-free collection. Writer
+file I/O runs outside this thread and must not block its collection or
+completion checks; handoff uses bounded Host-owned batches without waiting
+for the Writer or allocating an unbounded queue. Staging, in-flight transfers,
+queues, and Writer-held batches remain within the Host collection budget.
+Host capacity exhaustion must have explicit loss accounting and never cause
+premature reuse of a Device slot or a Host batch still owned by the Writer.
+
+Collector acquire-observes completion before starting a Device-to-Host copy;
+an asynchronous copy may read only immutable committed slots. It does not
+synchronize production Streams. Out-of-order completion is consumable without
+waiting for a pending lower sequence. A slot cannot be reused before the full
+copy completes and its previous ownership is retired; reclamation does not
+wait for file publication. `poll` returns a bounded
+Host-owned batch or an empty result; its span stays valid until `release`.
+The Writer releases it after publication or a counted discard. A failed Writer
+may stop export while the Collector still drains committed slots into counted
+post-commit loss. No unbounded retry queue or device reservation leak is allowed.
+Teardown preserves unfinished slots until CUDA retirement; their tail is
+unknown if no reliable final checkpoint is possible.
+Background-thread shutdown follows the same Quiesce/Detach/Drain boundaries
+and shutdown deadline. A timeout does not permit releasing resources still
+used by a collection thread or in-flight CUDA/IPC work. Disabled observation
+starts no collection thread.
+
+## Raw Chunks and Errors
+
+Published path: `chunks/<producer>/<chunk_sequence>.xpool`. The header is
+128 bytes, followed by `event_count * 256` bytes, with no trailer or compression.
+At most 4095 events fit in a 1 MiB chunk. Chunks are nonempty; empty collection
+is represented by metadata/quality only. Chunk sequences start at one.
+
+| Offset | Header field | Type/value |
+| --- | --- | --- |
+| 0 | magic | Eight bytes `XPOOLC04` |
+| 8, 10, 12, 14 | version, header_bytes, event_bytes, flags | u16: 4, 128, 256, 0 |
+| 16, 24, 32, 40 | producer, chunk_sequence, metadata_revision, event_count | u64 each |
+| 48, 56 | first_event_sequence, last_event_sequence | u64, minimum/maximum |
+| 64, 72 | host_window_begin_ns, host_window_end_ns | u64 CLOCK_MONOTONIC collection window |
+| 80 | payload_bytes | u64, exactly event_count * 256 |
+| 88, 92 | payload_crc32, header_crc32 | u32 each |
+| 96 | Run UUID | 16 opaque bytes, canonical UUID byte order |
+| 112 | metadata_sha256_prefix | First 16 SHA-256 bytes |
+
+CRC is CRC-32/ISO-HDLC, equivalent to `zlib.crc32(bytes) & 0xffffffff`.
+Compute payload CRC over the payload. Compute header CRC over all 128 header
+bytes with bytes 92–95 zero and payload CRC already populated. Record order
+within a chunk is increasing event_sequence; holes are legal. Chunks can contain
+late commits whose sequences precede a previously published chunk's events.
+Chunk windows order collection, not Device event time. Reconstruct by identity,
+not file order; detect duplicates across chunks.
+
+Reserve exact disk bytes before creating/extending a unique same-directory
+temporary file. Close it before atomic rename. Publish its required metadata
+first. Keep failed temporary files as evidence charged to quota; never parse
+them as complete chunks. The process reserves 8 MiB for bounded metadata/close
+summaries; stop before consuming it with event or attachment files. Conversion
+outputs go to an explicit separate directory and quota.
+
+Strict parsing rejects the first failing stage in this order: header length;
+magic/version/layout/flags; header CRC; declared sizes and file length; metadata
+identity/hash and membership semantics; payload CRC; event widths, presence,
+enums, references, order, and membership agreement.
+Unknown event kinds fail v4; unsupported versions fail rather than falling back.
+Errors use codes `header_truncated`, `bad_magic`, `unsupported_version`,
+`invalid_layout`, `header_checksum`, `invalid_length`, `metadata_unavailable`,
+`metadata_checksum`, `payload_checksum`, `invalid_event`, `unknown_kind`,
+`identity_conflict`, and `event_conflict`. Include path, offset, Producer,
+event_sequence when available, and the underlying cause. Missing normal evidence
+is quality, not malformed encoding. Never inspect exception message strings
+to choose a recovery path.
+
+## Quality, Attachments, and Configuration
+
+Immutable `quality.<producer>.<revision>.json` checkpoints have these fields:
+contract_version:u32, run_id:UUID text, producer_id:u64, revision:u64,
+host_time_ns:u64, collection_state, export_state, stop_reason,
+last_attempted_sequence:u64, counters, pending:u64|null, tail,
+counter_exhausted:bool, exact_totals:bool. Revisions start at one. The complete
+example in [quality.json](fixtures/quality.json) freezes the field names.
+Counters are u64: attempted, committed, dropped_full,
+abandoned, stale_token, duplicate_commit, copied, exported, post_commit_lost,
+snapshot_operations_attempted, snapshot_operations_dropped,
+attachment_attempted, attachment_capacity_exhausted, attachment_payload_oversize,
+attachment_not_collected, attachment_publish_failed, sample_attempted,
+sample_failed, sample_skipped_busy, context_unavailable. Counters are cumulative,
+never summed across
+checkpoints. Unknown final pending/tail quantities are null, never zero.
+An exact checkpoint satisfies:
+
+```text
+attempted = committed + dropped_full + abandoned + pending
+exported + post_commit_lost <= committed
+exported <= copied <= committed
+```
+
+Stage counters count distinct Event identities, not transfer retries.
+Stale/double token reports are diagnostics on an existing attempt, not new
+attempts. Sequence holes
+are evidence gaps; only checkpoints explain their reason. A metadata failure
+or counter saturation sets exact_totals=false; checkpoint values remain
+lower-bound evidence. Crash recovery sets final totals unknown rather than
+claiming an earlier checkpoint is final. QualitySnapshot exposes the same
+fields as typed Native values; its counters have these exact names and widths.
+Use fixed retained-view known-fact masks to generate per-operation unknown-result
+or missing-fact diagnostics; do not accumulate an unbounded runtime issue list.
+
+Collection state is active/stopped/closed; export is active/failed/closed.
+Stop reason is null, disk_quota, io_error, metadata_unavailable,
+identity_exhausted, or shutdown_deadline. Tail is complete/pending/unknown.
+Routing event loss, tensor loss, payload oversize, and file-publication failure
+are independent statuses. Dense advertises Routing capability `not_applicable`.
+
+The immutable attachment index resolves each attachment identity to status
+published/not_collected/capacity_exhausted/payload_oversize/publish_failed/missing,
+relative artifact path, SHA-256, tensor keys, Invocation, Lane/Lease, layer,
+publisher, clock domain, raw publication time, and shape/dtypes. Only published
+has a usable path/hash. An event whose reserved attachment has no final outcome
+is unknown after truncation and missing after a complete closing index.
+An event's nonzero Routing artifact_id resolves in the referencing metadata
+revision to kind `routing`, status `published`, and a nonempty relative path
+and SHA-256. If a final attachment entry is supplied, it must be published and
+its path and SHA-256 must match that artifact declaration exactly. Wrong kinds,
+incomplete publication declarations and disagreement with the final entry are
+identity conflicts; an unregistered artifact_id is an invalid event. A nonzero
+reference alone does not replace the final attachment index or establish tensor
+availability. Zero continues to resolve through the attachment identity.
+Do not map by tensor-slot position. Safetensors retains existing generation,
+pe, sequence, dropped, records metadata, and adds contract_version, run_id,
+producer_id, and per-record identity/time/lease fields inside records. IDs and
+weights remain CPU int32/float32, live_rows by effective_topk. Tensor data stays
+outside Event storage. Graph structure artifacts retain their existing inventory
+and add template references through the artifact index.
+
+`debug.timeline` adds enable=false, outdir=null, device_bytes=8388608,
+host_bytes=33554432, chunk_bytes=1048576, collection_interval_ms=100,
+disk_bytes=1073741824, metadata_reserve_bytes=8388608, shutdown_wait_ms=5000,
+calibration_block_attempts=10, device_event_slot_capacity=16384,
+endpoint_capacity=8, context_slot_capacity=64, and sampler_slot_capacity=1. Enable and outdir must be set together.
+Block attempts is fixed to ten in v4. `device_event_slot_capacity`,
+`endpoint_capacity`, `context_slot_capacity`, and `sampler_slot_capacity` are positive; startup first evaluates the device
+collection budget composition formula against `device_bytes` using these
+four values, then validates each remaining positive resource value against
+the minimum required allocations and chunk layout; chunk_bytes
+cannot exceed 1 MiB and shutdown_wait_ms cannot exceed 5000. Run-wide policy
+is installed before workers start. Configuration uses the existing environment
+registration/precedence rules and rejects inconsistent participants at preparation.
+
+Unified mode installs all four evidence classes, Context, and calibration;
+existing observer flags request their legacy projections using the same storage,
+never a second Device collector. Unified outdir owns all artifacts and quota;
+an explicitly enabled legacy outdir must equal it, otherwise configuration fails.
+Legacy record_capacity controls its own reconstruction cap. Unified mode with
+legacy flags disabled need not build those legacy views. Independent mode uses
+one process disk ledger across its configured directories, retains its enabled
+class capabilities, and installs shared identity facilities needed by those
+classes. Calibration and complete four-class association are capabilities of
+unified mode. Advertise enabled/disabled/not_applicable/unavailable explicitly.
+The existing snapshot APIs remain callable in unified mode. A disabled legacy
+flag means no separately budgeted legacy projection is installed; its getter
+returns the same unavailable value as an independently disabled observer.
+
+## Legacy Snapshot Reconstruction
+
+Source owners are
+[Transport Record](../../../src/cext-include/xpool/devkit/transport_observer.hpp),
+[Fabric Record](../../../src/cext-include/xpool/devkit/fabric_observer.hpp),
+[Transport JSON](../../../src/xpool/devkit/transport_observer.py), and
+[Fabric JSON](../../../src/xpool/devkit/fabric_observer.py).
+
+Allocate a legacy trace ID per original record-begin Hook independently of
+event capacity: Instance staging start, AtnAgent RequestObserved, Fabric
+SubmissionPrepared, Enqueued, or LaneExecutionObserved. Snapshot sequence counts
+these operation attempts; it never counts events. The earliest N local IDs are
+eligible for the view (default 8192 per Transport Endpoint or Fabric Producer).
+Omitted opening events do not renumber IDs. Later self-describing events can
+reconstruct an eligible operation; operations with no retained evidence remain
+absent and are classified separately as unobserved. Capacity dropped counts
+IDs above N; event loss may make len(records) smaller than sequence - dropped.
+Lifetime is Endpoint for Transport and installed Producer/Generation for Fabric.
+Endpoint recreation starts a new snapshot domain; offline queries retain both.
+
+| Legacy fields | Reconstruction source |
+| --- | --- |
+| Transport trace_id, payload_rows, layer_ordinal, forward_mode, output_requirement, dp_row_layout | Event local_trace_id and repeated request facts |
+| Transport result_code | Site-local result presence; absent projects ProtocolMismatch sentinel plus unknown_result quality |
+| Transport eleven timestamp getters | Corresponding retained event; absent is zero, recorded bitmap remains authoritative |
+| Endpoint instance_index/rank | Endpoint metadata; Instance Rank repeats on events |
+| Snapshot pid/site/model_id/arena_handle_suffix | Process/Endpoint metadata; preserve exact model scalar, site, and handle suffix |
+| Fabric local_trace_id, key, layer_ordinal, payload_rows, output_requirement | Repeated local and Invocation facts |
+| AtnAgent DP rows, forward_mode, DP layout | Repeated Submission facts |
+| AtnAgent/Coordinator nullable Lane/Lease | Present only if own AdmissionObserved/Scheduled evidence or later own repeated Lease exists |
+| Coordinator ready_ticket and scheduler | Repeated FIFO ticket plus immutable scheduler policy |
+| FfnAgent Lane/Lease, payload_row_capacity, delivery | Repeated LaneExecution/selection facts |
+| Fabric role event timestamps | Corresponding retained kind; absent getters/JSON entries are zero |
+| Fabric generation/pe/counts/model_topologies | Generation metadata and its pe_members entry for the recording Producer; Event PE must agree |
+
+If required scalar facts for a legacy Record are absent, retain the raw evidence
+and omit that Record with `legacy_fact_missing` quality. In particular, FIFO
+without an observed ticket cannot be projected as random. Do not fabricate a
+FfnAgent capacity or delivery. Read remains valid only after the original
+quiescence/synchronization boundary and returns bounded Host-owned values.
+Transport reconstruction slots are 256 bytes and Fabric reconstruction slots
+are 384 bytes, including identity, known-fact masks, and timestamps. Reserved
+slab bytes are `sum(transport_capacity * 256 for open Endpoints) +
+fabric_capacity * 384`. Native snapshot result staging adds its actual declared
+Record sizes and bounded vector overhead at peak read time. The slots, metadata,
+queues, and peak read staging must fit Host budget; startup fails otherwise.
+
+Presence, not the value zero, controls event merging. Merge repeated facts only
+when equal; a conflict is an explicit structured error. Identical event identity
+and bytes is a duplicate, counted once. Two different event IDs for the same
+site/operation/kind with identical time/facts are semantic duplicates; differing
+time/facts conflict. Different roles/sites are different observations.
+When a phase is missing, later phases remain retained; do not apply the old
+Timeline predecessor assertions to incomplete reconstruction.
+
+Legacy durations retain precisely the existing writer's pairs (enumerated in
+fixtures/snapshots.json), and require both endpoints, the same raw domain, and
+nondecreasing time. Reversed boundaries report temporal_conflict rather than
+silently disappearing. Raw timestamp zero cannot be represented as a recorded
+legacy timestamp; mark legacy_zero_timestamp and omit its legacy duration while
+keeping the raw event. Transport completed means ResultPublished at AtnAgent
+or ResultAcknowledged at Instance; closed means Closed; otherwise incomplete.
+These are legacy classifications, not an assertion of all-phase completeness.
+Phase summary preserves the existing writer's exact indices on sorted values:
+min=0, max=n-1, median=(n-1)//2, p95=round((n-1)*0.95), and
+p99=round((n-1)*0.99), with Python ties-to-even rounding. The baseline docstring
+calls this nearest-rank, but these index rules define compatibility; do not
+substitute ceil(p*n)-1.
+Loss never creates normal derived slices; queries return complete/partial/
+conflict/unavailable with source event references and quality reasons.
+
+### Field availability and projection
+
+A snapshot is a projection of retained evidence, not an atomic image of all
+production state. One lost Event can remove a timestamp even when later Events
+recover every scalar fact. A terminal Event proves its own boundary, not the
+presence of earlier observations. Repeated facts never reconstruct a timestamp.
+Event presence and the Native recorded bitmap distinguish an observed raw zero
+from an absent boundary; legacy JSON alone cannot make that distinction.
+
+Apply the following rules after strict Event validation and equal-fact merging:
+
+| Field group | Required evidence and applicability | Missing projection |
+| --- | --- | --- |
+| Transport identity and request scalars | Endpoint metadata and any own Transport Event repeating local trace ID, Operation, layer, rows, forward mode, output requirement and DP layout | Omit the Record if any required scalar remains unknown |
+| Transport effective result | Own ResultPublished at AtnAgent, or ResultObserved/Closed at Instance, and subsequent own repetitions after the result is known | ProtocolMismatch sentinel with `unknown_result`; a later acknowledgement may repeat Ok, but never supplies the missing ResultObserved time |
+| Transport Instance timestamps | RequestStagingStarted, RequestStagingCompleted, RequestPublished, ResultObserved, OutputCopied, ResultAcknowledged, Closed, each at its own Hook | Zero for an unobserved or inapplicable boundary; distinguish them in the evidence report |
+| Transport AtnAgent timestamps | RequestObserved, ExecutionStarted, ExecutionCompleted, ResultPublished, each at its own Hook | Zero for an unobserved or inapplicable boundary |
+| Transport other-site timestamps | AtnAgent boundaries at Instance and Instance boundaries at AtnAgent are inapplicable | Zero, with `not_applicable_fields`; never copy the other site's timestamp |
+| Fabric common scalars | Own local trace ID, Invocation, layer, rows and output requirement; Generation/PE/topology from Generation metadata and its pe_members entry for the recording Producer | Omit the Record if a required scalar is unknown; malformed or conflicting membership fails validation |
+| Fabric AtnAgent facts | Repeated request forward mode, DP layout and DP-local rows | Omit the Record if unknown; these facts are inapplicable to Coordinator/FfnAgent |
+| Fabric AtnAgent/Coordinator Lane and Lease | Own AdmissionObserved/Scheduled or later own repeated Lease | Both nullable values remain null and unknown until evidence exists; null does not prove assignment never happened |
+| Fabric Coordinator scheduler | Metadata policy; repeated ready ticket required only for FIFO | Missing FIFO ticket omits the Record; random has no ready_ticket member and marks it inapplicable |
+| Fabric FfnAgent facts | Own repeated Lane/Lease, row capacity and delivery selection | Omit the Record if unknown; never use another participant's capacity or selection |
+| Fabric other-role facts | Fields outside the selected legacy role alternative | Keep them absent; common nullable fields such as dp_row_layout remain null and are marked inapplicable |
+| Fabric timestamps | Own role's corresponding retained protocol Event | Zero when unobserved or inapplicable; repeated Lease or Graph activity cannot supply a protocol timestamp |
+
+All required facts are repeated on ordinary Transport/Fabric protocol Events.
+Thus losing only their opening Event does not normally lose the scalar facts.
+Auxiliary Graph evidence with a matching local trace ID may identify an eligible
+local Record and recover only the facts whose presence it actually carries; it
+does not relax protocol Event validation or imply any missing protocol boundary.
+An Event omitting a mandatory field is `invalid_event`, not `legacy_fact_missing`.
+The latter describes insufficient otherwise valid reconstruction evidence.
+
+Missing evidence means unknown. `event_missing` names an observation gap, not
+proof that a Hook was reached or that an Event was dropped by a particular
+buffer. Sequence holes and Producer loss counters alone cannot identify an
+affected Operation, field, or loss reason. Synchronization makes reads safe;
+it does not repair evidence gaps or establish normal production completion.
+
+### Applicable paths and evidence completeness
+
+Determine applicability from the local role/site, retained production facts,
+and referenced metadata or installed Graph structure. An observed boundary is
+applicable. An unobserved conditional boundary is inapplicable only when that
+evidence proves its branch cannot apply; otherwise its applicability is unknown.
+Observation disabled, a missing attachment, or an earlier quality checkpoint
+does not prove a production branch inapplicable. Preserve the metadata/Event
+references supporting each applicability decision.
+
+The boundary sets for successful ordinary execution are:
+
+| Local view | Required boundaries for that path |
+| --- | --- |
+| Transport Instance | RequestStagingStarted, RequestStagingCompleted, RequestPublished, ResultObserved, OutputCopied, ResultAcknowledged; Closed is inapplicable after acknowledgement |
+| Transport AtnAgent | RequestObserved, ExecutionStarted, ExecutionCompleted, ResultPublished |
+| Fabric AtnAgent | SubmissionPrepared, SubmissionPublished, AdmissionObserved, InputReadyPublished, OutputCommitObserved, OutputAcknowledgementPublished |
+| Fabric Coordinator | Enqueued, Scheduled, AdmissionPublished, LaneExecutionPublished, FfnAgentCompletionsObserved, OutputCommitPublished, OutputAcknowledgementsObserved, LaneReleased |
+| Fabric FfnAgent | LaneExecutionObserved, InputReadyObserved, ComputeStarted, ComputeCompleted, CompletionPublished, plus the applicable conditional boundaries below |
+
+For FfnAgent, Dense layers have no RoutingMetadataPublished/Observed. MoE
+RoutingMetadataPublished belongs to the selected publisher and
+RoutingMetadataObserved to the peers that wait for routing. This requires the
+actual layer/participant or installed-Graph evidence; Routing observer enablement
+alone is insufficient. DirectPartial skips PartialReadyPublished and
+PeerPartialsReadyObserved. For complete delivery, PartialReadyPublished requires
+a nonempty destination set, and PeerPartialsReadyObserved requires an active
+reader with peers, following the production selection. If retained topology
+cannot establish those conditions, record unknown applicability.
+
+Closed, rejection, shutdown, timeout, and failed execution may end a path early.
+Closed at Instance excludes ResultAcknowledged. A retained non-Ok Instance result
+excludes successful acknowledgement; OutputCopied can still be observed before
+a shutdown close and must be preserved. AtnAgent rejection may publish a result
+without entering execution. An absent intermediate boundary on these conditional
+paths remains unknown unless local evidence identifies the actual branch; neither
+a non-Ok result nor Closed alone proves the exact stopping point. Conservative
+partial evidence is preferable to declaring an unsupported complete failure path.
+
+`evidence_status` is independent of legacy terminal classification:
+
+- `complete`: all applicable required scalar facts and protocol boundaries are
+  observed, the local terminal boundary is observed, conditional applicability
+  is resolved, and no temporal conflict exists. Inapplicable fields are excluded.
+- `partial`: some local evidence exists, but facts, boundaries, applicability,
+  terminal evidence, or a usable interval remain unresolved. A raw zero timestamp
+  is observed evidence; its legacy representation limitation alone does not
+  change this status.
+- `unavailable`: no local evidence exists for the eligible operation.
+
+Identity/fact/Event conflicts fail reconstruction with the existing structured
+error and source context; they never return a successful legacy projection.
+Conflicting repeated scalar facts use `identity_conflict`; conflicting bytes
+under one Event identity or conflicting duplicate boundaries use `event_conflict`.
+Temporal reversal retains raw evidence, marks `temporal_conflict` and partial
+evidence, and suppresses only the affected durations. In particular, a retained
+ResultAcknowledged can produce legacy `completed` together with evidence
+`partial`. Summaries use only valid phase samples; each phase count may differ
+from both retained and completed Record counts.
+
+### SnapshotEvidenceReport
+
+Each enabled legacy projection has a separate typed `SnapshotEvidenceReport`.
+Keep the existing Native getters and legacy JSON shape. An evidence-aware read
+returns the legacy snapshot and report from the same quiescent/synchronized
+read and Collector cutoff; two independent reads cannot be combined as one pair.
+For JSON publication, publish the immutable report first at
+`<legacy-snapshot-filename>.evidence.json`, then its legacy snapshot. Reports
+are replacements at the same lifecycle boundary as existing snapshots, not an
+unbounded history. Atomicity is per file: a report is usable with a snapshot
+only when `snapshot_sha256` matches its exact published bytes. A crash between
+publications leaves a detectable unavailable pair. Failed publication is an
+explicit I/O error. The legacy snapshot contains no report-specific fields.
+
+The report JSON contains exactly:
+
+| Field | Type and meaning |
+| --- | --- |
+| contract_version, run_id, producer_id | u32, UUID text, u64; same Run/Producer as source evidence |
+| observer | `transport` or `fabric` |
+| generation | Positive u64 metadata reference |
+| endpoint | `{owner:u64, sequence:u64}` for Transport; null for Fabric |
+| site | `instance` or `atnagent` for Transport; null for Fabric |
+| snapshot_sha256 | SHA-256 text for a published JSON pair; null for a Native-only read |
+| capacity | Legacy operation retention capacity, u64 |
+| sequence, dropped | u64 or null; exact operation attempts and capacity exclusions at this read cutoff, or unknown |
+| unobserved_operations | u64 or null; eligible IDs with no evidence, or unknown when the exact eligible range is unavailable |
+| entries | Array of the entries below, sorted by local_trace_id |
+
+Each entry contains exactly `local_trace_id:u64`, `role`, `operation`,
+`invocation`, `projection_status`, `evidence_status`, `unknown_fields`,
+`not_applicable_fields`, `missing_boundaries`, `unknown_applicability`, `quality`,
+and `sources`. Role is instance/atnagent/coordinator/ffnagent, or null only for
+an unobserved Fabric ID whose role is not known. Operation is
+`{endpoint_owner:u64, endpoint_sequence:u64, operation_sequence:u64}` or null;
+Invocation is `{generation:u64, instance_index:u64, invocation_sequence:u64}`
+or null. Null identities remain unknown, not fabricated from local trace IDs.
+`projection_status` is `retained`, `omitted`, or `unobserved`: omitted has local
+evidence but lacks required legacy scalar facts; unobserved has no local evidence.
+Omitted entries carry `legacy_fact_missing`; unobserved entries carry
+`operation_unobserved`. Both are absent from legacy records.
+
+Field and boundary lists contain unique, lexically sorted names. Field paths
+are relative to one legacy Record, using dotted paths for Fabric facts/events.
+`missing_boundaries` lists expected
+but unobserved applicable Event kind names. `unknown_applicability` lists kind
+names whose conditional applicability is unresolved; these are distinct from
+definitely expected missing boundaries. Every listed boundary also appears in
+`unknown_fields` by its legacy timestamp path. Inapplicable paths are never
+unknown at the same time. A path may name an omitted required field, such as
+`facts.scheduler.ready_ticket`; it need not exist in the emitted JSON.
+
+`quality` contains unique sorted reasons from `event_missing`, `unknown_result`,
+`legacy_fact_missing`, `operation_unobserved`, `applicability_unknown`,
+`legacy_zero_timestamp`, and `temporal_conflict`. Missing required boundaries
+add event_missing; unknown applicability adds applicability_unknown. Preserve
+other reconstruction diagnostics at their owning interface, rather than
+turning Producer-wide loss into a local reason.
+
+`sources` contains `{field, event, metadata}` entries for observed fields and
+applicability decisions. Exactly one of event/metadata is non-null. Event is
+`{producer:u64, event_sequence:u64}`; metadata is
+`{producer:u64, revision:u64, path:string}`, referencing that revision's JSON
+path. Boundary decisions use `boundary.<Kind>` as the field name. Sort sources
+by field; equal repeated facts use the smallest (producer,event_sequence).
+Each field needs at most one source. Proving a field inapplicable from a compound
+condition retains one source per contributing fact under its own field path.
+Use the lexically smallest metadata path in the referencing revision when the
+same fact has multiple equivalent metadata sources. Sources describe stored
+scalar facts and boundary applicability, not derived durations. Transport
+Operation and Fabric Invocation identities are justified by the same source
+as their repeated local identity; snapshot-level metadata is resolved from the
+report domain. The field lists cover the selected legacy role alternative;
+inapplicable nullable common fields, such as Fabric dp_row_layout, are included.
+Facts exclusive to other role alternatives are outside that entry's field set.
+The conditional FIFO ready_ticket remains in the Coordinator field set even
+when random policy omits it from JSON.
+
+Transport report domains are (Run, Producer, Endpoint, site); Fabric domains
+are (Run, Producer, Generation). AtnAgent and Coordinator share the latter local
+ID sequence. Recover an eligible ID's role only from its own evidence. With exact
+sequence S and capacity N, dropped=max(S-N,0), eligible IDs are 1..min(S,N),
+and unobserved_operations counts eligible IDs lacking any local evidence.
+Emit an unobserved entry for each such ID, leaving its unsupported identities
+and Fabric role null, with empty field/boundary/source lists. If S is unknown,
+sequence, dropped and unobserved_operations are null; emit only positively
+identified eligible IDs and never treat an earlier checkpoint as a final count.
+Offline reconstruction may expose the individually projected records with this
+report, but cannot publish a whole legacy snapshot with invented sequence or
+dropped values. Its legacy snapshot envelope is unavailable until those counts
+are exact. A Native synchronized read obtains exact live operation counts;
+an unknown crashed tail is an offline artifact condition.
+IDs above capacity are excluded from the legacy view and report entries, while
+their raw Events remain available to offline queries.
+
+Reports are bounded by the same earliest-N operation window. Store at most one
+canonical provenance reference per finite legacy field or applicability fact;
+duplicate Events do not expand retained provenance. Native report storage, read
+staging and JSON serialization count toward Host budget; published and temporary
+sidecars count toward disk quota. Include their declared worst-case sizes in
+startup admission, alongside existing slabs, metadata and queues. Do not collect
+an unbounded list of repeated Events or silently omit report entries on exhaustion.
+An unavailable/disabled legacy observer has no separate report, matching its
+existing unavailable getter result. Producer quality checkpoints remain aggregate
+collection evidence and never substitute for this per-snapshot report.
