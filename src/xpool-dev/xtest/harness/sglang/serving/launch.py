@@ -36,6 +36,7 @@ def prepare(
         SglangLaunchModel(
             model_id=model_id,
             graph_mode=graph_mode,
+            arguments=case.server_arguments,
         )
         for model_id in case.models
     )

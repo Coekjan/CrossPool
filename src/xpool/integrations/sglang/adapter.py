@@ -19,6 +19,8 @@ from torch import nn
 
 from xpool.config import get_global_config
 from xpool.integrations.sglang.ecs.capacity import CapacityReconciler
+from xpool.integrations.sglang.ecs.implementations.kv import KvStateAdapter
+from xpool.integrations.sglang.ecs.interfaces import SglangStateAdapter
 from xpool.integrations.sglang.ecs.state import SglangElasticContextState
 from xpool.integrations.sglang.hooks.registry import SglangHook
 from xpool.integrations.sglang.shim import FfnShimModule, ShimUnavailableError, iter_ffn_shims
@@ -240,6 +242,7 @@ class SglangInstanceRankRuntime:
     instance_rank: InstanceRankRuntime | None = None
     capacity_reconciler: CapacityReconciler | None = None
     context_state: SglangElasticContextState | None = None
+    state_adapter_type: type[SglangStateAdapter] | None = None
 
     @classmethod
     def attach(cls, model_runner: ModelRunner, binding: SglangInstanceRankBinding) -> SglangInstanceRankRuntime:
@@ -289,6 +292,7 @@ class SglangShimAdapter(ABC):
 
     name: str
     supports_dp_attention = False
+    state_adapter_type: type[SglangStateAdapter] = KvStateAdapter
 
     @abstractmethod
     def hooks(self) -> Sequence[SglangHook]:

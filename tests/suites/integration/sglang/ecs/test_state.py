@@ -20,8 +20,8 @@ from xpool.integrations.sglang.ecs.allocator import (
     ElasticPagedTokenToKVPoolAllocator,
     ElasticTokenToKVPoolAllocator,
 )
-from xpool.integrations.sglang.ecs.radix import SglangCacheEviction
-from xpool.integrations.sglang.ecs.state import SglangElasticContextState, SglangMemoryRequirement
+from xpool.integrations.sglang.ecs.implementations.kv import KvStateAdapter, SglangMemoryRequirement
+from xpool.integrations.sglang.ecs.implementations.kv_radix import SglangCacheEviction
 from xtest.harness.support.sglang.runtime import published_sglang_config
 
 pytestmark = pytest.mark.usefixtures(published_sglang_config.__name__)
@@ -31,7 +31,7 @@ def test_preparation_publishes_all_fully_backed_free_pages_without_exposing_owne
     allocator: ElasticTokenToKVPoolAllocator | ElasticPagedTokenToKVPoolAllocator,
     attention_cache: UnifiedRadixCache,
 ) -> None:
-    state = SglangElasticContextState.create(
+    state = KvStateAdapter.create(
         allocator.get_kvcache(),
         allocator,
         attention_cache.req_to_token_pool,
@@ -53,7 +53,7 @@ def test_joint_forecast_uses_only_unlocked_same_pool_cache(
     allocator: ElasticTokenToKVPoolAllocator | ElasticPagedTokenToKVPoolAllocator, attention_cache: UnifiedRadixCache
 ) -> None:
     # No sizing calculation runs here; retain the actual upstream owner type.
-    state = SglangElasticContextState.create(
+    state = KvStateAdapter.create(
         allocator.get_kvcache(),
         allocator,
         attention_cache.req_to_token_pool,
@@ -73,14 +73,14 @@ def test_joint_forecast_uses_only_unlocked_same_pool_cache(
     attention_cache.dec_lock_ref(inserted.last_device_node, receipt)
     assert state.required_bytes(requirement) == state.profile.reservation_bytes
 
-    logical = state.logical_free_pages()
+    logical = state.logical_free_units()
     allocator.free_group_begin()
     current = allocator.alloc(allocator.page_size)
     assert current is not None
     allocator.free(current)
-    assert state.logical_free_pages() == (logical[0] - 1,)
+    assert state.logical_free_units() == (logical[0] - 1,)
     allocator.free_group_end()
-    assert state.logical_free_pages() == logical
+    assert state.logical_free_units() == logical
 
 
 @xtest.requirements(device_count=1)
@@ -93,7 +93,7 @@ def test_composite_prepares_joint_cost_before_original_full_swa_allocation(
     allocator = SWATokenToKVPoolAllocator(8192, 4096, 4, torch.float16, full_swa_pool.device, full_swa_pool, True)
     configurator = object.__new__(KVCacheConfigurator)
     configurator.forward_stream = torch.cuda.current_stream()
-    state = SglangElasticContextState.create(
+    state = KvStateAdapter.create(
         full_swa_pool,
         allocator,
         ReqToTokenPool(2, 64, full_swa_pool.device, False),
@@ -121,10 +121,10 @@ def test_composite_prepares_joint_cost_before_original_full_swa_allocation(
     )
     assert allocated is not None
     assert torch.all(allocator.full_to_swa_index_mapping[allocated] > 0)
-    assert state.logical_free_pages() == (8192 // 4 - 600, 4096 // 4 - 600)
+    assert state.logical_free_units() == (8192 // 4 - 600, 4096 // 4 - 600)
     allocator.free(allocated)
     torch.cuda.synchronize()
-    assert state.logical_free_pages() == (8192 // 4, 4096 // 4)
+    assert state.logical_free_units() == (8192 // 4, 4096 // 4)
     assert state.quota.charged_bytes == charged + growth
     plan = state.prepare_reclaim(growth)
     assert plan is not None
@@ -134,13 +134,13 @@ def test_composite_prepares_joint_cost_before_original_full_swa_allocation(
     for binding in state.components:
         child = binding.allocator
         assert not torch.isin(child.retiring_pages, child.get_all_free_pages()).any()
-    assert sum(state.logical_free_pages()) < 8192 // 4 + 4096 // 4
+    assert sum(state.logical_free_units()) < 8192 // 4 + 4096 // 4
     torch.cuda.synchronize()
     assert state.finish_retirement(plan) == growth
     assert plan.completed
     assert state.finish_retirement(plan) == 0
     assert state.quota.charged_bytes == charged
-    assert state.logical_free_pages() == (8192 // 4, 4096 // 4)
+    assert state.logical_free_units() == (8192 // 4, 4096 // 4)
 
 
 @xtest.requirements(device_count=1)
@@ -153,7 +153,7 @@ def test_swa_only_cache_reclaim_preserves_locked_full_prefix_and_actual_paired_m
     device = full_swa_pool.device
     allocator = SWATokenToKVPoolAllocator(8192, 4096, 4, torch.float16, device, full_swa_pool, True)
     request_pool = ReqToTokenPool(2, 64, device, False)
-    state = SglangElasticContextState.create(
+    state = KvStateAdapter.create(
         full_swa_pool,
         allocator,
         request_pool,
@@ -182,17 +182,17 @@ def test_swa_only_cache_reclaim_preserves_locked_full_prefix_and_actual_paired_m
     key = RadixKey(array("q", range(16)))
     inserted = cache.insert(InsertParams(key=key, value=locations))
     receipt = cache.inc_lock_ref(inserted.last_device_node).to_dec_params()
-    free = state.resident_free_pages()
+    free = state.resident_free_units()
     assert free == (allocator.full_available_size() // 4, allocator.swa_available_size() // 4)
-    assert state.eviction_page_targets(EvictParams(num_tokens=1, swa_num_tokens=5)) == (free[0] + 1, free[1] + 2)
-    assert state.eviction_page_targets(EvictParams()) == (0, 0)
+    assert state.eviction_targets(EvictParams(num_tokens=1, swa_num_tokens=5)) == (free[0] + 1, free[1] + 2)
+    assert state.eviction_targets(EvictParams()) == (0, 0)
     assert state.select_cache_eviction((False, False), release_backing=False) is None
     candidate = state.select_cache_eviction((False, True), release_backing=False)
-    assert candidate is not None and candidate.component == ComponentType.SWA
-    assert list(candidate.key) == list(key[:8])
+    assert candidate is not None and candidate.pool_index == 1
+    assert list(candidate.key.radix_key()) == list(key[:8])
     release_candidate = state.select_cache_eviction((False, False), release_backing=True)
-    assert release_candidate is not None and release_candidate.component == candidate.component
-    assert list(release_candidate.key) == list(candidate.key)
+    assert release_candidate is not None and release_candidate.pool_index == candidate.pool_index
+    assert list(release_candidate.key.radix_key()) == list(candidate.key.radix_key())
     available = (allocator.full_available_size(), allocator.swa_available_size())
     charged = state.quota.charged_bytes
     plan = state.prepare_reclaim(0, cache_eviction=candidate)
@@ -207,6 +207,6 @@ def test_swa_only_cache_reclaim_preserves_locked_full_prefix_and_actual_paired_m
     # A leaf selected under SWA pressure has a whole-leaf effect, not SWA-only.
     assert SglangCacheEviction(key, ComponentType.SWA).resolve(cache) is None
     leaf = state.select_cache_eviction((False, True), release_backing=False)
-    assert leaf is not None and leaf.component == ComponentType.FULL
-    assert list(leaf.key) == list(key)
+    assert leaf is not None and leaf.pool_index == 0
+    assert list(leaf.key.radix_key()) == list(key)
     torch.cuda.synchronize()

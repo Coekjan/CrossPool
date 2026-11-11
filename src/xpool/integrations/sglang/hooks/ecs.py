@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from inspect import signature
 from typing import cast
 
@@ -21,14 +21,12 @@ from sglang.srt.mem_cache.allocator.base import BaseTokenToKVPoolAllocator
 from sglang.srt.mem_cache.base_prefix_cache import BasePrefixCache, EvictParams, EvictResult
 from sglang.srt.mem_cache.kv_cache_configurator import KVCacheConfigurator, _InitializedPools, _PoolSizes
 from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
-from sglang.srt.mem_cache.unified_cache.components import ComponentType
 from sglang.srt.mem_cache.unified_radix_cache import UnifiedRadixCache
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.model_executor.model_runner_components.kv_pool_runtime import PostCaptureKVResize
 from sglang.srt.plugins.hook_registry import HookType
 from sglang.srt.runtime_context import get_schedule
 
-from xpool import ecs
 from xpool.config import get_global_config
 from xpool.integrations.sglang.adapter import SglangInstanceRankRuntime
 from xpool.integrations.sglang.ecs.admission import (
@@ -51,20 +49,17 @@ from xpool.integrations.sglang.ecs.capacity import (
     capacity_reconciler_scope,
     current_capacity_reconciler,
 )
-from xpool.integrations.sglang.ecs.pool import (
-    ElasticMHATokenToKVPool,
-    ElasticMLATokenToKVPool,
-    prepared_backing_scope,
-)
-from xpool.integrations.sglang.ecs.radix import (
+from xpool.integrations.sglang.ecs.construction import current_state_adapter_type
+from xpool.integrations.sglang.ecs.implementations.kv_radix import (
     around_acquire_swa_component_lock,
     free_swa_out_of_window_slots,
 )
-from xpool.integrations.sglang.ecs.state import SglangElasticContextState
-from xpool.integrations.sglang.ecs.vmm import KvVmmBacking
+from xpool.integrations.sglang.ecs.pool import (
+    ElasticMHATokenToKVPool,
+    ElasticMLATokenToKVPool,
+)
 from xpool.integrations.sglang.hooks.registry import SglangHook, SglangHookSet
 from xpool.native.ecs import QuotaCommand
-from xpool.utils.cuda import is_terminal_device_error
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +85,8 @@ def compute_reservation_budget(configurator: KVCacheConfigurator, pre_model_load
     """Reserve virtual capacity independently of other models' launch order."""
 
     utilization = min(get_global_config().atn.device_memory_utilization, get_schedule().mem_fraction_static)
-    return int(torch.cuda.get_device_properties(configurator.device).total_memory * utilization)
+    budget = int(torch.cuda.get_device_properties(configurator.device).total_memory * utilization)
+    return current_state_adapter_type().reservation_budget(configurator, budget)
 
 
 def compute_post_capture_resize(
@@ -189,10 +185,11 @@ def complete_allocation[R](operation: Callable[[], R], batch: ScheduleBatch, *, 
     attempt.watch(batch.reqs)
     attempt.batch, attempt.token_per_req = batch, token_per_req
     if token_per_req is not None:
-        attempt.decode_rows = (batch.req_pool_indices_cpu, batch.seq_lens_cpu, token_per_req)
+        attempt.record_decode(batch.req_pool_indices_cpu, batch.seq_lens_cpu, token_per_req)
     error: BaseException | None = None
     result: R | None = None
     try:
+        current_capacity_reconciler().state.before_allocation(batch, token_per_req=token_per_req)
         result = operation()
         status = SglangAllocationStatus.READY
     except SglangCapacityMiss as failure:
@@ -252,7 +249,7 @@ def around_evict_from_tree_cache(
     if attempt is None or attempt.batch is None:
         return original_fn(tree_cache, num_tokens)
     state = current_capacity_reconciler().state
-    pages = state.allocation_pages(attempt.batch, token_per_req=attempt.token_per_req)
+    pages = state.allocation_counts(attempt.batch, token_per_req=attempt.token_per_req)
     if not state.prepare_allocation(pages):
         raise SglangCapacityMiss("xpool elastic context state cannot realize the selected batch under its byte grant")
 
@@ -269,24 +266,7 @@ def around_cache_evict(
 
 
 def after_pool_stats(result: PoolStats, observer: SchedulerPoolStatsObserver) -> PoolStats:
-    """Keep resident availability distinct from stable limits and virtual reservation."""
-
-    state = current_capacity_reconciler().state
-    for binding in state.components:
-        allocator = binding.allocator
-        used = (
-            allocator.size
-            - (len(allocator.get_all_free_pages()) + len(allocator.unavailable_pages)) * allocator.page_size
-        )
-        match binding.component:
-            case ComponentType.FULL:
-                used -= result.full_evictable_size
-                result = replace(result, full_num_used=used, full_token_usage=used / observer.max_total_num_tokens)
-            case ComponentType.SWA:
-                # The actual composite establishes the upstream optional SWA fields.
-                used -= cast(int, result.swa_evictable_size)
-                result = replace(result, swa_num_used=used, swa_token_usage=used / observer.swa_tokens_per_layer)
-    return result
+    return current_capacity_reconciler().state.pool_stats(result, observer)
 
 
 def around_check_full_pool(
@@ -295,18 +275,7 @@ def around_check_full_pool(
     ps: PoolStats,
     uncached: int = 0,
 ) -> tuple[bool, str]:
-    """Conserve the real Full reservation, including free unavailable IDs only here."""
-
-    allocator = next(
-        binding.allocator
-        for binding in current_capacity_reconciler().state.components
-        if binding.component is ComponentType.FULL
-    )
-    stats = replace(
-        ps, full_available_size=ps.full_available_size + len(allocator.unavailable_pages) * allocator.page_size
-    )
-    reservation_view = replace(checker, max_total_num_tokens=allocator.size, full_tokens_per_layer=allocator.size)
-    return original_fn(reservation_view, stats, uncached)
+    return current_capacity_reconciler().state.check_pool(original_fn, checker, ps, uncached, window=False)
 
 
 def around_check_swa_pool(
@@ -315,18 +284,7 @@ def around_check_swa_pool(
     ps: PoolStats,
     uncached: int = 0,
 ) -> tuple[bool, str]:
-    """Conserve SWA independently using the same real-reservation accounting."""
-
-    allocator = next(
-        binding.allocator
-        for binding in current_capacity_reconciler().state.components
-        if binding.component is ComponentType.SWA
-    )
-    stats = replace(
-        ps,
-        swa_available_size=(cast(int, ps.swa_available_size) + len(allocator.unavailable_pages) * allocator.page_size),
-    )
-    return original_fn(replace(checker, swa_tokens_per_layer=allocator.size), stats, uncached)
+    return current_capacity_reconciler().state.check_pool(original_fn, checker, ps, uncached, window=True)
 
 
 def around_init_pools(
@@ -343,25 +301,13 @@ def around_init_pools(
     device errors or failed cleanup retain the owners in the exception chain.
     """
 
-    layouts = SglangElasticContextState.describe_layouts(configurator, sizes)
-    quota = ecs.MemoryQuota(ecs.ElasticContextStateProfile(tuple(layout.profile for layout in layouts)).floor_bytes)
-    backings: list[KvVmmBacking] = []
-    try:
-        for layout in layouts:
-            backings.append(KvVmmBacking(layout, quota))
-        with prepared_backing_scope(tuple(backings)):
-            return original_fn(
-                configurator,
-                sizes=sizes,
-                req_to_token_pool=req_to_token_pool,
-                token_to_kv_pool_allocator=token_to_kv_pool_allocator,
-            )
-    except BaseException as error:
-        if not is_terminal_device_error(error):
-            torch.cuda.synchronize(configurator.device)
-            for backing in reversed(backings):
-                backing.close()
-        raise
+    return current_state_adapter_type().initialize_pools(
+        original_fn,
+        configurator,
+        sizes=sizes,
+        req_to_token_pool=req_to_token_pool,
+        token_to_kv_pool_allocator=token_to_kv_pool_allocator,
+    )
 
 
 def validate_seams() -> None:

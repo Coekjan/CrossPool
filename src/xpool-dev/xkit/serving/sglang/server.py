@@ -217,4 +217,5 @@ def server_command(
             graph_settings.prefill_backend,
         )
     )
+    command.extend(model.arguments)
     return command

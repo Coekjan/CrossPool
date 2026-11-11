@@ -31,6 +31,21 @@ class E2eElasticKvWorkload(BaseModel):
     atn_device_memory_budget_bytes: int = Field(gt=0)
 
 
+class E2eServingInput(BaseModel):
+    """Native media transported through the public endpoint for one request.
+
+    Paths identify repository-owned encoded fixtures, never embeddings or
+    processor outputs. The prompt owns the model's media placeholders.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    text: str = Field(min_length=1)
+    images: tuple[Path, ...] = ()
+    videos: tuple[Path, ...] = ()
+    new_tokens: int = Field(default=8, gt=0)
+
+
 class E2eServingCase(BaseModel):
     """Serving workload with portable geometry and declaration-owned graph policy.
 
@@ -50,6 +65,8 @@ class E2eServingCase(BaseModel):
     estimated_duration_seconds: float = Field(gt=0)
     timeout_seconds: float = Field(gt=0)
     elastic_kv: E2eElasticKvWorkload | None = None
+    native_input: E2eServingInput | None = None
+    server_arguments: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validate_case(self) -> Self:

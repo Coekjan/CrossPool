@@ -46,12 +46,14 @@ from xpool.integrations.sglang.ecs.allocator import (
     ElasticTokenToKVPoolAllocator,
 )
 from xpool.integrations.sglang.ecs.capacity import CapacityReconciler, capacity_reconciler_scope
-from xpool.integrations.sglang.ecs.pool import ElasticMHATokenToKVPool
-from xpool.integrations.sglang.ecs.state import (
-    SglangElasticContextState,
+from xpool.integrations.sglang.ecs.implementations.kv import (
+    KvStateAdapter,
     SglangMemoryRequirement,
     SglangPrefillProposal,
+    SglangReclaimPlan,
 )
+from xpool.integrations.sglang.ecs.implementations.kv_allocation import KvAllocationReceipt
+from xpool.integrations.sglang.ecs.pool import ElasticMHATokenToKVPool
 from xpool.integrations.sglang.ecs.vmm import KvVmmBacking, KvVmmLayout
 from xpool.integrations.sglang.hooks.ecs import (
     around_alloc_for_extend,
@@ -121,7 +123,7 @@ def test_scheduler_delivers_formed_batch_before_reclaiming_for_later_candidate(
         )
         configurator = object.__new__(KVCacheConfigurator)
         configurator.forward_stream = torch.cuda.current_stream()
-        state = SglangElasticContextState.create(pool, allocator, request_pool, configurator=configurator)
+        state = KvStateAdapter.create(pool, allocator, request_pool, configurator=configurator)
         state.bind_cache(cache)
         capacity = state.allocation_bytes((16 // page_size,))
         assert capacity is not None
@@ -223,7 +225,7 @@ def test_prefill_waits_for_whole_input_budget_but_prepares_no_forecast_output(
     allocator: ElasticTokenToKVPoolAllocator | ElasticPagedTokenToKVPoolAllocator,
     attention_cache: UnifiedRadixCache,
 ) -> None:
-    state = SglangElasticContextState.create(
+    state = KvStateAdapter.create(
         allocator.get_kvcache(),
         allocator,
         attention_cache.req_to_token_pool,
@@ -238,7 +240,7 @@ def test_prefill_waits_for_whole_input_budget_but_prepares_no_forecast_output(
         state,
         cast(InstanceRankRuntime, object()),
         LatencySloConfig(ttft_ms=1000, tbt_ms=50),
-        admission_free_pages=state.logical_free_pages(),
+        admission_free_units=state.logical_free_units(),
         service_ceiling_bytes=(state.profile.reservation_bytes,),
     )
     request = Req("prefill", "", array("q", range(20)), SamplingParams(max_new_tokens=4))
@@ -267,7 +269,7 @@ def test_prefill_waits_for_whole_input_budget_but_prepares_no_forecast_output(
             adder.add_one_req(request, False, None)
             assert adder.can_run_list == [request]
             assert request.extend_range is not None and request.extend_range.length == 16
-            assert proposal.memory.forecast_pages[0] > proposal.preparation_pages[0]
+            assert proposal.memory.forecast_units[0] > proposal.preparation_units[0]
             forecast = state.required_bytes(proposal.memory)
             assert forecast is not None and state.quota.charged_bytes < forecast <= state.quota.limit_bytes
             assert allocator.available_size() >= 20
@@ -286,7 +288,7 @@ def test_chunk_owner_keeps_residency_and_smaller_quota_pending_through_final_all
     allocator: ElasticTokenToKVPoolAllocator | ElasticPagedTokenToKVPoolAllocator,
     attention_cache: UnifiedRadixCache,
 ) -> None:
-    state = SglangElasticContextState.create(
+    state = KvStateAdapter.create(
         allocator.get_kvcache(),
         allocator,
         attention_cache.req_to_token_pool,
@@ -353,7 +355,7 @@ def test_prefill_local_reclamation_keeps_admission_open_until_capacity_can_progr
     event = Mock(spec=torch.cuda.Event)
     event.query.return_value = True
     monkeypatch.setattr(torch.cuda, "Event", lambda: event)
-    state = SglangElasticContextState.create(
+    state = KvStateAdapter.create(
         allocator.get_kvcache(), allocator, attention_cache.req_to_token_pool, configurator=configurator
     )
     state.bind_cache(attention_cache)
@@ -441,7 +443,7 @@ def run_tp_capacity_rank(rank: int, rendezvous: str) -> None:
         request_pool = ReqToTokenPool(4, 64, "cpu", False)
         configurator = object.__new__(KVCacheConfigurator)
         configurator.forward_stream = Mock(spec=torch.cuda.Stream)
-        state = SglangElasticContextState.create(pool, allocator, request_pool, configurator=configurator)
+        state = KvStateAdapter.create(pool, allocator, request_pool, configurator=configurator)
         cache = UnifiedRadixCache(
             CacheInitParams(
                 disable=False,
@@ -468,7 +470,7 @@ def run_tp_capacity_rank(rank: int, rendezvous: str) -> None:
             held = allocator.alloc(2) if rank == 1 else None
             local_free = allocator.available_size()
             reconciler.sync_admission_budget()
-            assert reconciler.admission_free_pages == (30,)
+            assert reconciler.admission_free_units == (30,)
             assert allocator.available_size() == local_free
             if held is not None:
                 allocator.free(held)
@@ -506,7 +508,7 @@ def run_tp_capacity_rank(rank: int, rendezvous: str) -> None:
                 available = allocator.available_size()
                 with pytest.MonkeyPatch.context() as preparation:
                     if rank == 1:
-                        preparation.setattr(SglangElasticContextState, "prepare_allocation", lambda owner, pages: False)
+                        preparation.setattr(KvStateAdapter, "prepare_allocation", lambda owner, pages: False)
                     assert (
                         adder.coordinate_prefill(
                             lambda limit: SglangPrefillProposal(
@@ -529,8 +531,8 @@ def run_tp_capacity_rank(rank: int, rendezvous: str) -> None:
                 reconciler.defer_eviction(EvictParams(num_tokens=2))
             reconciler.begin_scheduling(scheduler)
             assert cache.full_evictable_size() == 0
-            assert state.logical_free_pages() == (32,)
-            assert reconciler.admission_free_pages == (32,)
+            assert state.logical_free_units() == (32,)
+            assert reconciler.admission_free_units == (32,)
 
             request = Req("blocked", "", array("q", [1]), SamplingParams(max_new_tokens=1))
             request.time_stats.scheduler_recv_time = time.monotonic()
@@ -594,7 +596,7 @@ def run_tp_capacity_rank(rank: int, rendezvous: str) -> None:
             if rank == 1:
                 assert caught.value is original_error
             assert not attempt.rolled_back and not attempt.committed
-            assert len(attempt.page_allocations) == (1 if rank == 0 else 0)
+            assert len(cast(KvAllocationReceipt, attempt.journal).page_allocations) == (1 if rank == 0 else 0)
             assert allocator.available_size() == available - (1 if rank == 0 else 0)
         finally:
             backing.close()
@@ -633,7 +635,7 @@ def run_tp_composite_rank(rank: int, rendezvous: str) -> None:
             allocator = SWATokenToKVPoolAllocator(8192, 4096, 4, torch.float16, str(device), pool, True)
             configurator = object.__new__(KVCacheConfigurator)
             configurator.forward_stream = torch.cuda.current_stream()
-            state = SglangElasticContextState.create(
+            state = KvStateAdapter.create(
                 pool, allocator, ReqToTokenPool(2, 64, str(device), False), configurator=configurator
             )
             cache = UnifiedRadixCache(
@@ -660,7 +662,7 @@ def run_tp_composite_rank(rank: int, rendezvous: str) -> None:
             reconciler.accept_command(QuotaCommand(1, (floor + 2 * growth, floor + growth)))
             reconciler.begin_scheduling(None)
             batch = ScheduleBatch(reqs=[])
-            free_before = state.logical_free_pages()
+            free_before = state.logical_free_units()
             mapping_before = allocator.full_to_swa_index_mapping.clone()
 
             def allocate() -> torch.Tensor:
@@ -691,7 +693,7 @@ def run_tp_composite_rank(rank: int, rendezvous: str) -> None:
                 with pytest.raises(SglangCapacityMiss):
                     complete_allocation(allocate, batch, token_per_req=None)
                 assert attempt.rolled_back and not attempt.committed
-            assert state.logical_free_pages() == free_before
+            assert state.logical_free_units() == free_before
             assert torch.equal(allocator.full_to_swa_index_mapping, mapping_before)
             assert state.quota.charged_bytes == floor + growth
 
@@ -711,6 +713,7 @@ def run_tp_composite_rank(rank: int, rendezvous: str) -> None:
                 retirement = reconciler.pending_retirement
                 if retirement is not None:
                     torch.cuda.synchronize()
+                    assert isinstance(retirement, SglangReclaimPlan)
                     assert retirement.event is not None and retirement.event.query()
                 reconciler.begin_scheduling(scheduler)
                 assert state.quota.charged_bytes == sum(
@@ -723,7 +726,7 @@ def run_tp_composite_rank(rank: int, rendezvous: str) -> None:
             assert state.quota.charged_bytes == state.quota.limit_bytes == floor
             assert channel.completion is not None and channel.completion.sequence == 2
             assert channel.completion.backed_bytes == floor
-            assert state.logical_free_pages() == free_before
+            assert state.logical_free_units() == free_before
     finally:
         torch.distributed.destroy_process_group()
 

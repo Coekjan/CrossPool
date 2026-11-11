@@ -15,10 +15,15 @@ __all__ = ["ServingLaunch", "SglangLaunchModel"]
 
 @dataclass(frozen=True, slots=True)
 class SglangLaunchModel:
-    """One Instance's graph policy; runtime configuration owns its geometry."""
+    """One Instance's graph policy and explicit engine processor/capacity flags.
+
+    Runtime configuration owns model identity and parallel geometry. Arguments
+    extend the installed CLI for a portable workload's bounded engine policy.
+    """
 
     model_id: ModelId
     graph_mode: SglangGraphMode
+    arguments: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.model_id, ModelId):

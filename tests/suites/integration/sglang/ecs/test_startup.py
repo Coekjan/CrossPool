@@ -16,7 +16,8 @@ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from transformers import DeepseekV2Config, GptOssConfig, PretrainedConfig, Qwen3Config
 
 import xtest
-from xpool.integrations.sglang.ecs.state import SglangElasticContextState
+from xpool.integrations.sglang.ecs.construction import state_adapter_scope
+from xpool.integrations.sglang.ecs.implementations.kv import KvStateAdapter
 from xpool.integrations.sglang.hooks.ecs import ElasticContextStateHookSet
 from xtest.harness.native.case import run_native_case
 from xtest.harness.support.sglang.fakes import server_args
@@ -106,8 +107,11 @@ def run_original_factory_case(hf_config: PretrainedConfig, tmp_path: Path) -> No
         token_to_kv_pool_allocator=None,
         memory_pool_config=None,
     )
-    with get_context().override_server_args(
-        page_size=4, swa_full_tokens_ratio=0.5, cuda_graph_config=server_args().cuda_graph_config
+    with (
+        state_adapter_scope(KvStateAdapter),
+        get_context().override_server_args(
+            page_size=4, swa_full_tokens_ratio=0.5, cuda_graph_config=server_args().cuda_graph_config
+        ),
     ):
         config = MemoryPoolConfig(
             max_total_num_tokens=8192,
@@ -120,7 +124,7 @@ def run_original_factory_case(hf_config: PretrainedConfig, tmp_path: Path) -> No
             req_to_token_pool=None,
             token_to_kv_pool_allocator=None,
         )
-        state = SglangElasticContextState.create(
+        state = KvStateAdapter.create(
             pools.token_to_kv_pool,
             pools.token_to_kv_pool_allocator,
             pools.req_to_token_pool,
@@ -129,7 +133,7 @@ def run_original_factory_case(hf_config: PretrainedConfig, tmp_path: Path) -> No
         try:
             assert len(state.components) == (2 if model.is_hybrid_swa else 1)
             assert state.quota.charged_bytes == state.quota.limit_bytes == state.profile.floor_bytes
-            before = state.logical_free_pages()
+            before = state.logical_free_units()
             ceiling = state.profile.floor_bytes + max(profile.bundle_bytes for profile in state.profile.pools)
             reference = state.reference_config(ceiling)
             cost = state.reference_bytes(reference)
@@ -138,7 +142,7 @@ def run_original_factory_case(hf_config: PretrainedConfig, tmp_path: Path) -> No
             assert 0 < reference.max_total_num_tokens <= 8192
             state.quota.set_limit(ceiling)
             assert state.reference_config(ceiling) == reference
-            assert state.logical_free_pages() == before
+            assert state.logical_free_units() == before
             assert state.quota.charged_bytes == state.profile.floor_bytes
         finally:
             torch.cuda.synchronize()

@@ -252,6 +252,12 @@ combined-mode logits at the end of Prefill. Model suites own numerical parity;
 routine E2E owns installed serving, observed graph structure, and Transport/Fabric
 behavior.
 
+Native-media inputs additionally retain a matching `*.native-input.json`
+sidecar with text/media fingerprints and resolved processor/server settings.
+Model-owned fixtures document their provenance and frame ordering. The shared
+[serving lifecycle](../docs/designs/tooling.md#shared-serving-lifecycle) owns
+native-reference process isolation and request transport.
+
 ## Commands
 
 Before canonical commands, conditionally set `UV_ENV_FILE` as below so uv loads

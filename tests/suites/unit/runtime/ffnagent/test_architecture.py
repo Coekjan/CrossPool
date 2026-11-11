@@ -293,3 +293,31 @@ def test_compilers_select_serializable_router_semantics(
     )
     changed = FfnModelSpec.model_validate(payload)
     assert changed.digest() != spec.digest()
+
+
+@pytest.mark.parametrize("extra_key", (None, "model.language_model.layers.1.mlp.unowned.weight"))
+def test_original_qwen35_compiles_only_language_ffns(tmp_path: Path, extra_key: str | None) -> None:
+    text = {
+        **common_config(architecture_name="Qwen3_5ForCausalLM", model_type="qwen3_5_text", dtype_field="dtype"),
+        "intermediate_size": 32,
+        "layer_types": ["linear_attention", "linear_attention", "full_attention"],
+        "mtp_num_hidden_layers": 1,
+    }
+    config = {
+        "architectures": ["Qwen3_5ForConditionalGeneration"],
+        "model_type": "qwen3_5",
+        "text_config": text,
+    }
+    keys = tuple(
+        key.replace("model.layers", "model.language_model.layers") for layer in range(3) for key in dense_keys(layer)
+    )
+    local_keys = ("model.visual.blocks.0.mlp.linear_fc1.weight", "mtp.layers.0.mlp.gate_proj.weight")
+    write_indexed_model(tmp_path / "model", config, (*keys, *local_keys, *((extra_key,) if extra_key else ())))
+    if extra_key:
+        with pytest.raises(RuntimeError, match=r"extra=.*unowned"):
+            architecture.load(model_id=TEST_MODEL_ID, model_path=tmp_path / "model")
+    else:
+        spec = architecture.load(model_id=TEST_MODEL_ID, model_path=tmp_path / "model")
+        assert spec.hidden_size == 16 and len(spec.layers) == 3
+        assert isinstance(spec.activation, SiluActivation)
+        assert tuple(key for layer in spec.layers for key in layer.tensor_keys()) == keys

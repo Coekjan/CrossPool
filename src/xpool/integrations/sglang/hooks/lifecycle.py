@@ -34,6 +34,7 @@ from xpool.integrations.sglang.adapter import (
     model_runner_architectures,
 )
 from xpool.integrations.sglang.ecs.capacity import CapacityReconciler, capacity_reconciler_scope
+from xpool.integrations.sglang.ecs.construction import state_adapter_scope
 from xpool.integrations.sglang.ecs.state import SglangElasticContextState
 from xpool.integrations.sglang.hooks.registry import SglangHook, SglangHookSet
 from xpool.integrations.sglang.registry import MODELS_PACKAGE, discover_sglang_model_adapters
@@ -76,8 +77,8 @@ class LifecycleHookSet(SglangHookSet):
                 ),
                 SglangHook(
                     "sglang.srt.model_executor.model_runner.ModelRunner.alloc_memory_pool",
-                    after_model_runner_alloc_memory_pool,
-                    HookType.AFTER,
+                    around_model_runner_alloc_memory_pool,
+                    HookType.AROUND,
                 ),
                 SglangHook(
                     "sglang.srt.managers.scheduler.Scheduler.get_init_info",
@@ -216,6 +217,7 @@ def around_model_runner_load_model[**P, R](
     adapter.validate_before_load(model_runner)
 
     runtime = SglangInstanceRankRuntime.attach(model_runner, binding)
+    runtime.state_adapter_type = adapter.state_adapter_type
     logger.info(
         "bound instance=%s rank=%s device=%s pid=%s",
         binding.model_id,
@@ -235,6 +237,19 @@ def around_model_runner_load_model[**P, R](
         runtime.detach(model_runner)
         raise
     return result
+
+
+def around_model_runner_alloc_memory_pool[R](
+    original_fn: Callable[..., R],
+    model_runner: ModelRunner,
+    memory_pool_config: MemoryPoolConfig | None = None,
+) -> R:
+    runtime = SglangInstanceRankRuntime.require(model_runner)
+    if runtime.state_adapter_type is None:
+        raise RuntimeError("xpool model has no selected state implementation")
+    with state_adapter_scope(runtime.state_adapter_type):
+        result = original_fn(model_runner, memory_pool_config)
+        return after_model_runner_alloc_memory_pool(result, model_runner, memory_pool_config)
 
 
 def after_model_runner_alloc_memory_pool[R](
@@ -267,13 +282,15 @@ def after_model_runner_alloc_memory_pool[R](
     try:
         ffn_profile = derive_instance_ffn_profile(model_runner, binding)
         transport = derive_instance_rank_transport_profile(binding, ffn_profile)
-        state = SglangElasticContextState.create(
+        if runtime.state_adapter_type is None:
+            raise RuntimeError("xpool model has no selected state implementation")
+        state = runtime.state_adapter_type.create(
             model_runner.token_to_kv_pool,
             model_runner.token_to_kv_pool_allocator,
             model_runner.req_to_token_pool,
             configurator=model_runner.kv_cache_configurator,
         )
-        runtime.context_state = state
+        runtime.context_state = SglangElasticContextState(state)
         device_total_bytes = torch.cuda.get_device_properties(binding.worker_rank).total_memory
         atn_runtime_headroom_bytes = int(device_total_bytes * (1 - model_runner.mem_fraction_static))
         decode_graph = get_exec().graph.cuda_graph_config.decode

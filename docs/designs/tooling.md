@@ -425,6 +425,9 @@ each attention TP-by-DP geometry agrees with the configured attention devices.
 Graph mode remains attention-side policy. Shared command construction uses
 `xpool exec -- sglang serve` with attention-local base zero and step one; runtime
 preparation normalizes the complete deployment visibility before engine import.
+Each model declaration can also supply explicit engine processor/capacity
+arguments. Runtime configuration continues to own model identity and parallel
+geometry; source-owned workloads declare their bounded engine policy.
 
 `XpoolServingSystem.start` reserves all endpoint families, starts the daemon and
 Agents, starts all Instance servers, then establishes System Ready and every
@@ -475,6 +478,17 @@ evidence. The running cluster owns the runtime launch.
 The test probe validates `/server_info` Graph settings against the shared
 settings declaration at its HTTP reading boundary and retains the typed result
 before sending its deterministic inference request.
+
+Native-media test inputs carry repository-owned encoded image/video paths and
+their actual text placeholders. The probe sends the encoded bytes through the
+ordinary HTTP endpoint and retains the request/response before validation.
+A sidecar records text/media SHA-256 values and resolved server/processor
+settings. Fixtures retain provenance and deterministic frame ordering.
+The independent native reference uses an isolated original SGLang HTTP server,
+with matching processor settings and the same supervised endpoint/process
+ownership. Its inference bypasses the CrossPool plugin and retires before the
+production comparison. Fixture choices and response lengths remain model-owned.
+
 `xbench` supplies the complete case-resolved deployment
 and its own workload. Benchmark execution does not enable test observers or
 reuse the test probe's fixed requests and verdict policy. The shared installed

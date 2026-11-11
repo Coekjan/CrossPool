@@ -233,6 +233,12 @@ The stable virtual storage, Tensor views and sparse physical residency for one
 rank-local KV pool, distinct from shared byte permission and logical allocation.
 _Avoid_: VMM manager, elastic KV pool
 
+**State VMM Backing**:
+Stable typed virtual views and exact sparse physical mappings for retained-state
+allocation units. Buffer descriptors define physical coverage; the selected
+state implementation owns logical allocation and state updates.
+_Avoid_: State algorithm, logical slot allocator, quota share
+
 **Elastic Context State Capacity Reconciliation**:
 The adoption of a Quota Target and safe adjustment of rank-local backing
 while preserving logical allocation and in-flight device access.

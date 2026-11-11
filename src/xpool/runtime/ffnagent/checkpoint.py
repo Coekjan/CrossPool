@@ -78,13 +78,15 @@ def read_checkpoint_key_view(model_path: Path) -> dict[str, Path]:
 def validate_ffn_coverage(
     spec: ffn.FfnModelSpec,
     key_view: Mapping[str, Path],
+    *,
+    decoder_prefix: str = "model.layers",
 ) -> None:
     """Require exact family-owned FFN keys for every main decoder layer."""
 
     expected_by_layer = {layer.layer_id: set(layer.tensor_keys()) for layer in spec.layers}
     all_checkpoint_keys = set(key_view)
     for layer_id, expected_keys in expected_by_layer.items():
-        prefix = f"model.layers.{layer_id}.mlp."
+        prefix = f"{decoder_prefix}.{layer_id}.mlp."
         actual_keys = {key for key in all_checkpoint_keys if key.startswith(prefix)}
         if actual_keys != expected_keys:
             missing = sorted(expected_keys - actual_keys)
