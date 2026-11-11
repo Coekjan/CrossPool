@@ -7,6 +7,9 @@ qualified per model ID; sharing a family does not establish support.
 Family names identify the complete checkpoint architecture, including multimodal
 wrappers. Model ID links point to the checkpoint configuration.
 
+Support applies to the execution and resource envelopes owned by
+[Qualification](designs/qualification.md) and each model's qualification suite.
+
 | Model ID | Family | Support |
 | --- | --- | --- |
 | [Qwen/Qwen2.5-0.5B](https://huggingface.co/Qwen/Qwen2.5-0.5B/blob/main/config.json) | `Qwen2ForCausalLM` | ✅ Supported |
@@ -28,7 +31,7 @@ wrappers. Model ID links point to the checkpoint configuration.
 | [Qwen/Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
 | [Qwen/Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
 | [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
-| [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
+| [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ✅ Supported |
 | [Qwen/Qwen3.5-27B](https://huggingface.co/Qwen/Qwen3.5-27B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
 | [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b/blob/main/config.json) | `GptOssForCausalLM` | ✅ Supported |
 | [openai/gpt-oss-120b](https://huggingface.co/openai/gpt-oss-120b/blob/main/config.json) | `GptOssForCausalLM` | ✅ Supported |
@@ -67,6 +70,11 @@ wrappers. Model ID links point to the checkpoint configuration.
 GPT-OSS uses the original MXFP4 checkpoints with BF16 payloads and Hybrid
 Full/SWA storage. Coverage follows the
 [qualification boundary](designs/overview.md#supported-boundary).
+
+Qwen3.5-9B uses the original BF16 multimodal checkpoint and the
+[linear-attention state option](designs/elastic-context-state.md#concrete-linear-attention-option).
+Its [model suite](../tests/suites/models/Qwen/Qwen3.5-9B/test_sglang_model_qualification.py)
+owns processor limits and native-media qualification inputs.
 
 Run the relevant `xtest run --suite <model-id> --strict-requirements` suite
 when changes invalidate that model's qualification evidence. The complete

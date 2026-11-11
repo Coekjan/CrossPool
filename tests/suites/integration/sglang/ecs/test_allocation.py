@@ -30,7 +30,8 @@ from xpool.integrations.sglang.ecs.allocator import (
     ElasticTokenToKVPoolAllocator,
 )
 from xpool.integrations.sglang.ecs.capacity import CapacityReconciler, capacity_reconciler_scope
-from xpool.integrations.sglang.ecs.state import SglangElasticContextState
+from xpool.integrations.sglang.ecs.implementations.kv import KvStateAdapter
+from xpool.integrations.sglang.ecs.implementations.kv_allocation import KvAllocationReceipt
 from xpool.integrations.sglang.hooks.ecs import complete_allocation
 from xpool.native.ecs import InstanceControlChannel
 from xpool.runtime.instance import InstanceRankRuntime
@@ -65,7 +66,7 @@ def test_clean_rollback_preserves_continuation_and_actual_sorted_acquisitions(
     mapping[held] = 7
     charged_before = allocator.backing.quota.charged_bytes
 
-    with SglangAllocation(request_pool, attention_cache, allocator, mapping) as attempt:
+    with SglangAllocation(KvAllocationReceipt(request_pool, attention_cache, allocator, mapping)) as attempt:
         attempt.watch([request])
         attempt.batch = ScheduleBatch(reqs=[request])
         locations = allocator.alloc(2 * page_size)
@@ -110,7 +111,7 @@ def test_rollback_returns_new_rows_locks_and_selected_waiting_positions(
     request_pool = attention_cache.req_to_token_pool
     rows_before = request_pool.available_size()
 
-    with SglangAllocation(request_pool, attention_cache, allocator, None, scheduler) as attempt:
+    with SglangAllocation(KvAllocationReceipt(request_pool, attention_cache, allocator, None), scheduler) as attempt:
         attempt.watch([request])
         rows = request_pool.alloc([request])
         assert rows is not None
@@ -143,7 +144,7 @@ def test_terminal_failure_retains_journal_ownership_without_device_rollback(
     allocator.publish_pages(plan.page_ids)
     available = allocator.available_size()
     error = CudaDriverError(driver.CUresult.CUDA_ERROR_ILLEGAL_ADDRESS, "test forward preparation")
-    attempt = SglangAllocation(attention_cache.req_to_token_pool, attention_cache, allocator, None)
+    attempt = SglangAllocation(KvAllocationReceipt(attention_cache.req_to_token_pool, attention_cache, allocator, None))
 
     with pytest.raises(CudaDriverError) as caught:
         with attempt:
@@ -154,7 +155,7 @@ def test_terminal_failure_retains_journal_ownership_without_device_rollback(
     assert SglangAllocation.current() is None
     assert allocator.available_size() == available - allocator.page_size
     assert not attempt.committed and not attempt.rolled_back
-    assert sum(len(pages) for owner, pages in attempt.page_allocations) == 1
+    assert sum(len(pages) for owner, pages in cast(KvAllocationReceipt, attempt.journal).page_allocations) == 1
 
 
 def test_successful_commit_keeps_the_new_logical_page_owner(
@@ -165,7 +166,9 @@ def test_successful_commit_keeps_the_new_logical_page_owner(
     assert allocator.backing.try_map(plan.missing_bundle_ids)
     allocator.publish_pages(plan.page_ids)
     available = allocator.available_size()
-    with SglangAllocation(attention_cache.req_to_token_pool, attention_cache, allocator, None) as attempt:
+    with SglangAllocation(
+        KvAllocationReceipt(attention_cache.req_to_token_pool, attention_cache, allocator, None)
+    ) as attempt:
         attempt.batch = ScheduleBatch(reqs=[])
         assert allocator.alloc(allocator.page_size) is not None
         attempt.commit()
@@ -178,7 +181,7 @@ def test_decode_miss_clears_every_actual_row_tail_and_keeps_committed_prefixes(
     allocator: ElasticTokenToKVPoolAllocator | ElasticPagedTokenToKVPoolAllocator,
     attention_cache: UnifiedRadixCache,
 ) -> None:
-    state = SglangElasticContextState.create(
+    state = KvStateAdapter.create(
         allocator.get_kvcache(),
         allocator,
         attention_cache.req_to_token_pool,
@@ -279,13 +282,13 @@ def test_upstream_paired_decode_rollback_restores_partial_page_mapping(
     before = mapping.clone()
     available = (allocator.full_available_size(), allocator.swa_available_size())
 
-    with SglangAllocation(request_pool, cache, full, mapping) as attempt:
+    with SglangAllocation(KvAllocationReceipt(request_pool, cache, full, mapping)) as attempt:
         attempt.watch(batch.reqs)
         attempt.batch = batch
         attempt.token_per_req = 1
         locations = alloc_for_decode(batch, token_per_req=1)
         assert torch.all(mapping[locations] != before[locations])
-        assert not attempt.page_allocations
+        assert not cast(KvAllocationReceipt, attempt.journal).page_allocations
         attempt.rollback()
     torch.cuda.synchronize()
 

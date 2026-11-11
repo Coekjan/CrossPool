@@ -1,16 +1,15 @@
 <h1 align="center">CrossPool</h1>
 
-CrossPool is a serving system for co-locating multiple SGLang models when
-user-driven KV Cache demand and model-driven FFN weight requirements do not
-line up.
+CrossPool co-locates SGLang models by sharing physical context capacity and FFN
+execution across independently placed attention and FFN devices.
 
 ## Why CrossPool?
 
-KV Cache and FFN weights/execution are governed by different sizing axes:
+Retained context and FFN weights/execution are governed by different sizing axes:
 
 | Resource | Main sizing driver | CrossPool treatment |
 | --- | --- | --- |
-| Attention and KV Cache | Active requests, context lengths, and generation histories | SGLang keeps logical cache ownership; physical backing can be lent and reclaimed among Instances on one attention device. |
+| Attention and retained context | Active requests, token histories, and recurrent checkpoints | SGLang keeps logical state ownership; physical backing can be lent and reclaimed among Instances on one attention device. |
 | FFN weights and execution | Model layer geometry, weight size, and FFN parallelism | FfnAgents retain model-specific true-TP shards on a shared FFN execution tier. |
 
 A conventional co-located deployment binds these two axes to the same process and
@@ -20,9 +19,9 @@ independently.
 
 CrossPool separates the placement and sizing decisions without changing
 SGLang's request semantics. It shares FFN execution infrastructure and
-reallocates physical KV backing across co-located Instances. Logical KV contents
-and prefix caches remain isolated; CrossPool shares execution infrastructure and
-physical capacity, not cache contents.
+reallocates physical context backing across co-located Instances. Logical state
+contents and prefix caches remain isolated; CrossPool shares execution
+infrastructure and physical capacity, not cache contents.
 
 ## Architecture at a glance
 
@@ -30,10 +29,10 @@ physical capacity, not cache contents.
   <img src="docs/assets/architecture.svg" alt="CrossPool architecture">
 </p>
 
-The daemon control plane registers participants, coordinates SLO-aware KV
+The daemon control plane registers participants, coordinates SLO-aware context
 capacity, and watches participant liveness. Each SGLang Instance Rank keeps
-attention and logical KV/prefix-cache ownership, then sends FFN work through a
-rank-local mailbox to its AtnAgent's Transport Kernel.
+attention and logical context/prefix-cache ownership, then sends FFN work through
+a rank-local mailbox to its AtnAgent's Transport Kernel.
 
 FfnAgents keep the FFN weight shards. Each Executor Lane captures a CUDA
 Graph for each compute structure its layers need. The Fabric carries work
@@ -45,11 +44,14 @@ for request flow and readiness.
 - **Seamless SGLang integration:** a pinned SGLang plugin installs
   architecture-specific adapters without replacing SGLang's request or KV Cache
   runtime.
-- **Independent resource placement:** attention/KV and FFN/weight sides can be
-  configured and sized independently for co-located models.
-- **SLO-aware elastic KV Cache backing:** stable attention-side virtual addresses
-  allow physical KV capacity to move between co-located Instances while SGLang
-  keeps logical allocation and prefix-cache ownership.
+- **Independent resource placement:** attention execution and FFN weights can
+  be placed and sized independently for co-located models.
+- **SLO-aware elastic context state:** stable attention-side virtual addresses
+  allow Full/SWA KV and supported recurrent-state capacity to move between
+  co-located Instances while SGLang keeps logical allocation and cache ownership.
+- **Native multimodal Qwen3.5-9B:** the original wrapper retains its
+  visual encoder and media processor in SGLang while its language FFNs execute
+  on the shared FFN tier.
 - **Layer-wise FFN execution:** FfnAgents retain model-specific weight shards
   and execute model-defined FFN layers through GraphTemplates based on layer
   signatures.
@@ -94,8 +96,8 @@ shows a complete two-device setup.
 CrossPool integrates with SGLang through architecture-discovered adapters. The
 model architecture in `config.json` selects the adapter, while the configured
 model ID resolves its weights. SGLang continues to own request scheduling,
-attention, KV Cache, and output processing; CrossPool adds the shared FFN
-execution path and elastic physical KV Cache backing. See
+attention, retained context, media processing and output processing; CrossPool
+adds shared FFN execution and elastic physical context-state backing. See
 [Supported Models](docs/supported-models.md) for currently qualified model IDs.
 
 Select `xpool` through `SGLANG_PLUGINS` and launch with

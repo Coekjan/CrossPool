@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Barrier
@@ -10,9 +13,11 @@ import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from safetensors import SafetensorError, safe_open
 
+from xkit.results import write_json
 from xkit.serving.sglang.graph import SglangGraphSettings
 from xkit.serving.sglang.server import SglangServerProcess
 from xpool.model import ModelId
+from xtest.harness.sglang.catalog import E2eServingInput
 
 PROMPT = "The quick brown fox jumps over the lazy dog. " * 8
 NEW_TOKENS = 8
@@ -54,6 +59,7 @@ class SglangProbeServer:
     process: SglangServerProcess
     inference_path: Path
     prefill_logit_outdir: Path | None = None
+    native_input: E2eServingInput | None = None
 
     def url(self) -> str:
         return self.process.url()
@@ -73,21 +79,43 @@ class SglangProbeServer:
         """
 
         request_id = f"xpool-serving-graph-{self.process.model.model_id}"
+        native = self.native_input
+        new_tokens = NEW_TOKENS if native is None else native.new_tokens
         request: dict[str, JsonValue] = {
             "rid": request_id,
-            "text": PROMPT,
+            "text": PROMPT if native is None else native.text,
             "sampling_params": {
                 "temperature": 0,
-                "max_new_tokens": NEW_TOKENS,
-                "min_new_tokens": NEW_TOKENS,
+                "max_new_tokens": new_tokens,
+                "min_new_tokens": new_tokens,
                 "ignore_eos": True,
             },
             "stream": False,
         }
+        fingerprints = {}
+        if native is not None:
+            for name, paths in (("image_data", native.images), ("video_data", native.videos)):
+                if paths:
+                    encoded = []
+                    for path in paths:
+                        data = path.read_bytes()
+                        fingerprints[path.name] = hashlib.sha256(data).hexdigest()
+                        mime = mimetypes.guess_type(path.name)[0]
+                        encoded.append(f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}")
+                    request[name] = encoded
         with httpx.Client(base_url=self.url(), timeout=HTTP_TIMEOUT_SECONDS) as client:
             server_info = client.get("/server_info")
             server_info.raise_for_status()
             info = server_info.json()
+            if native is not None:
+                write_json(
+                    self.inference_path.with_suffix(".native-input.json"),
+                    dict(
+                        text_sha256=hashlib.sha256(native.text.encode()).hexdigest(),
+                        media_sha256=fingerprints,
+                        server_info=info,
+                    ),
+                )
             try:
                 graph = info["cuda_graph_config"]
                 settings = TypeAdapter(SglangGraphSettings).validate_python(
@@ -117,7 +145,7 @@ class SglangProbeServer:
         output_ids = payload.get("output_ids") if isinstance(payload, dict) else None
         if (
             not isinstance(output_ids, list)
-            or len(output_ids) != NEW_TOKENS
+            or len(output_ids) != new_tokens
             or not all(
                 isinstance(token_id, int) and not isinstance(token_id, bool) and token_id >= 0
                 for token_id in output_ids

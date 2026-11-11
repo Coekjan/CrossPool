@@ -21,7 +21,7 @@ from xpool.integrations.sglang.ecs.allocator import (
     ElasticTokenToKVPoolAllocator,
 )
 from xpool.integrations.sglang.ecs.capacity import CapacityReconciler, capacity_reconciler_scope
-from xpool.integrations.sglang.ecs.state import SglangElasticContextState
+from xpool.integrations.sglang.ecs.implementations.kv import KvStateAdapter
 from xpool.integrations.sglang.hooks.ecs import after_pool_stats, around_check_full_pool
 from xpool.native.ecs import InstanceControlChannel
 from xpool.runtime.instance import InstanceRankRuntime
@@ -60,7 +60,7 @@ def test_statistics_exclude_free_unavailable_ids_but_conservation_checks_the_ful
     allocator: ElasticTokenToKVPoolAllocator | ElasticPagedTokenToKVPoolAllocator,
     attention_cache: UnifiedRadixCache,
 ) -> None:
-    state = SglangElasticContextState.create(
+    state = KvStateAdapter.create(
         allocator.get_kvcache(),
         allocator,
         attention_cache.req_to_token_pool,

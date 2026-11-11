@@ -21,13 +21,13 @@ from sglang.srt.runtime_context import get_parallel
 
 from xpool.config import LatencySloConfig
 from xpool.fabric import FabricGenerationPhase
-from xpool.integrations.sglang.ecs.allocation import SglangAllocation, SglangAllocationStatus
-from xpool.integrations.sglang.ecs.radix import SglangCacheEviction
-from xpool.integrations.sglang.ecs.state import (
-    SglangElasticContextState,
+from xpool.integrations.sglang.ecs.allocation import SglangAllocation, SglangAllocationStatus, SglangCapacityMiss
+from xpool.integrations.sglang.ecs.interfaces import (
     SglangMemoryRequirement,
     SglangPrefillProposal,
-    SglangReclaimPlan,
+    SglangStateAdapter,
+    StateCacheProposal,
+    StateReclaimPlan,
 )
 from xpool.native.ecs import (
     InstanceControlChannel,
@@ -81,15 +81,15 @@ class CapacityReconciler:
 
     channel: InstanceControlChannel
     command_index: int
-    state: SglangElasticContextState
+    state: SglangStateAdapter
     instance_rank: InstanceRankRuntime
     slo: LatencySloConfig
     command: QuotaCommand | None = None
     active_quota_bytes: tuple[int, ...] = ()
     completed_sequence: int = 0
-    pending_retirement: SglangReclaimPlan | None = None
-    admission_free_pages: tuple[int, ...] = ()
-    deferred_eviction_pages: tuple[int, ...] = ()
+    pending_retirement: StateReclaimPlan | None = None
+    admission_free_units: tuple[int, ...] = ()
+    deferred_eviction_units: tuple[int, ...] = ()
     service_ceiling_bytes: tuple[int, ...] | None = None
     unresolved_demands: dict[tuple[Req, ...], DemandWitness] = field(default_factory=dict)
     published_demand: tuple[int, tuple[int, ...] | None, int | None] | None = None
@@ -103,7 +103,7 @@ class CapacityReconciler:
         group_index: int,
         partition_index: int,
         dp_group_count: int,
-        state: SglangElasticContextState,
+        state: SglangStateAdapter,
         instance_rank: InstanceRankRuntime,
         slo: LatencySloConfig,
     ) -> CapacityReconciler:
@@ -115,8 +115,8 @@ class CapacityReconciler:
             state=state,
             instance_rank=instance_rank,
             slo=slo,
-            admission_free_pages=state.logical_free_pages(),
-            deferred_eviction_pages=(0,) * len(state.components),
+            admission_free_units=state.logical_free_units(),
+            deferred_eviction_units=(0,) * state.pool_count,
         )
 
     @property
@@ -201,10 +201,37 @@ class CapacityReconciler:
     def sync_admission_budget(self) -> None:
         """Observe common logical free space without altering any local free-list owner."""
 
-        free = torch.tensor(self.state.logical_free_pages(), dtype=torch.int64)
+        free = torch.tensor(self.state.logical_free_units(), dtype=torch.int64)
         if get_parallel().attn_tp_size > 1:
             torch.distributed.all_reduce(free, op=torch.distributed.ReduceOp.MIN, group=self.tp_group.cpu_group)
-        self.admission_free_pages = tuple(free.tolist())
+        self.admission_free_units = tuple(free.tolist())
+
+    def commit_prefill(self, request: Req) -> None:
+        """Acquire prepared transition receipts under a matched TP verdict.
+
+        The current allocation journal has watched the request before this
+        call. Terminal errors retain its owners for generation failure.
+        """
+
+        error: BaseException | None = None
+        try:
+            self.state.commit_prefill(request)
+            status = SglangAllocationStatus.READY
+        except SglangCapacityMiss as failure:
+            error, status = failure, SglangAllocationStatus.CAPACITY_MISS
+        except BaseException as failure:
+            error, status = failure, SglangAllocationStatus.FAILED
+        verdict = self.allocation_verdict(status)
+        if verdict is SglangAllocationStatus.FAILED:
+            if status is SglangAllocationStatus.FAILED and error is not None:
+                raise error
+            raise RuntimeError("xpool state transition failed on a TP peer") from error
+        if verdict is SglangAllocationStatus.CAPACITY_MISS:
+            attempt = SglangAllocation.current()
+            if attempt is None:
+                raise RuntimeError("xpool state transition requires an allocation journal")
+            attempt.rollback()
+            raise SglangCapacityMiss("xpool state transition could not commit on every TP rank") from error
 
     def finish_retirement(self) -> None:
         """Poll local physical dependencies while retaining the same retirement record."""
@@ -215,7 +242,7 @@ class CapacityReconciler:
             if plan.completed:
                 self.pending_retirement = None
 
-    def reclaim(self, release_bytes: int, allocation_pages: tuple[int, ...]) -> bool:
+    def reclaim(self, release_bytes: int, allocation_units: tuple[int, ...]) -> bool:
         """Release empty backing first, then agree on one exact logical cache effect.
 
         The leader considers every rank's needs. An empty-backing retirement
@@ -232,10 +259,10 @@ class CapacityReconciler:
                 self.pending_retirement = empty
         if not self.vote_ready(self.pending_retirement is None):
             return False
-        free = self.state.resident_free_pages()
+        free = self.state.resident_free_units()
         needs = torch.tensor(
             [
-                *(int(need > available) for need, available in zip(allocation_pages, free, strict=True)),
+                *(int(need > available) for need, available in zip(allocation_units, free, strict=True)),
                 int(release_bytes > 0),
             ],
             dtype=torch.int32,
@@ -244,7 +271,7 @@ class CapacityReconciler:
             torch.distributed.all_reduce(needs, op=torch.distributed.ReduceOp.MAX, group=self.tp_group.cpu_group)
         if not bool(needs.any().item()):
             return False
-        candidate: SglangCacheEviction | None = None
+        candidate: StateCacheProposal | None = None
         if get_parallel().attn_tp_rank == 0:
             candidate = self.state.select_cache_eviction(
                 tuple(bool(value) for value in needs[:-1].tolist()), release_backing=bool(needs[-1].item())
@@ -281,23 +308,21 @@ class CapacityReconciler:
                 if scheduler is not None:
                     scheduler.running_batch.batch_is_full = False
             elif scheduler is not None:
-                self.reclaim(max(0, self.state.quota.charged_bytes - target), (0,) * len(self.state.components))
+                self.reclaim(max(0, self.state.quota.charged_bytes - target), (0,) * self.state.pool_count)
         if scheduler is not None:
-            deferred = torch.tensor(
-                self.deferred_eviction_pages or (0,) * len(self.state.components), dtype=torch.int64
-            )
+            deferred = torch.tensor(self.deferred_eviction_units or (0,) * self.state.pool_count, dtype=torch.int64)
             if get_parallel().attn_tp_size > 1:
                 torch.distributed.all_reduce(deferred, op=torch.distributed.ReduceOp.MAX, group=self.tp_group.cpu_group)
             if bool(deferred.any().item()):
                 if self.reclaim(0, tuple(deferred.tolist())):
-                    self.deferred_eviction_pages = (0,) * len(self.state.components)
+                    self.deferred_eviction_units = (0,) * self.state.pool_count
             self.sync_admission_budget()
 
     def memory_ready(self, memory: SglangMemoryRequirement) -> bool:
         """Check forecast and concrete realization jointly, without mapping or eviction."""
 
         forecast = self.state.required_bytes(memory)
-        immediate = self.state.allocation_bytes(memory.allocation_pages)
+        immediate = self.state.allocation_bytes(memory.allocation_units)
         return self.vote_ready(
             forecast is not None and immediate is not None and max(forecast, immediate) <= self.state.quota.limit_bytes
         )
@@ -317,7 +342,7 @@ class CapacityReconciler:
         try:
             status = (
                 SglangAllocationStatus.READY
-                if self.state.prepare_allocation(proposal.preparation_pages)
+                if self.state.prepare_allocation(proposal.preparation_units)
                 else SglangAllocationStatus.CAPACITY_MISS
             )
         except BaseException as failure:
@@ -334,14 +359,14 @@ class CapacityReconciler:
 
         if self.memory_ready(memory):
             return True
-        return self.reclaim_requirement(memory, memory.allocation_pages) and self.memory_ready(memory)
+        return self.reclaim_requirement(memory, memory.allocation_units) and self.memory_ready(memory)
 
     def defer_eviction(self, params: EvictParams) -> None:
         """Retain the requested resident-free target for the next common cache boundary."""
 
-        requested = self.state.eviction_page_targets(params)
-        previous = self.deferred_eviction_pages or (0,) * len(requested)
-        self.deferred_eviction_pages = tuple(max(old, target) for old, target in zip(previous, requested, strict=True))
+        requested = self.state.eviction_targets(params)
+        previous = self.deferred_eviction_units or (0,) * len(requested)
+        self.deferred_eviction_units = tuple(max(old, target) for old, target in zip(previous, requested, strict=True))
 
     def deadline_ns(self, origin: float, target_ms: float) -> int:
         """Convert the authoritative scheduler timing origin to an absolute deadline."""

@@ -21,6 +21,7 @@ SUPPORTED_MODEL_CLASSES = frozenset(
         "Qwen2ForCausalLM",
         "Qwen3ForCausalLM",
         "Qwen3MoeForCausalLM",
+        "Qwen3_5ForConditionalGeneration",
     }
 )
 

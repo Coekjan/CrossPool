@@ -15,6 +15,14 @@ semantics.
 Synthetic calibration declares those same semantics directly rather than
 selecting a model Adapter.
 
+The family adapter declares the main decoder checkpoint prefix used by exact
+FFN-key coverage validation. Qwen3.5's original ConditionalGeneration checkpoint
+uses a nested text configuration and `model.language_model.layers`; its visual
+and auxiliary namespaces remain outside the language FFN Spec. The adapter
+compiles ordinary Dense SiLU layers, preserving the original checkpoint
+identity without adding a new execution kind. Existing families retain their
+declared decoder namespaces and the same strict missing/extra-key checks.
+
 The immutable FFN Spec declares each projection's encoding, values-source layout
 and physical keys, with separate per-Expert or stacked routed sources and
 explicit Expert cardinality. A fused or stacked source key is counted once. Activation parameters,

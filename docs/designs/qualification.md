@@ -59,6 +59,17 @@ model suites own their explicit qualification whenever an adapter or numerical
 contract changes. The [test architecture](../../tests/README.md) owns suite
 selection commands and case placement.
 
+Native multimodal qualification transports actual encoded media through the
+original wrapper and processor. Model-owned cases compare an independent
+original-SGLang HTTP reference, exercise repeated prefix reuse, changed media,
+frame order and changed text, and retain input/processor fingerprints. The
+fixture-defined complete answer is the native-reference comparison boundary;
+separate graph rows retain Decode-token and first-Prefill logit comparisons.
+Qwen3.5's color/shape fixtures request one-word answers, while its graph rows
+retain eight Decode tokens. Non-bucket FFN row counts also exercise numerical
+bounds when fixed-Capacity execution changes rounding relative to an unpadded
+native call.
+
 ## Topology evidence
 
 Native topology qualification covers representative AtnAgent/FfnAgent
@@ -151,6 +162,18 @@ than a correctness assertion surface. Qualification cases provide evidence
 rather than an adapter allowlist. Runtime compatibility follows the SGLang
 memory and cache contract, with structural incompatibility at that seam
 determining rejection.
+
+Retained linear-state evidence additionally covers mixed-dtype granule unions,
+original kernel strides, clear/copy/tracking, stable views through sparse remap
+and Graph replay, mapping amplification at minimum/recommended CUDA granularities,
+and terminal failures retaining physical charge. Real hybrid/cache cases prove
+private COW, pre-forward checkpoint-replacement obligations, duplicate insertion,
+finish/abort cleanup and continuation rollback. Asymmetric TP residency must
+agree on exact logical cache effects and a common allocation verdict. A shrink
+preserves active/locked contents numerically until physical retirement is safe.
+Native media also runs under peer pressure with observed combined Graphs,
+transport/Fabric execution, a confirmed hit decrease/recovery, a visual-cache
+miss at the declared media envelope and verified participant cleanup.
 
 Computation errors, missing ownership and unconfirmed reclamation invalidate
 either route. Preserve the failing case, discrepancy and raw evidence.

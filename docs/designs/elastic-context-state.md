@@ -1,14 +1,16 @@
 # Elastic Context State
 
 CrossPool manages physical-memory capacity for Elastic Context State (ECS)
-across colocated Instances. SGLang owns requests, logical token/page allocation,
+across colocated Instances. SGLang owns requests, logical resource allocation,
 prefix-cache contents and eviction policy. CrossPool owns byte permission, stable virtual
 storage, sparse physical backing and coordinated allocation/reclamation.
 
 Pooling is always present in the CrossPool SGLang integration. Full attention
 and sliding-window attention (SWA) use their real upstream pools and paired
-allocator. Their rank-local backings share one Elastic Context State Memory
-Quota; cache contents remain private to each Instance.
+allocator. Supported linear-attention models retain active recurrent state and
+reusable checkpoints alongside Full KV. A rank's assembled backings share one
+Elastic Context State Memory Quota; logical state contents remain private to
+each Instance. The model adapter selects the concrete state implementation.
 
 ## Capacity model
 
@@ -20,8 +22,8 @@ geometry, bundle counts and physical IDs stay inside the Instance.
 An Instance Rank's `ecs.MemoryQuota` charges every managed backing.
 Pending allocations, resident bundles and retiring bundles retain their charges
 until checked rollback or physical release confirms that the bytes are free.
-Logical free pages alone do not refund bytes. Full and SWA can reuse the same
-quota as their demands change.
+Logical frees alone do not refund bytes. The assembled pools reuse the same
+quota as their demands change, without fixed physical shares per state type.
 
 An Elastic Context State Capacity Pool is the physical budget shared across
 Instance partitions on one attention Device. After local Graph captures
@@ -72,15 +74,29 @@ across all components under one quota. Only successfully backed pages become
 deliverable to the original allocators. A later clean miss can leave new
 physical mappings as charged reusable residency.
 
-`SglangElasticContextState` assembles the actual root pool, allocator, request pool
-and existing configurator. Its ordered `SglangKvComponent` associations bind
-each child allocator to its Full or SWA cache component; backings and pool
-profiles derive from those allocator owners. The state owns resident-page
-observations, eviction-target conversion and cache-candidate selection. The
-reconciler retains TP agreement, quota adoption and retirement ordering.
-The runner retains the state before transport startup; Scheduler setup binds
-the real Python Unified Radix cache. The state maintains no additional request
-table or cache index.
+`SglangElasticContextState` owns the selected `SglangStateAdapter`. The adapter
+assembles the actual pools, allocator, request pool and existing configurator.
+The model supplies its adapter type before pool sizing; a scoped construction
+owner delegates budget normalization and the original pool factory. Selection
+remains immutable for the runner's lifetime. The runner retains the state
+before transport startup, and Scheduler setup binds the real Python Unified
+Radix cache.
+
+Shared admission, allocation, capacity and cache coordination consume the
+interface, ordered resource counts and implementation-owned receipts. They
+retain no concrete recurrent geometry, request fields or algorithm dispatch.
+`implementations/kv.py` owns the Full/SWA composition, including its ordered
+`SglangKvComponent` associations. The selected linear-attention option composes
+that KV behavior with its own slot ownership. Pool profiles describe physical
+mapping units independently of the logical resource vector's length.
+
+`StateVmmBacking` supplies descriptor-driven storage for retained-state units.
+Each buffer declares dtype, contiguous shape/strides, logical-unit axis and
+mapping granularity. One unit can intersect disjoint intervals across outer
+dimensions. The backing maps their exact sorted granule union and preserves
+the original stable views. It owns physical mappings and charge; the selected
+implementation owns logical IDs, pins and clear/copy/update operations. A
+granule remains resident while any intersecting logical owner requires it.
 
 Ordinary backing failures perform checked local rollback. Terminal device
 errors or uncertain cleanup retain the original failure and resource owners
@@ -99,12 +115,14 @@ TP ranks agree on logical requests, order, token ranges, cache effects and the
 allocation outcome. Their storage IDs, free lists and physical residency remain
 rank-local.
 
-At the fixed planning boundary, ranks reduce logical free-page vectors by
+At the fixed planning boundary, ranks reduce logical free-unit vectors by
 minimum. This observation feeds the existing Prefill budget offsets; it does
 not overwrite local free lists. Admission prices all component requirements
 together under each local byte grant. The full remaining request forecast is
-distinct from pre-lock resident preparation and the next batch's actual page
-acquisitions. All three requirements use each component's allocator-page unit.
+distinct from pre-lock resident preparation and the next batch's actual resource
+acquisitions. Each vector uses its logical pool's native allocation unit in one
+immutable order. The selected implementation owns conversion to physical bytes;
+the shared coordinator does not infer a pool's meaning from its vector position.
 The forecast retains clipped output lookahead and upstream budget offsets;
 preparation establishes deliverable input backing rather than reserving future
 output storage.
@@ -114,6 +132,12 @@ or feasibility even when one rank rejects locally. If a smaller legal chunk
 fits, common probes rerun pure selection before tentative commit. Chunk
 continuation retains its distinct lock and ownership semantics; no allocatable
 chunk leaves that same continuation parked.
+
+Rank-local preparation maps and publishes deliverable capacity. It acquires no
+request owner, evicts no cache and enters no TP collective. The allocation
+journal watches a request before the selected implementation's `commit_prefill`
+acquires prepared transitions under a matched TP MAX verdict. The complete
+allocation window also calls `before_allocation` at the actual batch boundary.
 
 Before a new chunk owner acquires its persistent prefix lock, preparation covers
 the remaining Full input and a conservative SWA peak. For SWA, the base target
@@ -154,11 +178,12 @@ The complete allocation window is:
 
 ```text
 tentative selection / Decode staging
-  -> alloc_for_extend or alloc_for_decode binds the actual batch
+  -> alloc_for_extend or alloc_for_decode binds the actual batch and watched receipts
+  -> the selected implementation prepares/acquires its request obligations
   -> committed window releases and actual new request rows
   -> exact joint backing preparation at the common allocation helper
-  -> original child allocations and Full-to-SWA mapping writes
-  -> original request-table writes and KV lengths
+  -> original logical allocations and implementation-owned mapping writes
+  -> original request-table writes and lengths
   -> one TP CPU-group MAX verdict
       READY: commit, then counters / penalties / DP sync / forward
       CAPACITY_MISS: restore unpublished ownership
@@ -166,13 +191,18 @@ tentative selection / Decode staging
 ```
 
 There is no collective between child allocations. The common preparation hook
-uses actual batch page requirements, including partial-page reuse and beam
-rows, rather than the helper's conservative token estimate.
+delegates actual batch requirements, including the KV implementation's
+partial-page reuse and beam rows, rather than the helper's conservative token
+estimate.
 
-`SglangAllocation` records actual child acquisitions after upstream conditional
-sorting. The Full child snapshots every returned mapping location, including
-Decode writes that acquire no new page. New request rows, lock receipts, queue
-positions, chunk ownership and tentative KV lengths retain their real owners.
+`SglangAllocation` coordinates opaque implementation-owned receipts and shared
+selection/queue restoration. The KV receipt records actual child acquisitions
+after upstream conditional sorting and snapshots every returned mapping
+location, including Decode writes that acquire no new page. New request rows,
+lock receipts, chunk ownership and tentative KV lengths retain their real
+owners. Additional state receipts snapshot their own fields and mutable tensor
+contents by value. Rollback preserves preexisting continuation owners; failed
+cleanup retains unconsumed receipts and physical charge.
 
 A common clean miss restores overwritten mapping entries, invalidates
 unpublished request-table tails, returns actual new child pages, releases new
@@ -191,15 +221,23 @@ success. Arbitrary execution or cleanup failures are not clean capacity misses.
 Local pressure first retires completely unowned bundles. When cache contents
 must change, the TP leader proposes the original policy's exact candidate as an
 owned root-to-node Radix key and component effect. Every rank resolves and
-validates that same endpoint before an all-ready vote. Full leaf eviction
+validates that same endpoint and complete ordered logical effects before an
+all-ready vote. The immutable proposal carries full-width token/media identity,
+extra namespace, bigram mode, cache salt, pool indices and released unit counts.
+It carries no rank-local physical IDs. Application consumes the prepared
+operation without another policy selection. Full leaf eviction
 includes its actual cascades; an SWA-only operation preserves Full contents and
 is rejected if it would instead cascade to Full.
 
-Only actual frees establish physical emptiness. The Instance withdraws the
-affected allocation IDs, records a CUDA Event on the actual execution stream,
-and polls it at later planning boundaries. Confirmed completion allows exact
-unmap and byte refund. A local Event result changes local ownership, not the
-collective order or another rank's physical release.
+Only actual frees establish physical emptiness. The selected implementation
+returns an opaque retirement receipt and withdraws every free ID intersecting
+the selected unowned physical mappings,
+then records the device-use fence. Scheduler-side state copies join the actual
+forward stream before its fence is recorded. Local polling refunds only
+confirmed release; pending or completed receipts return zero. Device or cleanup
+uncertainty retains unconfirmed ownership and fails the Generation.
+A local Event result changes local ownership, not the collective order or
+another rank's physical release.
 
 Unmatched local eviction helpers retain their requested shortfall for the next
 common cache boundary. They cannot independently mutate replicated cache
@@ -263,6 +301,10 @@ revisions. One-shot startup and ceiling values have explicit ready words;
 zero bytes remain valid data. Exact layouts and interfaces belong to native
 declarations and generated bindings under `xpool.native.ecs`.
 
+State composition does not extend this channel. The daemon consumes summed
+physical-byte bounds and observations, while algorithm-specific pool names,
+slot IDs and buffer geometry remain inside the serving integration.
+
 Commands are immutable within a sequence, and an unfinished group command
 cannot be superseded. Demand can be replaced or cleared under the same
 evaluated sequence. Startup polls the same channel; serving-time commands
@@ -289,7 +331,51 @@ budgets and issued quota transitions. Logs remain diagnostics rather than a
 protocol or correctness assertion surface. [Qualification](qualification.md)
 owns the native, component, installed serving and resource evidence boundaries.
 
-The integration supports the existing ordinary decoder boundary with Python
-Unified Radix and no KV offload. Alternate layouts, transfer/recurrent variants,
-speculative execution and mixed chunked Prefill/Decode require a separate
-integration design; Full/SWA support does not enable those paths.
+## Concrete linear-attention option
+
+The Qwen3.5 model adapter selects `implementations/linear/gdn.py`. That option
+owns the pinned engine's hybrid/Mamba pool classes and Gated DeltaNet semantics.
+It binds original mixed-dtype views without eagerly allocating or zeroing the
+complete virtual reservation. BF16 convolution history and FP32 matrix state
+retain their upstream contiguous layer-major strides. The dummy slot remains
+backed for padded Graph writes; real slot IDs become deliverable only after
+all of their physical coverage is resident.
+
+The real slot allocator retains active, tracking, cached and replacement owners
+through allocation epochs. It prefers resident holes, then the smallest missing
+granule union with a stable ID tie-break. Queue-wide opportunistic grouped
+preallocation is disabled: matching cannot hide acquisitions before joint
+preparation, and ending a group preserves every delivered owner.
+
+Normal committed prefix matching retains its upstream topology and LRU effects.
+The component hook defers private COW binding, reuses the matched endpoint and
+records the source. `cow_mamba=False` suppresses that acquisition only; it is
+not a pure-lookup guarantee. A temporary source lock protects planning, and the
+original persistent lock protects deferred execution. Prepared private active
+and tracking owners plus a checkpoint-replacement obligation precede forward.
+An unfinished insertion consumes the replacement receipt before donating a
+tracking slot. Finish, duplicate insertion, abort and rollback each release or
+transfer only their owned slots. Insertion exhaustion after execution is an
+invariant failure, rather than a local eviction/retry path.
+
+State-only eviction can preserve useful Full KV. Full leaf eviction includes
+its recurrent checkpoint and actual ancestor cascades. Every TP rank validates
+the same logical effects even when its slot IDs and mapping holes differ.
+A physical shrink preserves active and locked checkpoint contents until their
+owners release them and the actual device users complete.
+
+Upstream state-capacity normalization runs once during reservation sizing,
+including attention-DP normalization. Immutable service limits price at least
+one legal request's active, resolved tracking and checkpoint-replacement working
+set, plus pinned storage. The entire virtual state reservation is not a fixed
+physical slice. Runtime concurrency remains subject to joint KV/slot demands
+under the shared quota; storage and Graph geometry remain immutable.
+
+The option requires the non-lazy `extra_buffer` radix strategy, Python Unified
+Radix and ordinary separate hybrid pools. Quantized weights or recurrent
+checkpoints, stochastic rounding, replay variants, envelope/page-major layouts,
+unified memory, offload and speculative execution remain outside this option. Model
+and request boundaries also reject unsupported session and beam-state forks.
+Shared engine-wide restrictions continue to govern other unsupported modes.
+[Qualification](qualification.md) owns the accepted numerical, sparse-storage,
+distributed, Graph and native-media evidence boundaries.

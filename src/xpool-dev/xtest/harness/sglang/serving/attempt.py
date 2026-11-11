@@ -90,6 +90,7 @@ class ProbeAttempt:
                     server,
                     self.workdir / "models" / server.model.model_id.uri_encode() / "inference.json",
                     config.debug.prefill_logit_observer.outdir if config.debug.prefill_logit_observer.enable else None,
+                    self.case.native_input,
                 )
                 for server in self.system.servers
             ]

@@ -1,7 +1,7 @@
 # System Overview
 
-CrossPool separates attention and KV Cache execution from FFN weight residency and
-computation. The current deployment runs both roles on one host, with
+CrossPool separates attention and retained-context storage from FFN weight
+residency and computation. The current deployment runs both roles on one host, with
 daemon-owned attention MPS and direct FFN execution. Multiple models may share
 every device assigned to a role; no model owns a device exclusively.
 
@@ -58,8 +58,8 @@ but does not initialize CUDA or join NVSHMEM. Fabric UID creation is its only
 business-level native operation.
 
 Each serving Instance rank runs inside SGLang. It owns request scheduling,
-attention, logical KV Cache and prefix-cache semantics, outer CUDA Graph
-selection, output processing, and one rank-local Transport attachment.
+attention, logical KV/recurrent state and prefix-cache semantics, outer CUDA
+Graph selection, output processing, and one rank-local Transport attachment.
 CrossPool supplies stable elastic physical backing and coordinates capacity
 across co-located Instances as described in
 [Elastic Context State](elastic-context-state.md). The Instance invokes the sole
@@ -163,5 +163,5 @@ Production `xpool` does not depend on these packages. See
 The current implementation provides real Dense and MoE FFN execution, true-TP
 weight ownership, Device-resident Transport and Fabric progress, per-Lane
 GraphExec ownership, static placement, memory admission, elastic
-attention-side KV backing, and SGLang serving integration. These capabilities
-share one generation-scoped ABI and serving path.
+attention-side context-state backing, and SGLang serving integration. These
+capabilities share one generation-scoped ABI and serving path.

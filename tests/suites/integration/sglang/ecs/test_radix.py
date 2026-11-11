@@ -22,7 +22,7 @@ from xpool.integrations.sglang.ecs.allocator import (
     ElasticPagedTokenToKVPoolAllocator,
     ElasticTokenToKVPoolAllocator,
 )
-from xpool.integrations.sglang.ecs.radix import (
+from xpool.integrations.sglang.ecs.implementations.kv_radix import (
     SglangCacheEviction,
     around_acquire_swa_component_lock,
     free_swa_out_of_window_slots,

@@ -109,9 +109,9 @@ DP Attention. The integration validates engine geometry against configuration;
 daemon registration and readiness require the complete configured rank set.
 
 `atn.device_memory_utilization` defines the maximum share of each attention
-device that the post-capture Elastic Context State Capacity Pool may retain. Available KV
-bytes are the AtnAgent's observed free bytes plus already mapped bootstrap
-backing. The daemon subtracts the larger of the configured unused-memory
+device that the post-capture Elastic Context State Capacity Pool may retain.
+Available state bytes are the AtnAgent's observed free bytes plus already mapped
+bootstrap backing. The daemon subtracts the larger of the configured unused-memory
 margin and the summed Attention Runtime Headroom declared by co-located
 Instance Ranks; it does not add those reserves together.
 
@@ -159,6 +159,29 @@ architecture name or runtime Adapter lookup. Shared
 [FFN execution](ffn-execution.md) owns Router computation and resource geometry.
 The resulting `FfnModelSpec.digest()` identifies the compiled FFN semantics; the
 source JSON bytes are not carried as a separate contract field.
+
+The model adapter also selects its SGLang state-adapter type before pool sizing.
+Shared coordinators consume that interface; concrete pool construction, state
+fields, compatibility guards and algorithm-specific hooks remain in the selected
+implementation. [Elastic Context State](elastic-context-state.md) owns its
+resource, allocation and retirement contracts.
+
+Qwen3.5 retains its original BF16 ConditionalGeneration wrapper and nested
+language configuration. Its model-local shim bridges both decoder forward
+paths to the existing FFN API with the actual batch and validates full MLP
+input boundaries and matching output reduction. Family-local hooks handle
+projection-based initialization, including SiLU/FP4 fusion setup, only for the
+parameter-free language shim. Visual MLPs retain their modules, weights and
+initialization. Shared FFN execution consumes the existing Dense semantics.
+
+Native multimodal wrappers retain their visual encoder, media processor,
+embedding assembly and positional metadata inside SGLang. CrossPool offloads
+only the language decoder's declared FFNs. Visual weights, execution scratch,
+expanded embeddings and bounded media caches remain outside the managed state
+quota. Their service-time memory follows the existing Attention Runtime
+Headroom declaration. Portable qualification workloads declare processor pixel,
+frame, media-count, concurrency and cache bounds together with engine memory
+settings; enlarging that envelope requires new resource evidence.
 
 Outer graph mode is an attention-side concept. Eager, Decode Full, and combined
 Decode Full plus Prefill Breakable modes all invoke the same FFN data-plane

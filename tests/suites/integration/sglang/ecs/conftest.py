@@ -16,8 +16,16 @@ from xpool.integrations.sglang.ecs.allocator import (
     ElasticPagedTokenToKVPoolAllocator,
     ElasticTokenToKVPoolAllocator,
 )
+from xpool.integrations.sglang.ecs.construction import state_adapter_scope
+from xpool.integrations.sglang.ecs.implementations.kv import KvStateAdapter
 from xpool.integrations.sglang.ecs.pool import ElasticMHATokenToKVPool
 from xpool.integrations.sglang.ecs.vmm import KvVmmBacking, KvVmmLayout
+
+
+@pytest.fixture(autouse=True)
+def state_implementation() -> Iterator[None]:
+    with state_adapter_scope(KvStateAdapter):
+        yield
 
 
 @pytest.fixture

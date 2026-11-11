@@ -125,6 +125,7 @@ class FfnModelAdapter(ABC):
     """Compile one strict model-family configuration into FFN semantics."""
 
     architecture_name: str
+    decoder_prefix = "model.layers"
 
     @classmethod
     @abstractmethod
@@ -188,7 +189,7 @@ def load(*, model_id: ModelId, model_path: pathlib.Path) -> ffn.FfnModelSpec:
             raise ValueError("FFN Architecture Adapter returned inconsistent model identity")
 
         key_view = checkpoint.read_checkpoint_key_view(model_path)
-        checkpoint.validate_ffn_coverage(spec, key_view)
+        checkpoint.validate_ffn_coverage(spec, key_view, decoder_prefix=adapter.decoder_prefix)
         return spec
     except Exception as error:
         raise RuntimeError(f"failed to compile FFN model {model_id!r} at {model_path}: {error}") from error

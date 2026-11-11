@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable
-from dataclasses import fields, replace
+from dataclasses import fields
 from http import HTTPStatus
 from typing import cast
 
@@ -18,12 +17,11 @@ from sglang.srt.managers.scheduler import _make_abort_req
 from sglang.srt.managers.scheduler_components.new_token_ratio_tracker import NewTokenRatioTracker
 from sglang.srt.mem_cache.allocation import alloc_for_decode
 from sglang.srt.mem_cache.unified_radix_cache import UnifiedRadixCache
-from sglang.srt.model_executor.forward_batch_info import ForwardMode
-from sglang.srt.runtime_context import get_parallel, get_schedule
+from sglang.srt.runtime_context import get_parallel
 
 from xpool.integrations.sglang.ecs.allocation import SglangAllocation, SglangCapacityMiss
 from xpool.integrations.sglang.ecs.capacity import current_capacity_reconciler
-from xpool.integrations.sglang.ecs.state import SglangMemoryRequirement, SglangPrefillProposal
+from xpool.integrations.sglang.ecs.interfaces import SglangMemoryRequirement, SglangPrefillProposal
 
 
 class ElasticPrefillAdder(PrefillAdder):
@@ -38,80 +36,23 @@ class ElasticPrefillAdder(PrefillAdder):
 
     @property
     def rem_total_tokens(self) -> float:
-        """Apply the original total forecast offset to common Full free capacity."""
-
-        free = current_capacity_reconciler().admission_free_pages[0] * self.page_size
-        return free + self.tree_cache.full_evictable_size() - self.rem_total_token_offset
+        reconciler = current_capacity_reconciler()
+        return float(reconciler.state.prefill_budget(self, "total", reconciler.admission_free_units))
 
     @property
     def cur_rem_tokens(self) -> int:
-        """Apply the original current-batch offset without changing local allocation IDs."""
-
-        free = current_capacity_reconciler().admission_free_pages[0] * self.page_size
-        return free + self.tree_cache.full_evictable_size() - self.cur_rem_token_offset
+        reconciler = current_capacity_reconciler()
+        return int(reconciler.state.prefill_budget(self, "current", reconciler.admission_free_units))
 
     @property
     def rem_swa_tokens(self) -> int:
-        """Keep the SWA forecast separate from Full and from byte permission."""
-
-        free = current_capacity_reconciler().admission_free_pages[1] * self.page_size
-        return free + self.tree_cache.swa_evictable_size() - self.rem_swa_token_offset
+        reconciler = current_capacity_reconciler()
+        return int(reconciler.state.prefill_budget(self, "window", reconciler.admission_free_units))
 
     def proposal_for_admission(
         self, request: Req, admission: _PrefillAdmission, *, continuation: bool = False
     ) -> SglangPrefillProposal:
-        """Derive admission, pre-lock backing and actual acquisition from one engine shape.
-
-        Whole-input forecasts retain output lookahead; preparation backs input
-        capacity only. Continuations need the next batch rather than another
-        whole-request forecast. Every vector follows the component pool order.
-        """
-
-        prefix, extend = admission.prefix_len, admission.extend_len
-        acquired = (self.ceil_paged_tokens(prefix + extend) - self.ceil_paged_tokens(prefix)) // self.page_size
-        selected_pages = 0
-        for selected in self.can_run_list:
-            extent = selected.extend_range
-            if extent is None:
-                raise RuntimeError("xpool selected Prefill request has no committed extent")
-            selected_pages += (
-                self.ceil_paged_tokens(extent.end) - self.ceil_paged_tokens(extent.start)
-            ) // self.page_size
-        acquired += selected_pages
-        components = 2 if self.is_hybrid_swa else 1
-        allocation = (acquired,) * components
-        if continuation:
-            return SglangPrefillProposal(admission, SglangMemoryRequirement(allocation, allocation), allocation)
-
-        remaining = len(request.full_untruncated_fill_ids) - prefix
-        remaining_pages = (
-            self.ceil_paged_tokens(prefix + remaining) - self.ceil_paged_tokens(prefix)
-        ) // self.page_size
-        total = self.rem_total_token_offset + extend + admission.max_new_tokens + self.page_size
-        current = self.cur_rem_token_offset + self.ceil_paged_tokens(extend) + self.page_size
-        whole_input = self.rem_total_token_offset + remaining + self._swa_new_tokens(request) + self.page_size
-        preparation = (selected_pages + remaining_pages,)
-        full = max(
-            preparation[0],
-            math.floor(max(total, whole_input) / self.page_size) + 1,
-            math.ceil(current / self.page_size),
-        )
-        forecast = (full,)
-        if self.is_hybrid_swa:
-            chunk_tokens = get_schedule().chunked_prefill_size
-            chunk_pages = (
-                self.ceil_paged_tokens(chunk_tokens) // self.page_size
-                if chunk_tokens is not None and chunk_tokens > 0
-                else remaining_pages
-            )
-            window_pages = self.ceil_paged_tokens(self.tree_cache.sliding_window_size) // self.page_size
-            swa_preparation = selected_pages + min(remaining_pages, window_pages + 2 * chunk_pages) + 1
-            preparation += (max(acquired, swa_preparation),)
-            swa_tokens = self.rem_swa_token_offset + self._swa_budget_for_req(
-                self.ceil_paged_tokens(extend), self._swa_new_tokens(request)
-            )
-            forecast += (max(preparation[1], swa_tokens // self.page_size + 1),)
-        return SglangPrefillProposal(admission, SglangMemoryRequirement(forecast, allocation), preparation)
+        return current_capacity_reconciler().state.prefill_proposal(self, request, admission, continuation=continuation)
 
     def _req_inc_lock_ref(self, req: Req) -> None:
         """Keep the original acquisition and retain its exact rollback receipt."""
@@ -177,7 +118,7 @@ class ElasticPrefillAdder(PrefillAdder):
             return AddReqResult.OTHER
 
         blocked = original if selected is None else selected
-        advanced = reconciler.reclaim_requirement(blocked.memory, blocked.preparation_pages)
+        advanced = reconciler.reclaim_requirement(blocked.memory, blocked.preparation_units)
         if selected is not None or advanced or not reconciler.vote_ready(reconciler.pending_retirement is None):
             return AddReqResult.OTHER
         return AddReqResult.NO_TOKEN
@@ -240,6 +181,7 @@ class ElasticPrefillAdder(PrefillAdder):
             ):
                 reconciler.record_prefill_requirement(req, None)
                 return AddReqResult.OTHER
+            reconciler.commit_prefill(req)
             self._commit_prefill_admission(req, result.admission, 0)
         reconciler.record_prefill_requirement(req, None)
         return self.budget_state()
@@ -288,6 +230,7 @@ class ElasticPrefillAdder(PrefillAdder):
                 waiting_queue_len=self.waiting_queue_len,
             )
         admission = result.admission
+        reconciler.commit_prefill(req)
         req.set_extend_range(admission.prefix_len, admission.prefix_len + admission.extend_len)
         self.can_run_list.append(req)
         self._update_prefill_budget(
@@ -303,13 +246,7 @@ class ElasticPrefillAdder(PrefillAdder):
 
 
 def decode_requirement(batch: ScheduleBatch, selected_indices: list[int] | None = None) -> SglangMemoryRequirement:
-    """Use the original next-step requirement, including the engine's beam rows."""
-
-    state = current_capacity_reconciler().state
-    page_size = state.components[0].allocator.page_size
-    tokens = batch.new_tokens_required_next_decode(selected_indices)
-    pages = (tokens + page_size - 1) // page_size
-    return SglangMemoryRequirement((pages,) * len(state.components), (pages,) * len(state.components))
+    return current_capacity_reconciler().state.decode_requirement(batch, selected_indices)
 
 
 def check_decode_mem(batch: ScheduleBatch, selected_indices: list[int] | None = None) -> bool:
@@ -319,7 +256,7 @@ def check_decode_mem(batch: ScheduleBatch, selected_indices: list[int] | None = 
     memory = decode_requirement(batch, selected_indices)
     if selected_indices is not None:
         forecast = reconciler.state.required_bytes(memory)
-        immediate = reconciler.state.allocation_bytes(memory.allocation_pages)
+        immediate = reconciler.state.allocation_bytes(memory.allocation_units)
         return (
             forecast is not None
             and immediate is not None
@@ -384,14 +321,7 @@ def prepare_for_decode(batch: ScheduleBatch) -> None:
     scheduler = reconciler.scheduler
     if scheduler is None:
         raise RuntimeError("xpool Decode preparation requires the bound Scheduler")
-    staged = replace(
-        batch,
-        forward_mode=ForwardMode.DECODE,
-        input_embeds=None,
-        mamba_cow_src_indices=None,
-        mamba_cow_dst_indices=None,
-        mamba_clear_indices=None,
-    )
+    staged = reconciler.state.stage_decode(batch)
     strip_beam_tail(staged)
     append_beam_tail(staged)
     with reconciler.state.allocation() as attempt:
@@ -429,5 +359,6 @@ def prepare_for_decode(batch: ScheduleBatch) -> None:
     staged.orig_seq_lens = staged.orig_seq_lens + 1
     # The pinned engine uses None to invalidate this lazily computed int.
     staged.seq_lens_sum = None  # ty: ignore[invalid-assignment]
+    reconciler.state.finish_decode(staged)
     for declaration in fields(staged):
         setattr(batch, declaration.name, getattr(staged, declaration.name))

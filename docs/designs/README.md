@@ -15,8 +15,8 @@ current architecture while workflow history remains in version control.
 - [FFN Execution](ffn-execution.md) defines model materialization, operators,
   GraphTemplates, and Executor Lanes.
 - [Elastic Context State](elastic-context-state.md) defines stable attention-side
-  KV storage, logical admission, physical capacity coordination, and
-  reclamation.
+  KV and recurrent-state storage, logical admission, physical capacity
+  coordination, and reclamation.
 - [Devkit](devkit.md) defines Hook Points and observer evidence.
 - [Test and Benchmark Tooling](tooling.md) defines installed harness ownership,
   configuration, catalogues, shared resource lifecycle and test evidence.
