@@ -46,6 +46,7 @@ class Reconstruction:
     """Evidence inventory consumed by offline queries and export."""
 
     events: dict[EventIdentity, Event]
+    # Event identity -> all physical input locations of that Event, including duplicates.
     event_sources: dict[EventIdentity, tuple[Source, ...]]
     entities: dict[EntityIdentity, Entity]
     edges: tuple[CausalEdge, ...]
@@ -63,7 +64,11 @@ class Reconstruction:
 
 def check_metadata_revisions(metadata: Iterable[Metadata]) -> tuple[Metadata, ...]:
     """Reject changed immutable references across revisions, processes and chunks."""
+    # (Run UUID, publishing Producer ID, metadata revision) -> validated metadata document.
     retained: dict[tuple[str, int, int], Metadata] = {}
+    # (Run UUID, definition family, family-specific identity components) -> immutable JSON definition.
+    # Components: producer/generation/clock use (ID,); endpoint/template use (owner Producer ID, sequence);
+    # artifact uses (publishing Producer ID, artifact ID); policy uses (publishing Producer ID,).
     definitions: dict[tuple[str, str, tuple[int, ...]], str] = {}
 
     for document in metadata:
@@ -116,6 +121,7 @@ def check_metadata_revisions(metadata: Iterable[Metadata]) -> tuple[Metadata, ..
 @dataclass
 class EventInventory:
     events: dict[EventIdentity, Event]
+    # Event identity -> each physical input occurrence, preserving encounter order.
     locations: dict[EventIdentity, list[Source]]
     documents: tuple[Metadata, ...]
 
@@ -123,6 +129,7 @@ class EventInventory:
 def retain_events(events: Iterable[Event], metadata: Iterable[Metadata], findings: list[Finding]) -> EventInventory:
     """Validate provenance and deduplicate identities while retaining every location."""
     retained: dict[EventIdentity, Event] = {}
+    # Event identity -> each physical input occurrence, preserving encounter order.
     locations: dict[EventIdentity, list[Source]] = defaultdict(list)
     documents = list(metadata)
 
@@ -177,6 +184,7 @@ def calibration_samples(samples: Iterable[Event]) -> tuple[CalibrationSample, ..
         # validate_event established a Device domain with a positive Epoch.
         if domain.raw_epoch is None:
             raise event.error(ErrorCode.INVALID_EVENT, "sample Device Epoch unavailable")
+        # SampleFailure wire value -> structured calibration-sample failure name.
         failures: dict[int, Literal["enqueue_failed", "completion_failed", "timed_out", "shutdown"]] = {
             SampleFailure.ENQUEUE_FAILED: "enqueue_failed",
             SampleFailure.COMPLETION_FAILED: "completion_failed",
@@ -200,6 +208,7 @@ def calibration_samples(samples: Iterable[Event]) -> tuple[CalibrationSample, ..
     return tuple(result)
 
 
+# Returns (entity/causal-edge inventory, retained calibration outcome Events).
 def reconstruct_entities(events: Iterable[Event], findings: list[Finding]) -> tuple[EntityGraph, tuple[Event, ...]]:
     """Build entity/site facts and identity edges in canonical Event order."""
     graph = EntityGraph()
@@ -210,6 +219,8 @@ def reconstruct_entities(events: Iterable[Event], findings: list[Finding]) -> tu
         run_id = event.source.identity.run_id
         keys: dict[str, EntityIdentity] = {}
 
+        # Each entry: (presence bit selecting the identity, entity kind, ordered identity components).
+        # Component positions follow EntityIdentity.components.
         identity_groups: tuple[tuple[PresenceBit, EntityKind, tuple[int, ...]], ...] = (
             (PresenceBit.OPERATION, "operation", (r.endpoint_owner, r.endpoint_sequence, r.operation_sequence)),
             (PresenceBit.INVOCATION, "invocation", (r.generation, r.instance_index, r.invocation_sequence)),
@@ -258,6 +269,7 @@ def reconstruct_entities(events: Iterable[Event], findings: list[Finding]) -> tu
         for identity in keys.values():
             graph.entities[identity].add(event)
 
+        # Each entry: (causal relation, origin entity kind, destination entity kind, admission condition).
         relations: tuple[tuple[CausalRelation, EntityKind, EntityKind, bool], ...] = (
             ("operation_to_invocation", "operation", "invocation", r.kind == EventKind.TRANSPORT_FABRIC_ASSOCIATED),
             ("graph_to_operation", "graph_execution", "operation", True),
@@ -414,6 +426,7 @@ def link_protocol_boundaries(graph: EntityGraph) -> None:
     for entity in graph.entities.values():
         if entity.identity.kind != "invocation":
             continue
+        # Protocol boundary kind -> retained Events across this Invocation's local role observations.
         by_kind: dict[int, list[Event]] = defaultdict(list)
         for observation in entity.observations.values():
             for kind, event in observation.events.items():

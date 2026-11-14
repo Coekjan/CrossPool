@@ -29,6 +29,7 @@ class Source:
     offset: int
     process_creation_id: str
     clock_domain_id: int
+    # (Endpoint-owner Producer ID, Endpoint sequence), absent when not recorded.
     endpoint: tuple[int, int] | None
     instance_rank: int | None
     pe: int | None

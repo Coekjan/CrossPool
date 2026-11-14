@@ -112,6 +112,7 @@ def test_routing_reference_must_match_the_final_index(
     tmp_path: Path, routing_entry: RoutingAttachment, conflict: str
 ) -> None:
     inputs = write_referenced_routing_inventory(tmp_path, routing_entry)
+    # Conflict case name -> {Routing attachment index field: replacement value}.
     changes_by_conflict: dict[str, dict[str, str | None]] = {
         "path": {"path": "other.safetensors"},
         "sha256": {"sha256": "0" * 64},

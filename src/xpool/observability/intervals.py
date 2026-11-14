@@ -32,6 +32,7 @@ class Interval:
         return tuple(event.source for event in (self.begin, self.end) if event is not None)
 
 
+# Phase entries are (phase name, begin Event kind, end Event kind); fabric_pairs groups them by local role.
 # Translate the shared timestamp field names into raw wire boundaries.
 transport_pairs = tuple(
     (name, EventKind[start.upper()], EventKind[end.upper()]) for name, start, end in phases.transport_phases

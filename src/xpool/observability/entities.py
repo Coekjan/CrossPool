@@ -39,6 +39,10 @@ class EntityIdentity:
 
     run_id: str
     kind: EntityKind
+    # Positions by kind: operation=(Endpoint owner, Endpoint sequence, Operation sequence);
+    # invocation=(Generation, Instance index, Invocation sequence);
+    # lease=(Generation, Lane index, Lease sequence);
+    # graph_template/graph_execution/attachment=(owner Producer ID, respective sequence).
     components: tuple[int, ...]
 
 
@@ -56,9 +60,12 @@ class Observation:
     """Retained boundaries and repeated facts at one actual observing site."""
 
     identity: ObservationIdentity
+    # Semantic field name -> retained scalar value; absence means no known value.
     facts: dict[str, int] = field(default_factory=dict)
+    # Original protocol boundary (including anomaly data0), or Graph kind -> retained Event.
     events: dict[int, Event] = field(default_factory=dict)
     sources: list[Source] = field(default_factory=list)
+    # Semantic field name -> canonical Event establishing that field's value.
     fact_sources: dict[str, Event] = field(default_factory=dict)
 
     def add(self, event: Event, findings: list[Finding]) -> None:
@@ -119,8 +126,10 @@ class Entity:
 
     identity: EntityIdentity
     observations: dict[ObservationIdentity, Observation] = field(default_factory=dict)
+    # Semantic field name -> retained scalar value; absence means no known value.
     facts: dict[str, int] = field(default_factory=dict)
     sources: list[Source] = field(default_factory=list)
+    # Semantic field name -> canonical Event establishing that field's value.
     fact_sources: dict[str, Event] = field(default_factory=dict)
 
     def add(self, event: Event) -> None:
@@ -194,6 +203,7 @@ class EntityGraph:
     """Mutable reconstruction inventory; edge keys retain all distinct source locations."""
 
     entities: dict[EntityIdentity, Entity] = field(default_factory=dict)
+    # (relation, origin identity, destination identity) -> edge with all supporting source locations.
     edges: dict[tuple[CausalRelation, EntityIdentity | EventIdentity, EntityIdentity | EventIdentity], CausalEdge] = (
         field(default_factory=dict)
     )
@@ -222,6 +232,7 @@ class EntityGraph:
     def validate_associations(self) -> None:
         """Reject remapped operations, executions and reused association destinations."""
         # Repeated association evidence may add sources while keeping one target.
+        # (relation, origin identity) -> its single permitted destination identity.
         targets: dict[tuple[CausalRelation, EntityIdentity | EventIdentity], EntityIdentity | EventIdentity] = {}
 
         for edge in self.edges.values():
@@ -240,6 +251,7 @@ class EntityGraph:
                     )
                 targets[relation_key] = edge.destination
 
+        # (relation, destination identity) -> its single permitted origin identity.
         inverse_targets: dict[
             tuple[CausalRelation, EntityIdentity | EventIdentity], EntityIdentity | EventIdentity
         ] = {}

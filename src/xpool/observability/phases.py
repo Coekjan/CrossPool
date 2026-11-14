@@ -3,6 +3,7 @@
 Intervals require retained boundaries and preserve observed zero timestamps.
 """
 
+# Each entry in the phase tables is (phase name, begin timestamp field, end timestamp field).
 transport_phases: tuple[tuple[str, str, str], ...] = (
     ("request_staging", "request_staging_started", "request_staging_completed"),
     ("request_publication", "request_staging_completed", "request_published"),

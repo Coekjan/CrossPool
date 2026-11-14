@@ -107,6 +107,7 @@ class TensorRecord(StrictModel):
     pe: uint64
     clock_domain_id: uint64
     raw_publication_time_ns: uint64
+    # Tensor dimensions in order: [live rows, effective top-k].
     shape: list[uint64]
 
 
@@ -192,13 +193,16 @@ def verify_tensors(path: Path, entry: RoutingAttachment, metadata: Metadata) -> 
         raise ObservationError(ErrorCode.INVALID_EVENT, "invalid Routing tensor artifact", path=path) from exc
 
 
+# Returns (resolved attachment evidence, related quality findings).
 def resolve_attachments(
     indices: tuple[AttachmentIndex, ...],
     root: Path | None,
     events: tuple[Event, ...],
     metadata: tuple[Metadata, ...],
 ) -> tuple[tuple[AttachmentEvidence, ...], tuple[Finding, ...]]:
+    # (Run UUID, attachment-owner Producer ID, attachment sequence) -> final index entry.
     entries: dict[tuple[str, int, int], RoutingAttachment] = {}
+    # (Run UUID, attachment-owner Producer ID) -> whether its final index is complete.
     closing: dict[tuple[str, int], bool] = {}
 
     for index in indices:
@@ -218,6 +222,7 @@ def resolve_attachments(
                 raise ObservationError(ErrorCode.IDENTITY_CONFLICT, "attachment index owner/identity conflict")
             entries[identity] = indexed_entry
 
+    # (Run UUID, attachment-owner Producer ID, attachment sequence) -> retained RoutingPublished Events.
     publications: dict[tuple[str, int, int], list[Event]] = {}
 
     for event in events:
@@ -375,6 +380,7 @@ def read_artifacts(inputs: ArtifactInputs) -> ArtifactSet:
     Raises:
         ObservationError: For I/O, unsupported versions, invalid data or conflicts.
     """
+    # (Run UUID, publishing Producer ID, metadata revision) -> exact published JSON bytes.
     raw_metadata: dict[tuple[str, int, int], bytes] = {}
     metadata: list[Metadata] = []
 
@@ -392,6 +398,7 @@ def read_artifacts(inputs: ArtifactInputs) -> ArtifactSet:
         metadata.append(document)
 
     chunks: list[Chunk] = []
+    # (Run UUID, recording Producer ID, chunk sequence) -> exact published chunk bytes.
     chunk_bytes: dict[tuple[str, int, int], bytes] = {}
 
     for path in inputs.chunks:

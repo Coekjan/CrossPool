@@ -18,7 +18,9 @@ class QualityReport:
     """Latest cumulative checkpoints plus local findings, without invented totals."""
 
     findings: tuple[Finding, ...]
+    # (Run UUID, recording Producer ID) -> latest cumulative checkpoint.
     checkpoints: dict[tuple[str, int], QualityCheckpoint]
+    # (Run UUID, recording Producer ID) -> {counter name: final u64 total}.
     # None means no closed exact checkpoint proves final totals.
     final_counters: dict[tuple[str, int], dict[str, int] | None]
 
@@ -39,7 +41,9 @@ def summarize_quality(
     findings: list[Finding],
 ) -> QualityReport:
     """Combine retained facts with cumulative checkpoints, preserving finding order."""
+    # (Run UUID, recording Producer ID) -> highest-revision cumulative checkpoint.
     latest: dict[tuple[str, int], QualityCheckpoint] = {}
+    # (Run UUID, recording Producer ID, checkpoint revision) -> unique revision contents.
     revisions: dict[tuple[str, int, int], QualityCheckpoint] = {}
     for checkpoint in checkpoints:
         key = (checkpoint.run_id, checkpoint.producer_id)
@@ -58,6 +62,7 @@ def summarize_quality(
             ) or any(value < previous_counters[name] for name, value in checkpoint.counters.model_dump().items()):
                 raise ObservationError(ErrorCode.IDENTITY_CONFLICT, "cumulative checkpoint regressed", producer=key[1])
         latest[key] = checkpoint
+    # (Run UUID, recording Producer ID) -> retained Events used for sequence/loss checks.
     observed: dict[tuple[str, int], list[Event]] = defaultdict(list)
     for event in events:
         observed[(event.source.identity.run_id, event.source.identity.producer)].append(event)
@@ -123,6 +128,7 @@ def summarize_quality(
     }
     for key in registered:
         final.setdefault(key, None)
+    # Distinct (Run UUID, Endpoint-owner Producer ID, Endpoint sequence, Operation sequence).
     anomalous_operations = {
         (run_id, event.record.endpoint_owner, event.record.endpoint_sequence, event.record.operation_sequence)
         for (run_id, _), producer_events in observed.items()

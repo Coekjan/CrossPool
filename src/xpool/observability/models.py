@@ -67,6 +67,7 @@ class StrictModel(BaseModel):
         path: Path,
         code: ErrorCode,
         *,
+        # Expected (Run UUID, publishing Producer ID, metadata revision), when supplied.
         publication_identity: tuple[str, int, int] | None = None,
     ) -> Self:
         """Decode exact JSON without duplicate keys, coercion or non-finite values.
@@ -75,6 +76,7 @@ class StrictModel(BaseModel):
         membership semantics, after lexical and contract-version validation.
         """
 
+        # JSON object entries arrive as ordered (field name, JSON value) pairs before duplicate checks.
         def unique_fields(pairs: list[tuple[str, JsonValue]]) -> dict[str, JsonValue]:
             result: dict[str, JsonValue] = {}
             for key, value in pairs:
@@ -660,7 +662,9 @@ class RoutingAttachment(StrictModel):
     pe: uint32
     clock_domain_id: positive_uint64
     raw_publication_time_ns: uint64
+    # Tensor dimensions in order: [live rows, effective top-k].
     shape: list[uint64]
+    # Dtypes in tensor_keys order: top-k IDs first, then top-k weights.
     dtypes: list[str]
 
     @model_validator(mode="after")
