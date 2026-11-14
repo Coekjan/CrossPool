@@ -9,7 +9,7 @@ from pydantic import TypeAdapter
 
 from xpool.observability.models import Event, EventRecord, Metadata
 from xpool.observability.provenance import EventIdentity, Source
-from xpool.observability.wire import PresenceBit
+from xpool.observability.wire import EVENT_BYTES, PresenceBit
 
 fixture_root = Path(__file__).resolve().parents[2] / "tests/resources/observability"
 
@@ -94,7 +94,7 @@ def events_for(data: FixtureData) -> tuple[Event, ...]:
         source = Source(
             EventIdentity(document.run_id, producer["id"], record.event_sequence),
             fixture_root / "causality.json",
-            position * 256,
+            position * EVENT_BYTES,
             document.process.creation_id,
             record.clock_domain_id,
             (record.endpoint_owner, record.endpoint_sequence) if record.has(PresenceBit.ENDPOINT) else None,

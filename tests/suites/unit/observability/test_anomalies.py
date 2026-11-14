@@ -6,7 +6,7 @@ import pytest
 from tests.support.observability import events_for, fixture, fixture_root, scenario
 
 from xpool.observability import Event, ObservationError, QualityCheckpoint, parse_chunk, reconstruct
-from xpool.observability.wire import EventKind, PresenceBit, ResultCode
+from xpool.observability.wire import EventKind, EventRole, PresenceBit, ResultCode
 
 
 def opening() -> Event:
@@ -190,7 +190,7 @@ def test_legal_enums_with_invalid_request_geometry_remain_ordinary_evidence() ->
 def test_terminal_only_anomaly_has_no_borrowed_instance_result() -> None:
     result = reconstruct((terminal(opening()),))
     assert len(result.of_kind("operation")[0].observations) == 1
-    assert not any(event.record.role == 1 for event in result.events.values())
+    assert not any(event.record.role == EventRole.INSTANCE for event in result.events.values())
 
 
 def test_reversed_anomaly_times_preserve_events_and_report_temporal_conflict() -> None:

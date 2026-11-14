@@ -24,7 +24,10 @@ from xpool.observability.models import (
 )
 from xpool.observability.provenance import Source
 from xpool.observability.wire import (
+    CHUNK_HEADER_BYTES,
+    CONTRACT_VERSION,
     AttachmentState,
+    ChunkHeaderOffset,
     EventKind,
 )
 
@@ -137,7 +140,7 @@ def verify_tensors(path: Path, entry: RoutingAttachment, metadata: Metadata) -> 
                 raise ValueError("Routing attachment has no metadata")
 
             expected = {
-                "contract_version": "6",
+                "contract_version": str(CONTRACT_VERSION),
                 "run_id": metadata.run_id,
                 "producer_id": str(entry.publisher),
             }
@@ -408,10 +411,10 @@ def read_artifacts(inputs: ArtifactInputs) -> ArtifactSet:
         data = read_bytes(path, ErrorCode.INVALID_LENGTH)
         metadata_bytes = None
 
-        if len(data) >= 128:
-            producer = struct.unpack_from("<Q", data, 16)[0]
-            revision = struct.unpack_from("<Q", data, 32)[0]
-            run_id = str(UUID(bytes=data[96:112]))
+        if len(data) >= CHUNK_HEADER_BYTES:
+            producer = struct.unpack_from("<Q", data, ChunkHeaderOffset.PRODUCER)[0]
+            revision = struct.unpack_from("<Q", data, ChunkHeaderOffset.METADATA_REVISION)[0]
+            run_id = str(UUID(bytes=data[ChunkHeaderOffset.RUN_ID : ChunkHeaderOffset.METADATA_HASH]))
             metadata_bytes = raw_metadata.get((run_id, producer, revision))
 
         chunk = parse_chunk(data, metadata_bytes, path=path)

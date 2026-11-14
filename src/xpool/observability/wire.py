@@ -1,12 +1,27 @@
 """Independent version-six observation wire values; no Native imports required."""
 
 from enum import IntEnum, IntFlag, unique
+from typing import Final, Literal
 
 __all__ = [
+    "CHUNK_FLAGS",
+    "CHUNK_HEADER_BYTES",
+    "CHUNK_MAGIC",
+    "CONTRACT_VERSION",
+    "CRC32_BYTES",
+    "EVENT_BYTES",
+    "MAX_CHUNK_BYTES",
+    "MAX_EVENTS_PER_CHUNK",
+    "METADATA_HASH_PREFIX_BYTES",
+    "MIN_EVENTS_PER_CHUNK",
+    "SHA256_HEX_LENGTH",
     "AttachmentState",
+    "ChunkHeaderOffset",
+    "ContractVersion",
     "Delivery",
     "DpRowLayout",
     "EventKind",
+    "EventOffset",
     "EventRole",
     "ForwardMode",
     "GraphError",
@@ -20,6 +35,44 @@ __all__ = [
     "device_execution_boundary",
     "known_presence_mask",
 ]
+
+
+# Keep the strict JSON schema type and the runtime version value in one owner.
+type ContractVersion = Literal[6]
+CONTRACT_VERSION: Final[ContractVersion] = 6
+CHUNK_MAGIC: Final = b"XPOOLC06"
+CHUNK_HEADER_BYTES: Final = 128
+EVENT_BYTES: Final = 256
+CHUNK_FLAGS: Final = 0
+MAX_CHUNK_BYTES: Final = 1 << 20
+MIN_EVENTS_PER_CHUNK: Final = 1
+MAX_EVENTS_PER_CHUNK: Final = (MAX_CHUNK_BYTES - CHUNK_HEADER_BYTES) // EVENT_BYTES
+CRC32_BYTES: Final = 4
+METADATA_HASH_PREFIX_BYTES: Final = 16
+SHA256_HEX_LENGTH: Final = 64
+
+
+@unique
+class ChunkHeaderOffset(IntEnum):
+    """Byte offsets of header fields accessed independently of full unpacking."""
+
+    VERSION = 8
+    HEADER_BYTES = 10
+    PRODUCER = 16
+    METADATA_REVISION = 32
+    PAYLOAD_CRC32 = 88
+    HEADER_CRC32 = 92
+    RUN_ID = 96
+    METADATA_HASH = 112
+
+
+@unique
+class EventOffset(IntEnum):
+    """Byte offsets of Event fields used for targeted wire validation."""
+
+    CLOCK_DOMAIN_ID = 16
+    FORWARD_MODE = 184
+    ROLE = 204
 
 
 @unique

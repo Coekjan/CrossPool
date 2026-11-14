@@ -13,7 +13,17 @@ from xpool.observability.errors import ErrorCode, ObservationError
 from xpool.observability.models import Event, EventRecord, Metadata, presence_groups
 from xpool.observability.provenance import EventIdentity, Source
 from xpool.observability.wire import (
+    CHUNK_FLAGS,
+    CHUNK_HEADER_BYTES,
+    CHUNK_MAGIC,
+    CONTRACT_VERSION,
+    CRC32_BYTES,
+    EVENT_BYTES,
+    MAX_EVENTS_PER_CHUNK,
+    METADATA_HASH_PREFIX_BYTES,
+    MIN_EVENTS_PER_CHUNK,
     AttachmentState,
+    ChunkHeaderOffset,
     Delivery,
     DpRowLayout,
     EventKind,
@@ -90,8 +100,6 @@ kind_names: dict[int, str] = {
     EventKind.CALIBRATION_SAMPLE_SUCCEEDED: "CalibrationSampleSucceeded",
     EventKind.CALIBRATION_SAMPLE_FAILED: "CalibrationSampleFailed",
 }
-
-CHUNK_MAGIC = b"XPOOLC06"
 
 
 @dataclass(frozen=True)
@@ -346,10 +354,27 @@ def validate_event(event: Event) -> None:
         )
         require(invalid_mask != 0 and r.data2 >> 32 == invalid_mask, "invalid anomaly field mask")
         allowed_boundaries = (
-            {100, 101, 102, 107, 108, 109, 110} if r.role == EventRole.INSTANCE else {103, 104, 105, 106}
+            {
+                EventKind.REQUEST_STAGING_STARTED,
+                EventKind.REQUEST_STAGING_COMPLETED,
+                EventKind.REQUEST_PUBLISHED,
+                EventKind.RESULT_OBSERVED,
+                EventKind.OUTPUT_COPIED,
+                EventKind.RESULT_ACKNOWLEDGED,
+                EventKind.CLOSED,
+            }
+            if r.role == EventRole.INSTANCE
+            else {
+                EventKind.REQUEST_OBSERVED,
+                EventKind.EXECUTION_STARTED,
+                EventKind.EXECUTION_COMPLETED,
+                EventKind.RESULT_PUBLISHED,
+            }
         )
         require(r.data0 in allowed_boundaries, "invalid anomaly site/boundary")
-        require(r.has(PresenceBit.RESULT_CODE) == (r.data0 >= 106), "invalid anomaly result presence")
+        require(
+            r.has(PresenceBit.RESULT_CODE) == (r.data0 >= EventKind.RESULT_PUBLISHED), "invalid anomaly result presence"
+        )
     elif r.kind < EventKind.GRAPH_CAPTURE_BEGIN:
         require(not any((r.data0, r.data1, r.data2, r.data3, r.data4)), "unexpected protocol payload")
     elif EventKind.GRAPH_CAPTURE_BEGIN <= r.kind <= EventKind.GRAPH_INSTALL_ERROR:
@@ -433,10 +458,10 @@ def parse_chunk(data: bytes, metadata_bytes: bytes | None, *, path: Path = Path(
     producer: int | None = None
 
     def fail(code: ErrorCode, detail: str, offset: int = 0) -> ObservationError:
-        return ObservationError(code, detail, path=path, offset=offset, producer=producer)
+        return ObservationError(code, detail, path=path, offset=int(offset), producer=producer)
 
-    if len(data) < 128:
-        raise fail(ErrorCode.HEADER_TRUNCATED, "header requires 128 bytes")
+    if len(data) < CHUNK_HEADER_BYTES:
+        raise fail(ErrorCode.HEADER_TRUNCATED, f"header requires {CHUNK_HEADER_BYTES} bytes")
     (
         magic,
         version,
@@ -461,19 +486,26 @@ def parse_chunk(data: bytes, metadata_bytes: bytes | None, *, path: Path = Path(
     if magic != CHUNK_MAGIC:
         raise fail(ErrorCode.BAD_MAGIC, "invalid chunk magic")
 
-    if version != 6:
-        raise fail(ErrorCode.UNSUPPORTED_VERSION, f"unsupported chunk version {version}", 8)
+    if version != CONTRACT_VERSION:
+        raise fail(ErrorCode.UNSUPPORTED_VERSION, f"unsupported chunk version {version}", ChunkHeaderOffset.VERSION)
 
-    if (header_bytes, event_bytes, flags) != (128, 256, 0):
-        raise fail(ErrorCode.INVALID_LAYOUT, "invalid header/event layout or flags", 10)
-
-    if zlib.crc32(data[:92] + bytes(4) + data[96:128]) != header_crc:
-        raise fail(ErrorCode.HEADER_CHECKSUM, "header CRC mismatch", 92)
+    if (header_bytes, event_bytes, flags) != (CHUNK_HEADER_BYTES, EVENT_BYTES, CHUNK_FLAGS):
+        raise fail(ErrorCode.INVALID_LAYOUT, "invalid header/event layout or flags", ChunkHeaderOffset.HEADER_BYTES)
 
     if (
-        not 1 <= count <= 4095
-        or payload_bytes != count * 256
-        or len(data) != 128 + payload_bytes
+        zlib.crc32(
+            data[: ChunkHeaderOffset.HEADER_CRC32]
+            + bytes(CRC32_BYTES)
+            + data[ChunkHeaderOffset.HEADER_CRC32 + CRC32_BYTES : CHUNK_HEADER_BYTES]
+        )
+        != header_crc
+    ):
+        raise fail(ErrorCode.HEADER_CHECKSUM, "header CRC mismatch", ChunkHeaderOffset.HEADER_CRC32)
+
+    if (
+        not MIN_EVENTS_PER_CHUNK <= count <= MAX_EVENTS_PER_CHUNK
+        or payload_bytes != count * EVENT_BYTES
+        or len(data) != CHUNK_HEADER_BYTES + payload_bytes
         or not producer
         or not sequence
         or not revision
@@ -484,8 +516,8 @@ def parse_chunk(data: bytes, metadata_bytes: bytes | None, *, path: Path = Path(
     if metadata_bytes is None:
         raise fail(ErrorCode.METADATA_UNAVAILABLE, "required metadata revision unavailable")
 
-    if hashlib.sha256(metadata_bytes).digest()[:16] != metadata_hash:
-        raise fail(ErrorCode.METADATA_CHECKSUM, "metadata SHA-256 mismatch", 112)
+    if hashlib.sha256(metadata_bytes).digest()[:METADATA_HASH_PREFIX_BYTES] != metadata_hash:
+        raise fail(ErrorCode.METADATA_CHECKSUM, "metadata SHA-256 mismatch", ChunkHeaderOffset.METADATA_HASH)
 
     run_id = str(UUID(bytes=run_bytes))
     metadata = Metadata.parse_artifact(
@@ -495,14 +527,14 @@ def parse_chunk(data: bytes, metadata_bytes: bytes | None, *, path: Path = Path(
         publication_identity=(run_id, producer, revision),
     )
 
-    if zlib.crc32(data[128:]) != payload_crc:
-        raise fail(ErrorCode.PAYLOAD_CHECKSUM, "payload CRC mismatch", 88)
+    if zlib.crc32(data[CHUNK_HEADER_BYTES:]) != payload_crc:
+        raise fail(ErrorCode.PAYLOAD_CHECKSUM, "payload CRC mismatch", ChunkHeaderOffset.PAYLOAD_CRC32)
 
     events: list[Event] = []
 
     previous = 0
 
-    for offset in range(128, len(data), 256):
+    for offset in range(CHUNK_HEADER_BYTES, len(data), EVENT_BYTES):
         try:
             record = EventRecord.model_validate(
                 dict(zip(event_fields, event_struct.unpack_from(data, offset), strict=True))
@@ -548,10 +580,10 @@ def encode_chunk(header: ChunkHeader, records: tuple[EventRecord, ...], metadata
         packed = bytearray(
             header_struct.pack(
                 CHUNK_MAGIC,
-                6,
-                128,
-                256,
-                0,
+                CONTRACT_VERSION,
+                CHUNK_HEADER_BYTES,
+                EVENT_BYTES,
+                CHUNK_FLAGS,
                 header.producer,
                 header.chunk_sequence,
                 header.metadata_revision,
@@ -564,13 +596,13 @@ def encode_chunk(header: ChunkHeader, records: tuple[EventRecord, ...], metadata
                 zlib.crc32(payload),
                 0,
                 UUID(header.run_id).bytes,
-                hashlib.sha256(metadata_bytes).digest()[:16],
+                hashlib.sha256(metadata_bytes).digest()[:METADATA_HASH_PREFIX_BYTES],
             )
         )
     except (struct.error, ValueError) as exc:
         raise ObservationError(ErrorCode.INVALID_EVENT, "chunk fields exceed wire representation") from exc
 
-    struct.pack_into("<I", packed, 92, zlib.crc32(packed))
+    struct.pack_into("<I", packed, ChunkHeaderOffset.HEADER_CRC32, zlib.crc32(packed))
     data = bytes(packed) + payload
     parse_chunk(data, metadata_bytes)
     return data

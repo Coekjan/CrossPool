@@ -31,6 +31,7 @@ from xpool.observability import (
     reconstruct,
 )
 from xpool.observability.models import Artifact
+from xpool.observability.wire import CHUNK_HEADER_BYTES, CONTRACT_VERSION, SHA256_HEX_LENGTH, EventKind
 
 
 def write_inventory(
@@ -115,7 +116,7 @@ def test_routing_reference_must_match_the_final_index(
     # Conflict case name -> {Routing attachment index field: replacement value}.
     changes_by_conflict: dict[str, dict[str, str | None]] = {
         "path": {"path": "other.safetensors"},
-        "sha256": {"sha256": "0" * 64},
+        "sha256": {"sha256": "0" * SHA256_HEX_LENGTH},
         "status": {"status": "publish_failed", "path": None, "sha256": None},
     }
     changes = changes_by_conflict[conflict]
@@ -127,7 +128,7 @@ def test_routing_reference_must_match_the_final_index(
         )
     assert caught.value.code == "identity_conflict"
     assert caught.value.path == inputs.chunks[0]
-    assert caught.value.offset == 128
+    assert caught.value.offset == CHUNK_HEADER_BYTES
     assert caught.value.producer == 5
     assert caught.value.event_sequence == 10
 
@@ -228,7 +229,7 @@ def test_routing_frozen_artifacts(tmp_path: Path, case: FixtureData) -> None:
             assert handle.get_tensor("records.0.topk_ids").tolist() == [[0, 1], [1, 0]]
             assert handle.get_tensor("records.0.topk_weights").tolist() == [[0.75, 0.25], [0.5, 0.5]]
     if not expected.get("event_available", True):
-        assert not any(event.record.kind == 550 for event in result.events.values())
+        assert not any(event.record.kind == EventKind.ROUTING_PUBLISHED for event in result.events.values())
 
 
 def test_published_files_out_of_order_duplicates_and_provenance(tmp_path: Path) -> None:
@@ -239,7 +240,9 @@ def test_published_files_out_of_order_duplicates_and_provenance(tmp_path: Path) 
     assert "duplicate_event" in result.quality.codes
     assert any(len(sources) == 2 for sources in result.event_sources.values())
     assert all(
-        source.path in inputs.chunks and source.offset == 128 for edge in result.edges for source in edge.sources
+        source.path in inputs.chunks and source.offset == CHUNK_HEADER_BYTES
+        for edge in result.edges
+        for source in edge.sources
     )
 
 
@@ -249,7 +252,7 @@ def test_published_files_out_of_order_duplicates_and_provenance(tmp_path: Path) 
 def test_contract_v6_evidence_survives_file_round_trip(tmp_path: Path, case_id: str) -> None:
     result = reconstruct(read_artifacts(write_inventory(tmp_path, scenario(case_id))))
     expected = next(case["expected"] for case in fixture("causality")["cases"] if case["id"] == case_id)
-    assert all(document.contract_version == 6 for document in result.metadata)
+    assert all(document.contract_version == CONTRACT_VERSION for document in result.metadata)
     relation = "invocation_to_graph_activity" if "graph_owners" in expected else "operation_to_invocation"
     actual = [
         [list(edge.origin.components), list(edge.destination.components)]

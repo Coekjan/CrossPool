@@ -7,6 +7,7 @@ import pytest
 from tests.support.observability import FixtureData, events_for, fixture, scenario
 
 from xpool.observability import ErrorCode, Metadata, ObservationError, reconstruct
+from xpool.observability.wire import EventKind
 
 
 def test_run_isolation_preserves_identical_local_ids() -> None:
@@ -57,14 +58,18 @@ def test_generation_recreation_never_merges_invocations_or_leases() -> None:
     events = tuple(
         replace(event, metadata=document)
         for event, document in zip((*base_events, *new_events), documents, strict=True)
-        if 200 <= event.record.kind <= 408
+        if EventKind.SUBMISSION_PREPARED <= event.record.kind <= EventKind.COMPLETION_PUBLISHED
     )
     result = reconstruct(events)
     assert len(result.of_kind("invocation")) == len(result.of_kind("lease")) == 2
 
 
 def test_same_pid_new_producer_and_process_are_distinct() -> None:
-    event = next(event for event in events_for(scenario("normal_dense")) if event.record.kind == 100)
+    event = next(
+        event
+        for event in events_for(scenario("normal_dense"))
+        if event.record.kind == EventKind.REQUEST_STAGING_STARTED
+    )
     raw = event.metadata.model_dump()
     process = raw["process"] | {"creation_id": "66666666-6666-4666-8666-666666666666"}
     domain = copy.deepcopy(next(domain for domain in raw["clock_domains"] if domain["id"] == 2))
@@ -112,7 +117,7 @@ def test_changed_process_creation_for_same_producer_is_a_conflict() -> None:
 def test_fabric_entry_does_not_prove_submission_publication() -> None:
     result = reconstruct(events_for(scenario("missing_publication")))
     assert any(edge.relation == "operation_to_invocation" for edge in result.edges)
-    assert not any(event.record.kind == 201 for event in result.events.values())
+    assert not any(event.record.kind == EventKind.SUBMISSION_PUBLISHED for event in result.events.values())
     assert "event_missing" in result.quality.codes
 
 

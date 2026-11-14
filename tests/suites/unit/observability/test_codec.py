@@ -13,7 +13,19 @@ from tests.support.observability import FixtureData, events_for, fixture, fixtur
 from xpool.observability.codec import encode_chunk, parse_chunk, validate_event
 from xpool.observability.errors import ErrorCode, ObservationError
 from xpool.observability.models import Artifact, Metadata, QualityCheckpoint
-from xpool.observability.wire import PresenceBit
+from xpool.observability.wire import (
+    CHUNK_HEADER_BYTES,
+    CONTRACT_VERSION,
+    EVENT_BYTES,
+    MAX_CHUNK_BYTES,
+    MAX_EVENTS_PER_CHUNK,
+    METADATA_HASH_PREFIX_BYTES,
+    MIN_EVENTS_PER_CHUNK,
+    SHA256_HEX_LENGTH,
+    ChunkHeaderOffset,
+    EventOffset,
+    PresenceBit,
+)
 
 vectors = json.loads((fixture_root / "encoding.json").read_bytes())["vectors"]
 checksums = json.loads((fixture_root / "checksums.json").read_bytes())["files"]
@@ -35,7 +47,14 @@ checksums = json.loads((fixture_root / "checksums.json").read_bytes())["files"]
 def test_routing_reference_requires_a_published_routing_artifact(changes: FixtureData) -> None:
     event = events_for(fixture("routing")["cases"][0]["input"])[0]
     artifact = Artifact.model_validate(
-        {"id": 2, "kind": "routing", "status": "published", "path": "routing.safetensors", "sha256": "a" * 64} | changes
+        {
+            "id": 2,
+            "kind": "routing",
+            "status": "published",
+            "path": "routing.safetensors",
+            "sha256": "a" * SHA256_HEX_LENGTH,
+        }
+        | changes
     )
     event = replace(
         event,
@@ -80,11 +99,12 @@ def test_artifact_version_is_rejected_before_schema_validation(
 @pytest.mark.parametrize("version", [1, 2, 3, 4, 5])
 def test_chunk_version_is_rejected_before_checksums(version: int) -> None:
     data = bytearray.fromhex(vectors[0]["hex"])
-    struct.pack_into("<H", data, 8, version)
+    struct.pack_into("<H", data, ChunkHeaderOffset.VERSION, version)
     with pytest.raises(ObservationError) as caught:
         parse_chunk(bytes(data), None)
     assert caught.value.code == ErrorCode.UNSUPPORTED_VERSION
-    assert caught.value.offset == 8
+    assert caught.value.offset == ChunkHeaderOffset.VERSION
+    assert type(caught.value.offset) is int
 
 
 @pytest.mark.parametrize("vector", vectors, ids=[item["id"] for item in vectors])
@@ -105,14 +125,19 @@ def test_frozen_encoding(vector: FixtureData) -> None:
 
 
 @pytest.mark.parametrize(
-    "offset,value,code", [(184, 3, "invalid_event"), (204, 99, "invalid_event"), (16, 99, "invalid_event")]
+    "offset,value,code",
+    [
+        (EventOffset.FORWARD_MODE, 3, "invalid_event"),
+        (EventOffset.ROLE, 99, "invalid_event"),
+        (EventOffset.CLOCK_DOMAIN_ID, 99, "invalid_event"),
+    ],
 )
 def test_valid_crcs_do_not_hide_invalid_semantics(offset: int, value: int, code: str) -> None:
     data = bytearray.fromhex(vectors[0]["hex"])
-    struct.pack_into("<I", data, 128 + offset, value)
-    struct.pack_into("<I", data, 88, zlib.crc32(data[128:]))
-    struct.pack_into("<I", data, 92, 0)
-    struct.pack_into("<I", data, 92, zlib.crc32(data[:128]))
+    struct.pack_into("<I", data, CHUNK_HEADER_BYTES + offset, value)
+    struct.pack_into("<I", data, ChunkHeaderOffset.PAYLOAD_CRC32, zlib.crc32(data[CHUNK_HEADER_BYTES:]))
+    struct.pack_into("<I", data, ChunkHeaderOffset.HEADER_CRC32, 0)
+    struct.pack_into("<I", data, ChunkHeaderOffset.HEADER_CRC32, zlib.crc32(data[:CHUNK_HEADER_BYTES]))
     with pytest.raises(ObservationError) as caught:
         parse_chunk(bytes(data), (fixture_root / "metadata.json").read_bytes())
     assert caught.value.code == code
@@ -137,7 +162,7 @@ def test_json_boundary_rejects_versions_duplicates_and_nonfinite(mutation: bytes
 
 def test_integrity_stage_precedence() -> None:
     data = bytearray.fromhex(vectors[0]["hex"])
-    data[128] ^= 1
+    data[CHUNK_HEADER_BYTES] ^= 1
     # Both the metadata and payload are corrupt; metadata fails first.
     with pytest.raises(ObservationError) as caught:
         parse_chunk(bytes(data), b"corrupted metadata")
@@ -149,10 +174,12 @@ def test_membership_semantics_precede_payload_crc() -> None:
     del metadata["generations"][0]["pe_members"]
     metadata_bytes = json.dumps(metadata).encode()
     data = bytearray.fromhex(vectors[0]["hex"])
-    data[112:128] = hashlib.sha256(metadata_bytes).digest()[:16]
-    data[128] ^= 1
-    struct.pack_into("<I", data, 92, 0)
-    struct.pack_into("<I", data, 92, zlib.crc32(data[:128]))
+    data[ChunkHeaderOffset.METADATA_HASH : CHUNK_HEADER_BYTES] = hashlib.sha256(metadata_bytes).digest()[
+        :METADATA_HASH_PREFIX_BYTES
+    ]
+    data[CHUNK_HEADER_BYTES] ^= 1
+    struct.pack_into("<I", data, ChunkHeaderOffset.HEADER_CRC32, 0)
+    struct.pack_into("<I", data, ChunkHeaderOffset.HEADER_CRC32, zlib.crc32(data[:CHUNK_HEADER_BYTES]))
     with pytest.raises(ObservationError) as caught:
         parse_chunk(bytes(data), metadata_bytes)
     assert caught.value.code == ErrorCode.INVALID_EVENT
@@ -166,9 +193,11 @@ def test_metadata_publication_identity_precedes_membership_semantics() -> None:
     metadata["revision"] += 1
     metadata_bytes = json.dumps(metadata).encode()
     data = bytearray.fromhex(vectors[0]["hex"])
-    data[112:128] = hashlib.sha256(metadata_bytes).digest()[:16]
-    struct.pack_into("<I", data, 92, 0)
-    struct.pack_into("<I", data, 92, zlib.crc32(data[:128]))
+    data[ChunkHeaderOffset.METADATA_HASH : CHUNK_HEADER_BYTES] = hashlib.sha256(metadata_bytes).digest()[
+        :METADATA_HASH_PREFIX_BYTES
+    ]
+    struct.pack_into("<I", data, ChunkHeaderOffset.HEADER_CRC32, 0)
+    struct.pack_into("<I", data, ChunkHeaderOffset.HEADER_CRC32, zlib.crc32(data[:CHUNK_HEADER_BYTES]))
     with pytest.raises(ObservationError) as caught:
         parse_chunk(bytes(data), metadata_bytes)
     assert caught.value.code == ErrorCode.METADATA_UNAVAILABLE
@@ -247,3 +276,34 @@ def test_unknown_graph_payload_enums_are_rejected(field: str, value: int) -> Non
     with pytest.raises(ObservationError, match="invalid Graph payload") as caught:
         validate_event(replace(event, record=event.record.model_copy(update={field: value})))
     assert caught.value.code == ErrorCode.INVALID_EVENT
+
+
+@pytest.mark.parametrize(
+    "count", [MIN_EVENTS_PER_CHUNK - 1, MIN_EVENTS_PER_CHUNK, MAX_EVENTS_PER_CHUNK, MAX_EVENTS_PER_CHUNK + 1]
+)
+def test_chunk_event_count_boundaries(count: int) -> None:
+    metadata = (fixture_root / "metadata.json").read_bytes()
+    reference = parse_chunk(bytes.fromhex(vectors[0]["hex"]), metadata)
+    record = reference.events[0].record
+    records = tuple(record.model_copy(update={"event_sequence": sequence}) for sequence in range(1, count + 1))
+    if not MIN_EVENTS_PER_CHUNK <= count <= MAX_EVENTS_PER_CHUNK:
+        with pytest.raises(ObservationError) as caught:
+            encode_chunk(reference.header, records, metadata)
+        assert caught.value.code == ErrorCode.INVALID_LENGTH
+    else:
+        data = encode_chunk(reference.header, records, metadata)
+        assert len(data) == CHUNK_HEADER_BYTES + count * EVENT_BYTES
+        assert len(data) <= MAX_CHUNK_BYTES
+        parsed = parse_chunk(data, metadata)
+        assert len(parsed.events) == count
+        assert parsed.events[-1].source.offset == CHUNK_HEADER_BYTES + (count - 1) * EVENT_BYTES
+
+
+def test_wire_constants_match_independent_reference_layout_and_schema() -> None:
+    layout = fixture("layout")
+    assert CONTRACT_VERSION == layout["contract_version"] == fixture("metadata")["contract_version"]
+    assert CHUNK_HEADER_BYTES == layout["header_bytes"]
+    assert EVENT_BYTES == layout["event_bytes"]
+    schema = Metadata.model_json_schema()
+    # The named Literal alias retains an exact-version JSON schema, not a general integer.
+    assert schema["$defs"]["ContractVersion"]["const"] == layout["contract_version"]

@@ -229,9 +229,9 @@ def test_duplicate_retains_every_location() -> None:
 def test_raw_zero_and_reversed_interval_are_not_hidden() -> None:
     events = list(events_for(scenario("normal_dense")))
     for index, event in enumerate(events):
-        if event.record.kind == 100:
+        if event.record.kind == EventKind.REQUEST_STAGING_STARTED:
             events[index] = replace(event, record=event.record.model_copy(update={"raw_time_ns": 0}))
-        if event.record.kind == 101:
+        if event.record.kind == EventKind.REQUEST_STAGING_COMPLETED:
             events[index] = replace(event, record=event.record.model_copy(update={"raw_time_ns": 500}))
     result = reconstruct(events)
     assert any(interval.name == "request_staging" and interval.duration_ns == 500 for interval in result.intervals)
@@ -239,8 +239,15 @@ def test_raw_zero_and_reversed_interval_are_not_hidden() -> None:
 
 
 def test_graph_failure_does_not_become_successful_execution() -> None:
-    event = next(event for event in events_for(scenario("normal_dense")) if event.record.kind == 505)
-    failed = replace(event, record=event.record.model_copy(update={"kind": 506, "data4": 3}))
+    event = next(
+        event for event in events_for(scenario("normal_dense")) if event.record.kind == EventKind.GRAPH_HOST_CALL_END
+    )
+    failed = replace(
+        event,
+        record=event.record.model_copy(
+            update={"kind": int(EventKind.GRAPH_HOST_CALL_ERROR), "data4": int(GraphError.HOST_CALL_FAILED)}
+        ),
+    )
     result = reconstruct((failed,))
     assert len(result.intervals) == 1
     interval = result.intervals[0]
@@ -280,9 +287,15 @@ def test_graph_interval_accepts_raw_event_kinds(failed: bool) -> None:
 
 
 def test_unavailable_graph_context_does_not_produce_normal_duration_or_edges() -> None:
-    events = tuple(event for event in events_for(scenario("normal_dense")) if event.record.kind in (504, 505))
     events = tuple(
-        replace(event, record=event.record.model_copy(update={"data4": 4})) if event.record.kind == 505 else event
+        event
+        for event in events_for(scenario("normal_dense"))
+        if event.record.kind in (EventKind.GRAPH_HOST_CALL_BEGIN, EventKind.GRAPH_HOST_CALL_END)
+    )
+    events = tuple(
+        replace(event, record=event.record.model_copy(update={"data4": int(GraphError.CONTEXT_UNAVAILABLE)}))
+        if event.record.kind == EventKind.GRAPH_HOST_CALL_END
+        else event
         for event in events
     )
     result = reconstruct(events)
@@ -293,7 +306,11 @@ def test_unavailable_graph_context_does_not_produce_normal_duration_or_edges() -
 
 
 def test_semantic_duplicates_are_distinct_from_boundary_conflicts() -> None:
-    event = next(event for event in events_for(scenario("normal_dense")) if event.record.kind == 100)
+    event = next(
+        event
+        for event in events_for(scenario("normal_dense"))
+        if event.record.kind == EventKind.REQUEST_STAGING_STARTED
+    )
     duplicate = replace(
         event,
         record=event.record.model_copy(update={"event_sequence": 20}),

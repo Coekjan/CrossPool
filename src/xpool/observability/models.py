@@ -11,7 +11,13 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, m
 
 from xpool.observability.errors import ErrorCode, ObservationError
 from xpool.observability.provenance import Source
-from xpool.observability.wire import EventKind, PresenceBit
+from xpool.observability.wire import (
+    CONTRACT_VERSION,
+    SHA256_HEX_LENGTH,
+    ContractVersion,
+    EventKind,
+    PresenceBit,
+)
 
 __all__ = [
     "CalibrationSample",
@@ -110,7 +116,7 @@ class StrictModel(BaseModel):
             if (
                 isinstance(value, dict)
                 and type(value.get("contract_version")) is int
-                and value["contract_version"] != 6
+                and value["contract_version"] != CONTRACT_VERSION
             ):
                 raise ObservationError(ErrorCode.UNSUPPORTED_VERSION, "unsupported artifact version", path=path)
 
@@ -362,7 +368,7 @@ class Capabilities(StrictModel):
 class Metadata(StrictModel):
     """One immutable, hash-addressed Producer metadata revision."""
 
-    contract_version: Literal[6]
+    contract_version: ContractVersion
     run_id: str
     producer_id: positive_uint64
     revision: positive_uint64
@@ -597,7 +603,7 @@ class Counters(StrictModel):
 class QualityCheckpoint(StrictModel):
     """Cumulative source counters with explicit finality and unknown-tail state."""
 
-    contract_version: Literal[6]
+    contract_version: ContractVersion
     run_id: str
     producer_id: positive_uint64
     revision: positive_uint64
@@ -671,7 +677,7 @@ class RoutingAttachment(StrictModel):
     def validate_publication(self) -> Self:
         """Require usable paths and hashes exclusively for published attachments."""
         if self.status == "published":
-            if self.path is None or self.sha256 is None or len(self.sha256) != 64:
+            if self.path is None or self.sha256 is None or len(self.sha256) != SHA256_HEX_LENGTH:
                 raise ValueError("published attachment requires path and SHA-256")
         elif self.path is not None or self.sha256 is not None:
             raise ValueError("unpublished attachment cannot have a usable path/hash")
