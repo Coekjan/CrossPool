@@ -13,6 +13,7 @@ def test_qualification_preserves_effective_compute_environment(
 ) -> None:
     policy = {
         "PATH": "/test/bin",
+        "TRITON_CACHE_DIR": "/tmp/test-triton-cache",
         "LD_LIBRARY_PATH": "/test/lib",
         "CUDA_VISIBLE_DEVICES": "GPU-a,GPU-b",
         "PYTORCH_ALLOC_CONF": "max_split_size_mb:128",

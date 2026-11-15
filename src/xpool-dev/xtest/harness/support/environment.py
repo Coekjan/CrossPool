@@ -16,6 +16,7 @@ def qualification_environment() -> dict[str, str]:
         "LANG",
         "LC_ALL",
         "TMPDIR",
+        "TRITON_CACHE_DIR",
         "LD_LIBRARY_PATH",
         "CUDA_HOME",
         "CUDA_VISIBLE_DEVICES",
