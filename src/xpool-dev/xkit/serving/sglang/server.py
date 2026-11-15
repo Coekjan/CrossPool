@@ -49,7 +49,7 @@ class SglangServerProcess:
         """Consume one reservation and launch the pinned installed CLI."""
 
         environment = dict(launch.environment)
-        environment["SGLANG_PLUGINS"] = "xpool"
+        environment["SGLANG_PLUGINS"] = "xpool,xkit_deterministic" if model.deterministic else "xpool"
         environment["SGLANG_GRPC_PORT"] = str(endpoint.family.grpc_port)
         command = server_command(
             launch=launch,

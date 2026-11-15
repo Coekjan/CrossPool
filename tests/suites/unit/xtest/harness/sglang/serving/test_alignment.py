@@ -23,9 +23,15 @@ from xtest.harness.sglang.serving.alignment import (
 from xtest.harness.support.config import TEST_MODEL_ID
 
 
-def artifact(mode: SglangGraphMode, output_ids: tuple[int, ...] = (1, 2, 3)) -> ServingGraphArtifact:
+def artifact(
+    mode: SglangGraphMode,
+    output_ids: tuple[int, ...] = (1, 2, 3),
+    *,
+    deterministic: bool = True,
+) -> ServingGraphArtifact:
     return ServingGraphArtifact(
         graph_settings=mode.settings(),
+        deterministic=deterministic,
         outputs=(TokenOutput(TEST_MODEL_ID, output_ids),),
     )
 
@@ -138,6 +144,17 @@ def test_serving_graph_alignment_accepts_prefill_distribution_limit(monkeypatch:
             SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings(): logits,
         },
     )
+
+
+def test_serving_graph_alignment_requires_matching_deterministic_policies() -> None:
+    with pytest.raises(AssertionError, match="different deterministic policies"):
+        assert_serving_graph_alignment(
+            (
+                artifact(SglangGraphMode.EAGER),
+                artifact(SglangGraphMode.DECODE_FULL, deterministic=False),
+            ),
+            {},
+        )
 
 
 def test_serving_graph_alignment_rejects_decode_token_mismatch() -> None:

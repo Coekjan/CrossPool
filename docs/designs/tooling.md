@@ -447,9 +447,17 @@ is occupied.
 The test probe closes Systems whose resource retirement remains pending.
 Unconfirmed retirement retains ownership and prevents replay.
 
-Owned SGLang startup selects `SGLANG_PLUGINS=xpool` and sets `HF_HUB_OFFLINE=1`
-and `TRANSFORMERS_OFFLINE=1` in its child environment. The generic command wrapper
-preserves that selection and forwards engine arguments unchanged. After reserving
+Owned SGLang startup always selects the production `xpool` plugin. A model
+launch's deterministic intent additionally selects `xkit_deterministic` before
+Graph capture. This development plugin activates only through explicit
+selection. Its [implementation](../../src/xpool-dev/xkit/serving/sglang/deterministic.py)
+owns the supported controls and hook-application check; it can also be selected
+independently for an original-SGLang serving comparison. Ordinary serving and
+benchmark launches retain their default policy. Qualification owns when tests
+select the control and what their comparisons establish.
+Startup sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` in the child
+environment. The generic command wrapper preserves the selected environment
+and forwards engine arguments unchanged. After reserving
 the daemon endpoint, it calls shared `snapshot_cluster_launch` once to bind its
 port, write the runtime TOML and freeze child inputs. The running
 cluster owns the resulting `XpoolClusterLaunch`; `XpoolServingSystem.launch`
@@ -470,11 +478,11 @@ meaning. Each owned worker installs its frozen global configuration once.
 
 `xtest` supplies its case projection and observers, then evaluates
 qualification evidence. Test preparation supplies launch inputs; `ProbeRun`
-retains expected Model IDs, its observer directory, results and qualification
-evidence. The running cluster owns the runtime launch.
+retains expected Model IDs, the selected deterministic policy, its observer
+directory, results and qualification evidence. The running cluster owns the runtime launch.
 The test probe validates `/server_info` Graph settings against the shared
 settings declaration at its HTTP reading boundary and retains the typed result
-before sending its deterministic inference request.
+before sending its fixed greedy request.
 `xbench` supplies the complete case-resolved deployment
 and its own workload. Benchmark execution does not enable test observers or
 reuse the test probe's fixed requests and verdict policy. The shared installed
@@ -528,7 +536,7 @@ counters are validated against raw records and outcomes before this projection;
 retained report totals count unique test items.
 
 The collected plan and retained task/artifact mapping own serving comparison
-membership. Serving artifacts supply graph settings and model outputs for that
+membership. Serving artifacts supply graph settings, numerical policy and model outputs for that
 assignment. Numerical samples use Layer-by-Rows labels local to their case's
 isolated reference and production workdirs. The runner mapping supplies test
 attribution for both evidence types.

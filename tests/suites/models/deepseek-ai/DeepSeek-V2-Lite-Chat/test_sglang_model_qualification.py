@@ -97,3 +97,28 @@ def test_serving_graph(
         task_artifact_dir,
         compare_modes=True,
     )
+
+
+@xtest.parameterize(
+    ("case", "graph_mode"),
+    (SERVING_CASES[1].model_copy(update={"graph_modes": (SglangGraphMode.DECODE_FULL,)}),),
+    rows=qualification.graph_rows,
+)
+@xtest.requirements(qualification.requirements_of)
+def test_default_serving(
+    case: E2eServingCase,
+    graph_mode: SglangGraphMode,
+    e2e_base_config: ResolvedConfig,
+    tmp_path: Path,
+    task_artifact_dir: Path | None,
+) -> None:
+    """Exercise default MLA DP2 serving without numerical policy controls."""
+
+    qualification.run_serving_case(
+        case,
+        graph_mode,
+        e2e_base_config,
+        tmp_path,
+        task_artifact_dir,
+        compare_modes=False,
+    )

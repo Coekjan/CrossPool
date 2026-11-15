@@ -23,6 +23,9 @@ dependencies = [
     "transformers==5.12.1",
 ]
 
+[project.entry-points."sglang.srt.plugins"]
+xkit_deterministic = "xkit.serving.sglang.deterministic:install"
+
 [project.scripts]
 xtest = "xtest.cli:main"
 xbench = "xbench.cli:main"

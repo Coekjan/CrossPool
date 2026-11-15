@@ -73,15 +73,17 @@ def test_server_command_projects_pinned_cli_policy(
     assert ("--enable-dp-attention" in command) is enable_dp_attention
 
 
+@pytest.mark.parametrize("deterministic", [False, True])
 def test_server_start_prepares_process_environment_and_log_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    deterministic: bool,
 ) -> None:
     launch = replace(
         server_launch(tmp_path),
         environment=MappingProxyType({"SGLANG_GRPC_PORT": "discarded", "XPOOL_TEST_VALUE": "preserved"}),
     )
-    model = SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER)
+    model = SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER, deterministic=deterministic)
     family = SglangEndpointFamily("127.0.0.1", 19_000, 19_001, 19_002, 1)
     events: list[str] = []
     endpoint = cast(
@@ -118,7 +120,7 @@ def test_server_start_prepares_process_environment_and_log_directory(
     assert events == ["released", "spawned"]
     assert captured["env"] == {
         "SGLANG_GRPC_PORT": "19002",
-        "SGLANG_PLUGINS": "xpool",
+        "SGLANG_PLUGINS": "xpool,xkit_deterministic" if deterministic else "xpool",
         "XPOOL_TEST_VALUE": "preserved",
     }
     assert launch.environment == {"SGLANG_GRPC_PORT": "discarded", "XPOOL_TEST_VALUE": "preserved"}

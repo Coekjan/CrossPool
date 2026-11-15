@@ -15,10 +15,15 @@ __all__ = ["ServingLaunch", "SglangLaunchModel"]
 
 @dataclass(frozen=True, slots=True)
 class SglangLaunchModel:
-    """One Instance's graph policy; runtime configuration owns its geometry."""
+    """One Instance's graph policy and optional deterministic comparison request.
+
+    Runtime configuration owns geometry. The selected xkit plugin owns the
+    comparison controls requested by ``deterministic``.
+    """
 
     model_id: ModelId
     graph_mode: SglangGraphMode
+    deterministic: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.model_id, ModelId):

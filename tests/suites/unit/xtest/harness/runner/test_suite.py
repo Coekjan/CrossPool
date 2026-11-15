@@ -892,6 +892,7 @@ def serving_graph_runner(
         if status is xtest.harness.runner.pytest_report.PytestCaseStatus.PASSED:
             ServingGraphArtifact(
                 graph_settings=graph_mode.settings(),
+                deterministic=True,
                 outputs=(TokenOutput(TEST_MODEL_ID, (1, 2, 3)),),
             ).write(artifact_directory / SERVING_GRAPH_ARTIFACT_FILENAME)
     return runner

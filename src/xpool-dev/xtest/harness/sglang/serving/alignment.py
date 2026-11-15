@@ -75,6 +75,7 @@ class ServingGraphArtifact:
     """Versionless serving output evidence from one logical case and graph mode."""
 
     graph_settings: SglangGraphSettings
+    deterministic: bool
     outputs: tuple[TokenOutput, ...]
 
     def __post_init__(self) -> None:
@@ -150,6 +151,8 @@ def assert_serving_graph_alignment(
         raise AssertionError(f"serving graph alignment contains unsupported graph settings: {unexpected_settings}")
 
     eager = artifacts_by_settings[eager_settings]
+    if any(artifact.deterministic != eager.deterministic for artifact in artifacts):
+        raise AssertionError("serving graph modes use different deterministic policies")
     eager_outputs = {output.model_id: output.output_ids for output in eager.outputs}
     for artifact in artifacts:
         model_ids = {output.model_id for output in artifact.outputs}

@@ -75,6 +75,7 @@ def run_serving_case(
         base_config=e2e_base_config,
         graph_settings=graph_mode.settings(),
         workdir=tmp_path,
+        deterministic=compare_modes,
     )
     assert_transport_observer_snapshots(
         run.observer_outdir,

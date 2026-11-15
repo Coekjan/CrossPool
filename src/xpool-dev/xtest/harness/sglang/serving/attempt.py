@@ -31,6 +31,7 @@ class ProbeRun:
     model_ids: tuple[ModelId, ...]
     observer_outdir: Path
     graph_settings: SglangGraphSettings
+    deterministic: bool
     results: tuple[SglangServerResult, ...]
     events: list[SglangGraphEvent]
     daemon_startup_seconds: float
@@ -41,6 +42,7 @@ class ProbeRun:
 
         return ServingGraphArtifact(
             graph_settings=self.graph_settings,
+            deterministic=self.deterministic,
             outputs=tuple(TokenOutput(result.model_id, result.output_ids) for result in self.results),
         )
 
@@ -53,6 +55,7 @@ class ProbeAttempt:
     base_config: ResolvedConfig
     graph_settings: SglangGraphSettings
     workdir: Path
+    deterministic: bool = False
     system: XpoolServingSystem | None = None
 
     @property
@@ -80,6 +83,7 @@ class ProbeAttempt:
                 base_config=self.base_config,
                 workdir=self.workdir,
                 graph_settings=self.graph_settings,
+                deterministic=self.deterministic,
             )
             self.system = XpoolServingSystem()
             self.system.start(launch, workdir=self.workdir, startup_timeout_seconds=PROBE_TIMEOUT_SECONDS)
@@ -114,6 +118,7 @@ class ProbeAttempt:
             model_ids=tuple(model.model_id for model in launch.models),
             observer_outdir=self.observer_outdir,
             graph_settings=self.graph_settings,
+            deterministic=self.deterministic,
             results=results,
             events=read_graph_events(self.observer_outdir),
             daemon_startup_seconds=daemon_startup_seconds,

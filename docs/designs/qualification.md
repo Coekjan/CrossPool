@@ -46,6 +46,12 @@ combined Decode Full plus Prefill Breakable mode's final Prefill logits with
 full-distribution forward KL while the Graph Observer proves that Breakable
 execution actually occurred. Prefill token identity is diagnostic, not a
 correctness requirement.
+Cross-mode numerical comparisons select the shared xkit deterministic policy
+and retain that selection in their artifacts. These comparisons qualify Graph
+equivalence under the selected policy rather than default-production token
+invariance. Independent FFN references and numerical limits retain their existing
+contracts. Default-policy serving separately proves completion, actual Graph
+execution and cleanup.
 The two nonempty `[1, V]` logits tensors must have identical shapes before KL;
 different vocabulary widths fail qualification rather than broadcasting.
 

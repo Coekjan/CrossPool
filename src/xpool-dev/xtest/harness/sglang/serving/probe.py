@@ -21,6 +21,7 @@ def run_probe(
     base_config: ResolvedConfig,
     graph_settings: SglangGraphSettings,
     workdir: Path,
+    deterministic: bool = False,
     workload: Callable[[list[SglangProbeServer]], tuple[SglangServerResult, ...]] | None = None,
 ) -> ProbeRun:
     """Run one rematerialized attempt, retrying confirmed bind conflicts only."""
@@ -32,6 +33,7 @@ def run_probe(
             base_config=base_config,
             graph_settings=graph_settings,
             workdir=workdir / f"attempt-{attempt_number}",
+            deterministic=deterministic,
         )
         try:
             return attempt.run(workload)

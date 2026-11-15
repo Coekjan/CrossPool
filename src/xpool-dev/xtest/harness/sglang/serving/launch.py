@@ -21,6 +21,7 @@ def prepare(
     base_config: ResolvedConfig,
     workdir: Path,
     graph_settings: SglangGraphSettings,
+    deterministic: bool = False,
 ) -> ServingLaunch:
     """Prepare deployment policy and test observer inputs for startup.
 
@@ -34,6 +35,7 @@ def prepare(
         SglangLaunchModel(
             model_id=model_id,
             graph_mode=graph_mode,
+            deterministic=deterministic,
         )
         for model_id in case.models
     )
