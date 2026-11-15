@@ -17,6 +17,7 @@ def test_ffn_model_adapter_discovery_is_stable_and_module_owned() -> None:
         "xpool.runtime.ffnagent.models.glm4_moe_lite",
         "xpool.runtime.ffnagent.models.gpt_oss",
         "xpool.runtime.ffnagent.models.llama",
+        "xpool.runtime.ffnagent.models.opt",
         "xpool.runtime.ffnagent.models.qwen2",
         "xpool.runtime.ffnagent.models.qwen3",
         "xpool.runtime.ffnagent.models.qwen3_moe",

@@ -149,8 +149,10 @@ is a resolver policy for the supported path, not support for arbitrary SGLang
 expert-parallel configurations or non-uv installers.
 
 The SGLang adapter replaces supported decoder FFN computation with a shim and
-filters the corresponding tensors from attention-side loading. Model adapters
-are discovered by family. A model adapter receives a strict `FfnSourceConfig` view
+filters the corresponding tensors from attention-side loading. OPT keeps its FFN
+inline in the decoder layer, so its adapter replaces that layer while preserving
+upstream attention, normalization and residual order. Model adapters are
+discovered by family. A model adapter receives a strict `FfnSourceConfig` view
 of the parsed `config.json` and, separately, checkpoint-key metadata; it owns
 architecture extraction, checkpoint key mapping, activation selection, and
 Router Algorithm and Precision selection for that family. The compiled Spec
