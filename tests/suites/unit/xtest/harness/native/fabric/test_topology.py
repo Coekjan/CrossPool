@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-import weakref
 from multiprocessing.connection import Connection
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,10 +10,8 @@ import pytest
 import torch
 
 from xpool.fabric import FABRIC_UID_HEX_LENGTH, FabricPlan, FabricUid
-from xpool.memory import FfnExecutionContract
 from xpool.native import RuntimeRole
 from xpool.native.ffn import ForwardMode, LayerKind
-from xpool.runtime.ffnagent.execution import OwnedExecutionResource
 from xtest.harness.native.fabric import participant, topology
 from xtest.harness.native.fabric.protocol import (
     FabricParticipantCommand,
@@ -23,7 +20,6 @@ from xtest.harness.native.fabric.protocol import (
 )
 from xtest.harness.native.fabric.topology import run_fabric_topology
 from xtest.harness.native.ffn.qualification import execution_fabric_plan
-from xtest.harness.support.config import TEST_EXECUTION_CONTRACT
 
 
 def test_topology_rejects_rows_above_selected_mode_capacity(tmp_path: Path) -> None:
@@ -68,18 +64,7 @@ def test_participant_stops_before_plan_or_retains_owner_after_plan(
         hidden_size=16,
         intermediate_size=32,
     )
-    owners: list[weakref.ReferenceType[torch.Tensor]] = []
     sent: list[object] = []
-
-    def prepare():
-        tensor = torch.empty(1)
-        owners.append(weakref.ref(tensor))
-        return TEST_EXECUTION_CONTRACT, (
-            OwnedExecutionResource(
-                owner=tensor,
-                region=participant.xpool.native.ffnagent.CapturedResourceRange("table", 0x1000, 0x1000, 4, True),
-            ),
-        )
 
     def receive():
         if failure_site == "plan":
@@ -94,7 +79,6 @@ def test_participant_stops_before_plan_or_retains_owner_after_plan(
             executor_lane_count=1,
             instance_count=1,
             execution_kind=LayerKind.DENSE,
-            ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,),
             payload_dtype=torch.bfloat16,
         )
 
@@ -102,14 +86,12 @@ def test_participant_stops_before_plan_or_retains_owner_after_plan(
         raise RuntimeError("join failed")
 
     def retain(seconds: float) -> None:
-        assert owners[0]() is not None
-        assert sent == [TEST_EXECUTION_CONTRACT]
+        assert not sent
         raise OwnerRetained
 
     monkeypatch.setattr(torch.cuda, "set_device", lambda device: None)
     monkeypatch.setattr(participant.xpool.native, "initialize", lambda *args: None)
     monkeypatch.setattr(participant.xpool.native.fabric, "join", join)
-    monkeypatch.setattr(participant.capture_workspace, "prepare_execution_sources", prepare)
     monkeypatch.setattr(participant, "time", SimpleNamespace(sleep=retain))
     connection = cast(Connection, SimpleNamespace(send=sent.append, recv=receive))
     if failure_site == "join":
@@ -120,8 +102,7 @@ def test_participant_stops_before_plan_or_retains_owner_after_plan(
             participant.run_fabric_participant(connection, spec)
     else:
         participant.run_fabric_participant(connection, spec)
-        assert sent == [TEST_EXECUTION_CONTRACT, FabricParticipantStopped()]
-        assert owners[0]() is None
+        assert sent == [FabricParticipantStopped()]
 
 
 @pytest.mark.parametrize("failure", ("partial_dispatch", "unconfirmed_exit"))
@@ -149,9 +130,7 @@ def test_topology_retains_mps_after_dispatch_or_without_exit_proof(
         process=SimpleNamespace(pid=1, is_alive=lambda: True),
         start=lambda: None,
         send=send,
-        receive=lambda expected, **kwargs: (
-            TEST_EXECUTION_CONTRACT if expected is FfnExecutionContract else FabricParticipantStopped()
-        ),
+        receive=lambda expected, **kwargs: FabricParticipantStopped(),
         wait=wait,
         close=lambda: pytest.fail("unconfirmed child must stay owned"),
     )

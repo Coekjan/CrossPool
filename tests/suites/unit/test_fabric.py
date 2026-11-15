@@ -25,7 +25,7 @@ from xpool.fabric import (
 )
 from xpool.memory import DeviceMemoryEstimate
 from xpool.native.ffn import LayerKind
-from xtest.harness.support.config import TEST_EXECUTION_CONTRACT, TEST_MODEL_ID
+from xtest.harness.support.config import TEST_MODEL_ID
 
 
 def profile(payload_dtype: torch.dtype = torch.bfloat16) -> InstanceFfnProfile:
@@ -47,7 +47,6 @@ def fabric_plan() -> FabricPlan:
     return FabricPlan(
         generation=FabricGenerationId(high=1, low=2),
         uid=FabricUid(value="ab" * 128),
-        ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 2,
         pe_placements=(
             FabricPePlacement(role=FabricRole.ATNAGENT, device=0),
             FabricPePlacement(role=FabricRole.FFNAGENT, device=1),
@@ -204,7 +203,6 @@ def test_deployment_retains_all_ffn_budgets_through_json() -> None:
     deployment = FabricDeploymentPlan(**plan.model_dump(), ffn_memory_estimates=budgets)
     returned = FabricDeploymentPlan.model_validate_json(deployment.model_dump_json())
     assert returned.ffn_memory_estimates == budgets
-    assert returned.ffn_execution_contracts == plan.ffn_execution_contracts
 
 
 @pytest.mark.parametrize("budgets", (None, (), (DeviceMemoryEstimate(retained_bytes=1, peak_bytes=2),)))

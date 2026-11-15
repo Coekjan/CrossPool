@@ -420,7 +420,6 @@ def create_daemon() -> FastAPI:
                 calibration_environment=request.calibration_environment,
                 device_free_memory_bytes=request.device_free_memory_bytes,
                 device_total_memory_bytes=request.device_total_memory_bytes,
-                execution_contract=request.execution_contract,
                 abi_version=request.abi_version,
                 pid=request.pid,
                 now=monotonic(),

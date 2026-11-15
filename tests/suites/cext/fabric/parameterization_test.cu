@@ -207,9 +207,6 @@ TEST(FfnParameterizationTest, BindsMemsetWithPitchAndRejectsIncompleteWriteSpans
                                                              reinterpret_cast<std::uintptr_t>(storage[2])};
   EXPECT_THROW(xpool::ffnagent::parameterize_graph(graphs[0], graphs[1], {}, {&replacement, 1}, 0, 0, 0), c10::Error);
   replacement.bytes = 64;
-  replacement.read_only = true;
-  EXPECT_THROW(xpool::ffnagent::parameterize_graph(graphs[0], graphs[1], {}, {&replacement, 1}, 0, 0, 0), c10::Error);
-  replacement.read_only = false;
   ASSERT_NO_THROW(xpool::ffnagent::parameterize_graph(graphs[0], graphs[1], {}, {&replacement, 1}, 0, 0, 0));
   ASSERT_EQ(cudaGraphDestroy(graphs[1]), cudaSuccess);
   ASSERT_EQ(cudaFree(storage[0]), cudaSuccess);
@@ -246,7 +243,7 @@ TEST(FfnParameterizationTest, BindsDeviceMemcpyEndpointsBeforeSourceRetirement) 
   const auto replacements = std::array<xpool::ffnagent::LaneAddressReplacement, 2>{
       xpool::ffnagent::LaneAddressReplacement{reinterpret_cast<std::uintptr_t>(storage[0]),
                                               reinterpret_cast<std::uintptr_t>(storage[1]), 64,
-                                              reinterpret_cast<std::uintptr_t>(storage[4]), true, true},
+                                              reinterpret_cast<std::uintptr_t>(storage[4]), true},
       xpool::ffnagent::LaneAddressReplacement{reinterpret_cast<std::uintptr_t>(storage[2]),
                                               reinterpret_cast<std::uintptr_t>(storage[3]), 64,
                                               reinterpret_cast<std::uintptr_t>(storage[5])},

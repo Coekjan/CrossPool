@@ -44,7 +44,7 @@ class MemoryProfileWorld:
             range(len(self.participants))
         ):
             raise ValueError("memory-profile evidence must contain ordered complete FfnAgent indices")
-        if len(self.participants) != len(self.memory_context.ffn_execution):
+        if len(self.participants) != self.memory_context.ffnagent_count:
             raise ValueError("memory-profile observations do not cover the frozen FFN context")
         if self.memory_context.participants is None:
             raise ValueError("memory-profile evidence requires complete participant observations")

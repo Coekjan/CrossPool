@@ -27,12 +27,7 @@ from xpool.service.daemon.app import create_daemon
 from xpool.service.wire import ElasticContextStateControlChannelRef
 from xpool.utils.mps import MpsEndpoint, MpsProbeResult, MpsScope
 from xpool.utils.procs import ProcUniqId
-from xtest.harness.support.config import (
-    TEST_CALIBRATION_ENVIRONMENT,
-    TEST_EXECUTION_CONTRACT,
-    TEST_MODEL_ID,
-    install_test_config,
-)
+from xtest.harness.support.config import TEST_CALIBRATION_ENVIRONMENT, TEST_MODEL_ID, install_test_config
 from xtest.harness.support.ecs import context_state_profile
 
 
@@ -208,7 +203,6 @@ def ffnagent_registration(
         "calibration_environment": TEST_CALIBRATION_ENVIRONMENT.model_dump(mode="json"),
         "device_free_memory_bytes": 12 * 1024**3,
         "device_total_memory_bytes": TEST_CALIBRATION_ENVIRONMENT.total_memory_bytes,
-        "execution_contract": TEST_EXECUTION_CONTRACT.model_dump(mode="json"),
         "model_specs": [ffn_model_spec(model_id=model_id) for model_id in model_ids],
     }
 

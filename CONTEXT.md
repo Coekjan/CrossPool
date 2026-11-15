@@ -123,7 +123,7 @@ _Avoid_: Prefill Context Parallelism, Decode TP
 **Fabric Plan**:
 The participants, FFN layer placement and execution capacity agreed for one
 Fabric Generation.
-_Avoid_: Task plan, implementation plan, FFN Execution Resource Plan
+_Avoid_: Task plan, implementation plan, FFN Compute Plan
 
 **Fabric Executable**:
 A Fabric generation whose participants have activated their data-plane
@@ -244,13 +244,13 @@ run it.
 _Avoid_: Graph install, backend install
 
 **FFN Execution Resource**:
-Storage an FFN installation needs, identified by its source, owner and
-permitted uses independently of its device address.
+Retained weights and Lane workspace needed by an FFN installation through
+confirmed execution retirement.
 _Avoid_: Allocator pool, captured address, workspace family
 
-**FFN Execution Resource Plan**:
-An address-free inventory of the Lane and shared backings required by the
-selected Execution Signatures.
+**FFN Compute Plan**:
+The address-free computation and workspace requirements for one Execution
+Signature.
 _Avoid_: Captured workspace list, allocator snapshot, runtime owner graph
 
 **FFN Semantics**:
@@ -264,11 +264,20 @@ behavior and checkpoint identity, distinct from the source model architecture
 used to interpret its configuration.
 _Avoid_: Source architecture, Execution Signature, Fabric Plan
 
+**Dense FFN**:
+A feed-forward layer that applies the same projection-and-activation sequence
+to every input token. Its computation pattern is independent of its
+Quantization Scheme.
+
+**MoE FFN**:
+A feed-forward layer that selects Experts for each token and combines their
+weighted outputs, optionally including Shared Experts.
+
 **FFN Activation**:
-The model-declared nonlinear combination of gate and up projection results
-after their optional additive biases, including any declared clipping, slope
-and Up offset. It is distinct from the runtime startup transition called
-Execution Activation.
+The model-declared nonlinear function applied to a projection result after its
+optional bias. Gated layers combine the activated Gate with an Up projection;
+their clipping and Up offset are separate from the nonlinear function. It is
+distinct from the runtime startup transition called Execution Activation.
 _Avoid_: Source activation string, Execution Activation
 
 **FFN Gate/Up Order**:
@@ -364,9 +373,9 @@ for algorithm state or accumulation.
 _Avoid_: PayloadDType, dtype code
 
 **Quantization Scheme**:
-The numerical rules and encoding used to represent weights and their associated
-scaling data, independent of the model using them and the concrete operator
-that consumes them.
+The numerical rules and encoding used to represent weights or activations and
+their associated scaling data, independent of the model using them and the
+concrete operator that consumes them.
 _Avoid_: Model family, operator backend, payload element type
 
 **Native ABI Version**:
@@ -380,8 +389,8 @@ allocations whose sizes follow stable formulas.
 _Avoid_: Exact allocation demand, safe estimate
 
 **Fabric Memory Context**:
-A Fabric generation's per-FFN execution contracts and optional participant
-observations used to match a calibration Profile.
+The FFN participant count and optional participant observations used to match a
+Fabric generation to a calibration Profile.
 _Avoid_: Local free-memory observation, predicted memory usage
 
 **Analytic Allocator Allowance**:

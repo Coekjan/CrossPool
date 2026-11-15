@@ -16,7 +16,6 @@ import pytest
 import xtest
 from xkit.child import PythonChildProcess
 from xpool.fabric import FABRIC_UID_HEX_LENGTH, FabricUid
-from xpool.native import RuntimeRole
 from xpool.native.ffn import ForwardMode, LayerKind
 from xtest.harness.native.fabric import topology
 from xtest.harness.native.fabric.bootstrap import fabric_bootstrap
@@ -27,29 +26,23 @@ from xtest.harness.native.fabric.protocol import (
     FabricParticipantStopped,
 )
 from xtest.harness.native.fabric.topology import run_fabric_topology
-from xtest.harness.support.config import TEST_EXECUTION_CONTRACT
 from xtest.harness.support.native.fabric import assert_fabric_report
 
 pytestmark = pytest.mark.timeout(180)
 
 
-def setup_peer(connection: Connection, spec: FabricParticipantSpec, *, directory: Path, failure: str) -> None:
+def setup_peer(connection: Connection, spec: FabricParticipantSpec, *, directory: Path) -> None:
     try:
-        if spec.role is RuntimeRole.FFNAGENT:
-            if failure == "source" and spec.pe == spec.atnagent_count:
-                raise RuntimeError("source preparation failed")
-            connection.send(TEST_EXECUTION_CONTRACT)
         assert connection.recv() is FabricParticipantCommand.STOP
-        if failure == "cleanup" and spec.pe == spec.atnagent_count:
+        if spec.pe == spec.atnagent_count:
             raise RuntimeError("local cleanup failed")
         connection.send(FabricParticipantStopped())
     finally:
         (directory / f"exited-{spec.pe}").write_text(str(os.getpid()))
 
 
-@pytest.mark.parametrize("failure", ("source", "cleanup"))
 def test_setup_failure_reaps_all_children_before_stopping_mps(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     children: list[PythonChildProcess] = []
     stopped = []
@@ -63,7 +56,7 @@ def test_setup_failure_reaps_all_children_before_stopping_mps(
     ) -> PythonChildProcess:
         child = PythonChildProcess(
             name,
-            partial(setup_peer, directory=tmp_path, failure=failure),
+            partial(setup_peer, directory=tmp_path),
             spec,
             log_path=log_path,
             import_paths=(Path(__file__).resolve().parents[4],),
@@ -90,9 +83,7 @@ def test_setup_failure_reaps_all_children_before_stopping_mps(
     monkeypatch.setattr(topology, "PythonChildProcess", spawn)
     monkeypatch.setattr(topology, "execution_fabric_plan", fail_plan)
     try:
-        with pytest.raises(
-            RuntimeError, match="source preparation failed" if failure == "source" else "Plan construction failed"
-        ):
+        with pytest.raises(RuntimeError, match="Plan construction failed"):
             run_fabric_topology(
                 FabricUid("a" * FABRIC_UID_HEX_LENGTH),
                 workdir=tmp_path / "topology",
@@ -103,8 +94,7 @@ def test_setup_failure_reaps_all_children_before_stopping_mps(
                 layer_kind=LayerKind.DENSE,
             )
         assert stopped == [True]
-        if failure == "cleanup":
-            assert "local cleanup failed" in caplog.text
+        assert "local cleanup failed" in caplog.text
     finally:
         live = tuple(child for child in children if not child.closed)
         PythonChildProcess.terminate_all(live)

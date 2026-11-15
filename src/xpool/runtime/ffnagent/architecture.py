@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import pathlib
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import TypeVar, cast
 
@@ -100,7 +100,7 @@ class FfnSourceConfig:
         if dtype_field is not None and self.get(dtype_field, str) not in ("bfloat16", "float16"):
             raise ValueError(f"{dtype_field} must be 'bfloat16' or 'float16'")
 
-    def projection(self, module_name: str) -> ffn.ProjectionSpec:
+    def projection(self, module_name: str, *, bias: bool = False) -> ffn.ProjectionSpec:
         """Compile an ordinary weight source with its source-config exclusions."""
 
         return ffn.ProjectionSpec(
@@ -109,6 +109,7 @@ class FfnSourceConfig:
                 module_name=module_name,
             ),
             values_key=f"{module_name}.weight",
+            bias_key=f"{module_name}.bias" if bias else None,
         )
 
     def gated_projections(self, prefix: str) -> ffn.GatedProjectionSpec:
@@ -133,8 +134,15 @@ class FfnModelAdapter(ABC):
         *,
         model_id: ModelId,
         model_config: FfnSourceConfig,
+        checkpoint_keys: Collection[str],
     ) -> ffn.FfnModelSpec:
         """Compile a parsed model configuration without filesystem access."""
+
+    @classmethod
+    def checkpoint_prefixes(cls, layer: ffn.FfnLayerSpec) -> tuple[str, ...]:
+        """Return this family's owned checkpoint namespaces for a layer."""
+
+        return (f"model.layers.{layer.layer_id}.mlp.",)
 
 
 def adapters_by_architecture() -> dict[str, type[FfnModelAdapter]]:
@@ -180,15 +188,20 @@ def load(*, model_id: ModelId, model_path: pathlib.Path) -> ffn.FfnModelSpec:
         adapter = adapters_by_architecture().get(architecture_name)
         if adapter is None:
             raise ValueError(f"unsupported FFN architecture {architecture_name!r}")
+        key_view = checkpoint.read_checkpoint_key_view(model_path)
         spec = adapter.compile(
             model_id=model_id,
             model_config=model_config,
+            checkpoint_keys=key_view.keys(),
         )
         if spec.model_id != model_id:
             raise ValueError("FFN Architecture Adapter returned inconsistent model identity")
 
-        key_view = checkpoint.read_checkpoint_key_view(model_path)
-        checkpoint.validate_ffn_coverage(spec, key_view)
+        checkpoint.validate_ffn_coverage(
+            spec,
+            key_view,
+            prefixes_by_layer={layer.layer_id: adapter.checkpoint_prefixes(layer) for layer in spec.layers},
+        )
         return spec
     except Exception as error:
         raise RuntimeError(f"failed to compile FFN model {model_id!r} at {model_path}: {error}") from error

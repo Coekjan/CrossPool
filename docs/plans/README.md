@@ -104,11 +104,11 @@ logs are not a source for the live view.
 - **Benefits from:** Unified Timeline Observability and the existing numerical
   qualification harness.
 
-A model compatible with the current gated Dense/MoE boundary can proceed as a
-focused implementation task. A model requiring Unary FFN, expert parallelism,
-quantization, a new Router, or a new operator first needs research for that
-missing capability. Candidate deliverables are one compatibility review,
-implementation, and qualification package per model family.
+A model compatible with the existing Dense or MoE execution paths can proceed
+as a focused implementation task. A model requiring an unsupported activation,
+quantization scheme, routing algorithm, operator or expert parallelism first
+needs a capability review. Candidate deliverables are one compatibility
+review, implementation, and qualification package per model family.
 
 ## Context Parallel Serving
 

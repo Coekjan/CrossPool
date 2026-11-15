@@ -13,7 +13,6 @@ import torch
 from xkit.child import PythonChildProcess
 from xkit.task import TaskCancelled, get_task_root
 from xpool.fabric import FabricUid
-from xpool.memory import FfnExecutionContract
 from xpool.native import RuntimeRole
 from xpool.native.ffn import ForwardMode, LayerKind, OutputRequirement
 from xpool.utils.device import visible_uuids
@@ -205,10 +204,6 @@ def run_fabric_topology(
                     )
                 )
             participants[-1].start()
-        execution_contracts = tuple(
-            process.receive(FfnExecutionContract, timeout_seconds=FABRIC_TIMEOUT_SECONDS)
-            for process in participants[atnagent_count:]
-        )
         fabric_plan = execution_fabric_plan(
             uid=uid.value,
             atnagent_count=atnagent_count,
@@ -217,7 +212,6 @@ def run_fabric_topology(
             executor_lane_count=executor_lane_count,
             instance_count=len(forward_modes),
             execution_kind=layer_kind,
-            ffn_execution_contracts=execution_contracts,
             layer_count=execution_layer_count,
             decode_payload_row_capacity=decode_payload_row_capacity,
             prefill_payload_row_capacity=prefill_payload_row_capacity,
@@ -325,8 +319,7 @@ def run_fabric_topology(
                                 )
                                 if isinstance(message, FabricParticipantStopped):
                                     break
-                                if not isinstance(message, FfnExecutionContract):
-                                    raise RuntimeError(f"unexpected Fabric setup stop reply: {message!r}")
+                                raise RuntimeError(f"unexpected Fabric setup stop reply: {message!r}")
                         except Exception as error:
                             early_cleanup_failures.append(error)
                     try:

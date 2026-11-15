@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
+
 from xpool import ffn
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
@@ -19,6 +21,7 @@ class Qwen3MoeAdapter(architecture.FfnModelAdapter):
         *,
         model_id: ModelId,
         model_config: architecture.FfnSourceConfig,
+        checkpoint_keys: Collection[str],
     ) -> ffn.FfnModelSpec:
         """Compile all main Qwen3-MoE decoder layers and routing semantics."""
 

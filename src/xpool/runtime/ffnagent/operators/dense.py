@@ -1,102 +1,86 @@
-"""Gated Dense execution into caller-owned storage."""
+"""Prepared Dense execution over caller-owned Lane storage."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 
-from xpool.ffn import ActivationSpec, GateUpOrder
+from xpool.quantization import TensorLayout
 from xpool.runtime.ffnagent import execution, weights
 from xpool.runtime.ffnagent.operators import linear
-from xpool.runtime.ffnagent.operators.activation import apply_into
 
 
-def compute_dense_partial(
-    *,
-    hidden_states: torch.Tensor,
-    layer_weights: weights.DenseFfnWeights,
-    workspace: torch.Tensor,
-    output: torch.Tensor,
-    activation: ActivationSpec,
-) -> torch.Tensor:
-    """Compute one fixed-Capacity rank-local gated Dense Partial.
+@dataclass(frozen=True, slots=True)
+class DenseExecutionPlan:
+    """Two prepared projections and their exact shared intermediate backing."""
 
-    Args:
-        hidden_states: Caller-owned contiguous payload input shaped ``[C, H]``.
-        layer_weights: Canonical local true-TP projection weights.
-        workspace: Caller-owned contiguous CUDA byte tensor with the exact
-        result of :func:`execution.dense_workspace_bytes`.
-        output: Caller-owned contiguous payload destination shaped ``[C, H]``.
-        activation: Startup-selected gated activation semantic.
+    signature: execution.DenseFfnExecutionSignature
+    i_proj: linear.GemmPlan
+    o_proj: linear.GemmPlan
+    workspace: execution.WorkspaceLayout
 
-    Returns:
-        The exact ``output`` object after all Capacity rows are evaluated.
+    @classmethod
+    def prepare(cls, signature: execution.DenseFfnExecutionSignature) -> DenseExecutionPlan:
+        """Derive storage once, retaining standalone ungated input/output aliasing."""
 
-    Raises:
-        ValueError: If activation, shapes, dtype, device, contiguity, or
-            alignment do not match the fixed Dense implementation.
-        ImportError: If the direct ``sgl_kernel`` dependency cannot load.
+        activated = TensorLayout(
+            (signature.payload_row_capacity, signature.local_intermediate_size), signature.payload_dtype, 0
+        )
+        i_proj = linear.GemmPlan.prepare(
+            input_layout=TensorLayout(signature.payload_shape, signature.payload_dtype, 0),
+            weight_layout=signature.i_proj,
+            result_layout=activated,
+            activation=signature.activation,
+        )
+        o_proj = linear.GemmPlan.prepare(
+            input_layout=activated,
+            weight_layout=signature.o_proj,
+            result_layout=TensorLayout(signature.payload_shape, signature.payload_dtype, 0),
+            activation=None,
+        )
+        regions = [(i_proj.output_layout.dtype, i_proj.output_layout.shape)]
+        if i_proj.fused_activation is None and not signature.activation.supports_inplace:
+            regions.append((activated.dtype, activated.shape))
+        regions.extend(((torch.uint8, (i_proj.workspace.nbytes,)), (torch.uint8, (o_proj.workspace.nbytes,))))
+        workspace = execution.WorkspaceLayout.from_regions(tuple(regions))
+        return cls(
+            signature=signature,
+            i_proj=i_proj,
+            o_proj=o_proj,
+            workspace=workspace,
+        )
 
-    Side Effects:
-        Writes ``workspace`` and ``output`` on the current CUDA stream. It
-        allocates no Torch output or persistent auxiliary tensor.
-    """
 
-    payload_dtype = hidden_states.dtype
-    if payload_dtype not in (torch.bfloat16, torch.float16):
-        raise ValueError("Dense execution requires BF16 or FP16 payloads")
-    weights.validate_tensor(hidden_states, name="hidden_states", dtype=payload_dtype, dimensions=2)
-    weights.validate_tensor(output, name="Dense Partial output", dtype=payload_dtype, dimensions=2)
-    weights.validate_tensor(workspace, name="Dense workspace", dtype=torch.uint8, dimensions=1)
+class Dense:
+    """Capture-time Dense computation borrowing prepared views and layer resources."""
 
-    row_capacity, hidden_size = hidden_states.shape
-    local_intermediate_twice, weight_hidden_size = layer_weights.gate_up.values.shape
-    local_intermediate_size = local_intermediate_twice // 2
-    if (
-        weight_hidden_size != hidden_size
-        or layer_weights.gate_up.values.dtype is not payload_dtype
-        or output.shape != hidden_states.shape
-    ):
-        raise ValueError("Dense input, output, and weight dimensions disagree")
-    if layer_weights.gate_up.scales is not None or layer_weights.down.scales is not None:
-        raise ValueError("Dense floating execution does not support encoded scales")
-    expected_workspace_bytes = execution.dense_workspace_bytes(
-        payload_dtype=payload_dtype,
-        row_capacity=row_capacity,
-        local_intermediate_size=local_intermediate_size,
-    )
-    if workspace.numel() != expected_workspace_bytes:
-        raise ValueError(f"Dense workspace must contain exactly {expected_workspace_bytes} bytes")
-    device = hidden_states.device
-    if output.device != device or workspace.device != device or layer_weights.gate_up.values.device != device:
-        raise ValueError("Dense input, output, workspace, and weights must share one device")
-    for name, tensor in (
-        ("hidden_states", hidden_states),
-        ("Dense Partial output", output),
-        ("Dense workspace", workspace),
-        ("gate/up weight", layer_weights.gate_up.values),
-        ("down weight", layer_weights.down.values),
-    ):
-        if tensor.data_ptr() % execution.OPERATOR_ALIGNMENT_BYTES != 0:
-            raise ValueError(f"{name} must be 16-byte aligned")
-    if local_intermediate_twice * payload_dtype.itemsize % execution.OPERATOR_ALIGNMENT_BYTES != 0:
-        raise ValueError("Dense gate/up rows must be 16-byte aligned")
+    def __init__(self, plan: DenseExecutionPlan, workspace: torch.Tensor) -> None:
+        views = plan.workspace.views(workspace)
+        self.plan = plan
+        self.projected = views[0]
+        self.activated = (
+            views[1]
+            if plan.i_proj.fused_activation is None and not plan.signature.activation.supports_inplace
+            else self.projected
+        )
+        self.i_proj = linear.Gemm(plan.i_proj, views[-2])
+        self.o_proj = linear.Gemm(plan.o_proj, views[-1])
 
-    workspace_values = workspace.view(payload_dtype)
-    gate_up_elements = row_capacity * local_intermediate_twice
-    gate_up = workspace_values[:gate_up_elements].view(row_capacity, local_intermediate_twice)
-    activated_up = workspace_values[gate_up_elements:].view(row_capacity, local_intermediate_size)
+    def run_into(
+        self,
+        *,
+        hidden_states: torch.Tensor,
+        layer_weights: weights.DenseFfnWeights,
+        output: torch.Tensor,
+    ) -> None:
+        """Write a complete rank-local Partial using the current layer bindings."""
 
-    linear.compute_projection(
-        linear.LinearOperationKind.TORCH,
-        hidden_states=hidden_states,
-        projection=layer_weights.gate_up,
-        output=gate_up,
-    )
-    apply_into(activation, inputs=gate_up, output=activated_up, order=GateUpOrder.CONCATENATED)
-    linear.compute_projection(
-        linear.LinearOperationKind.TORCH,
-        hidden_states=activated_up,
-        projection=layer_weights.down,
-        output=output,
-    )
-    return output
+        self.i_proj.run_into(hidden_states, layer_weights.i_proj, output=self.projected)
+        if self.plan.i_proj.fused_activation is None:
+            self.plan.signature.activation.apply_into(
+                inputs=self.projected,
+                output=self.activated,
+                order=self.plan.i_proj.weight_layout.gate_up_order,
+            )
+        self.o_proj.run_into(self.activated, layer_weights.o_proj, output=output)

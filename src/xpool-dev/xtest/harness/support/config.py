@@ -14,13 +14,7 @@ import xpool.config
 from xkit.case import CaseId
 from xkit.config import ToolConfigRecord, XpoolDevConfig
 from xpool.config import XpoolConfig
-from xpool.memory import (
-    ExecutionResourceDeclaration,
-    ExecutionResourceRequirement,
-    FabricMemoryContext,
-    FfnExecutionContract,
-    MemoryCalibrationEnvironment,
-)
+from xpool.memory import FabricMemoryContext, MemoryCalibrationEnvironment
 from xpool.model import ModelId
 from xpool.native import ABI_VERSION
 from xtest.harness.runner.pytest_plugin import resolved_config_key
@@ -28,7 +22,6 @@ from xtest.harness.runner.requirements import ResolvedConfig
 
 TEST_MODEL_ID = ModelId("test/test-model")
 TEST_CASE_ID = CaseId("550e8400-e29b-41d4-a716-446655440000")
-TEST_EXECUTION_CONTRACT = FfnExecutionContract(lane_resources=(), shared_resources=())
 TEST_CALIBRATION_ENVIRONMENT = MemoryCalibrationEnvironment(
     name="test-device",
     compute_capability=(8, 0),
@@ -46,30 +39,12 @@ TEST_CALIBRATION_ENVIRONMENT = MemoryCalibrationEnvironment(
 )
 
 
-def lane_resource_declaration(
-    *, key: str, max_bytes: int, alignment_bytes: int, aliases: tuple[str, ...]
-) -> ExecutionResourceDeclaration:
-    """Declare a bounded Lane-private source allocation for memory/placement fixtures."""
-
-    return ExecutionResourceDeclaration(
-        requirement=ExecutionResourceRequirement(
-            key=key,
-            request_bytes=(max_bytes,),
-            logical_extent_bound_bytes=max_bytes,
-            exact_logical_bytes=None,
-            alignment_bytes=alignment_bytes,
-        ),
-        aliases=aliases,
-        uses=("dense", "moe_router"),
-    )
-
-
 def synthetic_memory_context(*, atnagent_count: int = 1, ffnagent_count: int = 1) -> FabricMemoryContext:
     """Provide explicit facts for protocol/component tests without physical admission."""
 
     return FabricMemoryContext(
         participants=(TEST_CALIBRATION_ENVIRONMENT,) * (atnagent_count + ffnagent_count),
-        ffn_execution=(TEST_EXECUTION_CONTRACT,) * ffnagent_count,
+        ffnagent_count=ffnagent_count,
     )
 
 

@@ -11,7 +11,18 @@ def test_projection_layout_counts_physical_storages_in_allocation_order(
     expected: tuple[int, ...],
 ) -> None:
     encoded = scheme.weight_layout(logical_shape=(32, 64), dtype=torch.bfloat16)
-    layout = ProjectionLayout(values=encoded.values, scales=encoded.scales, bias=TensorLayout((32,), torch.float32, 0))
+    layout = ProjectionLayout(
+        quantization=scheme,
+        gate_up_order=None,
+        values=encoded.values,
+        scales=encoded.scales,
+        bias=TensorLayout((32,), torch.float32, 0),
+    )
 
     assert layout.allocation_bytes() == expected
-    assert ProjectionLayout(values=encoded.values, scales=encoded.scales, bias=None).allocation_bytes() == expected[:-1]
+    assert (
+        ProjectionLayout(
+            quantization=scheme, gate_up_order=None, values=encoded.values, scales=encoded.scales, bias=None
+        ).allocation_bytes()
+        == expected[:-1]
+    )

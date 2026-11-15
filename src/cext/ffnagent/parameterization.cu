@@ -16,7 +16,7 @@ namespace xpool::ffnagent {
 
 namespace {
 
-std::uintptr_t bind_memory_address(std::uintptr_t primary, std::uintptr_t control, std::size_t bytes, bool writing,
+std::uintptr_t bind_memory_address(std::uintptr_t primary, std::uintptr_t control, std::size_t bytes,
                                    cuda::std::span<const LaneAddressReplacement> replacements,
                                    cuda::std::span<std::size_t> matches) {
   auto found = false;
@@ -33,7 +33,6 @@ std::uintptr_t bind_memory_address(std::uintptr_t primary, std::uintptr_t contro
     TORCH_CHECK(!found, "xpool typed graph access has ambiguous resources");
     const auto offset = primary - range.primary_address;
     TORCH_CHECK(bytes <= range.bytes - offset, "xpool typed graph access exceeds a declared resource");
-    TORCH_CHECK(!writing || !range.read_only, "xpool typed graph writes a shared read-only resource");
     target = xpool::utils::checked::sum(range.target_address, offset);
     ++matches[index];
     found = true;
@@ -75,7 +74,7 @@ void parameterize_graph_recursive(
       const auto bytes = xpool::utils::cuda::graph::memset_access_bytes(primary);
       primary.dst = reinterpret_cast<void *>(bind_memory_address(reinterpret_cast<std::uintptr_t>(primary.dst),
                                                                  reinterpret_cast<std::uintptr_t>(control.dst), bytes,
-                                                                 true, lane_replacements, lane_matches));
+                                                                 lane_replacements, lane_matches));
       xpool::utils::cuda::graph::set_memset_parameters(primary_nodes[node_index], primary);
       continue;
     }
@@ -87,10 +86,10 @@ void parameterize_graph_recursive(
                   "xpool Primary and Control Memcpy metadata differ");
       primary.srcPtr.ptr = reinterpret_cast<void *>(bind_memory_address(
           reinterpret_cast<std::uintptr_t>(primary.srcPtr.ptr), reinterpret_cast<std::uintptr_t>(control.srcPtr.ptr),
-          bytes, false, lane_replacements, lane_matches));
+          bytes, lane_replacements, lane_matches));
       primary.dstPtr.ptr = reinterpret_cast<void *>(bind_memory_address(
           reinterpret_cast<std::uintptr_t>(primary.dstPtr.ptr), reinterpret_cast<std::uintptr_t>(control.dstPtr.ptr),
-          bytes, true, lane_replacements, lane_matches));
+          bytes, lane_replacements, lane_matches));
       xpool::utils::cuda::graph::set_memcpy_parameters(primary_nodes[node_index], primary);
       continue;
     }

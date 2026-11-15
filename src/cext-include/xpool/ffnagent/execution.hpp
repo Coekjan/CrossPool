@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <string>
 #include <variant>
 #include <vector>
 
@@ -14,20 +13,14 @@
 
 namespace xpool::ffnagent {
 
-/// Corresponding logical storage borrowed from retained execution owners.
-struct CapturedResourceRange {
-  /// Stable source identity within this capture.
-  std::string key;
-  /// Primary base, preserved in the installed graph.
-  std::uintptr_t primary_address;
-  /// Corresponding Control base used only for validation.
-  std::uintptr_t control_address;
-  /// Positive logical extent shared by both captures.
+/// Borrowed Lane-private workspace shared by Primary and Control capture.
+struct CaptureWorkspaceView {
+  /// Nonzero device base retained by the Lane owner through retirement.
+  std::uintptr_t address;
+  /// Positive logical extent of the prepared root workspace.
   std::size_t bytes;
-  /// Permit cross-Lane sharing only when the source declares immutable data.
-  bool shared_read_only = false;
 
-  bool operator==(const CapturedResourceRange &) const = default;
+  bool operator==(const CaptureWorkspaceView &) const = default;
 };
 
 /// Encoded values, optional scales and optional additive bias of one projection.
@@ -57,10 +50,10 @@ struct ProjectionBindingView {
 
 /// Canonical local Dense resources used during capture or service.
 struct DenseBindingView {
-  /// Fused gate/up projection resources.
-  ProjectionBindingView gate_up;
-  /// Down projection resources.
-  ProjectionBindingView down;
+  /// Input projection resources: packed Gate/Up or one ungated projection.
+  ProjectionBindingView i_proj;
+  /// Output projection resources.
+  ProjectionBindingView o_proj;
 
   constexpr bool operator==(const DenseBindingView &other) const = default;
 };
@@ -86,10 +79,10 @@ struct MoeRouterBindingView {
 
 /// Canonical local MoE weight addresses used during capture or service.
 struct MoeBindingView {
-  /// Local Expert gate/up projection resources.
-  ProjectionBindingView gate_up;
-  /// Local Expert down projection resources.
-  ProjectionBindingView down;
+  /// Local Expert input projection resources in the operation's Gate/Up order.
+  ProjectionBindingView i_proj;
+  /// Local Expert output projection resources.
+  ProjectionBindingView o_proj;
   /// Router resources when this FfnAgent owns routing for the layer.
   std::optional<MoeRouterBindingView> router;
 
@@ -99,7 +92,7 @@ struct MoeBindingView {
 /// Canonical Dense or MoE weight-address representation.
 using BindingView = std::variant<DenseBindingView, MoeBindingView>;
 
-/// One captured gated-Dense computation body and its Primary/Control captures.
+/// One captured Dense computation body and its Primary/Control captures.
 struct DenseCaptureDescriptor {
   /// Dtype used by Fabric payloads and graph input/output tensors.
   c10::ScalarType payload_dtype;
@@ -117,8 +110,8 @@ struct DenseCaptureDescriptor {
   std::uintptr_t capture_input_address;
   /// Device address used as graph partial output during capture.
   std::uintptr_t capture_partial_address;
-  /// Logical private or explicitly shared storage retained by the caller.
-  std::vector<CapturedResourceRange> capture_ranges;
+  /// Referenced root workspace, borrowed from the retained Lane owner.
+  std::optional<CaptureWorkspaceView> capture_workspace;
   /// Canonical resources used by the Primary capture.
   DenseBindingView primary_weight_bindings;
   /// Canonical resources used by the Control capture.
@@ -155,8 +148,8 @@ struct MoeCaptureDescriptor {
   std::uintptr_t capture_input_address;
   /// Device address used as graph partial output during capture.
   std::uintptr_t capture_partial_address;
-  /// Logical private or explicitly shared storage retained by the caller.
-  std::vector<CapturedResourceRange> capture_ranges;
+  /// Referenced root workspace, borrowed from the retained Lane owner.
+  std::optional<CaptureWorkspaceView> capture_workspace;
   /// Device address used for routing metadata during capture.
   std::uintptr_t capture_routing_metadata_address;
   /// Optional device address used for dynamic live-row count during capture.

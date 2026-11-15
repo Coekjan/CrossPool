@@ -19,7 +19,6 @@ from xpool.memory import (
     MIB,
     DeviceMemoryEstimate,
     DeviceMemoryFeatures,
-    FfnExecutionContract,
     FfnMemoryCalibrationCoefficients,
 )
 from xpool.runtime.ffnagent import execution, preparation
@@ -152,14 +151,12 @@ def place_ffn_models(
     model_specs: tuple[ffn.FfnModelSpec, ...],
     instance_plans: tuple[FabricInstancePlan, ...],
     ffnagent_free_memory_bytes: tuple[int, ...],
-    ffn_execution_contracts: tuple[FfnExecutionContract, ...],
     coefficients: FfnMemoryCalibrationCoefficients | None,
 ) -> FfnPlacementResult:
     """Validate one Placement request and solve it before the shared deadline."""
 
     try:
         estimator = DeviceMemoryEstimator(
-            ffn_execution_contracts=ffn_execution_contracts,
             model_specs=model_specs,
             instance_profiles=tuple(instance.ffn_profile for instance in instance_plans),
             coefficients=coefficients,
@@ -202,7 +199,6 @@ def solve_placement(
     """
 
     model_specs = estimator.model_specs
-    ffnagent_execution_contracts = estimator.ffn_execution_contracts
     config = get_global_config()
     ffnagent_count = len(config.ffn.devices)
 
@@ -258,10 +254,7 @@ def solve_placement(
         )
     )
     signature_index = {signature: index for index, signature in enumerate(all_signatures)}
-    resource_plans = tuple(
-        preparation.ExecutionResourcePlan.from_signatures(all_signatures, contract=contract)
-        for contract in ffnagent_execution_contracts
-    )
+    compute_plans = preparation.prepare_execution_plans(all_signatures)
     capture_weight_pair_keys = tuple(dict.fromkeys(execution.capture_weight_pair_key(item) for item in all_signatures))
     signature_storage_bytes = {}
     signature_allocator_allowance_bytes = {}
@@ -312,19 +305,11 @@ def solve_placement(
     maximum_graph_capture_allowance = config.scheduler.ffn_concurrency * sum(
         signature_allocator_allowance_bytes.values()
     ) + sum(capture_weight_pair_allocator_allowance_bytes.values())
-    maximum_pool_bytes = config.scheduler.ffn_concurrency * max(
-        (capture_pool_reservation_bytes(plan) for plan in resource_plans), default=0
+    maximum_pool_bytes = config.scheduler.ffn_concurrency * capture_pool_reservation_bytes(compute_plans)
+    maximum_resource_bytes = config.scheduler.ffn_concurrency * sum(plan.workspace.nbytes for plan in compute_plans)
+    maximum_resource_allocations = config.scheduler.ffn_concurrency * sum(
+        plan.workspace.nbytes > 0 for plan in compute_plans
     )
-    maximum_resource_bytes = 0
-    maximum_resource_allocations = 0
-    for resource_plan in resource_plans:
-        resource_bytes = 0
-        resource_allocations = 0
-        for group in resource_plan.lane_resources:
-            resource_bytes += config.scheduler.ffn_concurrency * group.requirement.logical_extent_bound_bytes
-            resource_allocations += config.scheduler.ffn_concurrency * len(group.requirement.request_bytes)
-        maximum_resource_bytes = max(maximum_resource_bytes, resource_bytes)
-        maximum_resource_allocations = max(maximum_resource_allocations, resource_allocations)
     maximum_runtime_bytes = estimator.execution_runtime_bytes(
         local_layer_count=sum(len(item) for item in class_layer_indices),
         local_layer_capacity_count=maximum_layer_capacity_count,
@@ -525,18 +510,11 @@ def solve_placement(
         private_pool_bytes: cp_model.LinearExpr | int = 0
         resource_storage_bytes: cp_model.LinearExpr | int = 0
         resource_allocations: cp_model.LinearExpr | int = 0
-        for resource_index, group in enumerate(resource_plans[ffnagent_index].lane_resources):
-            if len(group.signature_indices) == 1:
-                present = signature_present[ffnagent_index, group.signature_indices[0]]
-            else:
-                present = model.new_bool_var(f"resource_present_a{ffnagent_index}_r{resource_index}")
-                model.add_max_equality(
-                    present,
-                    [signature_present[ffnagent_index, index] for index in group.signature_indices],
-                )
-            private_pool_bytes += lanes * allocator_reservation_bytes(group.requirement.request_bytes) * present
-            resource_storage_bytes += lanes * group.requirement.logical_extent_bound_bytes * present
-            resource_allocations += lanes * len(group.requirement.request_bytes) * present
+        for signature_index_value, plan in enumerate(compute_plans):
+            present = signature_present[ffnagent_index, signature_index_value]
+            private_pool_bytes += lanes * allocator_reservation_bytes((plan.workspace.nbytes,)) * present
+            resource_storage_bytes += lanes * plan.workspace.nbytes * present
+            resource_allocations += lanes * int(plan.workspace.nbytes > 0) * present
         dense_present = model.new_bool_var(f"dense_present_a{ffnagent_index}")
         moe_present = model.new_bool_var(f"moe_present_a{ffnagent_index}")
         if dense_signatures:

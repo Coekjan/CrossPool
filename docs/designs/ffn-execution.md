@@ -22,13 +22,14 @@ additive projection bias and selection-only Router correction bias have separate
 declarations. A representable declaration does not establish operator support
 or qualify a concrete model.
 
-Family adapters check the model type and SiLU activation. Where the adapter
+Family adapters check the model type and declared activation. Where the adapter
 names a source dtype field, the checkpoint must declare BF16 or FP16. Original
 GPT-OSS configs omit that field. `InstanceFfnProfile` independently requires
 BF16 or FP16 payloads. See [checkpoint qualification](qualification.md#numerical-and-graph-evidence).
 
-Compilation validates exact FFN key coverage for each Spec-declared layer.
-Before materializing weight tensors, the loader checks Model/Instance identity
+Compilation validates exact FFN key coverage for each Spec-declared layer
+within family-owned checkpoint prefixes. Before materializing weight tensors,
+the loader checks Model/Instance identity
 and ordered layer geometry. Weights are read from explicit safetensors keys.
 The bounded reader verifies each original source shape, forms its declared
 canonical view, then applies the selected TP slice. Matrix and scale-blocked
@@ -47,7 +48,8 @@ its required execution order. The loader normalizes either concatenated or
 interleaved sources into that order with matched row selections for values,
 scales and bias. TP slicing preserves encoding-block constraints, and target
 padding retains its neutral values. Row order remains independent of activation
-and weight encoding.
+and weight encoding. Separate Gate/Up and single Up sources share projection
+descriptor construction; stacked Expert sources follow their declared layout.
 
 Bounded pinned slots stage those selections on the Host. Contiguous destinations
 use the ordinary blocking copy; strided rows use direct two-dimensional CUDA
@@ -60,8 +62,8 @@ Router Projection Precision determines input, retained weight and logits dtypes,
 independently of the Router Algorithm. `PAYLOAD` uses the effective payload dtype
 for all three. `FP32` uses FP32 for all three, converting projection inputs into
 caller-owned storage. `FP32_LOGITS` retains payload-precision inputs and weights
-and produces FP32 logits. These policies preserve backend arithmetic settings,
-including TF32. Loading, Control Probe construction and memory estimation use
+and produces FP32 logits. Ordinary FP32 matrix multiplication uses IEEE FP32.
+Loading, Control Probe construction and memory estimation use
 the same declared precision.
 
 TopK Weight Rounding is independent of projection precision. `NONE` retains
@@ -69,15 +71,26 @@ FP32 selected weights. `LOGITS_DTYPE` rounds them through the logits dtype after
 optional normalization, then publishes FP32 Routing Metadata. Shared-Expert
 assembly and model-declared scaling follow that boundary.
 
-Dense layers retain packed gate/up and down shards in two owned storages.
+Dense and MoE execution resources name their first and second weight projections
+`i_proj` and `o_proj` across prepared layouts, weight owners, execution signatures
+and native bindings. A gated input projection contains packed Gate/Up rows;
+an ungated Dense input projection contains one projection. Checkpoint sources
+retain their mathematical Gate/Up/Down roles. Dense input bias follows the TP
+slice; output bias is loaded on rank zero and remains zero on other ranks, so
+TP reduction adds it once.
 MoE layers additionally retain Router weights, expert tensors, top-k routing
-parameters, and any model-defined correction bias. `SiluActivation` declares
-the positive slope `alpha`, optional positive clipping `limit`, and `up_offset`.
-Projection bias is applied first. Clipping bounds Gate above and Up on both
-sides before computing `g * sigmoid(alpha * g) * (u + up_offset)`. Ordinary
-gated SiLU uses `(1.0, None, 0.0)`; the qualified GPT-OSS checkpoints use
-`(1.702, 7.0, 1.0)`. Model adapters resolve source parameters; execution supplies
-no model-specific defaults. Up offset is part of activation, not projection bias.
+parameters, and any model-defined correction bias. The model declares SiLU
+(with slope `alpha`), ReLU or GELU independently of a layer's gated structure. A model
+has a `GateTransform` for its gated layers, with an optional positive clipping
+`limit` and `up_offset`; its default performs ordinary gating. The projection
+sources determine whether a layer is gated. An ungated execution uses
+`Activation.gate=None`. Projection bias is applied before clipping.
+A limit bounds Gate above and Up on both sides; the result is
+`activation(g) * (u + up_offset)`.
+Ordinary gated SiLU uses slope 1, no clipping and zero offset. GPT-OSS resolves
+its slope and clipping from the source configuration, using 1.702 as the slope
+fallback, and declares an Up offset of 1. The qualified checkpoints use a
+clipping limit of 7. Up offset is independent of projection bias.
 
 Checkpoint loading and synthetic calibration share canonical empty-weight
 allocation factories, preserving shape, dtype, allocation order, and ownership.
@@ -90,38 +103,64 @@ expose non-owning native binding views while retaining Tensor ownership.
 ## Operators, routing, and delivery
 
 The [operator package](../../src/xpool/runtime/ffnagent/operators/) owns the
-pinned low-level projection, activation and Expert dependency seam. Ordinary
-BF16/FP16 Experts use SGLang's Triton configuration and launchers through
-`SglangTritonExperts`; packed MXFP4 Experts with BF16 payloads use the upstream
-Triton-Kernels operations through `TritonKernelsExperts`. Model adapters declare
-source geometry and mathematical semantics, not concrete operator classes.
-Pure preparation selects one Expert operation and checks its representation
-before weight reads or device work. The same closed operation mapping serves
-preparation, workspace sizing and capture.
+pinned matrix, activation and routed Expert dependency seam. Dense, Router and
+Experts compose the same `GemmPlan` and `Gemm` in `linear.py`. A plan retains
+operand layouts, weight encoding and Gate/Up order, output precision, optional
+activation fusion and local scratch. Quantization owns encoded storage and TP
+slices; matrix execution owns representation compatibility, kernel selection and
+scratch. Model adapters declare source geometry and mathematical semantics.
 
-The shared [activation module](../../src/xpool/runtime/ffnagent/operators/activation.py)
-supplies `apply_into` for caller-owned Dense and floating-Expert outputs and
-`fused` descriptors for packed Expert GEMMs. Both consume the same activation
-declaration while preserving each operation's qualified fusion and
-payload-rounding boundaries. Selection follows parameters and row layout,
-not model identity.
-The unit Up-offset path retains upstream `swiglu_fn`; other offsets use the
-local `fused_gated_silu`. Fused descriptors preserve each implementation's
-function identity so specialization caches distinguish them.
+Small ordinary unquantized projections use a local row-reduction kernel.
+Larger ordinary matrices with actual FP32 inputs and weights use local IEEE FP32
+SIMT kernels and an explicit Split-K reduction. Remaining ordinary payload and
+grouped floating/MXFP4 matrices use the bundled Triton-Kernels primitive.
+FP32 logits from payload inputs retain payload multiplication. Prepared encoding
+determines values and optional scales; adding an encoding requires its
+representation and arithmetic implementation.
 
-Any temporary adaptation of SGLang global arguments is scoped and
-unconditionally restored. Retained execution state is CrossPool-owned. The
-concrete operations call their pinned libraries and configuration modules
-directly, without a provider hierarchy or service-time fallback. Expanding this
-dependency seam requires an accepted design change.
+The [activation module](../../src/xpool/runtime/ffnagent/operators/activation.py)
+writes SiLU, ReLU or GELU, with or without gating, into caller-owned outputs.
+Ungated operations may reuse their input; gated operations use separate output
+storage. The standalone combinations share a local Triton kernel and their
+scalar activation expressions. Ungated ReLU preserves
+Torch's FP16/BF16 bit patterns. Floating matrices store their payload-precision
+projection before standalone activation, preserving that rounding boundary.
+
+Activation also supplies matrix epilogues. Gated fusion requires interleaved
+Gate/Up rows; other physical layouts retain a materialized projection and
+standalone activation. Floating fusion rounds the projection to its declared
+dtype before activation. Encoded execution retains accumulator precision;
+interleaved SiLU with unit Up offset uses upstream `swiglu_fn`. The other fused
+combinations use the same scalar expressions as standalone activation. Matrix
+plans account for materialized intermediate storage whenever fusion is absent.
+
+`DenseExecutionPlan`, `RouterExecutionPlan` and `ExpertExecutionPlan` compose
+matrix plans and stored workspace views. `MoeExecutionPlan` places Expert and
+optional Router backing in one root. Preparation retains concrete compute plans
+by Signature index for budgeting, allocation and capture. `WorkspaceLayout`
+stores aligned offsets and creates views without recomputing byte formulas.
+Each root receives its own allocator-reservation estimate, multiplied by the
+Lane count. Mutable backing remains independent per Lane.
+
+The common Expert pipeline constructs route histograms, gather/scatter indices
+and the pinned upstream ragged metadata, executes both matrices and reduces the
+weighted routes. Projection temporaries and route outputs reuse storage after
+their last consumer. Metadata covers the pinned matrix library's encoded block
+sizes, including its schedule-index limit. Matrix warmup selects public launch
+flags from actual geometry and device properties. Bundled execution disables
+persistent execution and Split-K; floating and MXFP4 ragged matrices use at least
+four warps for the measured launch selection. Local FP32 Split-K partials are
+declared in the root plan and reduced before bias and activation. Temporary
+library configuration is restored on success and failure. Runtime
+objects borrow current layer tensors and own no checkpoint weights.
 
 [Execution geometry](../../src/xpool/runtime/ffnagent/execution.py) defines
 Signatures and capture placeholder layouts. [Preparation](../../src/xpool/runtime/ffnagent/preparation.py)
-derives each TP shard's weight requests and Capacity-specific Signatures
-without allocating tensors. Loading, capture and placement use the same layout.
-An MoE workspace has one root large enough for every admitted block size.
-The Expert implementation lays out its slice; Router storage has independent
-offsets. Estimation uses the same byte extents as view construction.
+derives each TP shard's physical requests and Capacity-specific plans without
+allocating tensors or querying a device. Loading, capture and placement retain
+the same representation metadata. The Registry validates layer owners against
+those layouts before capture, then native replay supplies current resources
+without Python operation selection per invocation.
 
 The [Router implementation](../../src/xpool/runtime/ffnagent/operators/routing.py) owns
 projection, TopK and final Routing Metadata construction. Source compilers select
@@ -132,19 +171,17 @@ GPT-OSS uses Softmax with `PAYLOAD`, additive projection bias and
 validates these combinations and normalization; execution consumes the admitted
 semantics directly.
 
-Dense and Router projections share the [linear entry](../../src/xpool/runtime/ffnagent/operators/linear.py)
-and write caller-owned outputs. Torch `mm`/`addmm` preserves the existing
-floating paths. Startup selects FlashInfer TinyGemm for biased BF16 `PAYLOAD`
-Router projections with Capacity at most 128, aligned geometry and a device
-meeting its SM90+ TMA requirement; other projections keep Torch. This choice
-is fixed for the capture environment, and replay performs no operation
-selection. TinyGemm uses `use_pdl=False` and the same Primary/Control resource
-discovery and Device updates as other captured operations. Runtime module
-loading and compilation finish before capture; pure preparation does not
-initialize a device context.
+Dense, Router and Expert projections share the [linear entry](../../src/xpool/runtime/ffnagent/operators/linear.py)
+and write caller-owned outputs. Pure preparation fixes local geometry and
+scratch before allocation; warmup fixes bundled launch flags without changing
+that scratch. Primary and Control use the same selection, and replay performs
+no Python operation selection. Each invocation supplies current weight, scale
+and bias addresses. Local projections read bias directly; bundled GEMM converts
+payload bias into its prepared FP32 view. Runtime module loading and compilation
+finish before capture; pure preparation does not initialize a device context.
 
-Both algorithms use one local Triton TopK kernel. The Host entry validates
-resources, constructs projection logits and launches that kernel directly.
+Both algorithms use one local Triton TopK kernel. The Router uses its prepared workspace to construct projection logits and
+launches that kernel directly.
 The kernel computes FP32 activated scores and selects Experts using those scores
 plus optional per-Expert FP32 correction bias. Selected weights come from the
 original activated scores, followed by model-declared normalization and scaling.
@@ -161,10 +198,8 @@ preceding projection regenerates logits on every execution. Independent
 numerical and Graph qualification establishes the admitted implementation.
 
 The `FP32` policy converts Router inputs into caller-owned workspace before its
-matrix multiplication. Only this conversion uses local `torch.compile`
-during pre-capture warmup, producing a kernel compatible with declared-address
-Graph parameterization. Serving-engine whole-model compilation remains outside this
-seam, and native parameter checks remain in force. Input conversion and logits
+matrix multiplication. A local Triton copy kernel also serves projection-bias
+conversion. Native parameter checks remain in force. Input conversion and logits
 share the accounted Router workspace; payload and Expert arithmetic retain
 their admitted precision.
 
@@ -204,27 +239,28 @@ Control uses probe weights so installation can identify which kernel arguments
 must change when the Lane selects another layer. Compatible captures may reuse
 read-only probes. Replay uses the current layer's resident weights.
 
-The FfnAgent prepares source declarations before the free-memory baseline.
-It keeps any external owners locally and transfers them with the weights to
-`FfnExecutionRegistry` before materialization. A Signature borrows only its
-declared shared ranges. Production currently declares stream-local BLAS
-scratch; it supplies no baseline external Tensor. BLAS settings must stay
-fixed from preparation through capture.
+The FfnAgent measures its clean free-memory baseline before loading weights.
+`FfnExecutionRegistry` retains weights and owns each Lane's capture backing
+through confirmed native retirement. Concrete Signature plans determine that
+backing before capture.
 
 Each active capture Lane owns an exclusive stream and a private Torch memory
-pool with `use_on_oom=False`. Compute workspace and library scratch stay at
+pool with `use_on_oom=False`. Compute workspace stays at
 their Primary addresses. IO, routing and live-row placeholders use the
 default allocator. The Signature's placeholder layout supplies the allocation
 shapes and request sizes; budgeting separately counts temporary initialization
 and Torch's per-graph RNG state. The Registry retains initialized tensors
 while construction can still reuse their subblocks.
 
-A source declares the identity and logical extent of each range. Pool coverage
-proves the backing is retained; comparing graph addresses alone cannot prove
-ownership or discover opaque nested pointers. Installation checks Primary and
-Control offsets and access bounds. Writable storage is disjoint across Lanes;
-explicit read-only ranges may be shared. A difference between predicted and
-actual pool reservation is reported separately from an ownership failure.
+The Lane owner captures Primary and Control against one root workspace.
+A recursive scalar Graph query checks whether each graph references that range
+and validates typed access bounds throughout the graph. Both captures must
+agree on usage. A used range must have complete retained pool coverage; address
+observation alone cannot establish ownership or discover opaque nested pointers.
+Native installation checks the optional workspace view against IO, both weight
+inventories and other Lanes, including different Signatures. Each Lane keeps
+its mutable scratch private. Predicted versus actual pool reservation is reported
+separately from ownership failures.
 
 The Registry checks real Tensor layouts against the Layer Plan. Native
 installation checks all Lanes against the same Layer mapping, verifies graph
@@ -244,8 +280,8 @@ Lane terminal branches follow the block-wide decision contract in
 [Fabric](fabric.md#scheduler-and-failures).
 
 Installation is synchronous and consumes one attempt. On success the Registry
-synchronizes capture streams, resets the source graphs, clears stream-local
-library caches and releases construction tensors and probes. It then trims
+synchronizes capture streams, resets the source graphs and releases
+construction tensors and probes. It then trims
 releasable default cache. Each private pool and its stream stay sealed against
 new allocations until retirement; replay can still write scratch there.
 [Memory admission](control-plane.md#memory-admission) uses this point for the
@@ -253,7 +289,7 @@ retained budget.
 
 On partial failure the native runtime drains streams before destroying graphs
 or their storage. If cleanup also fails, it preserves the remaining handles.
-The Registry holds weights, external owners and Lane backing until native
+The Registry holds weights and Lane backing until native
 retirement is confirmed. Activation never retries installation.
 
 `FfnAgentControl` owns the process-local Device allocation shared by Lane

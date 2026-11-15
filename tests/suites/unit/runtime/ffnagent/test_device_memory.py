@@ -22,25 +22,11 @@ from xpool.fabric import (
     place_ffn_layer,
 )
 from xpool.ffn import FfnModelSpec
-from xpool.memory import (
-    MIB,
-    DeviceMemoryFeatures,
-    ExecutionResourceDeclaration,
-    ExecutionResourceRequirement,
-    FfnExecutionContract,
-    FfnMemoryCalibrationCoefficients,
-)
+from xpool.memory import MIB, DeviceMemoryFeatures, FfnMemoryCalibrationCoefficients
 from xpool.runtime.ffnagent import device_memory, execution, preparation
 from xpool.runtime.ffnagent.memory_profile import corpus
 from xpool.utils.integer import SINT64_MAX
-from xtest.harness.support.config import (
-    TEST_EXECUTION_CONTRACT,
-    TEST_MODEL_ID,
-    install_test_config,
-    lane_resource_declaration,
-    reset_global_config,
-    synthetic_config,
-)
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config, synthetic_config
 from xtest.harness.support.native.sizing import install_native_allocation_sizing
 from xtest.harness.support.service.daemon import ffn_model_spec, ffn_profile
 
@@ -80,7 +66,6 @@ def estimator_and_plan() -> tuple[device_memory.DeviceMemoryEstimator, FabricPla
     plan = FabricPlan(
         generation=FabricGenerationId(high=1, low=1),
         uid=FabricUid("a" * 256),
-        ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 2,
         pe_placements=(
             FabricPePlacement(role=FabricRole.ATNAGENT, device=0),
             FabricPePlacement(role=FabricRole.FFNAGENT, device=1),
@@ -95,7 +80,6 @@ def estimator_and_plan() -> tuple[device_memory.DeviceMemoryEstimator, FabricPla
         coefficients=None,
         model_specs=(spec,),
         instance_profiles=(profile,),
-        ffn_execution_contracts=plan.ffn_execution_contracts,
     ), plan
 
 
@@ -117,7 +101,11 @@ def test_fp32_router_keeps_fp32_weights_and_input_workspace() -> None:
         assert isinstance(signature, execution.MoeFfnExecutionSignature)
         assert signature.router is not None
         assert signature.router.projection.values.dtype is torch.float32
-        assert signature.router.router_workspace_bytes == 4 * signature.payload_row_capacity * (spec.hidden_size + 64)
+        plan = preparation.MoeExecutionPlan.prepare(signature)
+        assert plan.router is not None
+        backing = torch.empty(plan.router.workspace.nbytes, dtype=torch.uint8)
+        logits, converted, *_ = plan.router.workspace.views(backing)
+        assert logits.nbytes + converted.nbytes == 4 * signature.payload_row_capacity * (spec.hidden_size + 64)
 
 
 def test_exact_dense_allocation_ledger_and_feature_rows() -> None:
@@ -144,7 +132,7 @@ def test_exact_dense_allocation_ledger_and_feature_rows() -> None:
         "execution_installation",
         "retained",
     )
-    assert tuple(point.exact_resource_ledger_bytes for point in points) == (96, 3424, 4248, 4688, 4224)
+    assert tuple(point.exact_resource_ledger_bytes for point in points) == (96, 3424, 4008, 4448, 3984)
     for point in points:
         charges = {charge.domain: charge for charge in point.charges}
         assert charges["weights.default"].estimated_physical_bytes == 2 * MIB
@@ -154,12 +142,12 @@ def test_exact_dense_allocation_ledger_and_feature_rows() -> None:
             assert charges["capture.default"].estimated_physical_bytes == 10 * MIB
         if point.point == "retained":
             assert "capture.default" not in charges
-    assert points[2].features.tensor_storage_bytes == 920
+    assert points[2].features.tensor_storage_bytes == 680
     assert points[2].features.tensor_storage_allocation_count == 32
     assert points[2].features.dense_graph_capture_count == 4
     assert points[3].features.executor_lane_count == 1
     assert points[3].features.compute_branch_count == 4
-    assert points[4].features.tensor_storage_bytes == 456
+    assert points[4].features.tensor_storage_bytes == 216
     assert points[4].features.dense_graph_capture_count == 0
     assert "cuda.graph_driver" in points[3].unmodeled_costs
     assert "capture.infrastructure" in points[4].unmodeled_costs
@@ -190,60 +178,6 @@ def test_unmodeled_overhead_allows_analytic_or_calibrated_estimation(calibration
     assert estimate.peak_bytes == max(point.analytic_estimate_bytes for point in points) + correction
     assert estimate.retained_bytes == points[-1].analytic_estimate_bytes + correction
     assert "cuda.graph_driver" in points[3].unmodeled_costs
-
-
-def test_estimator_requires_one_execution_contract_per_configured_ffnagent() -> None:
-    estimator, _ = estimator_and_plan()
-    with pytest.raises(ValueError, match="execution contracts do not match configured FfnAgent count"):
-        device_memory.DeviceMemoryEstimator(
-            model_specs=estimator.model_specs,
-            instance_profiles=estimator.instance_profiles,
-            ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,),
-            coefficients=None,
-        )
-
-
-def test_source_cache_is_charged_once_per_lane_and_retained_with_the_pool() -> None:
-    estimator, plan = estimator_and_plan()
-    contract = FfnExecutionContract(
-        lane_resources=(
-            lane_resource_declaration(
-                key="projection.scratch", max_bytes=1024, alignment_bytes=256, aliases=("projection.scratch",)
-            ),
-        ),
-        shared_resources=(),
-    )
-    baseline = estimator.allocation_ledger_for_model_plans(model_plans=plan.model_plans, ffnagent_index=0)
-    contracts = (contract, TEST_EXECUTION_CONTRACT)
-    estimator = device_memory.DeviceMemoryEstimator(
-        coefficients=None,
-        model_specs=estimator.model_specs,
-        instance_profiles=estimator.instance_profiles,
-        ffn_execution_contracts=contracts,
-    )
-    plan = plan.model_copy(update={"ffn_execution_contracts": contracts})
-    observed = estimator.allocation_ledger_for_model_plans(model_plans=plan.model_plans, ffnagent_index=0)
-
-    assert observed[0] == baseline[0]
-    assert observed[1] == baseline[1]
-    assert tuple(point.exact_resource_ledger_bytes for point in observed) == tuple(
-        point.exact_resource_ledger_bytes for point in baseline
-    )
-    for before, after in zip(baseline[2:], observed[2:], strict=True):
-        original = next(charge for charge in before.charges if charge.domain == "capture.private_pools")
-        with_source = next(charge for charge in after.charges if charge.domain == "capture.private_pools")
-        assert (
-            with_source.estimated_physical_bytes - original.estimated_physical_bytes
-            == 2 * MIB * plan.executor_lane_count
-        )
-        assert (
-            after.features.tensor_storage_bytes - before.features.tensor_storage_bytes
-            == 1024 * plan.executor_lane_count
-        )
-        assert (
-            after.features.tensor_storage_allocation_count - before.features.tensor_storage_allocation_count
-            == plan.executor_lane_count
-        )
 
 
 def test_fabric_observer_allocation_begins_at_fabric_join(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -366,30 +300,3 @@ def test_calibrated_overhead_uses_one_mib_ceiling_and_rejects_overflow() -> None
                 joined_ffnagent=False,
             )
         )
-
-
-def test_prebaseline_shared_storage_is_recorded_without_incremental_charge() -> None:
-    estimator, plan = estimator_and_plan()
-    baseline = estimator.allocation_ledger_for_model_plans(model_plans=plan.model_plans, ffnagent_index=0)
-    declaration = ExecutionResourceDeclaration(
-        requirement=ExecutionResourceRequirement(
-            key="table",
-            request_bytes=(4096,),
-            logical_extent_bound_bytes=1024,
-            exact_logical_bytes=1024,
-            alignment_bytes=256,
-        ),
-        aliases=("table",),
-        uses=("dense",),
-    )
-    contract = TEST_EXECUTION_CONTRACT.model_copy(update={"shared_resources": (declaration,)})
-    contracts = (contract, TEST_EXECUTION_CONTRACT)
-    plan = plan.model_copy(update={"ffn_execution_contracts": contracts})
-    estimator = device_memory.DeviceMemoryEstimator(
-        model_specs=estimator.model_specs,
-        instance_profiles=estimator.instance_profiles,
-        ffn_execution_contracts=contracts,
-        coefficients=None,
-    )
-    points = estimator.allocation_ledger_for_model_plans(model_plans=plan.model_plans, ffnagent_index=0)
-    assert points == baseline

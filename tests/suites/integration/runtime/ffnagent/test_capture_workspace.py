@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gc
-import os
 import weakref
 from collections import Counter
 from pathlib import Path
@@ -13,8 +12,8 @@ import xpool.native
 import xtest
 from xpool.fabric import FABRIC_UID_HEX_LENGTH
 from xpool.native.ffn import LayerKind
-from xpool.runtime.ffnagent import capture_workspace, preparation
-from xpool.runtime.ffnagent.registry import FfnExecutionRegistry, LaneCaptureResources
+from xpool.runtime.ffnagent import preparation
+from xpool.runtime.ffnagent.registry import FfnExecutionRegistry
 from xtest.harness.native.case import run_native_case
 from xtest.harness.native.ffn.qualification import (
     dense_layer_weights,
@@ -24,80 +23,8 @@ from xtest.harness.native.ffn.qualification import (
 )
 
 
-def isolated_blas_capture_source(workspace_config: str | None, unified: str | None) -> None:
-    for name in ("CUBLASLT_WORKSPACE_SIZE", "TORCH_BLAS_PREFER_CUBLASLT", "TORCH_CUBLASLT_UNIFIED_WORKSPACE"):
-        os.environ.pop(name, None)
-    if workspace_config is None:
-        os.environ.pop("CUBLAS_WORKSPACE_CONFIG", None)
-    else:
-        os.environ["CUBLAS_WORKSPACE_CONFIG"] = workspace_config
-    if unified is not None:
-        os.environ["TORCH_CUBLASLT_UNIFIED_WORKSPACE"] = unified
-    torch.cuda.set_device(0)
-    contract, external_owners = capture_workspace.prepare_execution_sources()
-    assert external_owners == ()
-    if unified == "0":
-        assert len(contract.lane_resources) == 2
-        assert all(capacity.aliases == (capacity.requirement.key,) for capacity in contract.lane_resources)
-
-    generator = torch.Generator(device="cpu").manual_seed(17)
-    inputs = torch.randn((64, 2880), generator=generator).to(torch.bfloat16).cuda()
-    primary_weight = torch.randn((32, 2880), generator=generator).to(torch.bfloat16).cuda()
-    control_weight = primary_weight.clone()
-    bias = torch.randn((32,), generator=generator).to(torch.bfloat16).cuda()
-    output = torch.empty((64, 32), dtype=torch.bfloat16, device="cuda")
-
-    def launch(weight: torch.Tensor) -> None:
-        torch.addmm(bias, inputs[:rows], weight.t(), out=output[:rows])
-
-    owner = LaneCaptureResources()
-    try:
-        owner.initialize()
-        assert owner.stream is not None and owner.stream_owner is not None and owner.pool is not None
-        for rows in (1, 32, 64):
-            paired = owner.capture_pair(
-                primary_launch=lambda: launch(primary_weight),
-                control_launch=lambda: launch(control_weight),
-                local_allocations=(),
-                execution_contract=contract,
-                external_ranges=(),
-            )[2]
-            if workspace_config == ":0:0":
-                assert contract.lane_resources == ()
-                assert paired == ()
-            elif rows == 32 and torch.cuda.get_device_capability() == (8, 0):
-                assert paired, "the reproducing A100 GEMM must expose its BLAS scratch"
-            capacities = {
-                capacity.requirement.key: capacity.requirement.logical_extent_bound_bytes
-                for capacity in contract.lane_resources
-            }
-            for region in paired:
-                assert region.bytes <= capacities[region.key]
-        owner.release_capture_resources()
-        assert owner.pool is not None and owner.sealed
-        assert xpool.native.cuda.blas.snapshot_workspaces(owner.stream_owner) == []
-        retained_bytes = sum(segment["total_size"] for segment in owner.pool.snapshot())
-        torch.cuda.empty_cache()
-        assert sum(segment["total_size"] for segment in owner.pool.snapshot()) == retained_bytes
-    finally:
-        owner.close()
-
-
-@pytest.mark.parametrize(
-    ("workspace_config", "unified"),
-    ((None, None), (":0:0", None), (None, "0")),
-    ids=("default", "zero", "separate-lt"),
-)
-@xtest.requirements(device_count=1)
-def test_blas_capture_source_bounds_pairing_and_cleanup(
-    tmp_path: Path, workspace_config: str | None, unified: str | None
-) -> None:
-    run_native_case(isolated_blas_capture_source, workspace_config, unified, workdir=tmp_path / "case")
-
-
 def isolated_registry_install_failure_retains_captures(execution_kind: LayerKind, tp_rank: int) -> None:
     torch.cuda.set_device(0)
-    contract, external = capture_workspace.prepare_execution_sources()
     tp_size = 1 if execution_kind is LayerKind.DENSE else 2
     plan = execution_fabric_plan(
         uid="a" * FABRIC_UID_HEX_LENGTH,
@@ -107,7 +34,6 @@ def isolated_registry_install_failure_retains_captures(execution_kind: LayerKind
         executor_lane_count=2,
         instance_count=1,
         execution_kind=execution_kind,
-        ffn_execution_contracts=(contract,) * tp_size,
         decode_payload_row_capacity=1,
         prefill_payload_row_capacity=4,
         payload_dtype=torch.bfloat16,
@@ -123,9 +49,9 @@ def isolated_registry_install_failure_retains_captures(execution_kind: LayerKind
     expected_default_storage = Counter(
         value for signature in signatures for value in signature.capture_placeholder_layout().allocation_bytes()
     )
-    weight_ref = weakref.ref(weight.gate_up.values)
-    installation = FfnExecutionRegistry(layer_weights=((weight,),), external_resources=external)
-    del weight, external
+    weight_ref = weakref.ref(weight.i_proj.values)
+    installation = FfnExecutionRegistry(layer_weights=((weight,),))
+    del weight
     probe_refs: list[weakref.ReferenceType[torch.Tensor]] = []
 
     def fail_install(descriptor: xpool.native.ffnagent.ExecutionInstallDescriptor) -> None:
@@ -134,7 +60,7 @@ def isolated_registry_install_failure_retains_captures(execution_kind: LayerKind
         assert all(
             lane.capture_graphs and lane.pool is not None and not lane.sealed for lane in installation.capture_lanes
         )
-        probe_refs.extend(weakref.ref(probe.gate_up.values) for _, probe in installation.capture_weight_pairs.values())
+        probe_refs.extend(weakref.ref(probe.i_proj.values) for _, probe in installation.capture_weight_pairs.values())
         for lane in installation.capture_lanes:
             assert lane.pool is not None
             segments = lane.pool.snapshot()

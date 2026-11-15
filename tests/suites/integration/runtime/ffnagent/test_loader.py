@@ -12,7 +12,7 @@ import safetensors.torch
 import torch
 
 import xtest
-from xpool import ffn
+from xpool import ffn, quantization
 from xpool.config import XpoolConfig
 from xpool.fabric import InstanceFfnLayerProfile, InstanceFfnProfile
 from xpool.ffn import (
@@ -27,7 +27,7 @@ from xpool.ffn import (
 from xpool.native.ffn import LayerKind
 from xpool.quantization import Mxfp4, QuantizationSpec, TensorLayout, TensorSlice, Unquantized
 from xpool.runtime.ffnagent import architecture, execution, loader, preparation, weights
-from xpool.runtime.ffnagent.operators.triton_moe import TritonKernelsExperts
+from xpool.runtime.ffnagent.operators import moe
 from xtest.harness.native.ffn.qualification import packed_moe_reference
 from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
 
@@ -112,6 +112,8 @@ def tensor_values(shape: tuple[int, ...], start: int) -> torch.Tensor:
 def test_projection_resources_match_layout_and_use_encoding_correct_zero_probe() -> None:
     encoded = Mxfp4().weight_layout(logical_shape=(32, 64), dtype=torch.bfloat16)
     layout = weights.ProjectionLayout(
+        quantization=quantization.Mxfp4(),
+        gate_up_order=None,
         values=encoded.values,
         scales=encoded.scales,
         bias=TensorLayout((32,), torch.float32, 0),
@@ -126,10 +128,20 @@ def test_projection_resources_match_layout_and_use_encoding_correct_zero_probe()
     torch.testing.assert_close(probe.bias, torch.zeros_like(probe.bias))
     probe.binding_view()
     with pytest.raises(ValueError, match="presence disagrees"):
-        probe.validate(weights.ProjectionLayout(values=layout.values, scales=None, bias=layout.bias))
+        probe.validate(
+            weights.ProjectionLayout(
+                quantization=quantization.Mxfp4(),
+                gate_up_order=None,
+                values=layout.values,
+                scales=None,
+                bias=layout.bias,
+            )
+        )
     with pytest.raises(ValueError, match="shape or dtype disagrees"):
         probe.validate(
             weights.ProjectionLayout(
+                quantization=quantization.Mxfp4(),
+                gate_up_order=None,
                 values=TensorLayout((32, 16), torch.uint8, 0),
                 scales=layout.scales,
                 bias=layout.bias,
@@ -142,6 +154,7 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     install_loader_config()
     hidden_size = 4
     dense = dense_spec()
+    assert isinstance(dense.projections, ffn.GatedProjectionSpec)
     correction_bias_key = "model.layers.1.mlp.gate.e_score_correction_bias"
     moe = moe_spec(correction_bias_key)
     dense_tensors = {
@@ -204,16 +217,19 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     dense_weights, moe_weights = materialized
     assert isinstance(dense_weights, weights.DenseFfnWeights)
     assert isinstance(moe_weights, weights.MoeFfnWeights)
-    assert dense_weights.gate_up.values.device.index == torch.cuda.current_device()
-    assert dense_weights.gate_up.values.dtype is torch.float16
+    assert dense_weights.i_proj.values.device.index == torch.cuda.current_device()
+    assert dense_weights.i_proj.values.dtype is torch.float16
     torch.testing.assert_close(
-        dense_weights.gate_up.values.cpu(),
-        torch.cat(
-            (dense_tensors[dense.projections.gate.values_key][3:], dense_tensors[dense.projections.up.values_key][3:])
-        ).to(torch.float16),
+        dense_weights.i_proj.values.cpu(),
+        torch.stack(
+            (dense_tensors[dense.projections.gate.values_key][3:], dense_tensors[dense.projections.up.values_key][3:]),
+            dim=1,
+        )
+        .flatten(0, 1)
+        .to(torch.float16),
     )
     torch.testing.assert_close(
-        dense_weights.down.values.cpu(),
+        dense_weights.o_proj.values.cpu(),
         dense_tensors[dense.projections.down.values_key][:, 3:].to(torch.float16),
     )
     assert moe_weights.router is not None
@@ -224,15 +240,17 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
         moe_tensors[correction_bias_key],
     )
     expected_shared_gate = moe_tensors[shared.gate.values_key].reshape(2, 4, hidden_size)[:, :2]
-    torch.testing.assert_close(moe_weights.gate_up.values.cpu()[2:, :2], expected_shared_gate)
+    torch.testing.assert_close(moe_weights.i_proj.values.cpu()[2:, ::2], expected_shared_gate)
     expected_shared_down = moe_tensors[shared.down.values_key].reshape(hidden_size, 2, 4)[:, :, :2].permute(1, 0, 2)
-    torch.testing.assert_close(moe_weights.down.values.cpu()[2:], expected_shared_down)
+    torch.testing.assert_close(moe_weights.o_proj.values.cpu()[2:], expected_shared_down)
 
     device = torch.device("cuda", torch.cuda.current_device())
-    dense_probe = weights.DenseFfnWeights.allocate(gate_up=dense_layout.gate_up, down=dense_layout.down, device=device)
+    dense_probe = weights.DenseFfnWeights.allocate(
+        i_proj=dense_layout.i_proj, o_proj=dense_layout.o_proj, device=device
+    )
     moe_probe = weights.MoeFfnWeights.allocate(
-        gate_up=moe_layout.experts.gate_up,
-        down=moe_layout.experts.down,
+        i_proj=moe_layout.i_proj,
+        o_proj=moe_layout.o_proj,
         router=moe_layout.router,
         correction_bias=moe_layout.router_correction_bias,
         device=device,
@@ -240,10 +258,10 @@ def test_materialize_packs_dense_and_moe_in_stable_request_order(tmp_path: Path)
     assert moe_probe.router is not None
     assert moe_probe.router.correction_bias is not None
     for source, probe in (
-        (dense_weights.gate_up.values, dense_probe.gate_up.values),
-        (dense_weights.down.values, dense_probe.down.values),
-        (moe_weights.gate_up.values, moe_probe.gate_up.values),
-        (moe_weights.down.values, moe_probe.down.values),
+        (dense_weights.i_proj.values, dense_probe.i_proj.values),
+        (dense_weights.o_proj.values, dense_probe.o_proj.values),
+        (moe_weights.i_proj.values, moe_probe.i_proj.values),
+        (moe_weights.o_proj.values, moe_probe.o_proj.values),
         (moe_weights.router.projection.values, moe_probe.router.projection.values),
         (moe_weights.router.correction_bias, moe_probe.router.correction_bias),
     ):
@@ -423,30 +441,22 @@ def test_loading_normalizes_stacked_and_separate_sources_for_the_selected_operat
         requests=(loader.LocalLayerWeightRequest(model_path=model_path, layer_layout=layout),)
     )
     assert isinstance(loaded, weights.MoeFfnWeights)
-    expected_gate_up = (
-        torch.cat((gate[:, 32:], up[:, 32:]), dim=1)
-        if isinstance(encoding, Unquantized)
-        else torch.stack((gate[:, 32:], up[:, 32:]), dim=2).flatten(1, 2)
-    )
-    expected_bias = (
-        torch.cat((gate_bias[:, 32:], up_bias[:, 32:]), dim=1)
-        if isinstance(encoding, Unquantized)
-        else torch.stack((gate_bias[:, 32:], up_bias[:, 32:]), dim=2).flatten(1, 2)
-    )
-    torch.testing.assert_close(loaded.gate_up.values.cpu(), expected_gate_up, rtol=0, atol=0)
-    assert loaded.gate_up.bias is not None
-    torch.testing.assert_close(loaded.gate_up.bias.cpu(), expected_bias.float(), rtol=0, atol=0)
+    expected_gate_up = torch.stack((gate[:, 32:], up[:, 32:]), dim=2).flatten(1, 2)
+    expected_bias = torch.stack((gate_bias[:, 32:], up_bias[:, 32:]), dim=2).flatten(1, 2)
+    torch.testing.assert_close(loaded.i_proj.values.cpu(), expected_gate_up, rtol=0, atol=0)
+    assert loaded.i_proj.bias is not None
+    torch.testing.assert_close(loaded.i_proj.bias.cpu(), expected_bias.float(), rtol=0, atol=0)
     torch.testing.assert_close(
-        loaded.down.values.cpu(), down[:, :, 16 if isinstance(encoding, Mxfp4) else 32 :], rtol=0, atol=0
+        loaded.o_proj.values.cpu(), down[:, :, 16 if isinstance(encoding, Mxfp4) else 32 :], rtol=0, atol=0
     )
-    assert loaded.down.bias is not None
-    torch.testing.assert_close(loaded.down.bias, torch.zeros_like(loaded.down.bias), rtol=0, atol=0)
+    assert loaded.o_proj.bias is not None
+    torch.testing.assert_close(loaded.o_proj.bias, torch.zeros_like(loaded.o_proj.bias), rtol=0, atol=0)
     if gate_scales is not None and up_scales is not None:
-        assert loaded.gate_up.scales is not None and loaded.down.scales is not None
+        assert loaded.i_proj.scales is not None and loaded.o_proj.scales is not None
         assert down_scales is not None
         expected_scales = torch.stack((gate_scales[:, 32:], up_scales[:, 32:]), dim=2).flatten(1, 2)
-        torch.testing.assert_close(loaded.gate_up.scales.cpu(), expected_scales, rtol=0, atol=0)
-        torch.testing.assert_close(loaded.down.scales.cpu(), down_scales[:, :, 1:], rtol=0, atol=0)
+        torch.testing.assert_close(loaded.i_proj.scales.cpu(), expected_scales, rtol=0, atol=0)
+        torch.testing.assert_close(loaded.o_proj.scales.cpu(), down_scales[:, :, 1:], rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("bias", (False, True))
@@ -488,7 +498,8 @@ def test_stacked_packed_loading_preserves_source_slices_padding_and_single_bias_
     install_loader_config()
     monkeypatch.setattr(torch.backends.cuda.matmul, "fp32_precision", "ieee")
     experts, hidden, intermediate = 4, 64, 2880
-    activation = ffn.SiluActivation(alpha=1.702, limit=7.0, up_offset=1.0)
+    activation = ffn.SiluActivation(alpha=1.702)
+    gate_transform = ffn.GateTransform(limit=7.0, up_offset=1.0)
     layer = ffn.MoeFfnSpec(
         kind=LayerKind.MOE,
         layer_id=0,
@@ -524,6 +535,7 @@ def test_stacked_packed_loading_preserves_source_slices_padding_and_single_bias_
         model_id=TEST_MODEL_ID,
         hidden_size=hidden,
         activation=activation,
+        gate_transform=gate_transform,
         layers=(layer,),
     )
     tensors = {
@@ -576,38 +588,41 @@ def test_stacked_packed_loading_preserves_source_slices_padding_and_single_bias_
             requests=(loader.LocalLayerWeightRequest(model_path=model_path, layer_layout=layout),)
         )
         assert isinstance(loaded, weights.MoeFfnWeights)
-        loaded.gate_up.validate(layout.experts.gate_up)
-        loaded.down.validate(layout.experts.down)
+        loaded.i_proj.validate(layout.i_proj)
+        loaded.o_proj.validate(layout.o_proj)
         start, length = layout.source_start, layout.source_length
-        assert loaded.gate_up.scales is not None and loaded.down.scales is not None
-        assert loaded.gate_up.bias is not None and loaded.down.bias is not None
+        assert loaded.i_proj.scales is not None and loaded.o_proj.scales is not None
+        assert loaded.i_proj.bias is not None and loaded.o_proj.bias is not None
         for actual, expected in (
-            (loaded.gate_up.values[:, : 2 * length].cpu(), tensors["gate_up"][:, 2 * start : 2 * (start + length)]),
+            (loaded.i_proj.values[:, : 2 * length].cpu(), tensors["gate_up"][:, 2 * start : 2 * (start + length)]),
             (
-                loaded.gate_up.scales[:, : 2 * length].cpu(),
+                loaded.i_proj.scales[:, : 2 * length].cpu(),
                 tensors["gate_up.scales"][:, 2 * start : 2 * (start + length)],
             ),
             (
-                loaded.gate_up.bias[:, : 2 * length].cpu(),
+                loaded.i_proj.bias[:, : 2 * length].cpu(),
                 tensors["gate_up.bias"][:, 2 * start : 2 * (start + length)].float(),
             ),
-            (loaded.down.values[:, :, : length // 2].cpu(), tensors["down"][:, :, start // 2 : (start + length) // 2]),
             (
-                loaded.down.scales[:, :, : length // 32].cpu(),
+                loaded.o_proj.values[:, :, : length // 2].cpu(),
+                tensors["down"][:, :, start // 2 : (start + length) // 2],
+            ),
+            (
+                loaded.o_proj.scales[:, :, : length // 32].cpu(),
                 tensors["down.scales"][:, :, start // 32 : (start + length) // 32],
             ),
         ):
             torch.testing.assert_close(actual, expected, rtol=0, atol=0)
         for padding, neutral in (
-            (loaded.gate_up.values[:, 2 * length :], 0),
-            (loaded.gate_up.scales[:, 2 * length :], 127),
-            (loaded.gate_up.bias[:, 2 * length :], 0),
-            (loaded.down.values[:, :, length // 2 :], 0),
-            (loaded.down.scales[:, :, length // 32 :], 127),
+            (loaded.i_proj.values[:, 2 * length :], 0),
+            (loaded.i_proj.scales[:, 2 * length :], 127),
+            (loaded.i_proj.bias[:, 2 * length :], 0),
+            (loaded.o_proj.values[:, :, length // 2 :], 0),
+            (loaded.o_proj.scales[:, :, length // 32 :], 127),
         ):
             torch.testing.assert_close(padding, torch.full_like(padding, neutral), rtol=0, atol=0)
         torch.testing.assert_close(
-            loaded.down.bias.cpu(),
+            loaded.o_proj.bias.cpu(),
             tensors["down.bias"].float() if rank == 0 else torch.zeros_like(tensors["down.bias"], dtype=torch.float32),
             rtol=0,
             atol=0,
@@ -620,14 +635,14 @@ def test_stacked_packed_loading_preserves_source_slices_padding_and_single_bias_
         signature = layout.execution_signatures(profile=profile)[-1]
         assert isinstance(signature, execution.MoeFfnExecutionSignature)
         workspace = torch.empty(
-            TritonKernelsExperts.workspace_layout(signature).nbytes, device=device, dtype=torch.uint8
+            moe.ExpertExecutionPlan.prepare(signature).workspace.nbytes, device=device, dtype=torch.uint8
         )
-        operation = TritonKernelsExperts(signature, workspace)
+        operation = moe.Experts(moe.ExpertExecutionPlan.prepare(signature), workspace)
         partial = torch.empty_like(hidden_states)
-        operation.run(
+        operation.run_into(
             hidden_states=hidden_states,
-            gate_up=loaded.gate_up,
-            down=loaded.down,
+            i_proj=loaded.i_proj,
+            o_proj=loaded.o_proj,
             topk_ids=ids,
             topk_weights=probabilities,
             output=partial,
@@ -639,17 +654,18 @@ def test_stacked_packed_loading_preserves_source_slices_padding_and_single_bias_
     if len(ranks) == tp_size:
         expected_output = packed_moe_reference(
             hidden_states,
-            gate_up=weights.ProjectionWeights(
+            i_proj=weights.ProjectionWeights(
                 tensors["gate_up"].to(device),
                 tensors["gate_up.scales"].to(device),
                 tensors["gate_up.bias"].float().to(device),
             ),
-            down=weights.ProjectionWeights(
+            o_proj=weights.ProjectionWeights(
                 tensors["down"].to(device), tensors["down.scales"].to(device), tensors["down.bias"].float().to(device)
             ),
             ids=ids,
             probabilities=probabilities,
             activation=activation,
+            gate_transform=gate_transform,
             routed_scaling_factor=layer.routed_scaling_factor,
         ).float()
         scale = expected_output.square().mean().sqrt().clamp_min(1e-12)
@@ -725,3 +741,43 @@ def test_reader_rejects_numeric_conversion_of_encoded_storage(
     assert isinstance(messages.get_nowait(), loader.ReaderFinished)
     assert slots.get_nowait().numel() == slot.numel()
     assert cancelled.is_set()
+
+
+@xtest.requirements(device_count=1)
+def test_ungated_tp_loading_slices_input_bias_and_owns_output_bias_once(tmp_path: Path) -> None:
+    install_loader_config()
+    source = architecture.FfnSourceConfig({})
+    projections = ffn.UngatedProjectionSpec(
+        up=source.projection("decoder.layers.0.fc1", bias=True),
+        down=source.projection("decoder.layers.0.fc2", bias=True),
+    )
+    spec = FfnModelSpec(
+        model_id=TEST_MODEL_ID,
+        hidden_size=16,
+        activation=ffn.ReluActivation(),
+        layers=(DenseFfnSpec(kind=LayerKind.DENSE, layer_id=0, intermediate_size=32, projections=projections),),
+    )
+    assert projections.up.bias_key is not None and projections.down.bias_key is not None
+    tensors = {
+        projections.up.values_key: tensor_values((32, 16), 0),
+        projections.up.bias_key: tensor_values((32,), 0),
+        projections.down.values_key: tensor_values((16, 32), 0),
+        projections.down.bias_key: tensor_values((16,), 0),
+    }
+    model_path = tmp_path / "model"
+    write_checkpoint(model_path, (tensors,))
+    for rank in range(2):
+        layout = preparation.prepare_ffn_layer(
+            spec, layer_ordinal=0, payload_dtype=torch.float16, tp_size=2, tp_rank=rank
+        )
+        (loaded,) = loader.materialize_local_layer_weights(
+            requests=(loader.LocalLayerWeightRequest(model_path=model_path, layer_layout=layout),)
+        )
+        assert isinstance(loaded, weights.DenseFfnWeights)
+        assert loaded.i_proj.bias is not None and loaded.o_proj.bias is not None
+        interval = slice(rank * 16, (rank + 1) * 16)
+        torch.testing.assert_close(loaded.i_proj.values.cpu(), tensors[projections.up.values_key][interval].half())
+        torch.testing.assert_close(loaded.i_proj.bias.cpu(), tensors[projections.up.bias_key][interval].half())
+        torch.testing.assert_close(loaded.o_proj.values.cpu(), tensors[projections.down.values_key][:, interval].half())
+        expected_bias = tensors[projections.down.bias_key].half() if rank == 0 else torch.zeros(16, dtype=torch.float16)
+        torch.testing.assert_close(loaded.o_proj.bias.cpu(), expected_bias)

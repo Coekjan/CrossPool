@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
+
 from xpool import ffn, quantization
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
@@ -19,6 +21,7 @@ class GptOssAdapter(architecture.FfnModelAdapter):
         *,
         model_id: ModelId,
         model_config: architecture.FfnSourceConfig,
+        checkpoint_keys: Collection[str],
     ) -> ffn.FfnModelSpec:
         """Describe Router bias, interleaved Expert rows and block-shaped source values."""
 
@@ -30,15 +33,11 @@ class GptOssAdapter(architecture.FfnModelAdapter):
         topk = model_config.get("num_experts_per_tok", int, ge=1)
         encoding = model_config.get("quantization_config", dict)
         alpha = model_config.optional("hidden_act_alpha", float)
-        activation = ffn.SiluActivation(
-            alpha=1.702 if alpha is None else alpha,
-            limit=model_config.get("swiglu_limit", float, gt=0),
-            up_offset=1.0,
-        )
         return ffn.FfnModelSpec(
             model_id=model_id,
             hidden_size=hidden_size,
-            activation=activation,
+            activation=ffn.SiluActivation(alpha=1.702 if alpha is None else alpha),
+            gate_transform=ffn.GateTransform(limit=model_config.get("swiglu_limit", float, gt=0), up_offset=1.0),
             layers=tuple(
                 ffn.MoeFfnSpec(
                     kind=LayerKind.MOE,

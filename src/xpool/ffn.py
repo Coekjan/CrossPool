@@ -21,25 +21,31 @@ __all__ = [
     "DenseFfnSpec",
     "FfnLayerSpec",
     "FfnModelSpec",
+    "GateTransform",
     "GateUpOrder",
     "GatedProjectionSpec",
+    "GeluActivation",
     "MoeFfnSpec",
     "PerExpertSource",
     "ProjectionSpec",
+    "ReluActivation",
     "RoutedExpertSource",
     "RouterAlgorithm",
     "RouterProjectionPrecision",
     "SiluActivation",
     "StackedExpertSource",
     "TopKWeightRounding",
+    "UngatedProjectionSpec",
     "ValuesSourceLayout",
 ]
 
 
 class ActivationKind(IntEnum):
-    """Gated FFN activation semantics."""
+    """FFN activation semantics."""
 
     SILU = 1
+    RELU = 2
+    GELU = 3
 
 
 class GateUpOrder(IntEnum):
@@ -110,20 +116,36 @@ class FfnModel(BaseModel):
 
 
 class SiluActivation(FfnModel):
-    """Combine biased gate/up projections with parameterized gated SiLU.
-
-    Optional clipping bounds gate above and up on both sides before computing
-    ``g * sigmoid(alpha * g) * (u + up_offset)``. Ordinary gated SiLU uses the
-    defaults; model adapters declare their own slope, clipping and Up offset.
-    """
+    """Apply ``x * sigmoid(alpha * x)`` using the model-declared slope."""
 
     kind: Literal[ActivationKind.SILU] = ActivationKind.SILU
     alpha: float = Field(default=1.0, strict=True, gt=0, allow_inf_nan=False)
+
+
+class GateTransform(FfnModel):
+    """Clip Gate above ``limit`` and Up within ``[-limit, limit]`` when set.
+
+    Add ``up_offset`` to Up after clipping, before multiplying by activated Gate.
+    """
+
     limit: float | None = Field(default=None, strict=True, gt=0, allow_inf_nan=False)
     up_offset: float = Field(default=0.0, strict=True, allow_inf_nan=False)
 
 
-type ActivationSpec = SiluActivation
+class ReluActivation(FfnModel):
+    """Apply ReLU to one input projection."""
+
+    kind: Literal[ActivationKind.RELU] = ActivationKind.RELU
+
+
+class GeluActivation(FfnModel):
+    """Apply GELU using the declared erf definition or tanh approximation."""
+
+    kind: Literal[ActivationKind.GELU] = ActivationKind.GELU
+    approximate: Literal["none", "tanh"]
+
+
+type ActivationSpec = SiluActivation | ReluActivation | GeluActivation
 
 
 class ProjectionSpec(FfnModel):
@@ -162,6 +184,18 @@ class GatedProjectionSpec(FfnModel):
         return self.gate.tensor_keys() + self.up.tensor_keys() + self.down.tensor_keys()
 
 
+class UngatedProjectionSpec(FfnModel):
+    """Input and output projection sources for one ungated FFN."""
+
+    up: ProjectionSpec
+    down: ProjectionSpec
+
+    def tensor_keys(self) -> tuple[str, ...]:
+        """Return the input and output projections' physical keys."""
+
+        return self.up.tensor_keys() + self.down.tensor_keys()
+
+
 class PerExpertSource(FfnModel):
     """Independent projection keys in routed Expert-id order."""
 
@@ -192,14 +226,16 @@ type RoutedExpertSource = Annotated[PerExpertSource | StackedExpertSource, Field
 
 
 class DenseFfnSpec(FfnModel):
-    """Intrinsic semantics and checkpoint identity of one gated Dense layer."""
+    """Intrinsic semantics and checkpoint identity of one Dense layer."""
 
     kind: Literal[xpool.native.ffn.LayerKind.DENSE] = Field(  # ty: ignore[invalid-type-form]
         description="Dense layer discriminator."
     )
     layer_id: int = Field(strict=True, ge=0, description="Model-local decoder layer identity.")
     intermediate_size: int = Field(strict=True, ge=1, description="Full Dense intermediate width.")
-    projections: GatedProjectionSpec = Field(description="Checkpoint projections consumed by this layer.")
+    projections: GatedProjectionSpec | UngatedProjectionSpec = Field(
+        description="Checkpoint projections consumed by this layer."
+    )
 
     def tensor_keys(self) -> tuple[str, ...]:
         """Return all physical checkpoint keys owned by this layer."""
@@ -307,7 +343,10 @@ class FfnModelSpec(FfnModel):
 
     model_id: ModelId = Field(description="Canonical configured model identity.")
     hidden_size: int = Field(strict=True, ge=1, description="Model hidden-state width in elements.")
-    activation: ActivationSpec = Field(description="Gated activation shared by all model FFN layers.")
+    activation: ActivationSpec = Field(description="Activation shared by all model FFN layers.")
+    gate_transform: GateTransform = Field(
+        default_factory=GateTransform, description="Shared Gate/Up transform for gated layers."
+    )
     layers: tuple[FfnLayerSpec, ...] = Field(
         min_length=1,
         description="Ordered decoder FFN layer specifications.",

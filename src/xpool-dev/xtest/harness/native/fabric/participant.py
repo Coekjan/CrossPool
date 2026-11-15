@@ -10,12 +10,9 @@ import torch
 import xpool.native
 from xpool.cext import ensure_native_loaded
 from xpool.fabric import FabricPlan
-from xpool.memory import FfnExecutionContract
 from xpool.native import RuntimeRole
 from xpool.native.ffn import LayerKind
 from xpool.runtime.agent import project_fabric_arena
-from xpool.runtime.ffnagent import capture_workspace
-from xpool.runtime.ffnagent.execution import OwnedExecutionResource
 from xpool.runtime.ffnagent.registry import FfnExecutionRegistry
 from xpool.runtime.ffnagent.weights import FfnLayerWeights
 from xpool.utils.device import visible_uuids
@@ -57,11 +54,6 @@ def run_fabric_participant(connection: Connection, spec: FabricParticipantSpec) 
     )
     finalized = False
     execution_registry: FfnExecutionRegistry | None = None
-    external_resources: tuple[OwnedExecutionResource, ...] = ()
-    execution_contract: FfnExecutionContract | None = None
-    if spec.role is RuntimeRole.FFNAGENT:
-        execution_contract, external_resources = capture_workspace.prepare_execution_sources()
-        connection.send(execution_contract)
     fabric_plan = connection.recv()
     if fabric_plan is FabricParticipantCommand.STOP:
         connection.send(FabricParticipantStopped())
@@ -69,10 +61,6 @@ def run_fabric_participant(connection: Connection, spec: FabricParticipantSpec) 
     try:
         if not isinstance(fabric_plan, FabricPlan):
             raise RuntimeError(f"Fabric participant expected Plan, received {fabric_plan!r}")
-        if execution_contract is not None and (
-            fabric_plan.ffn_execution_contracts[spec.pe - spec.atnagent_count] != execution_contract
-        ):
-            raise RuntimeError("Fabric Plan disagrees with the participant's execution facts")
         projection = project_fabric_arena(fabric_plan)
         xpool.native.fabric.join(projection, spec.pe)
         if spec.role is RuntimeRole.FFNAGENT:
@@ -103,11 +91,8 @@ def run_fabric_participant(connection: Connection, spec: FabricParticipantSpec) 
                 tuple(local_layer_weights(layer_ordinal) for layer_ordinal in range(spec.execution_layer_count))
                 for _ in spec.forward_modes
             )
-            execution_registry = FfnExecutionRegistry(
-                layer_weights=layer_weights, external_resources=external_resources
-            )
+            execution_registry = FfnExecutionRegistry(layer_weights=layer_weights)
             del layer_weights
-            external_resources = ()
             execution_registry.materialize(
                 fabric_plan=fabric_plan,
                 model_specs=model_specs,

@@ -1,17 +1,14 @@
 import pytest
 import torch
+from tests.suites.integration.runtime.ffnagent.support import dense_plan, router_plan
 
 import xtest
-from xpool.ffn import RouterAlgorithm, RouterProjectionPrecision, SiluActivation, TopKWeightRounding
+from xpool import ffn, quantization
+from xpool.ffn import GateTransform, RouterAlgorithm, RouterProjectionPrecision, SiluActivation, TopKWeightRounding
 from xpool.quantization import TensorLayout
-from xpool.runtime.ffnagent import execution, weights
-from xpool.runtime.ffnagent.operators import dense, linear, routing
-
-
-@pytest.fixture(autouse=True)
-def ffn_blas_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Keep these projection cases independent of BLAS workspace allocation.
-    monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":0:0")
+from xpool.runtime.ffnagent import weights
+from xpool.runtime.ffnagent.operators import dense, routing
+from xpool.runtime.ffnagent.operators.activation import Activation
 
 
 @pytest.mark.parametrize(
@@ -44,34 +41,21 @@ def test_router_projection_bias_is_fused_before_rounding_and_replays_without_all
         ),
         correction_bias=None,
     )
-    workspace = torch.empty(
-        execution.router_workspace_bytes(
-            precision,
-            payload_dtype=hidden.dtype,
-            payload_row_capacity=4,
-            hidden_size=16,
-            routed_expert_count=8,
-            routed_topk=2,
-        ),
-        dtype=torch.uint8,
-        device="cuda",
+    plan = router_plan(
+        hidden,
+        router,
+        algorithm=algorithm,
+        precision=precision,
+        routed_topk=2,
+        renormalize=True,
+        weight_rounding=weight_rounding,
     )
-    ids = torch.empty((4, 2), dtype=torch.int32, device="cuda")
-    probabilities = torch.empty((4, 2), dtype=torch.float32, device="cuda")
+    workspace = torch.empty(plan.workspace.nbytes, device="cuda", dtype=torch.uint8)
+    operation = routing.Router(plan, workspace)
+    ids, probabilities = operation.ids, operation.weights
 
     def run() -> None:
-        routing.compute_routed_topk(
-            algorithm,
-            precision,
-            projection_operation=linear.LinearOperationKind.TORCH,
-            weight_rounding=weight_rounding,
-            hidden_states=hidden,
-            router_weights=router,
-            workspace=workspace,
-            routed_ids=ids,
-            routed_weights=probabilities,
-            renormalize=True,
-        )
+        operation.run_into(hidden_states=hidden, router_weights=router)
 
     run()
     torch.cuda.synchronize()
@@ -106,38 +90,35 @@ def test_dense_projection_bias_preserves_fused_rounding_without_capture_allocati
     torch.manual_seed(37)
     device = torch.device("cuda", torch.cuda.current_device())
     layer = weights.DenseFfnWeights.allocate(
-        gate_up=weights.ProjectionLayout(
+        i_proj=weights.ProjectionLayout(
+            quantization=quantization.Unquantized(),
+            gate_up_order=ffn.GateUpOrder.CONCATENATED,
             values=TensorLayout((16, 16), torch.bfloat16, 0),
             scales=None,
             bias=TensorLayout((16,), torch.bfloat16, 0),
         ),
-        down=weights.ProjectionLayout(
+        o_proj=weights.ProjectionLayout(
+            quantization=quantization.Unquantized(),
+            gate_up_order=None,
             values=TensorLayout((16, 8), torch.bfloat16, 0),
             scales=None,
             bias=TensorLayout((16,), torch.bfloat16, 0),
         ),
         device=device,
     )
-    for projection in (layer.gate_up, layer.down):
+    for projection in (layer.i_proj, layer.o_proj):
         assert projection.bias is not None
         projection.values.copy_(torch.randn_like(projection.values))
         projection.bias.copy_(torch.linspace(-2, 2, 16, dtype=torch.bfloat16, device=device))
     hidden = torch.randn((4, 16), dtype=torch.bfloat16, device=device)
     output = torch.empty_like(hidden)
-    workspace = torch.empty(
-        execution.dense_workspace_bytes(payload_dtype=hidden.dtype, row_capacity=4, local_intermediate_size=8),
-        dtype=torch.uint8,
-        device=device,
-    )
+    activation = Activation(function=SiluActivation(), gate=GateTransform())
+    plan = dense_plan(hidden, layer, activation)
+    workspace = torch.empty(plan.workspace.nbytes, device="cuda", dtype=torch.uint8)
+    operation = dense.Dense(plan, workspace)
 
     def run() -> None:
-        dense.compute_dense_partial(
-            hidden_states=hidden,
-            layer_weights=layer,
-            workspace=workspace,
-            output=output,
-            activation=SiluActivation(),
-        )
+        operation.run_into(hidden_states=hidden, layer_weights=layer, output=output)
 
     run()
     torch.cuda.synchronize()
@@ -150,9 +131,9 @@ def test_dense_projection_bias_preserves_fused_rounding_without_capture_allocati
     hidden.mul_(0.5)
     graph.replay()
     torch.cuda.synchronize()
-    assert layer.gate_up.bias is not None and layer.down.bias is not None
-    projected = (hidden.float() @ layer.gate_up.values.float().t() + layer.gate_up.bias.float()).to(hidden.dtype)
+    assert layer.i_proj.bias is not None and layer.o_proj.bias is not None
+    projected = (hidden.float() @ layer.i_proj.values.float().t() + layer.i_proj.bias.float()).to(hidden.dtype)
     gate, up = projected.float().chunk(2, dim=-1)
     activated = (gate * torch.sigmoid(gate) * up).to(hidden.dtype)
-    expected = (activated.float() @ layer.down.values.float().t() + layer.down.bias.float()).to(hidden.dtype)
+    expected = (activated.float() @ layer.o_proj.values.float().t() + layer.o_proj.bias.float()).to(hidden.dtype)
     torch.testing.assert_close(output, expected, rtol=0.02, atol=0.1)

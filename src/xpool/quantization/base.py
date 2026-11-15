@@ -38,6 +38,12 @@ class TensorLayout:
         ):
             raise ValueError("tensor layout neutral value must be finite and numeric")
 
+    @property
+    def nbytes(self) -> int:
+        """Return physical Tensor bytes, excluding allocator reservation and alignment."""
+
+        return math.prod(self.shape) * self.dtype.itemsize
+
 
 @dataclass(frozen=True, slots=True)
 class WeightLayout:

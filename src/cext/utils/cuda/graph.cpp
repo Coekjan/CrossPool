@@ -423,21 +423,16 @@ void insert_node_after(cudaGraph_t graph, cudaGraphNode_t predecessor, cudaGraph
   }
 }
 
-std::vector<std::size_t> used_resource_regions(cudaGraph_t graph, const std::vector<CaptureAllocation> &allocations) {
+bool references_range(cudaGraph_t graph, std::uintptr_t address, std::size_t bytes) {
   TORCH_CHECK(graph != nullptr, "xpool workspace observation requires a graph");
-  for (const auto &allocation : allocations) {
-    TORCH_CHECK(allocation.address != 0 && allocation.bytes != 0, "xpool workspace observation has an empty interval");
-    static_cast<void>(xpool::utils::checked::sum(allocation.address, static_cast<std::uintptr_t>(allocation.bytes)));
-  }
-  auto used = std::vector<bool>(allocations.size(), false);
-  const auto observe = [&](std::uintptr_t address, std::size_t access_bytes) {
-    for (auto index = std::size_t{0}; index < allocations.size(); ++index) {
-      const auto &allocation = allocations[index];
-      if (address >= allocation.address && address - allocation.address < allocation.bytes) {
-        TORCH_CHECK(access_bytes <= allocation.bytes - (address - allocation.address),
-                    "xpool typed graph access exceeds its declared resource");
-        used[index] = true;
-      }
+  TORCH_CHECK(address != 0 && bytes != 0, "xpool workspace observation has an empty interval");
+  static_cast<void>(xpool::utils::checked::sum(address, static_cast<std::uintptr_t>(bytes)));
+  auto used = false;
+  const auto observe = [&](std::uintptr_t reference, std::size_t access_bytes) {
+    if (reference >= address && reference - address < bytes) {
+      TORCH_CHECK(access_bytes <= bytes - (reference - address),
+                  "xpool typed graph access exceeds its declared resource");
+      used = true;
     }
   };
   xpool::utils::cuda::graph::for_each_reachable_node(graph, [&](cudaGraphNode_t node, cudaGraphNodeType kind) {
@@ -466,13 +461,7 @@ std::vector<std::size_t> used_resource_regions(cudaGraph_t graph, const std::vec
       }
     }
   });
-  auto result = std::vector<std::size_t>{};
-  for (auto index = std::size_t{0}; index < used.size(); ++index) {
-    if (used[index]) {
-      result.push_back(index);
-    }
-  }
-  return result;
+  return used;
 }
 
 } // namespace xpool::utils::cuda::graph

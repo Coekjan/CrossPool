@@ -24,7 +24,6 @@ from xpool.runtime.ffnagent.device_memory import DeviceMemoryCharge, DeviceMemor
 from xpool.runtime.ffnagent.memory_profile import corpus, evidence, fitting, runner
 from xpool.runtime.ffnagent.memory_profile.experiment import CalibrationExperiment
 from xtest.harness.support.config import (
-    TEST_EXECUTION_CONTRACT,
     install_test_config,
     reset_global_config,
     synthetic_config,
@@ -207,7 +206,6 @@ def test_experiment_projections_preserve_models_placement_and_complete_fleet(
         plan = experiment.fabric_plan(
             "a" * FABRIC_UID_HEX_LENGTH,
             config=config,
-            ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * len(source.ffn.devices),
         )
         definition = experiment.to_json_mapping()
 

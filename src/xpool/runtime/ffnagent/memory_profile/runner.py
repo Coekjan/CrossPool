@@ -33,7 +33,6 @@ from xpool.config import (
 from xpool.fabric import FabricPePlacement, FabricPlan, FabricRole
 from xpool.memory import (
     FabricMemoryContext,
-    FfnExecutionContract,
     FfnMemoryCalibration,
     MemoryCalibrationEnvironment,
     XpoolMemoryCalibrationProfile,
@@ -41,7 +40,6 @@ from xpool.memory import (
 from xpool.native import RuntimeRole
 from xpool.runtime import memory_calibration
 from xpool.runtime.agent import project_fabric_arena
-from xpool.runtime.ffnagent import capture_workspace
 from xpool.runtime.ffnagent.device_memory import (
     DeviceMemoryEstimator,
     DeviceMemoryPoint,
@@ -265,14 +263,6 @@ def require_command(connection: Connection, expected: str) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class ParticipantMemoryFacts:
-    """Pre-allocation compatibility facts and execution-resource declarations."""
-
-    calibration_environment: MemoryCalibrationEnvironment
-    execution_contract: FfnExecutionContract | None
-
-
-@dataclass(frozen=True, slots=True)
 class ParticipantFailure:
     """A failed outcome and permission to await coordinated finalization."""
 
@@ -342,13 +332,9 @@ def participant_child(
         role = RuntimeRole.ATNAGENT if placement.role is FabricRole.ATNAGENT else RuntimeRole.FFNAGENT
         device = placement.device
         bootstrap.init(device, role)
-        execution_contract = None
-        external_resources = ()
         if role is RuntimeRole.ATNAGENT:
             visibility = visible_uuids()
             MpsEndpoint(tuple(visibility[index] for index in config.atn.devices)).require_client()
-        else:
-            execution_contract, external_resources = capture_workspace.prepare_execution_sources()
         calibration_environment = memory_calibration.observe_environment(device)
         device_uuid = str(torch.cuda.get_device_properties(device).uuid).strip()
         if not device_uuid:
@@ -359,12 +345,7 @@ def participant_child(
             baseline_free_bytes, baseline_total_bytes = memory_info()
             if baseline_total_bytes != calibration_environment.total_memory_bytes:
                 raise RuntimeError("participant device memory observations disagree")
-        connection.send(
-            (
-                "facts",
-                ParticipantMemoryFacts(calibration_environment, execution_contract),
-            )
-        )
+        connection.send(("facts", calibration_environment))
         command = connection.recv()
         if command == "stop":
             connection.send(("stopped", pe))
@@ -377,12 +358,9 @@ def participant_child(
         if role is RuntimeRole.FFNAGENT:
             atnagent_count = sum(item.role is FabricRole.ATNAGENT for item in fabric_plan.pe_placements)
             ffnagent_index = pe - atnagent_count
-            if execution_contract is None or fabric_plan.ffn_execution_contracts[ffnagent_index] != execution_contract:
-                raise RuntimeError("memory-profile Plan differs from local execution facts")
             if fabric_plan.executor_lane_count != config.scheduler.ffn_concurrency:
                 raise RuntimeError("Fabric Plan executor Lane count disagrees with the process configuration")
             estimator = DeviceMemoryEstimator(
-                ffn_execution_contracts=fabric_plan.ffn_execution_contracts,
                 model_specs=model_specs,
                 instance_profiles=tuple(instance.ffn_profile for instance in fabric_plan.instance_plans),
                 coefficients=None,
@@ -418,11 +396,8 @@ def participant_child(
                 if recorder is None:
                     raise AssertionError("FFN participant lacks its sampler")
                 with record_registry_phases(recorder):
-                    execution_registry = FfnExecutionRegistry(
-                        layer_weights=layer_weights, external_resources=external_resources
-                    )
+                    execution_registry = FfnExecutionRegistry(layer_weights=layer_weights)
                     del layer_weights
-                    external_resources = ()
                     execution_registry.materialize(
                         fabric_plan=fabric_plan,
                         model_specs=model_specs,
@@ -695,7 +670,7 @@ def run_world(experiment: CalibrationExperiment, source: XpoolConfig, *, repetit
                     connections.append(parent)
                     child.close()
 
-            facts = []
+            facts: list[MemoryCalibrationEnvironment] = []
             for index, (connection, process) in enumerate(zip(connections, processes, strict=True)):
                 response = receive(connection, process, "facts")
                 if isinstance(response, ParticipantFailure):
@@ -703,23 +678,17 @@ def run_world(experiment: CalibrationExperiment, source: XpoolConfig, *, repetit
                     if response.ready_to_finalize:
                         join_started = True
                         raise RuntimeError("memory-profile participant reported join before its command")
-                elif isinstance(response, ParticipantMemoryFacts):
-                    if (response.execution_contract is None) != (placements[index].role is FabricRole.ATNAGENT):
-                        raise RuntimeError("memory-profile execution facts disagree with participant role")
+                elif isinstance(response, MemoryCalibrationEnvironment):
                     facts.append(response)
                 else:
                     raise RuntimeError("memory-profile participant returned invalid memory facts")
             memory_context = None
             if failure is None and cancelled is None:
                 memory_context = FabricMemoryContext(
-                    participants=tuple(item.calibration_environment for item in facts),
-                    ffn_execution=tuple(
-                        item.execution_contract for item in facts if item.execution_contract is not None
-                    ),
+                    participants=tuple(facts),
+                    ffnagent_count=len(world_config.ffn.devices),
                 )
-                fabric_plan = experiment.fabric_plan(
-                    uid, config=world_config, ffn_execution_contracts=memory_context.ffn_execution
-                )
+                fabric_plan = experiment.fabric_plan(uid, config=world_config)
                 for connection in connections:
                     connection.send(fabric_plan)
                 for index, (connection, process) in enumerate(zip(connections, processes, strict=True)):

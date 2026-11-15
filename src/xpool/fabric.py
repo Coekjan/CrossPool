@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 import xpool.native
 from xpool import ffn
 from xpool.config import FfnSchedulingPolicy
-from xpool.memory import DeviceMemoryEstimate, FfnExecutionContract
+from xpool.memory import DeviceMemoryEstimate
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind
 from xpool.utils.dtype import TorchDtype
@@ -433,9 +433,6 @@ class FabricPlan(FabricModel):
 
     generation: FabricGenerationId = Field(description="Daemon-authoritative generation identity.")
     uid: FabricUid = Field(description="NVSHMEM unique id used to bootstrap the generation.")
-    ffn_execution_contracts: tuple[FfnExecutionContract, ...] = Field(
-        description="Address-free resources in FfnAgent suffix order."
-    )
     pe_placements: tuple[FabricPePlacement, ...] = Field(
         min_length=2,
         description="Canonical AtnAgent-prefix and FfnAgent-suffix PE map.",
@@ -456,8 +453,6 @@ class FabricPlan(FabricModel):
         """Require exact co-indexing, topology, and placed Layer membership."""
 
         atnagent_count, ffnagent_count = FabricPePlacement.validate_order(self.pe_placements)
-        if len(self.ffn_execution_contracts) != ffnagent_count:
-            raise ValueError("Execution contracts and FfnAgents must be co-indexed")
         if len(self.model_plans) != len(self.instance_plans):
             raise ValueError("Model Plans and Instance Plans must be co-indexed")
         model_ids = tuple(plan.model_id for plan in self.instance_plans)
@@ -492,6 +487,8 @@ class FabricDeploymentPlan(FabricPlan):
     def validate_estimates(self) -> FabricDeploymentPlan:
         """Require an admission result for every FfnAgent, including idle agents."""
 
-        if len(self.ffn_memory_estimates) != len(self.ffn_execution_contracts):
-            raise ValueError("Memory estimates and execution contracts must be co-indexed")
+        if len(self.ffn_memory_estimates) != sum(
+            placement.role is FabricRole.FFNAGENT for placement in self.pe_placements
+        ):
+            raise ValueError("Memory estimates and FfnAgents must be co-indexed")
         return self

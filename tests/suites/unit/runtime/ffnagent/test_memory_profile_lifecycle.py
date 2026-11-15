@@ -16,11 +16,7 @@ from xpool.fabric import FABRIC_UID_HEX_LENGTH
 from xpool.runtime.ffnagent.device_memory import StartupPoint
 from xpool.runtime.ffnagent.memory_profile import corpus, runner
 from xpool.utils.cuda import CudaRuntimeError, is_terminal_device_error
-from xtest.harness.support.config import (
-    TEST_CALIBRATION_ENVIRONMENT,
-    TEST_EXECUTION_CONTRACT,
-    synthetic_config,
-)
+from xtest.harness.support.config import TEST_CALIBRATION_ENVIRONMENT, synthetic_config
 
 
 @pytest.fixture
@@ -45,16 +41,13 @@ def participant(
 
     config = synthetic_config()
     experiments, _ = corpus.calibration_experiments(config)
-    plan = experiments[0].fabric_plan(
-        "a" * FABRIC_UID_HEX_LENGTH, config=config, ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,)
-    )
+    plan = experiments[0].fabric_plan("a" * FABRIC_UID_HEX_LENGTH, config=config)
     initial = getattr(request, "param", "plan")
     parent.send(plan if initial == "plan" else initial)
     monkeypatch.setattr(runner.memory_calibration, "observe_environment", lambda device: TEST_CALIBRATION_ENVIRONMENT)
     monkeypatch.setattr(runner, "initialize_child_signals", lambda mask: None)
     monkeypatch.setattr(runner, "init_global_config", lambda **kwargs: synthetic_config())
     monkeypatch.setattr(runner.bootstrap, "init", lambda device, role: None)
-    monkeypatch.setattr(runner.capture_workspace, "prepare_execution_sources", lambda: (TEST_EXECUTION_CONTRACT, ()))
     monkeypatch.setattr(runner, "memory_info", lambda: (100, TEST_CALIBRATION_ENVIRONMENT.total_memory_bytes))
     monkeypatch.setattr(
         runner,
@@ -127,7 +120,7 @@ def test_joined_failure_waits_for_finalize_and_preserves_original_error(
     assert all(not recorder.thread.is_alive() for recorder in recorders)
 
 
-@pytest.mark.parametrize("stage", ("allocator", "estimator"))
+@pytest.mark.parametrize("stage", ("environment", "estimator"))
 def test_prejoin_setup_failure_acquires_no_sampler(
     participant: tuple[Callable[[], None], Connection, list[str], list[runner.PhaseRecorder], RuntimeError],
     monkeypatch: pytest.MonkeyPatch,
@@ -138,8 +131,8 @@ def test_prejoin_setup_failure_acquires_no_sampler(
     def fail(**kwargs: object) -> None:
         raise RuntimeError(f"{stage} failed")
 
-    if stage == "allocator":
-        monkeypatch.setattr(runner.capture_workspace, "prepare_execution_sources", fail)
+    if stage == "environment":
+        monkeypatch.setattr(runner.memory_calibration, "observe_environment", lambda device: fail())
     else:
         monkeypatch.setattr(runner, "DeviceMemoryEstimator", fail)
     with pytest.raises(RuntimeError, match=f"{stage} failed"):

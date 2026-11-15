@@ -25,18 +25,18 @@ struct BindingSite {
 
 /// Complete layer-resource address assignment shared across lanes.
 struct LayerBindingValues {
-  /// Device address of Dense or Expert gate/up values.
-  std::uintptr_t gate_up_values_address;
-  /// Gate/up scale address, or zero when absent.
-  std::uintptr_t gate_up_scales_address;
-  /// Gate/up additive-bias address, or zero when absent.
-  std::uintptr_t gate_up_bias_address;
-  /// Device address of Dense or Expert down values.
-  std::uintptr_t down_values_address;
-  /// Down scale address, or zero when absent.
-  std::uintptr_t down_scales_address;
-  /// Down additive-bias address, or zero when absent.
-  std::uintptr_t down_bias_address;
+  /// Input projection values, including packed Gate/Up rows for gated FFNs.
+  std::uintptr_t i_proj_values_address;
+  /// Input projection scale address, or zero when absent.
+  std::uintptr_t i_proj_scales_address;
+  /// Input projection additive-bias address, or zero when absent.
+  std::uintptr_t i_proj_bias_address;
+  /// Output projection values.
+  std::uintptr_t o_proj_values_address;
+  /// Output projection scale address, or zero when absent.
+  std::uintptr_t o_proj_scales_address;
+  /// Output projection additive-bias address, or zero when absent.
+  std::uintptr_t o_proj_bias_address;
   /// Router values address, or zero for non-owning layers.
   std::uintptr_t router_values_address;
   /// Router scale address, or zero when absent.

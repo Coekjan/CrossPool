@@ -1,38 +1,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 import xpool.memory
-from xpool.memory import (
-    ExecutionResourceDeclaration,
-    FfnMemoryCalibration,
-    FfnMemoryCalibrationCoefficients,
-    XpoolMemoryCalibrationProfile,
-)
-from xtest.harness.support.config import (
-    TEST_CALIBRATION_ENVIRONMENT,
-    lane_resource_declaration,
-    synthetic_memory_context,
-)
-
-
-@pytest.mark.parametrize(
-    ("capacity", "alignment", "aliases"),
-    (
-        (0, 256, ("scratch",)),
-        (1024, 3, ("scratch",)),
-        (1024, 256, ("other",)),
-        (1024, 256, ("scratch", "scratch")),
-    ),
-)
-def test_resource_declaration_rejects_unusable_backing(capacity: int, alignment: int, aliases: tuple[str, ...]) -> None:
-    with pytest.raises(ValueError):
-        lane_resource_declaration(key="scratch", max_bytes=capacity, alignment_bytes=alignment, aliases=aliases)
+from xpool.memory import FfnMemoryCalibration, FfnMemoryCalibrationCoefficients, XpoolMemoryCalibrationProfile
+from xtest.harness.support.config import TEST_CALIBRATION_ENVIRONMENT, synthetic_memory_context
 
 
 def profile() -> XpoolMemoryCalibrationProfile:
@@ -59,24 +35,6 @@ def profile() -> XpoolMemoryCalibrationProfile:
     )
 
 
-@pytest.mark.parametrize(
-    "change",
-    (
-        {"request_bytes": ()},
-        {"request_bytes": (0,)},
-        {"alignment_bytes": 512},
-        {"exact_logical_bytes": 1025},
-        {"request_bytes": (1,), "exact_logical_bytes": 1024},
-    ),
-)
-def test_requirement_rejects_incoherent_contract(change: dict[str, object]) -> None:
-    requirement = lane_resource_declaration(
-        key="scratch", max_bytes=1024, alignment_bytes=256, aliases=("scratch",)
-    ).requirement
-    with pytest.raises(ValueError):
-        replace(requirement, **change)
-
-
 def test_profile_json_rejects_string_for_numeric_field() -> None:
     payload = profile().model_dump(mode="json")
     payload["ffn"]["coefficients"]["base_bytes"] = "1"
@@ -84,6 +42,14 @@ def test_profile_json_rejects_string_for_numeric_field() -> None:
     with pytest.raises(ValidationError) as error:
         XpoolMemoryCalibrationProfile.model_validate_json(json.dumps(payload))
     assert any(item["loc"][-1] == "base_bytes" for item in error.value.errors())
+
+
+@pytest.mark.parametrize("count", (0, -1, True, "2"))
+def test_memory_context_requires_a_positive_integer_ffnagent_count(count: object) -> None:
+    values = synthetic_memory_context(ffnagent_count=2).model_dump(mode="python")
+    values["ffnagent_count"] = count
+    with pytest.raises(ValidationError):
+        xpool.memory.FabricMemoryContext.model_validate(values)
 
 
 def test_absent_profile_returns_none() -> None:
@@ -155,12 +121,3 @@ def test_profile_requires_complete_participant_observations() -> None:
     context = recorded.memory_context.model_copy(update={"participants": None})
     with pytest.raises(ValidationError, match="complete participant observations"):
         XpoolMemoryCalibrationProfile(memory_context=context, ffn=recorded.ffn)
-
-
-@pytest.mark.parametrize("uses", ([], ["dense", "dense"], ["unknown"]))
-def test_resource_requires_distinct_known_computation_sites(uses: list[str]) -> None:
-    declaration = lane_resource_declaration(key="scratch", max_bytes=1024, alignment_bytes=256, aliases=("scratch",))
-    values = declaration.model_dump(mode="json")
-    values["uses"] = uses
-    with pytest.raises(ValidationError):
-        ExecutionResourceDeclaration.model_validate(values)

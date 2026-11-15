@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from xpool.ffn import (
     FfnModelSpec,
     GatedProjectionSpec,
+    GateTransform,
     GateUpOrder,
     MoeFfnSpec,
     PerExpertSource,
@@ -88,7 +89,8 @@ def test_stacked_sources_keep_physical_keys_and_complete_semantic_identity() -> 
     spec = FfnModelSpec(
         model_id=TEST_MODEL_ID,
         hidden_size=64,
-        activation=SiluActivation(alpha=1.702, limit=7.0, up_offset=1.0),
+        activation=SiluActivation(alpha=1.702),
+        gate_transform=GateTransform(limit=7.0, up_offset=1.0),
         layers=(
             MoeFfnSpec(
                 kind=LayerKind.MOE,
@@ -119,6 +121,11 @@ def test_stacked_sources_keep_physical_keys_and_complete_semantic_identity() -> 
     )
     assert spec.layers[0].tensor_keys() == expected
     assert FfnModelSpec.model_validate_json(spec.model_dump_json()) == spec
+    default_data = spec.model_dump(mode="json", exclude={"gate_transform"})
+    default_spec = FfnModelSpec.model_validate(default_data)
+    explicit_default = FfnModelSpec.model_validate({**default_data, "gate_transform": {}})
+    assert default_spec.gate_transform == GateTransform()
+    assert default_spec.digest() == explicit_default.digest()
     layer = spec.layers[0]
     assert isinstance(layer, MoeFfnSpec)
     assert layer.topk_weight_rounding is TopKWeightRounding.NONE
@@ -128,12 +135,12 @@ def test_stacked_sources_keep_physical_keys_and_complete_semantic_identity() -> 
     assert FfnModelSpec.model_validate_json(rounded.model_dump_json()) == rounded
     assert rounded.digest() != spec.digest()
     assert hash(source) == hash(StackedExpertSource.model_validate_json(source.model_dump_json()))
-    for activation in (
-        SiluActivation(alpha=1.7, limit=7.0, up_offset=1.0),
-        SiluActivation(alpha=1.702, limit=None, up_offset=1.0),
-        SiluActivation(alpha=1.702, limit=7.0, up_offset=0.0),
+    for activation, gate_transform in (
+        (SiluActivation(alpha=1.7), GateTransform(limit=7.0, up_offset=1.0)),
+        (SiluActivation(alpha=1.702), GateTransform(limit=None, up_offset=1.0)),
+        (SiluActivation(alpha=1.702), GateTransform(limit=7.0, up_offset=0.0)),
     ):
-        changed = spec.model_copy(update={"activation": activation})
+        changed = spec.model_copy(update={"activation": activation, "gate_transform": gate_transform})
         assert FfnModelSpec.model_validate_json(changed.model_dump_json()) == changed
         assert changed.digest() != spec.digest()
 
@@ -143,17 +150,19 @@ def test_stacked_sources_keep_physical_keys_and_complete_semantic_identity() -> 
         FfnModelSpec.model_validate(payload)
 
 
-@pytest.mark.parametrize("parameter", ("alpha", "limit"))
+@pytest.mark.parametrize(("spec_type", "parameter"), ((SiluActivation, "alpha"), (GateTransform, "limit")))
 @pytest.mark.parametrize("value", (0, -1, float("inf"), float("nan"), True, "1.702"))
-def test_silu_slope_and_limit_require_positive_finite_numbers(parameter: str, value: object) -> None:
+def test_silu_slope_and_gate_limit_require_positive_finite_numbers(
+    spec_type: type[SiluActivation] | type[GateTransform], parameter: str, value: object
+) -> None:
     with pytest.raises(ValidationError):
-        SiluActivation.model_validate({parameter: value})
+        spec_type.model_validate({parameter: value})
 
 
 @pytest.mark.parametrize("value", (float("inf"), float("nan"), True, "1.0"))
-def test_silu_up_offset_requires_a_finite_number(value: object) -> None:
+def test_gate_up_offset_requires_a_finite_number(value: object) -> None:
     with pytest.raises(ValidationError):
-        SiluActivation.model_validate({"up_offset": value})
+        GateTransform.model_validate({"up_offset": value})
 
 
 @pytest.mark.parametrize("field", ("values_key", "scales_key", "bias_key"))

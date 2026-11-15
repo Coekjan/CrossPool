@@ -40,7 +40,6 @@ def test_unmodeled_overhead_allows_unprofiled_http_plan_publication() -> None:
     response = request(app, "GET", "/fabric/plan")
     assert response.status_code == HTTPStatus.OK
     plan = FabricDeploymentPlan.model_validate_json(response.content)
-    assert plan.ffn_execution_contracts == (FfnAgentRegistration.model_validate(ffnagent).execution_contract,)
     assert len(plan.ffn_memory_estimates) == 1
     assert plan.ffn_memory_estimates[0].peak_bytes > 0
     assert request(app, "GET", "/ready").json()["ready"] is False
@@ -58,7 +57,6 @@ def test_unprofiled_registration_omits_compatibility_observations() -> None:
     response = request(app, "GET", "/fabric/plan")
     assert response.status_code == HTTPStatus.OK
     plan = response.json()
-    assert plan["ffn_execution_contracts"] == [ffnagent["execution_contract"]]
     assert len(plan["ffn_memory_estimates"]) == 1
 
 
@@ -109,7 +107,6 @@ def test_published_correction_survives_profile_removal(tmp_path: Path, base_byte
     estimator = DeviceMemoryEstimator(
         model_specs=FfnAgentRegistration.model_validate(ffnagent).model_specs,
         instance_profiles=tuple(instance.ffn_profile for instance in plan.instance_plans),
-        ffn_execution_contracts=plan.ffn_execution_contracts,
         coefficients=coefficients,
     )
     assert plan.ffn_memory_estimates == (

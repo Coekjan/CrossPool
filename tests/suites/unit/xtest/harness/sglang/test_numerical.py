@@ -64,7 +64,7 @@ def test_numerical_case_compares_and_retains_every_rank(
         }
     )
     adapter = Qwen3MoeAdapter if moe else LlamaAdapter
-    model_spec = adapter.compile(model_id=TEST_MODEL_ID, model_config=source)
+    model_spec = adapter.compile(model_id=TEST_MODEL_ID, model_config=source, checkpoint_keys=())
     case = E2eFfnNumericalCase(
         description="CPU comparison and evidence across attention TP ranks.",
         deployment=tmp_path / "deployment.toml",

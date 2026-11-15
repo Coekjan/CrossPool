@@ -10,7 +10,7 @@ import psutil
 
 from xpool import ffn
 from xpool.fabric import FabricRole, InstanceFfnProfile
-from xpool.memory import FfnExecutionContract, MemoryCalibrationEnvironment
+from xpool.memory import MemoryCalibrationEnvironment
 from xpool.model import ModelId
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.errors import XpoolDaemonError
@@ -211,7 +211,6 @@ class FfnAgentRegistrationState(CommonRegistration):
         "device",
         "device_free_memory_bytes",
         "device_total_memory_bytes",
-        "execution_contract",
     )
 
     abi_version: int
@@ -219,7 +218,6 @@ class FfnAgentRegistrationState(CommonRegistration):
     calibration_environment: MemoryCalibrationEnvironment | None
     device_free_memory_bytes: int
     device_total_memory_bytes: int
-    execution_contract: FfnExecutionContract
 
     def __init__(
         self,
@@ -228,7 +226,6 @@ class FfnAgentRegistrationState(CommonRegistration):
         calibration_environment: MemoryCalibrationEnvironment | None,
         device_free_memory_bytes: int,
         device_total_memory_bytes: int,
-        execution_contract: FfnExecutionContract,
         abi_version: int,
         pid: int,
         now: float,
@@ -241,7 +238,6 @@ class FfnAgentRegistrationState(CommonRegistration):
         self.calibration_environment = calibration_environment
         self.device_free_memory_bytes = device_free_memory_bytes
         self.device_total_memory_bytes = device_total_memory_bytes
-        self.execution_contract = execution_contract
 
     def key(self) -> int:
         """Return the owned device."""
@@ -260,7 +256,6 @@ class FfnAgentRegistrationState(CommonRegistration):
             or self.calibration_environment != candidate.calibration_environment
             or self.device_free_memory_bytes != candidate.device_free_memory_bytes
             or self.device_total_memory_bytes != candidate.device_total_memory_bytes
-            or self.execution_contract != candidate.execution_contract
         )
 
 

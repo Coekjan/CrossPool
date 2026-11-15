@@ -21,7 +21,6 @@ from xpool.fabric import (
     InstanceRankTopology,
     MoeFfnLayerPlan,
 )
-from xpool.memory import FfnExecutionContract
 from xpool.model import ModelId
 from xpool.native.ffn import LayerKind, OutputRequirement
 from xpool.quantization import Unquantized
@@ -46,32 +45,33 @@ def decode_mxfp4_weights(values: torch.Tensor, scales: torch.Tensor) -> torch.Te
 def packed_moe_reference(
     hidden_states: torch.Tensor,
     *,
-    gate_up: ProjectionWeights,
-    down: ProjectionWeights,
+    i_proj: ProjectionWeights,
+    o_proj: ProjectionWeights,
     ids: torch.Tensor,
     probabilities: torch.Tensor,
-    activation: ffn.ActivationSpec,
+    activation: ffn.SiluActivation,
+    gate_transform: ffn.GateTransform,
     routed_scaling_factor: float,
 ) -> torch.Tensor:
     """Evaluate isolated packed Experts without the production decoder or kernels."""
 
-    assert gate_up.scales is not None and down.scales is not None
-    assert gate_up.bias is not None and down.bias is not None
-    first = decode_mxfp4_weights(gate_up.values, gate_up.scales)
-    second = decode_mxfp4_weights(down.values, down.scales)
+    assert i_proj.scales is not None and o_proj.scales is not None
+    assert i_proj.bias is not None and o_proj.bias is not None
+    first = decode_mxfp4_weights(i_proj.values, i_proj.scales)
+    second = decode_mxfp4_weights(o_proj.values, o_proj.scales)
     result = torch.zeros_like(hidden_states, dtype=torch.float32)
     for expert in range(first.shape[0]):
         rows, slots = torch.where(ids == expert)
-        projected = hidden_states[rows].float() @ first[expert].t() + gate_up.bias[expert]
+        projected = hidden_states[rows].float() @ first[expert].t() + i_proj.bias[expert]
         gate = projected[:, ::2]
         up = projected[:, 1::2]
-        if activation.limit is not None:
-            gate = gate.clamp(max=activation.limit)
-            up = up.clamp(min=-activation.limit, max=activation.limit)
-        activated = (gate * torch.sigmoid(activation.alpha * gate) * (up + activation.up_offset)).to(
+        if gate_transform.limit is not None:
+            gate = gate.clamp(max=gate_transform.limit)
+            up = up.clamp(min=-gate_transform.limit, max=gate_transform.limit)
+        activated = (gate * torch.sigmoid(activation.alpha * gate) * (up + gate_transform.up_offset)).to(
             hidden_states.dtype
         )
-        partial = activated.float() @ second[expert].t() + down.bias[expert]
+        partial = activated.float() @ second[expert].t() + o_proj.bias[expert]
         weighted = (partial * probabilities[rows, slots, None]).to(hidden_states.dtype).float()
         result.index_add_(0, rows, weighted)
     return (result * routed_scaling_factor).to(hidden_states.dtype)
@@ -157,7 +157,6 @@ def execution_fabric_plan(
     executor_lane_count: int,
     instance_count: int,
     execution_kind: LayerKind,
-    ffn_execution_contracts: tuple[FfnExecutionContract, ...],
     layer_count: int = 1,
     decode_payload_row_capacity: int = 4,
     prefill_payload_row_capacity: int = 4,
@@ -204,7 +203,6 @@ def execution_fabric_plan(
     )
     return FabricPlan(
         generation=FabricGenerationId(high=1, low=1),
-        ffn_execution_contracts=ffn_execution_contracts,
         uid=FabricUid(uid),
         pe_placements=tuple(
             FabricPePlacement(role=FabricRole.ATNAGENT, device=index) for index in range(atnagent_count)
@@ -257,10 +255,12 @@ def dense_layer_weights(
         intermediate_size=intermediate_size,
     )
     return DenseFfnWeights(
-        gate_up=ProjectionWeights(
-            values=torch.cat((gate[begin:end], up[begin:end])).contiguous(), scales=None, bias=None
+        i_proj=ProjectionWeights(
+            values=torch.stack((gate[begin:end], up[begin:end]), dim=1).flatten(0, 1).contiguous(),
+            scales=None,
+            bias=None,
         ),
-        down=ProjectionWeights(values=down[:, begin:end].contiguous(), scales=None, bias=None),
+        o_proj=ProjectionWeights(values=down[:, begin:end].contiguous(), scales=None, bias=None),
     )
 
 
@@ -358,10 +358,12 @@ def moe_layer_weights(
         intermediate_size=intermediate_size,
     )
     return MoeFfnWeights(
-        gate_up=ProjectionWeights(
-            values=torch.cat((gate[:, begin:end], up[:, begin:end]), dim=1).contiguous(), scales=None, bias=None
+        i_proj=ProjectionWeights(
+            values=torch.stack((gate[:, begin:end], up[:, begin:end]), dim=2).flatten(1, 2).contiguous(),
+            scales=None,
+            bias=None,
         ),
-        down=ProjectionWeights(values=down[:, :, begin:end].contiguous(), scales=None, bias=None),
+        o_proj=ProjectionWeights(values=down[:, :, begin:end].contiguous(), scales=None, bias=None),
         router=MoeRouterWeights(
             projection=ProjectionWeights(values=router, scales=None, bias=None), correction_bias=None
         )

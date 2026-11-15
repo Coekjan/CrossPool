@@ -75,11 +75,7 @@ def isolated_fabric_binding_validation() -> None:
         2,
         capture_input,
         capture_partial,
-        (
-            xpool.native.ffnagent.CapturedResourceRange(
-                "compute", capture_workspace.data_ptr(), capture_workspace.data_ptr(), 1
-            ),
-        ),
+        xpool.native.ffnagent.CaptureWorkspaceView(capture_workspace.data_ptr(), 1),
         primary_weights,
         control_weights,
     )
@@ -114,7 +110,7 @@ def isolated_capture_tensor_extents() -> None:
         control_graph_address=2,
         capture_input=payload,
         capture_partial=partial,
-        capture_ranges=(),
+        capture_workspace=None,
         primary_weight_bindings=primary,
         control_weight_bindings=control,
     )
@@ -131,7 +127,7 @@ def isolated_capture_tensor_extents() -> None:
         control_graph_address=2,
         capture_input=payload,
         capture_partial=partial,
-        capture_ranges=(),
+        capture_workspace=None,
         capture_routing_metadata=torch.empty(16, device="cuda", dtype=torch.uint8),
         capture_payload_rows=torch.empty((), device="cuda", dtype=torch.int64),
         primary_weight_bindings=xpool.native.ffnagent.MoeBindingView(projections[0], projections[1], None),

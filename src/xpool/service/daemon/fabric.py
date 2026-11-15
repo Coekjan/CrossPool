@@ -145,7 +145,7 @@ class FabricMembership:
             ),
             memory_context=FabricMemoryContext(
                 participants=participants if participants else None,
-                ffn_execution=tuple(ffnagent_by_device[device].execution_contract for device in config.ffn.devices),
+                ffnagent_count=len(config.ffn.devices),
             ),
             pe_placements=placements,
             agent_owners=agent_owners,

@@ -2,19 +2,19 @@
 
 import pytest
 import torch
-from triton_kernels import matmul
-from triton_kernels.matmul_details import opt_flags
 
 import xtest
 from xpool import ffn
 from xpool.native.ffn import LayerKind
 from xpool.quantization import Mxfp4, Unquantized
-from xpool.runtime.ffnagent import execution, weights
-from xpool.runtime.ffnagent.operators.triton_moe import TritonKernelsExperts
+from xpool.runtime.ffnagent import execution, preparation
+from xpool.runtime.ffnagent.operators import moe
+from xpool.runtime.ffnagent.operators.activation import Activation
 from xtest.harness.native.ffn.qualification import packed_moe_reference
+from xtest.harness.support.config import TEST_MODEL_ID
 
 
-def packed_layer(experts: int, intermediate_size: int) -> ffn.MoeFfnSpec:
+def packed_layer(experts: int, intermediate_size: int, topk: int) -> ffn.MoeFfnSpec:
     return ffn.MoeFfnSpec(
         kind=LayerKind.MOE,
         layer_id=0,
@@ -23,7 +23,7 @@ def packed_layer(experts: int, intermediate_size: int) -> ffn.MoeFfnSpec:
         expert_intermediate_size=intermediate_size,
         routed_expert_count=experts,
         shared_expert_count=0,
-        routed_topk=4,
+        routed_topk=topk,
         renormalize=True,
         routed_scaling_factor=1.0,
         router=ffn.ProjectionSpec(quantization=Unquantized(), values_key="router.weight"),
@@ -49,14 +49,14 @@ def packed_layer(experts: int, intermediate_size: int) -> ffn.MoeFfnSpec:
 
 
 @pytest.mark.parametrize(
-    "capacity,hidden_size,intermediate_size,experts,activation",
+    "capacity,hidden_size,intermediate_size,experts,function,gate_transform,topk",
     (
-        (65, 64, 64, 8, ffn.SiluActivation(alpha=1.702, limit=7.0, up_offset=1.0)),
-        (16385, 64, 64, 8, ffn.SiluActivation(alpha=1.702, limit=7.0, up_offset=1.0)),
-        (65, 2880, 736, 32, ffn.SiluActivation(alpha=1.702, limit=7.0, up_offset=1.0)),
-        (65, 2880, 384, 32, ffn.SiluActivation(alpha=1.702, limit=7.0, up_offset=1.0)),
-        (65, 64, 64, 8, ffn.SiluActivation()),
-        (65, 64, 64, 8, ffn.SiluActivation(alpha=1.3, limit=4.0, up_offset=-0.5)),
+        (65, 64, 64, 8, ffn.SiluActivation(alpha=1.702), ffn.GateTransform(limit=7.0, up_offset=1.0), 5),
+        (16385, 64, 64, 8, ffn.SiluActivation(alpha=1.702), ffn.GateTransform(limit=7.0, up_offset=1.0), 4),
+        (65, 2880, 736, 32, ffn.SiluActivation(alpha=1.702), ffn.GateTransform(limit=7.0, up_offset=1.0), 4),
+        (65, 2880, 384, 32, ffn.SiluActivation(alpha=1.702), ffn.GateTransform(limit=7.0, up_offset=1.0), 4),
+        (65, 64, 64, 8, ffn.SiluActivation(), ffn.GateTransform(), 4),
+        (65, 64, 64, 8, ffn.SiluActivation(alpha=1.3), ffn.GateTransform(limit=4.0, up_offset=-0.5), 4),
     ),
 )
 @xtest.requirements(device_count=1)
@@ -65,22 +65,30 @@ def test_packed_experts_keep_dynamic_routes_and_capacity_tails_without_capture_a
     hidden_size: int,
     intermediate_size: int,
     experts: int,
-    activation: ffn.ActivationSpec,
+    function: ffn.SiluActivation,
+    gate_transform: ffn.GateTransform,
+    topk: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     torch.manual_seed(73)
     monkeypatch.setattr(torch.backends.cuda.matmul, "fp32_precision", "ieee")
-    layer = packed_layer(experts, intermediate_size)
-    layout = weights.ExpertLayout.from_layer(
-        layer,
-        hidden_size=hidden_size,
-        local_intermediate_size=intermediate_size,
+    layer = packed_layer(experts, intermediate_size, topk)
+    layout = preparation.prepare_ffn_layer(
+        ffn.FfnModelSpec(
+            model_id=TEST_MODEL_ID,
+            hidden_size=hidden_size,
+            activation=function,
+            gate_transform=gate_transform,
+            layers=(layer,),
+        ),
+        layer_ordinal=0,
         payload_dtype=torch.bfloat16,
-        bias_dtype=TritonKernelsExperts.bias_dtype,
+        tp_size=1,
+        tp_rank=0,
     )
     device = torch.device("cuda", torch.cuda.current_device())
-    gate_up, down = layout.gate_up.zero_probe(device), layout.down.zero_probe(device)
-    for projection in (gate_up, down):
+    i_proj, o_proj = layout.i_proj.zero_probe(device), layout.o_proj.zero_probe(device)
+    for projection in (i_proj, o_proj):
         assert projection.scales is not None and projection.bias is not None
         projection.values.copy_(
             torch.arange(projection.values.numel(), device=device).to(torch.uint8).view_as(projection.values)
@@ -95,32 +103,27 @@ def test_packed_experts_keep_dynamic_routes_and_capacity_tails_without_capture_a
         hidden_size=hidden_size,
         local_intermediate_size=intermediate_size,
         expert_count=experts,
-        effective_topk=4,
-        activation=activation,
+        effective_topk=topk,
+        activation=Activation(function=function, gate=gate_transform),
         routed_scaling_factor=1.3,
         router=None,
-        operation=execution.ExpertOperationKind.TRITON_KERNELS,
-        gate_up=layout.gate_up,
-        down=layout.down,
+        i_proj=layout.i_proj,
+        o_proj=layout.o_proj,
     )
-    workspace_layout = TritonKernelsExperts.workspace_layout(signature)
-    assert all(
-        offset + torch.Size(shape).numel() * dtype.itemsize <= workspace_layout.nbytes
-        for offset, (dtype, shape) in zip(workspace_layout.offsets, workspace_layout.regions, strict=True)
-    )
-    workspace = torch.empty(workspace_layout.nbytes, dtype=torch.uint8, device=device)
-    operation = TritonKernelsExperts(signature, workspace)
+    plan = moe.ExpertExecutionPlan.prepare(signature)
+    workspace = torch.empty(plan.workspace.nbytes, dtype=torch.uint8, device=device)
+    operation = moe.Experts(plan, workspace)
     hidden = torch.randn((capacity, hidden_size), device=device, dtype=torch.bfloat16)
     rows = torch.arange(capacity, device=device)[:, None]
-    slots = torch.arange(4, device=device)[None, :]
+    slots = torch.arange(topk, device=device)[None, :]
     ids = ((rows * 3 + slots) % experts).to(torch.int32)
-    probabilities = torch.tensor((0.1, 0.2, 0.3, 0.4), device=device).expand(capacity, 4).contiguous()
+    probabilities = torch.arange(1, topk + 1, dtype=torch.float32, device=device)
+    probabilities = (probabilities / probabilities.sum()).expand(capacity, topk).contiguous()
     output = torch.empty_like(hidden)
-    selector, constraints, flags = matmul.make_opt_flags, opt_flags._opt_flags_constraints, opt_flags._opt_flags
 
     def run() -> None:
-        operation.run(
-            hidden_states=hidden, gate_up=gate_up, down=down, topk_ids=ids, topk_weights=probabilities, output=output
+        operation.run_into(
+            hidden_states=hidden, i_proj=i_proj, o_proj=o_proj, topk_ids=ids, topk_weights=probabilities, output=output
         )
 
     run()
@@ -134,15 +137,16 @@ def test_packed_experts_keep_dynamic_routes_and_capacity_tails_without_capture_a
     for live, shift in ((capacity, 0), (17, 2), (1, 0), (capacity, 1)):
         ids.copy_(((rows * 3 + slots + shift) % experts).to(torch.int32))
         ids[live:] = -1
-        probabilities.fill_(0.25)
+        probabilities.fill_(1 / topk)
         probabilities[live:] = 0
         expected = packed_moe_reference(
             hidden,
-            gate_up=gate_up,
-            down=down,
+            i_proj=i_proj,
+            o_proj=o_proj,
             ids=ids,
             probabilities=probabilities,
-            activation=activation,
+            activation=function,
+            gate_transform=gate_transform,
             routed_scaling_factor=signature.routed_scaling_factor,
         )
         before = torch.cuda.memory_stats()["allocation.all.allocated"]
@@ -156,12 +160,3 @@ def test_packed_experts_keep_dynamic_routes_and_capacity_tails_without_capture_a
         assert error.square().mean().sqrt() / scale <= 0.01
         assert (error.abs() / torch.maximum(expected.float().abs(), scale)).max() <= 0.10
         assert torch.count_nonzero(output[live:]) == 0
-    assert matmul.make_opt_flags is selector
-    assert opt_flags._opt_flags_constraints is constraints
-    assert opt_flags._opt_flags is flags
-    with pytest.raises(RuntimeError, match="construction failure"):
-        with operation.configuration():
-            raise RuntimeError("construction failure")
-    assert matmul.make_opt_flags is selector
-    assert opt_flags._opt_flags_constraints is constraints
-    assert opt_flags._opt_flags is flags

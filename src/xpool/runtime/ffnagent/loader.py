@@ -21,7 +21,6 @@ from xpool.config import get_global_config
 from xpool.fabric import FabricPlan, FabricRole, MoeFfnLayerPlan
 from xpool.quantization import TensorSlice
 from xpool.runtime.ffnagent import checkpoint, preparation, weights
-from xpool.runtime.ffnagent.operators import moe
 from xpool.utils.cuda import check_runtime
 
 
@@ -293,24 +292,24 @@ def prepare_layer_weight_request(
     layout = request.layer_layout
     torch_device = torch.device("cuda", device)
     if isinstance(layout, preparation.DenseFfnLayerLayout):
-        materialized = weights.DenseFfnWeights.allocate(gate_up=layout.gate_up, down=layout.down, device=torch_device)
-        descriptors = gated_descriptors(
+        materialized = weights.DenseFfnWeights.allocate(i_proj=layout.i_proj, o_proj=layout.o_proj, device=torch_device)
+        descriptors = ffn_projection_descriptors(
             key_view,
             projections=layout.layer.projections,
             layout=layout,
             source_intermediate_size=layout.layer.intermediate_size,
             source_start=layout.source_start,
             expert_id=None,
-            gate_up=materialized.gate_up,
-            down=materialized.down,
-            read_down_bias=layout.tp_rank == 0,
+            i_proj=materialized.i_proj,
+            o_proj=materialized.o_proj,
+            read_o_proj_bias=layout.tp_rank == 0,
         )
         return materialized, descriptors
 
     layer = layout.layer
     materialized = weights.MoeFfnWeights.allocate(
-        gate_up=layout.experts.gate_up,
-        down=layout.experts.down,
+        i_proj=layout.i_proj,
+        o_proj=layout.o_proj,
         router=layout.router,
         correction_bias=layout.router_correction_bias,
         device=torch_device,
@@ -319,7 +318,9 @@ def prepare_layer_weight_request(
     source = layer.routed_experts
     if isinstance(source, ffn.StackedExpertSource):
         if layout.source_length:
-            target_order = moe.expert_operation_type(layout.operation).required_gate_up_order
+            target_order = layout.i_proj.gate_up_order
+            if target_order is None:
+                raise ValueError("stacked gated input projection requires physical row order")
             segments = (
                 (
                     TensorSlice(1, 2 * layout.source_start, 2 * layout.source_length),
@@ -356,13 +357,13 @@ def prepare_layer_weight_request(
                         ),
                         selection=source_selection,
                         dtype=layout.payload_dtype,
-                        values=materialized.gate_up.values[: layer.routed_expert_count][target_indices],
+                        values=materialized.i_proj.values[: layer.routed_expert_count][target_indices],
                         scales=None
-                        if materialized.gate_up.scales is None
-                        else materialized.gate_up.scales[: layer.routed_expert_count][target_indices],
+                        if materialized.i_proj.scales is None
+                        else materialized.i_proj.scales[: layer.routed_expert_count][target_indices],
                         bias=None
-                        if materialized.gate_up.bias is None
-                        else materialized.gate_up.bias[: layer.routed_expert_count][target_indices],
+                        if materialized.i_proj.bias is None
+                        else materialized.i_proj.bias[: layer.routed_expert_count][target_indices],
                         read_bias=True,
                     )
                 )
@@ -373,42 +374,44 @@ def prepare_layer_weight_request(
                 logical_shape=(layer.routed_expert_count, layout.hidden_size, layer.expert_intermediate_size),
                 selection=TensorSlice(2, layout.source_start, layout.source_length),
                 dtype=layout.payload_dtype,
-                values=materialized.down.values[: layer.routed_expert_count],
+                values=materialized.o_proj.values[: layer.routed_expert_count],
                 scales=None
-                if materialized.down.scales is None
-                else materialized.down.scales[: layer.routed_expert_count],
-                bias=None if materialized.down.bias is None else materialized.down.bias[: layer.routed_expert_count],
+                if materialized.o_proj.scales is None
+                else materialized.o_proj.scales[: layer.routed_expert_count],
+                bias=None
+                if materialized.o_proj.bias is None
+                else materialized.o_proj.bias[: layer.routed_expert_count],
                 read_bias=layout.tp_rank == 0,
             )
         )
     else:
         for expert_id, projections in enumerate(source.experts):
             descriptors.extend(
-                gated_descriptors(
+                ffn_projection_descriptors(
                     key_view,
                     projections=projections,
                     layout=layout,
                     source_intermediate_size=layer.expert_intermediate_size,
                     source_start=layout.source_start,
                     expert_id=expert_id,
-                    gate_up=materialized.gate_up,
-                    down=materialized.down,
-                    read_down_bias=layout.tp_rank == 0,
+                    i_proj=materialized.i_proj,
+                    o_proj=materialized.o_proj,
+                    read_o_proj_bias=layout.tp_rank == 0,
                 )
             )
     if layer.shared_expert is not None:
         for ordinal in range(layer.shared_expert_count):
             descriptors.extend(
-                gated_descriptors(
+                ffn_projection_descriptors(
                     key_view,
                     projections=layer.shared_expert,
                     layout=layout,
                     source_intermediate_size=layer.expert_intermediate_size * layer.shared_expert_count,
                     source_start=ordinal * layer.expert_intermediate_size + layout.source_start,
                     expert_id=layer.routed_expert_count + ordinal,
-                    gate_up=materialized.gate_up,
-                    down=materialized.down,
-                    read_down_bias=layout.tp_rank == 0 and ordinal == 0,
+                    i_proj=materialized.i_proj,
+                    o_proj=materialized.o_proj,
+                    read_o_proj_bias=layout.tp_rank == 0 and ordinal == 0,
                 )
             )
     router = materialized.router
@@ -441,37 +444,42 @@ def prepare_layer_weight_request(
     return materialized, tuple(descriptors)
 
 
-def gated_descriptors(
+def ffn_projection_descriptors(
     key_view: dict[str, Path],
     *,
-    projections: ffn.GatedProjectionSpec,
+    projections: ffn.GatedProjectionSpec | ffn.UngatedProjectionSpec,
     layout: preparation.FfnLayerLayout,
     source_intermediate_size: int,
     source_start: int,
     expert_id: int | None,
-    gate_up: weights.ProjectionWeights,
-    down: weights.ProjectionWeights,
-    read_down_bias: bool,
+    i_proj: weights.ProjectionWeights,
+    o_proj: weights.ProjectionWeights,
+    read_o_proj_bias: bool,
 ) -> tuple[TensorReadDescriptor, ...]:
-    """Bind separate gate/up sources into the prepared fused destination order."""
+    """Bind FFN source projections to their prepared TP destinations."""
 
-    gate_values = gate_up.values if expert_id is None else gate_up.values[expert_id]
-    gate_scales = gate_up.scales if expert_id is None or gate_up.scales is None else gate_up.scales[expert_id]
-    gate_bias = gate_up.bias if expert_id is None or gate_up.bias is None else gate_up.bias[expert_id]
-    order = (
-        ffn.GateUpOrder.CONCATENATED
-        if isinstance(layout, preparation.DenseFfnLayerLayout)
-        else moe.expert_operation_type(layout.operation).required_gate_up_order
-    )
-    target_rows = order.row_slices(
-        axis=0,
-        width=layout.local_intermediate_size,
-        start=0,
-        length=layout.source_length,
-    )
+    i_proj_values = i_proj.values if expert_id is None else i_proj.values[expert_id]
+    i_proj_scales = i_proj.scales if expert_id is None or i_proj.scales is None else i_proj.scales[expert_id]
+    i_proj_bias = i_proj.bias if expert_id is None or i_proj.bias is None else i_proj.bias[expert_id]
+    if isinstance(projections, ffn.GatedProjectionSpec):
+        sources = (projections.gate, projections.up)
+        order = layout.i_proj.gate_up_order
+        if order is None:
+            raise ValueError("gated input projection requires physical row order")
+        target_rows = tuple(
+            selection.indices()
+            for selection in order.row_slices(
+                axis=0,
+                width=layout.local_intermediate_size,
+                start=0,
+                length=layout.source_length,
+            )
+        )
+    else:
+        sources = (projections.up,)
+        target_rows = (slice(None),)
     descriptors = []
-    for source, target_selection in zip((projections.gate, projections.up), target_rows, strict=True):
-        rows = target_selection.indices()
+    for source, rows in zip(sources, target_rows, strict=True):
         descriptors.extend(
             projection_descriptors(
                 key_view,
@@ -479,9 +487,9 @@ def gated_descriptors(
                 logical_shape=(source_intermediate_size, layout.hidden_size),
                 selection=TensorSlice(0, source_start, layout.source_length),
                 dtype=layout.payload_dtype,
-                values=gate_values[rows],
-                scales=None if gate_scales is None else gate_scales[rows],
-                bias=None if gate_bias is None else gate_bias[rows],
+                values=i_proj_values[rows],
+                scales=None if i_proj_scales is None else i_proj_scales[rows],
+                bias=None if i_proj_bias is None else i_proj_bias[rows],
                 read_bias=True,
             )
         )
@@ -492,10 +500,10 @@ def gated_descriptors(
             logical_shape=(layout.hidden_size, source_intermediate_size),
             selection=TensorSlice(1, source_start, layout.source_length),
             dtype=layout.payload_dtype,
-            values=down.values if expert_id is None else down.values[expert_id],
-            scales=down.scales if expert_id is None or down.scales is None else down.scales[expert_id],
-            bias=down.bias if expert_id is None or down.bias is None else down.bias[expert_id],
-            read_bias=read_down_bias,
+            values=o_proj.values if expert_id is None else o_proj.values[expert_id],
+            scales=o_proj.scales if expert_id is None or o_proj.scales is None else o_proj.scales[expert_id],
+            bias=o_proj.bias if expert_id is None or o_proj.bias is None else o_proj.bias[expert_id],
+            read_bias=read_o_proj_bias,
         )
     )
     return tuple(descriptors)

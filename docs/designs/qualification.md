@@ -9,9 +9,12 @@ suite placement and developer commands live in
 Dtype-specific component coverage exercises BF16 and FP16 weight conversion,
 Dense and MoE operator execution, captured Graph replay, and native TP1/TP>1
 delivery. It compares both admitted dtypes with an FP32 reference using the
-existing numerical policy. Routine end-to-end serving uses the effective dtype
-resolved for its two small Qwen deployments; component dtype coverage remains
-owned by the component suites.
+existing numerical policy. Standalone activation coverage exercises gated and
+ungated SiLU and ReLU, plus gated GELU with exact and tanh formulas. ReLU
+coverage compares every FP16 and BF16 bit pattern
+with Torch for both in-place and separate outputs. Routine end-to-end serving
+uses the effective dtype resolved for its deployments; component dtype coverage
+remains owned by the component suites.
 
 Numerical qualification compares each supported model, using one admitted TP
 realization, with an independent SGLang FFN reference. Shared native topology
@@ -56,12 +59,11 @@ The two nonempty `[1, V]` logits tensors must have identical shapes before KL;
 different vocabulary widths fail qualification rather than broadcasting.
 
 Routine serving E2E proves installed HTTP completion, graph-mode startup and
-observed Graph structure, and Transport and Fabric behavior with Qwen3-0.6B
-and Qwen2.5-0.5B at attention TP1 and TP2 under the combined graph mode.
+observed Graph structure, and Transport and Fabric behavior at attention TP1
+and TP2 under the combined graph mode.
 Explicit per-model suites own independent FFN numerical reference and serving
-graph comparisons, including qualified MoE models. The ordinary suite owns
-installed serving for the two small Qwen deployments;
-model suites own their explicit qualification whenever an adapter or numerical
+graph comparisons, including qualified MoE models. Model suites own their
+explicit qualification whenever an adapter or numerical
 contract changes. The [test architecture](../../tests/README.md) owns suite
 selection commands and case placement.
 
@@ -118,12 +120,12 @@ or cache trimming. Record sampling gaps: a sampled maximum can miss a peak.
   the predicted peak and `F` is fresh free memory. The interval positions
   the pressure test; it does not excuse underprediction.
 
-Qualify a shared external source with a real Tensor acquired before baseline.
-Exercise a Signature that reads it and one that does not, across at least two
-Lanes. Verify dynamic replay after construction cleanup, rejection of missing
-or inconsistent owners, retention on failure and release after retirement.
-This component evidence covers shared storage; a production source still
-needs its own installed-startup evidence.
+Qualify Lane workspace ownership through actual capture and installation.
+Verify complete pool coverage, Primary/Control agreement, bounded memory-node
+access and disjoint scratch across Lanes. Exercise dynamic weight, scale and
+bias changes after construction cleanup, failure retention and release after
+confirmed native retirement. Component coverage retains tails, idle FFN
+participants and zero-Signature installations at their owning boundaries.
 
 Resource qualification runners are evidence-only tools. Production modules,
 reusable test harnesses, and permanent test cases own the runtime contracts

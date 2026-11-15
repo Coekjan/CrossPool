@@ -55,12 +55,12 @@ LayerBindingValues materialize_binding_values(const BindingView &resources) {
   return std::visit(
       [](const auto &value) {
         auto result = LayerBindingValues{};
-        result.gate_up_values_address = value.gate_up.values;
-        result.gate_up_scales_address = value.gate_up.scales.value_or(0);
-        result.gate_up_bias_address = value.gate_up.bias.value_or(0);
-        result.down_values_address = value.down.values;
-        result.down_scales_address = value.down.scales.value_or(0);
-        result.down_bias_address = value.down.bias.value_or(0);
+        result.i_proj_values_address = value.i_proj.values;
+        result.i_proj_scales_address = value.i_proj.scales.value_or(0);
+        result.i_proj_bias_address = value.i_proj.bias.value_or(0);
+        result.o_proj_values_address = value.o_proj.values;
+        result.o_proj_scales_address = value.o_proj.scales.value_or(0);
+        result.o_proj_bias_address = value.o_proj.bias.value_or(0);
         if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>, MoeBindingView>) {
           if (value.router.has_value()) {
             result.router_values_address = value.router->projection.values;
@@ -93,11 +93,11 @@ std::vector<ResourceReplacement> make_resource_replacements(const CaptureDescrip
         const auto &control = value.control_weight_bindings;
         auto result = std::vector<ResourceReplacement>{};
         append_projection_replacements(
-            result, primary.gate_up, control.gate_up, offsetof(LayerBindingValues, gate_up_values_address),
-            offsetof(LayerBindingValues, gate_up_scales_address), offsetof(LayerBindingValues, gate_up_bias_address));
+            result, primary.i_proj, control.i_proj, offsetof(LayerBindingValues, i_proj_values_address),
+            offsetof(LayerBindingValues, i_proj_scales_address), offsetof(LayerBindingValues, i_proj_bias_address));
         append_projection_replacements(
-            result, primary.down, control.down, offsetof(LayerBindingValues, down_values_address),
-            offsetof(LayerBindingValues, down_scales_address), offsetof(LayerBindingValues, down_bias_address));
+            result, primary.o_proj, control.o_proj, offsetof(LayerBindingValues, o_proj_values_address),
+            offsetof(LayerBindingValues, o_proj_scales_address), offsetof(LayerBindingValues, o_proj_bias_address));
         if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>, MoeCaptureDescriptor>) {
           if (primary.router.has_value()) {
             append_projection_replacements(result, primary.router->projection, control.router->projection,
@@ -131,8 +131,8 @@ void validate_projection_cuda_addresses(const ProjectionBindingView &projection,
 
 void validate_layer_resource_targets(const ExecutionInstallDescriptor &descriptor, int device) {
   const auto validate_resources = [device](const auto &resources) {
-    validate_projection_cuda_addresses(resources.gate_up, device);
-    validate_projection_cuda_addresses(resources.down, device);
+    validate_projection_cuda_addresses(resources.i_proj, device);
+    validate_projection_cuda_addresses(resources.o_proj, device);
     if constexpr (std::is_same_v<std::remove_cvref_t<decltype(resources)>, MoeBindingView>) {
       if (resources.router.has_value()) {
         validate_projection_cuda_addresses(resources.router->projection, device);
@@ -149,11 +149,10 @@ void validate_layer_resource_targets(const ExecutionInstallDescriptor &descripto
     for (const auto &signature : lane.signatures) {
       std::visit(
           [device](const auto &value) {
-            for (const auto &region : value.capture_ranges) {
-              for (const auto address : {region.primary_address, region.control_address}) {
-                validate_cuda_address(address, device, "captured resource");
-                validate_cuda_address(address + region.bytes - 1, device, "captured resource end");
-              }
+            if (value.capture_workspace.has_value()) {
+              const auto &workspace = *value.capture_workspace;
+              validate_cuda_address(workspace.address, device, "capture workspace");
+              validate_cuda_address(workspace.address + workspace.bytes - 1, device, "capture workspace end");
             }
           },
           signature);
@@ -796,14 +795,14 @@ void ExecutionRuntime::materialize_lane(const ExecutionInstallDescriptor &projec
                   .target_address = partial_target,
               },
           };
-          for (const auto &region : value.capture_ranges) {
+          if (value.capture_workspace.has_value()) {
+            const auto &workspace = *value.capture_workspace;
             lane_replacements.push_back(LaneAddressReplacement{
-                .primary_address = region.primary_address,
-                .control_address = region.control_address,
-                .bytes = region.bytes,
-                .target_address = region.primary_address,
+                .primary_address = workspace.address,
+                .control_address = workspace.address,
+                .bytes = workspace.bytes,
+                .target_address = workspace.address,
                 .required = false,
-                .read_only = region.shared_read_only,
             });
           }
           using Signature = std::remove_cvref_t<decltype(value)>;

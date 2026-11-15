@@ -3,9 +3,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <vector>
 
+#include <c10/util/Exception.h>
 #include <cuda_runtime_api.h>
 #include <gtest/gtest.h>
 
@@ -30,6 +32,35 @@ XPOOL_KERNEL_FN void update_write_value_kernel(cudaGraphDeviceNode_t node, std::
        .updateData = {.param = {.pValue = &value, .offset = value_offset, .size = sizeof(value)}}},
   };
   *status = cudaGraphKernelNodeUpdatesApply(updates, std::size(updates));
+}
+
+TEST(GraphTest, ObservesWorkspaceAndChecksEveryTypedAccess) {
+  ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
+  auto buffer = static_cast<std::byte *>(nullptr);
+  ASSERT_EQ(cudaMalloc(&buffer, 16), cudaSuccess);
+  auto graph = cudaGraph_t{};
+  ASSERT_EQ(cudaGraphCreate(&graph, 0), cudaSuccess);
+  auto parameters = cudaMemsetParams{};
+  parameters.dst = buffer;
+  parameters.elementSize = 1;
+  parameters.width = 4;
+  parameters.height = 1;
+  auto first = cudaGraphNode_t{};
+  ASSERT_EQ(cudaGraphAddMemsetNode(&first, graph, nullptr, 0, &parameters), cudaSuccess);
+  const auto address = reinterpret_cast<std::uintptr_t>(buffer);
+  EXPECT_TRUE(xpool::utils::cuda::graph::references_range(graph, address, 8));
+  EXPECT_FALSE(xpool::utils::cuda::graph::references_range(graph, address + 32, 8));
+  EXPECT_THROW(xpool::utils::cuda::graph::references_range(graph, 0, 8), c10::Error);
+  EXPECT_THROW(xpool::utils::cuda::graph::references_range(graph, address, 0), c10::Error);
+  EXPECT_THROW(xpool::utils::cuda::graph::references_range(graph, std::numeric_limits<std::uintptr_t>::max(), 1),
+               c10::Error);
+  parameters.dst = buffer + 4;
+  parameters.width = 8;
+  auto second = cudaGraphNode_t{};
+  ASSERT_EQ(cudaGraphAddMemsetNode(&second, graph, &first, 1, &parameters), cudaSuccess);
+  EXPECT_THROW(xpool::utils::cuda::graph::references_range(graph, address, 8), c10::Error);
+  EXPECT_EQ(cudaGraphDestroy(graph), cudaSuccess);
+  EXPECT_EQ(cudaFree(buffer), cudaSuccess);
 }
 
 TEST(GraphTest, ConstructsAndVisitsRetainedNodeKinds) {

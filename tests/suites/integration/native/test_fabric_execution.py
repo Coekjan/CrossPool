@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-from multiprocessing.connection import Connection
 from pathlib import Path
 
 import pytest
@@ -13,10 +11,8 @@ import xpool.native
 import xtest
 from xpool.native import RuntimeRole
 from xpool.native.ffn import ForwardMode, LayerKind, OutputRequirement
-from xpool.runtime.ffnagent import capture_workspace
-from xtest.harness.native.fabric import participant, topology
 from xtest.harness.native.fabric.bootstrap import fabric_bootstrap
-from xtest.harness.native.fabric.protocol import FabricCoordinatorTrace, FabricFfnAgentTrace, FabricParticipantSpec
+from xtest.harness.native.fabric.protocol import FabricCoordinatorTrace, FabricFfnAgentTrace
 from xtest.harness.native.fabric.topology import run_fabric_topology
 from xtest.harness.support.native.fabric import assert_fabric_report
 
@@ -231,10 +227,9 @@ def test_fp16_tp2_delivers_complete_output(tmp_path: Path) -> None:
 
 
 @xtest.requirements(device_count=3)
-def test_unselected_ffnagent_installs_empty_lane_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unselected_ffnagent_installs_empty_lane_root(tmp_path: Path) -> None:
     """Keep joined FfnAgents outside a Layer Execution Group drainable and silent."""
 
-    monkeypatch.setattr(topology, "run_fabric_participant", run_participant_with_distinct_source_policies)
     with fabric_bootstrap(workdir=tmp_path / "bootstrap") as uid:
         report = run_fabric_topology(
             uid,
@@ -257,27 +252,6 @@ def test_unselected_ffnagent_installs_empty_lane_root(tmp_path: Path, monkeypatc
     assert selected.primary_graph_binding_site_counts
     assert unselected.primary_graph_binding_site_counts == ()
     assert unselected.lane_compute_branch_counts == (0,)
-
-
-def run_participant_with_distinct_source_policies(connection: Connection, spec: FabricParticipantSpec) -> None:
-    if spec.role is not RuntimeRole.FFNAGENT:
-        participant.run_fabric_participant(connection, spec)
-        return
-    has_scratch = spec.pe == spec.atnagent_count
-    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8" if has_scratch else ":0:0"
-    for name in ("CUBLASLT_WORKSPACE_SIZE", "TORCH_BLAS_PREFER_CUBLASLT", "TORCH_CUBLASLT_UNIFIED_WORKSPACE"):
-        os.environ.pop(name, None)
-    prepare = capture_workspace.prepare_execution_sources
-
-    def prepare_distinct_sources():
-        environment, owners = prepare()
-        assert bool(environment.lane_resources) is has_scratch
-        return environment, owners
-
-    # Successful startup also proves that the shared Plan preserves each own entry.
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(capture_workspace, "prepare_execution_sources", prepare_distinct_sources)
-        participant.run_fabric_participant(connection, spec)
 
 
 @xtest.requirements(device_count=6)

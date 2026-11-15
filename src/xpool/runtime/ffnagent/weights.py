@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import torch
 
 import xpool.native
 from xpool import ffn
-from xpool.quantization import TensorLayout
+from xpool.quantization import QuantizationSpec, TensorLayout
 
 
 def validate_tensor(
@@ -58,9 +57,11 @@ class ProjectionLayout:
     value/scale layouts. This description retains no Tensor or device state.
     """
 
+    quantization: QuantizationSpec
     values: TensorLayout
     scales: TensorLayout | None
     bias: TensorLayout | None
+    gate_up_order: ffn.GateUpOrder | None
 
     def zero_probe(self, device: torch.device) -> ProjectionWeights:
         """Allocate shape-equivalent, encoding-correct zero resources for capture."""
@@ -88,11 +89,7 @@ class ProjectionLayout:
     def allocation_bytes(self) -> tuple[int, ...]:
         """Return positive Tensor byte requests in the actual allocation order."""
 
-        return tuple(
-            math.prod(layout.shape) * layout.dtype.itemsize
-            for layout in (self.values, self.scales, self.bias)
-            if layout is not None
-        )
+        return tuple(layout.nbytes for layout in (self.values, self.scales, self.bias) if layout is not None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,70 +130,18 @@ class ProjectionWeights:
 
 
 @dataclass(frozen=True, slots=True)
-class ExpertLayout:
-    """Capacity-independent physical resources for the two Expert projections."""
-
-    gate_up: ProjectionLayout
-    down: ProjectionLayout
-
-    @classmethod
-    def from_layer(
-        cls,
-        layer: ffn.MoeFfnSpec,
-        *,
-        hidden_size: int,
-        local_intermediate_size: int,
-        payload_dtype: torch.dtype,
-        bias_dtype: torch.dtype,
-    ) -> ExpertLayout:
-        """Compose encoded Expert geometry with operation-owned bias storage.
-
-        Sources in each group must share an encoding and its scale presence.
-        This pure construction owns no Tensor and performs no device query.
-        """
-
-        gate_up_sources, down_sources = layer.expert_projection_sources()
-        expert_count = layer.routed_expert_count + layer.shared_expert_count
-        projections = []
-        for sources, shape, bias_shape in (
-            (
-                gate_up_sources,
-                (expert_count, 2 * local_intermediate_size, hidden_size),
-                (expert_count, 2 * local_intermediate_size),
-            ),
-            (down_sources, (expert_count, hidden_size, local_intermediate_size), (expert_count, hidden_size)),
-        ):
-            scheme = sources[0].quantization
-            if any(source.quantization != scheme for source in sources):
-                raise ValueError("Expert projection group requires a homogeneous encoding")
-            encoded = scheme.weight_layout(logical_shape=shape, dtype=payload_dtype)
-            if any((source.scales_key is not None) != (encoded.scales is not None) for source in sources):
-                raise ValueError("Expert projection scale keys disagree with the encoding")
-            projections.append(
-                ProjectionLayout(
-                    values=encoded.values,
-                    scales=encoded.scales,
-                    bias=TensorLayout(bias_shape, bias_dtype, 0)
-                    if any(source.bias_key is not None for source in sources)
-                    else None,
-                )
-            )
-        return cls(gate_up=projections[0], down=projections[1])
-
-
-@dataclass(frozen=True, slots=True)
 class DenseFfnWeights:
-    """Retained gate/up and down resources for one local Dense shard."""
+    """Retained input and output resources for one local Dense shard."""
 
-    gate_up: ProjectionWeights
-    down: ProjectionWeights
+    i_proj: ProjectionWeights
+    o_proj: ProjectionWeights
 
     @classmethod
     def allocate(
         cls,
         *,
-        gate_up: ProjectionLayout,
-        down: ProjectionLayout,
+        i_proj: ProjectionLayout,
+        o_proj: ProjectionLayout,
         device: torch.device,
     ) -> DenseFfnWeights:
         """Allocate neutral resources in the prepared projection order.
@@ -205,20 +150,20 @@ class DenseFfnWeights:
         Loading overwrites the valid source intervals without another weight copy.
         """
 
-        return cls(gate_up=gate_up.zero_probe(device), down=down.zero_probe(device))
+        return cls(i_proj=i_proj.zero_probe(device), o_proj=o_proj.zero_probe(device))
 
     def __post_init__(self) -> None:
-        if self.gate_up.values.ndim != 2 or self.down.values.ndim != 2:
+        if self.i_proj.values.ndim != 2 or self.o_proj.values.ndim != 2:
             raise ValueError("Dense projections require matrix values")
-        if self.down.values.device != self.gate_up.values.device:
+        if self.o_proj.values.device != self.i_proj.values.device:
             raise ValueError("Dense projections must share one device")
 
     def binding_view(self) -> xpool.native.ffnagent.DenseBindingView:
         """Borrow complete projection addresses while this owner retains storage."""
 
         return xpool.native.ffnagent.DenseBindingView(
-            gate_up=self.gate_up.binding_view(),
-            down=self.down.binding_view(),
+            i_proj=self.i_proj.binding_view(),
+            o_proj=self.o_proj.binding_view(),
         )
 
 
@@ -246,16 +191,16 @@ class MoeRouterWeights:
 class MoeFfnWeights:
     """Retained Expert projections and optional TP Router ownership."""
 
-    gate_up: ProjectionWeights
-    down: ProjectionWeights
+    i_proj: ProjectionWeights
+    o_proj: ProjectionWeights
     router: MoeRouterWeights | None
 
     @classmethod
     def allocate(
         cls,
         *,
-        gate_up: ProjectionLayout,
-        down: ProjectionLayout,
+        i_proj: ProjectionLayout,
+        o_proj: ProjectionLayout,
         router: ProjectionLayout | None,
         correction_bias: TensorLayout | None,
         device: torch.device,
@@ -264,8 +209,8 @@ class MoeFfnWeights:
 
         if router is None and correction_bias is not None:
             raise ValueError("Router correction requires an owned Router projection")
-        gate_up_weights = gate_up.zero_probe(device)
-        down_weights = down.zero_probe(device)
+        i_proj_weights = i_proj.zero_probe(device)
+        o_proj_weights = o_proj.zero_probe(device)
         router_weights = None
         if router is not None:
             projection = router.zero_probe(device)
@@ -277,24 +222,24 @@ class MoeFfnWeights:
                 else None
             )
             router_weights = MoeRouterWeights(projection=projection, correction_bias=correction)
-        return cls(gate_up=gate_up_weights, down=down_weights, router=router_weights)
+        return cls(i_proj=i_proj_weights, o_proj=o_proj_weights, router=router_weights)
 
     def __post_init__(self) -> None:
-        if self.gate_up.values.ndim != 3 or self.down.values.ndim != 3:
+        if self.i_proj.values.ndim != 3 or self.o_proj.values.ndim != 3:
             raise ValueError("Expert projections require Expert-major matrix values")
-        if self.gate_up.values.shape[0] != self.down.values.shape[0]:
+        if self.i_proj.values.shape[0] != self.o_proj.values.shape[0]:
             raise ValueError("Expert projections must have matching cardinality")
-        if self.down.values.device != self.gate_up.values.device:
+        if self.o_proj.values.device != self.i_proj.values.device:
             raise ValueError("Expert projections must share one device")
-        if self.router is not None and self.router.projection.values.device != self.gate_up.values.device:
+        if self.router is not None and self.router.projection.values.device != self.i_proj.values.device:
             raise ValueError("Expert and Router resources must share one device")
 
     def binding_view(self) -> xpool.native.ffnagent.MoeBindingView:
         """Borrow complete Expert and Router addresses without transferring owners."""
 
         return xpool.native.ffnagent.MoeBindingView(
-            gate_up=self.gate_up.binding_view(),
-            down=self.down.binding_view(),
+            i_proj=self.i_proj.binding_view(),
+            o_proj=self.o_proj.binding_view(),
             router=None
             if self.router is None
             else xpool.native.ffnagent.MoeRouterBindingView(

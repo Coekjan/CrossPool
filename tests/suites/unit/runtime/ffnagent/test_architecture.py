@@ -9,6 +9,7 @@ import pytest
 from xpool.ffn import (
     DenseFfnSpec,
     FfnModelSpec,
+    GateTransform,
     GateUpOrder,
     MoeFfnSpec,
     RouterAlgorithm,
@@ -210,7 +211,8 @@ def test_load_compiles_original_gpt_oss_sources_and_parameterized_activation(tmp
     spec = architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
 
     assert spec.hidden_size == 64
-    assert spec.activation == SiluActivation(alpha=1.5, limit=6.0, up_offset=1.0)
+    assert spec.activation == SiluActivation(alpha=1.5)
+    assert spec.gate_transform == GateTransform(limit=6.0, up_offset=1.0)
     assert tuple(key for layer in spec.layers for key in layer.tensor_keys()) == keys
     for layer in spec.layers:
         assert isinstance(layer, MoeFfnSpec)
@@ -279,7 +281,7 @@ def test_compilers_select_serializable_router_semantics(
             **source,
         }
     )
-    spec = adapter.compile(model_id=TEST_MODEL_ID, model_config=config)
+    spec = adapter.compile(model_id=TEST_MODEL_ID, model_config=config, checkpoint_keys=())
     assert isinstance(spec.layers[0], MoeFfnSpec)
     assert spec.layers[0].router_algorithm is algorithm
     assert spec.layers[0].router_projection_precision is precision

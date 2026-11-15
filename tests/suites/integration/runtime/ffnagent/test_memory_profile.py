@@ -20,7 +20,7 @@ from xpool.fabric import FABRIC_UID_HEX_LENGTH, FabricPePlacement, FabricPlan, F
 from xpool.runtime.ffnagent.memory_profile import corpus, runner
 from xpool.utils.mps import MpsEndpoint
 from xpool.utils.sighandler import block_signals, initialize_child_signals
-from xtest.harness.support.config import TEST_CALIBRATION_ENVIRONMENT, TEST_EXECUTION_CONTRACT, synthetic_config
+from xtest.harness.support.config import TEST_CALIBRATION_ENVIRONMENT, synthetic_config
 
 
 def uid_peer(
@@ -60,15 +60,7 @@ def participant_peer(
             # Withhold readiness briefly to observe whether stop is queued
             # independently of preparation, then let either implementation retire.
             (config_path.parent.parent / f"stop-before-prepared-pe{pe}").write_text(str(connection.poll(1.0)))
-        connection.send(
-            (
-                "facts",
-                runner.ParticipantMemoryFacts(
-                    calibration_environment=TEST_CALIBRATION_ENVIRONMENT,
-                    execution_contract=TEST_EXECUTION_CONTRACT if placement.role is FabricRole.FFNAGENT else None,
-                ),
-            )
-        )
+        connection.send(("facts", TEST_CALIBRATION_ENVIRONMENT))
         command = connection.recv()
         if isinstance(command, FabricPlan):
             if failed and failure_stage == "prepare":

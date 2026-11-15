@@ -137,9 +137,9 @@ and failure values. Serving-engine runtime imports, hooks, objects, and
 compatibility behavior remain under `xpool.integrations.sglang`. The integration
 translates SGLang state into CrossPool-owned values before crossing the core seam.
 One explicitly bounded implementation exception permits the FfnAgent operator
-module to use the pinned SGLang distribution's low-level Expert kernel and
-configuration-selection modules. Core APIs, Plans, Registries, GraphTemplates,
-and native Projections retain CrossPool-owned values only.
+module to use Triton-Kernels supplied by the pinned SGLang-Kernel distribution.
+Generation planning and native interfaces use CrossPool-owned values. Serving
+runtime types and retained engine state remain at the integration seam.
 
 The supported SGLang path is non-expert-parallel: `ep_size` remains one and
 `moe_a2a_backend` remains `none`. CrossPool rejects DeepEP and other expert-
@@ -148,15 +148,15 @@ therefore excludes `sgl-deep-ep` from the pinned SGLang dependency graph; this
 is a resolver policy for the supported path, not support for arbitrary SGLang
 expert-parallel configurations or non-uv installers.
 
-The SGLang adapter replaces supported decoder FFN modules with a shim module,
-filters their FFN tensors from attention-side loading, and preserves the model's
-attention-side behavior. Model adapters are discovered automatically and are
-split by model family. A model adapter receives a strict `FfnSourceConfig` view
-of the parsed `config.json` object and owns architecture extraction, checkpoint
-key mapping, activation selection, and Router Algorithm and Precision selection
-for that family. The compiled Spec carries execution semantics rather than a source
-architecture name or runtime Adapter lookup. Shared
-[FFN execution](ffn-execution.md) owns Router computation and resource geometry.
+The SGLang adapter replaces supported decoder FFN computation with a shim and
+filters the corresponding tensors from attention-side loading. Model adapters
+are discovered by family. A model adapter receives a strict `FfnSourceConfig` view
+of the parsed `config.json` and, separately, checkpoint-key metadata; it owns
+architecture extraction, checkpoint key mapping, activation selection, and
+Router Algorithm and Precision selection for that family. The compiled Spec
+carries execution semantics rather than a source architecture name or runtime
+Adapter lookup.
+Shared [FFN execution](ffn-execution.md) owns Router computation and resource geometry.
 The resulting `FfnModelSpec.digest()` identifies the compiled FFN semantics; the
 source JSON bytes are not carried as a separate contract field.
 
@@ -210,8 +210,8 @@ It contains global participant counts, executor lane count, scheduler policy,
 ordered model plans, and ordered Instance plans. Native processes create live
 CUDA objects and process-local addresses after retaining the plan.
 
-`FfnModelSpec` is the compiled FFN contract. It contains ordered gated Dense or
-MoE layer semantics, intrinsic dimensions, activation and routing behavior,
+`FfnModelSpec` is the compiled FFN contract. It contains ordered Dense or MoE
+layer semantics, intrinsic dimensions, activation and routing behavior,
 and checkpoint identities. Generation planning resolves placement and device
 state separately.
 
@@ -291,16 +291,15 @@ only.
 
 ## Memory admission
 
-Each FfnAgent prepares its execution sources and trims releasable cache before
-measuring free memory. It registers that baseline and an address-free
-`FfnExecutionContract`. The contract names the resources each Lane may need
-and any read-only storage already held by the process. Only declarations
-cross registration; the FfnAgent keeps the owners. See
-[FFN execution](ffn-execution.md#graphtemplate-and-executor-lanes) for their lifetime.
+Each FfnAgent trims releasable cache before measuring free memory and registers
+that baseline. The daemon derives concrete compute plans from admitted model
+specifications, profiles and candidate placements. The FfnAgent retains loaded
+weights and private Lane backing under
+[FFN execution](ffn-execution.md#graphtemplate-and-executor-lanes).
 
-For each candidate placement, the solver charges a backing once when any of
-its Signatures needs it. Each Lane has its own private backing. Shared storage
-held at baseline already reduces free memory and adds no incremental charge.
+For each candidate placement, the solver charges each installed Signature's
+root workspace once per Lane. Control Probes retain their separate sharing
+relations. Each Lane has its own private backing.
 The estimate distinguishes exact logical requests from physical reservation:
 known consecutive Torch requests can share a segment, while independent groups
 receive no assumed cache reuse. Library and driver overhead can exceed the
@@ -315,20 +314,22 @@ sets the predicted peak; the operator margin is added once, after the peak.
 The daemon freezes membership, selects any configured Profile and solves
 placement. It checks the solver's costs with an independent numeric estimate
 before publishing a budget for every FfnAgent, including idle ones. Each
-FfnAgent checks its contract and Lane count, then compares its budget plus
-margin with fresh free memory before loading weights. The deployment carries
-contracts and budgets; environment observations and coefficients stay with the
+FfnAgent checks its Lane count, then compares its budget plus margin with fresh
+free memory before loading weights. The deployment carries budgets;
+environment observations and coefficients stay with the
 daemon. Editing the Profile cannot change a published budget.
 
 Without `ffn.device_memory_calibration`, placement uses the analytic estimate.
 A startup OOM must prevent readiness and preserve borrowed resources until
 retirement. An explicitly configured Profile must load and match before the
 daemon publishes the Plan. Matching uses the Lane count, PE-ordered device and
-software observations, execution contracts, and allocation and compute settings.
+software observations, the complete FFN participant count including idle ones,
+and allocation and compute settings.
 The runtime reads relevant configuration-file contents, including the selected
 NCCL topology. An inspection error prevents reuse; ordinary unprofiled startup
-skips this inspection. Changes to estimation rules can require remeasurement
-even if the Profile schema still matches.
+skips this inspection. Kernel, allocation or estimation changes that affect
+measured costs require renewed qualification even when recorded environment
+facts still match.
 
 `xpool memory-profile` fits nonnegative corrections on repeated synthetic
 deployments using production weight allocation and execution construction.
@@ -461,7 +462,7 @@ ordered UUID view through `/config/check`. Agent startup performs the same check
 before admission and native initialization. Matching requests return `204`,
 disagreement returns `409`, and malformed requests return `422`. These startup
 owners perform the complete check once; registration owns identity, topology and
-execution contracts.
+memory observations.
 
 The plugin sets `SGLANG_ENABLE_POST_CAPTURE_KV_SIZING` to true and
 `SGLANG_ONE_VISIBLE_DEVICE_PER_PROCESS` and

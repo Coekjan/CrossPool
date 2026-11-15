@@ -324,9 +324,9 @@ TEST_F(ExecutionRetirementTest, FailedCleanupSynchronizationPreservesAllLaneOwne
   EXPECT_TRUE(faults.executables.empty());
 }
 
-XPOOL_KERNEL_FN void borrowed_compute(const std::uint32_t *input, const std::uint32_t *gate, const std::uint32_t *down,
-                                      std::uint32_t *scratch, std::uint32_t *output) {
-  *scratch = *input + *gate + *down;
+XPOOL_KERNEL_FN void borrowed_compute(const std::uint32_t *input, const std::uint32_t *i_proj,
+                                      const std::uint32_t *o_proj, std::uint32_t *scratch, std::uint32_t *output) {
+  *scratch = *input + *i_proj + *o_proj;
   *output = *scratch;
 }
 
@@ -349,8 +349,9 @@ protected:
                                                     .bias = std::nullopt,
                                                     .bias_bytes = 0};
     };
-    const auto primary = xpool::ffnagent::DenseBindingView{.gate_up = projection(0, 64), .down = projection(64, 32)};
-    const auto control = xpool::ffnagent::DenseBindingView{.gate_up = projection(128, 64), .down = projection(192, 32)};
+    const auto primary = xpool::ffnagent::DenseBindingView{.i_proj = projection(0, 64), .o_proj = projection(64, 32)};
+    const auto control =
+        xpool::ffnagent::DenseBindingView{.i_proj = projection(128, 64), .o_proj = projection(192, 32)};
     projection_.instances[0].layers[0].ffnagent_indices = {1};
     projection_.validate();
     descriptor_.layers = {{.instance_index = 0,
@@ -368,9 +369,9 @@ protected:
         auto graph = cudaGraph_t{};
         C10_CUDA_CHECK(cudaGraphCreate(&graph, 0));
         source_graphs_.push_back(graph);
-        auto *gate = reinterpret_cast<const std::uint32_t *>(view.gate_up.values);
-        auto *down = reinterpret_cast<const std::uint32_t *>(view.down.values);
-        auto args = std::array<void *, 5>{&input, &gate, &down, &scratch, &output};
+        auto *i_proj = reinterpret_cast<const std::uint32_t *>(view.i_proj.values);
+        auto *o_proj = reinterpret_cast<const std::uint32_t *>(view.o_proj.values);
+        auto args = std::array<void *, 5>{&input, &i_proj, &o_proj, &scratch, &output};
         static_cast<void>(xpool::utils::cuda::graph::add_kernel_node(
             graph, reinterpret_cast<const void *>(borrowed_compute), dim3{1}, dim3{1}, 0, args.data()));
         return reinterpret_cast<std::uintptr_t>(graph);
@@ -384,8 +385,8 @@ protected:
           .control_graph_address = capture(control),
           .capture_input_address = reinterpret_cast<std::uintptr_t>(input),
           .capture_partial_address = reinterpret_cast<std::uintptr_t>(output),
-          .capture_ranges = {{"compute", reinterpret_cast<std::uintptr_t>(scratch),
-                              reinterpret_cast<std::uintptr_t>(scratch), 32}},
+          .capture_workspace =
+              xpool::ffnagent::CaptureWorkspaceView{reinterpret_cast<std::uintptr_t>(scratch), std::size_t{32}},
           .primary_weight_bindings = primary,
           .control_weight_bindings = control,
       });

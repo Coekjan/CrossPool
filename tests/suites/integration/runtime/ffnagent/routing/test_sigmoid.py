@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import pytest
 import torch
+from tests.suites.integration.runtime.ffnagent.support import router_plan
 
 import xtest
 from xpool.ffn import RouterAlgorithm, RouterProjectionPrecision, TopKWeightRounding
-from xpool.runtime.ffnagent import execution, weights
-from xpool.runtime.ffnagent.operators import linear, routing
+from xpool.runtime.ffnagent import weights
+from xpool.runtime.ffnagent.operators import routing
 
 
 @pytest.mark.parametrize("payload_dtype", (torch.bfloat16, torch.float16), ids=("bfloat16", "float16"))
@@ -36,48 +37,24 @@ def test_sigmoid_router_matches_selection_only_correction(
         ),
         correction_bias=correction_bias,
     )
-    workspace = torch.empty(
-        execution.router_workspace_bytes(
-            RouterProjectionPrecision.FP32,
-            payload_dtype=payload_dtype,
-            payload_row_capacity=2,
-            hidden_size=expert_count,
-            routed_expert_count=expert_count,
-            routed_topk=topk,
-        ),
-        device="cuda",
-        dtype=torch.uint8,
-    )
-    routed_ids = torch.empty((2, topk), device="cuda", dtype=torch.int32)
-    routed_weights = torch.empty((2, topk), device="cuda", dtype=torch.float32)
-
-    routing.compute_routed_topk(
-        RouterAlgorithm.SIGMOID,
-        RouterProjectionPrecision.FP32,
-        projection_operation=linear.LinearOperationKind.TORCH,
-        weight_rounding=TopKWeightRounding.NONE,
-        hidden_states=hidden_states,
-        router_weights=router,
-        workspace=workspace,
-        routed_ids=routed_ids,
-        routed_weights=routed_weights,
+    plan = router_plan(
+        hidden_states,
+        router,
+        algorithm=RouterAlgorithm.SIGMOID,
+        precision=RouterProjectionPrecision.FP32,
+        routed_topk=topk,
         renormalize=True,
+        weight_rounding=TopKWeightRounding.NONE,
     )
+    workspace = torch.empty(plan.workspace.nbytes, device="cuda", dtype=torch.uint8)
+    operation = routing.Router(plan, workspace)
+    routed_ids, routed_weights = operation.ids, operation.weights
+
+    operation.run_into(hidden_states=hidden_states, router_weights=router)
 
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
-        routing.compute_routed_topk(
-            RouterAlgorithm.SIGMOID,
-            RouterProjectionPrecision.FP32,
-            projection_operation=linear.LinearOperationKind.TORCH,
-            weight_rounding=TopKWeightRounding.NONE,
-            hidden_states=hidden_states,
-            router_weights=router,
-            workspace=workspace,
-            routed_ids=routed_ids,
-            routed_weights=routed_weights,
-            renormalize=True,
-        )
+        operation.run_into(hidden_states=hidden_states, router_weights=router)
     hidden_states.mul_(0.5)
     if correction_bias is not None:
         correction_bias.neg_()
@@ -85,7 +62,7 @@ def test_sigmoid_router_matches_selection_only_correction(
     torch.cuda.synchronize()
 
     scores = torch.sigmoid(torch.mm(hidden_states.float(), router.projection.values.t()))
-    converted_input = workspace.view(torch.float32)[: hidden_states.numel()].view_as(hidden_states)
+    converted_input = operation.converted_input
     torch.testing.assert_close(converted_input, hidden_states.float(), rtol=0, atol=0)
     selection = scores if correction_bias is None else scores + correction_bias
     _, expected_ids = torch.topk(selection, topk, dim=-1)
@@ -116,32 +93,19 @@ def test_router_tie_policy_excludes_padding_and_preserves_zero_weights(algorithm
         ),
         correction_bias=None,
     )
-    workspace = torch.empty(
-        execution.router_workspace_bytes(
-            precision,
-            payload_dtype=hidden_states.dtype,
-            payload_row_capacity=2,
-            hidden_size=17,
-            routed_expert_count=17,
-            routed_topk=3,
-        ),
-        device="cuda",
-        dtype=torch.uint8,
-    )
-    routed_ids = torch.empty((2, 3), device="cuda", dtype=torch.int32)
-    routed_weights = torch.empty((2, 3), device="cuda", dtype=torch.float32)
-    routing.compute_routed_topk(
-        algorithm,
-        precision,
-        projection_operation=linear.LinearOperationKind.TORCH,
-        weight_rounding=TopKWeightRounding.NONE,
-        hidden_states=hidden_states,
-        router_weights=router,
-        workspace=workspace,
-        routed_ids=routed_ids,
-        routed_weights=routed_weights,
+    plan = router_plan(
+        hidden_states,
+        router,
+        algorithm=algorithm,
+        precision=precision,
+        routed_topk=3,
         renormalize=True,
+        weight_rounding=TopKWeightRounding.NONE,
     )
+    workspace = torch.empty(plan.workspace.nbytes, device="cuda", dtype=torch.uint8)
+    operation = routing.Router(plan, workspace)
+    routed_ids, routed_weights = operation.ids, operation.weights
+    operation.run_into(hidden_states=hidden_states, router_weights=router)
     ids = (16, 15, 14) if algorithm is RouterAlgorithm.SIGMOID else (0, 1, 2)
     second_weights = (0.0, 0.0, 0.0) if algorithm is RouterAlgorithm.SIGMOID else (1 / 3, 1 / 3, 1 / 3)
     torch.testing.assert_close(routed_ids, torch.tensor((ids, ids), device="cuda", dtype=torch.int32), rtol=0, atol=0)

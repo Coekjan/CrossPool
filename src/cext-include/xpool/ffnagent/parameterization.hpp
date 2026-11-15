@@ -39,8 +39,6 @@ struct LaneAddressReplacement {
   std::uintptr_t target_address;
   /// Require a direct graph reference to this range.
   bool required = true;
-  /// Reject typed memory writes through a shared immutable resource.
-  bool read_only = false;
 };
 
 /// One node together with the graph that directly owns it.

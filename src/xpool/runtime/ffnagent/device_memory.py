@@ -16,10 +16,10 @@ from xpool.memory import (
     MIB,
     DeviceMemoryEstimate,
     DeviceMemoryFeatures,
-    FfnExecutionContract,
     FfnMemoryCalibrationCoefficients,
 )
 from xpool.runtime.ffnagent import execution, preparation
+from xpool.runtime.ffnagent.operators import dense
 from xpool.utils import align_up
 from xpool.utils.integer import ensure_sint64_nonnegative
 
@@ -127,12 +127,10 @@ def graph_capture_allocator_allowance_bytes(signature: execution.ExecutionSignat
     return result
 
 
-def capture_pool_reservation_bytes(plan: preparation.ExecutionResourcePlan) -> int:
-    """Estimate one Lane's declared pool for the complete resource plan."""
+def capture_pool_reservation_bytes(plans: tuple[dense.DenseExecutionPlan | preparation.MoeExecutionPlan, ...]) -> int:
+    """Reserve each Signature's root separately within one Lane pool."""
 
-    result = sum(allocator_reservation_bytes(group.requirement.request_bytes) for group in plan.lane_resources)
-    ensure_sint64_nonnegative(result)
-    return result
+    return sum(allocator_reservation_bytes((plan.workspace.nbytes,)) for plan in plans)
 
 
 class DeviceMemoryEstimator:
@@ -143,7 +141,6 @@ class DeviceMemoryEstimator:
         *,
         model_specs: tuple[ffn.FfnModelSpec, ...],
         instance_profiles: tuple[InstanceFfnProfile, ...],
-        ffn_execution_contracts: tuple[FfnExecutionContract, ...],
         coefficients: FfnMemoryCalibrationCoefficients | None,
     ) -> None:
         """Retain co-indexed semantics and the generation's selected correction."""
@@ -151,8 +148,6 @@ class DeviceMemoryEstimator:
         if not model_specs or len(model_specs) != len(instance_profiles):
             raise ValueError("device-memory estimation requires nonempty co-indexed Models and Profiles")
         config = get_global_config()
-        if len(ffn_execution_contracts) != len(config.ffn.devices):
-            raise ValueError("execution contracts do not match configured FfnAgent count")
         if len(model_specs) != len(config.models):
             raise ValueError("device-memory Models do not match configured Model count")
         for index, (model, spec, profile) in enumerate(zip(config.models, model_specs, instance_profiles, strict=True)):
@@ -161,7 +156,6 @@ class DeviceMemoryEstimator:
             profile.require_compatible_model(spec)
         self.model_specs = model_specs
         self.instance_profiles = instance_profiles
-        self.ffn_execution_contracts = ffn_execution_contracts
         self.coefficients = coefficients
 
     def tp_size(self, model_plan_index: int) -> int:
@@ -258,7 +252,6 @@ class DeviceMemoryEstimator:
         ffnagent_count = len(get_global_config().ffn.devices)
         if not 0 <= ffnagent_index < ffnagent_count:
             raise ValueError("device-memory FfnAgent index is outside the configured Fleet")
-        execution_contract = self.ffn_execution_contracts[ffnagent_index]
         if len(model_plans) != len(self.model_specs):
             raise ValueError("device-memory Model Plans are not co-indexed with Model Specs")
         signatures: dict[execution.ExecutionSignature, None] = {}
@@ -304,10 +297,10 @@ class DeviceMemoryEstimator:
         graph_capture_allowance = sum(
             graph_capture_allocator_allowance_bytes(signature) for signature in signatures
         ) * executor_lane_count + sum(allocator_reservation_bytes(group) - sum(group) for group in probe_groups)
-        resource_plan = preparation.ExecutionResourcePlan.from_signatures(
-            tuple(signatures), contract=execution_contract
-        )
-        private_pool_reservation = executor_lane_count * capture_pool_reservation_bytes(resource_plan)
+        compute_plans = preparation.prepare_execution_plans(tuple(signatures))
+        private_pool_reservation = executor_lane_count * capture_pool_reservation_bytes(compute_plans)
+        workspace_bytes = executor_lane_count * sum(plan.workspace.nbytes for plan in compute_plans)
+        workspace_allocations = executor_lane_count * sum(plan.workspace.nbytes > 0 for plan in compute_plans)
         packed_weight_bytes = sum(packed_weight_storage_bytes)
         packed_weight_allocations = len(packed_weight_storage_bytes)
         dense_signature_count = sum(
@@ -350,11 +343,7 @@ class DeviceMemoryEstimator:
         )
         capture_private_charge = DeviceMemoryCharge(
             "capture.private_pools",
-            sum(
-                executor_lane_count * group.requirement.exact_logical_bytes
-                for group in resource_plan.lane_resources
-                if group.requirement.exact_logical_bytes is not None
-            ),
+            workspace_bytes,
             private_pool_reservation,
         )
         infrastructure_charge = DeviceMemoryCharge("capture.infrastructure", 0, 0, ("capture.infrastructure",))
@@ -375,15 +364,10 @@ class DeviceMemoryEstimator:
         )
         joined_features = replace(weight_features, joined_ffnagent=True)
         capture_features = DeviceMemoryFeatures(
-            tensor_storage_bytes=packed_weight_bytes
-            + graph_capture_bytes
-            + sum(
-                executor_lane_count * group.requirement.logical_extent_bound_bytes
-                for group in resource_plan.lane_resources
-            ),
+            tensor_storage_bytes=packed_weight_bytes + graph_capture_bytes + workspace_bytes,
             tensor_storage_allocation_count=packed_weight_allocations
             + graph_capture_allocations
-            + sum(executor_lane_count * len(group.requirement.request_bytes) for group in resource_plan.lane_resources),
+            + workspace_allocations,
             dense_graph_capture_count=dense_signature_count * executor_lane_count,
             moe_graph_capture_count=moe_signature_count * executor_lane_count,
             executor_lane_count=executor_lane_count,
@@ -394,13 +378,8 @@ class DeviceMemoryEstimator:
         )
         retained_features = replace(
             capture_features,
-            tensor_storage_bytes=packed_weight_bytes
-            + sum(
-                executor_lane_count * group.requirement.logical_extent_bound_bytes
-                for group in resource_plan.lane_resources
-            ),
-            tensor_storage_allocation_count=packed_weight_allocations
-            + sum(executor_lane_count * len(group.requirement.request_bytes) for group in resource_plan.lane_resources),
+            tensor_storage_bytes=packed_weight_bytes + workspace_bytes,
+            tensor_storage_allocation_count=packed_weight_allocations + workspace_allocations,
             dense_graph_capture_count=0,
             moe_graph_capture_count=0,
         )

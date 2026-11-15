@@ -41,19 +41,11 @@ namespace xpool::bindings {
 void bind_ffnagent(py::module_ &module) {
   auto ffnagent = module.def_submodule("ffnagent", "Native FfnAgent execution lifecycle functions.");
 
-  py::class_<xpool::ffnagent::CapturedResourceRange>(ffnagent, "CapturedResourceRange",
-                                                     "Logical storage borrowed from a retained pool or explicit owner.")
-      .def(py::init<std::string, std::uintptr_t, std::uintptr_t, std::size_t, bool>(), py::arg("key"),
-           py::arg("primary_address"), py::arg("control_address"), py::arg("bytes"),
-           py::arg("shared_read_only") = false)
-      .def_readonly("key", &xpool::ffnagent::CapturedResourceRange::key, "Source identity within one capture.")
-      .def_readonly("primary_address", &xpool::ffnagent::CapturedResourceRange::primary_address,
-                    "Primary address retained for service.")
-      .def_readonly("control_address", &xpool::ffnagent::CapturedResourceRange::control_address,
-                    "Control address retained through installation.")
-      .def_readonly("bytes", &xpool::ffnagent::CapturedResourceRange::bytes, "Logical extent of each source range.")
-      .def_readonly("shared_read_only", &xpool::ffnagent::CapturedResourceRange::shared_read_only,
-                    "Source-declared immutable storage permitted across Lanes.");
+  py::class_<xpool::ffnagent::CaptureWorkspaceView>(ffnagent, "CaptureWorkspaceView",
+                                                    "Borrowed Lane workspace retained through native retirement.")
+      .def(py::init<std::uintptr_t, std::size_t>(), py::arg("address"), py::arg("bytes"))
+      .def_readonly("address", &xpool::ffnagent::CaptureWorkspaceView::address, "Retained device base address.")
+      .def_readonly("bytes", &xpool::ffnagent::CaptureWorkspaceView::bytes, "Logical extent of the root workspace.");
 
   py::class_<xpool::ffnagent::ProjectionBindingView>(ffnagent, "ProjectionBindingView",
                                                      "Non-owning projection addresses and Tensor byte extents.")
@@ -73,10 +65,10 @@ void bind_ffnagent(py::module_ &module) {
            py::arg("values"), py::arg("scales"), py::arg("bias"));
 
   py::class_<xpool::ffnagent::DenseBindingView>(ffnagent, "DenseBindingView", "Non-owning Dense resources.")
-      .def(py::init([](xpool::ffnagent::ProjectionBindingView gate_up, xpool::ffnagent::ProjectionBindingView down) {
-             return xpool::ffnagent::DenseBindingView{.gate_up = gate_up, .down = down};
+      .def(py::init([](xpool::ffnagent::ProjectionBindingView i_proj, xpool::ffnagent::ProjectionBindingView o_proj) {
+             return xpool::ffnagent::DenseBindingView{.i_proj = i_proj, .o_proj = o_proj};
            }),
-           py::arg("gate_up"), py::arg("down"));
+           py::arg("i_proj"), py::arg("o_proj"));
 
   py::class_<xpool::ffnagent::MoeRouterBindingView>(ffnagent, "MoeRouterBindingView", "Non-owning Router resources.")
       .def(py::init(
@@ -93,11 +85,11 @@ void bind_ffnagent(py::module_ &module) {
            py::arg("projection"), py::arg("correction_bias"));
 
   py::class_<xpool::ffnagent::MoeBindingView>(ffnagent, "MoeBindingView", "Non-owning MoE resources.")
-      .def(py::init([](xpool::ffnagent::ProjectionBindingView gate_up, xpool::ffnagent::ProjectionBindingView down,
+      .def(py::init([](xpool::ffnagent::ProjectionBindingView i_proj, xpool::ffnagent::ProjectionBindingView o_proj,
                        std::optional<xpool::ffnagent::MoeRouterBindingView> router) {
-             return xpool::ffnagent::MoeBindingView{.gate_up = gate_up, .down = down, .router = std::move(router)};
+             return xpool::ffnagent::MoeBindingView{.i_proj = i_proj, .o_proj = o_proj, .router = std::move(router)};
            }),
-           py::arg("gate_up"), py::arg("down"), py::arg("router"));
+           py::arg("i_proj"), py::arg("o_proj"), py::arg("router"));
 
   py::class_<xpool::ffnagent::DenseCaptureDescriptor>(ffnagent, "DenseCaptureDescriptor",
                                                       "Captured Dense execution signature.")
@@ -105,7 +97,7 @@ void bind_ffnagent(py::module_ &module) {
                        std::size_t local_intermediate_size, std::uintptr_t primary_graph_address,
                        std::uintptr_t control_graph_address, const at::Tensor &capture_input,
                        const at::Tensor &capture_partial,
-                       std::vector<xpool::ffnagent::CapturedResourceRange> capture_ranges,
+                       std::optional<xpool::ffnagent::CaptureWorkspaceView> capture_workspace,
                        xpool::ffnagent::DenseBindingView primary_weight_bindings,
                        xpool::ffnagent::DenseBindingView control_weight_bindings) {
              const auto dtype = require_payload_dtype(payload_dtype, "FFN");
@@ -122,67 +114,68 @@ void bind_ffnagent(py::module_ &module) {
                  .control_graph_address = control_graph_address,
                  .capture_input_address = require_cuda_storage(capture_input, "Dense capture input", io_bytes),
                  .capture_partial_address = require_cuda_storage(capture_partial, "Dense capture partial", io_bytes),
-                 .capture_ranges = std::move(capture_ranges),
+                 .capture_workspace = capture_workspace,
                  .primary_weight_bindings = primary_weight_bindings,
                  .control_weight_bindings = control_weight_bindings,
              };
            }),
            py::arg("payload_dtype"), py::arg("payload_row_capacity"), py::arg("hidden_size"),
            py::arg("local_intermediate_size"), py::arg("primary_graph_address"), py::arg("control_graph_address"),
-           py::arg("capture_input"), py::arg("capture_partial"), py::arg("capture_ranges"),
+           py::arg("capture_input"), py::arg("capture_partial"), py::arg("capture_workspace"),
            py::arg("primary_weight_bindings"), py::arg("control_weight_bindings"));
 
   py::class_<xpool::ffnagent::MoeCaptureDescriptor>(ffnagent, "MoeCaptureDescriptor",
                                                     "Captured MoE execution signature.")
-      .def(py::init(
-               [](const py::object &payload_dtype, std::size_t payload_row_capacity, std::size_t hidden_size,
-                  std::size_t local_intermediate_size, std::size_t expert_count, std::size_t effective_topk,
-                  std::optional<std::size_t> routed_expert_count, std::uintptr_t primary_graph_address,
-                  std::uintptr_t control_graph_address, const at::Tensor &capture_input,
-                  const at::Tensor &capture_partial, std::vector<xpool::ffnagent::CapturedResourceRange> capture_ranges,
-                  const at::Tensor &capture_routing_metadata, const std::optional<at::Tensor> &capture_payload_rows,
-                  xpool::ffnagent::MoeBindingView primary_weight_bindings,
-                  xpool::ffnagent::MoeBindingView control_weight_bindings) {
-                 const auto dtype = require_payload_dtype(payload_dtype, "FFN");
-                 const auto io_bytes = xpool::utils::checked::prod(payload_row_capacity, hidden_size,
-                                                                   static_cast<std::size_t>(c10::elementSize(dtype)));
-                 const auto route_bytes = xpool::utils::checked::prod(payload_row_capacity, effective_topk,
-                                                                      sizeof(std::int32_t) + sizeof(float));
-                 TORCH_CHECK(capture_input.scalar_type() == dtype && capture_partial.scalar_type() == dtype,
-                             "xpool capture input and partial must match payload dtype");
-                 TORCH_CHECK(!capture_payload_rows.has_value() ||
-                                 capture_payload_rows->scalar_type() == c10::ScalarType::Long,
-                             "xpool MoE capture payload rows must have int64 dtype");
-                 return xpool::ffnagent::MoeCaptureDescriptor{
-                     .payload_dtype = dtype,
-                     .payload_row_capacity = payload_row_capacity,
-                     .hidden_size = hidden_size,
-                     .local_intermediate_size = local_intermediate_size,
-                     .expert_count = expert_count,
-                     .effective_topk = effective_topk,
-                     .routed_expert_count = routed_expert_count,
-                     .primary_graph_address = primary_graph_address,
-                     .control_graph_address = control_graph_address,
-                     .capture_input_address = require_cuda_storage(capture_input, "MoE capture input", io_bytes),
-                     .capture_partial_address = require_cuda_storage(capture_partial, "MoE capture partial", io_bytes),
-                     .capture_ranges = std::move(capture_ranges),
-                     .capture_routing_metadata_address =
-                         require_cuda_storage(capture_routing_metadata, "MoE capture routing metadata", route_bytes),
-                     .capture_payload_rows_address =
-                         capture_payload_rows.has_value()
-                             ? std::optional{require_cuda_storage(*capture_payload_rows, "MoE capture payload rows",
-                                                                  sizeof(std::int64_t))}
-                             : std::nullopt,
-                     .primary_weight_bindings = std::move(primary_weight_bindings),
-                     .control_weight_bindings = std::move(control_weight_bindings),
-                 };
-               }),
-           py::arg("payload_dtype"), py::arg("payload_row_capacity"), py::arg("hidden_size"),
-           py::arg("local_intermediate_size"), py::arg("expert_count"), py::arg("effective_topk"),
-           py::arg("routed_expert_count"), py::arg("primary_graph_address"), py::arg("control_graph_address"),
-           py::arg("capture_input"), py::arg("capture_partial"), py::arg("capture_ranges"),
-           py::arg("capture_routing_metadata"), py::arg("capture_payload_rows"), py::arg("primary_weight_bindings"),
-           py::arg("control_weight_bindings"));
+      .def(
+          py::init([](const py::object &payload_dtype, std::size_t payload_row_capacity, std::size_t hidden_size,
+                      std::size_t local_intermediate_size, std::size_t expert_count, std::size_t effective_topk,
+                      std::optional<std::size_t> routed_expert_count, std::uintptr_t primary_graph_address,
+                      std::uintptr_t control_graph_address, const at::Tensor &capture_input,
+                      const at::Tensor &capture_partial,
+                      std::optional<xpool::ffnagent::CaptureWorkspaceView> capture_workspace,
+                      const at::Tensor &capture_routing_metadata, const std::optional<at::Tensor> &capture_payload_rows,
+                      xpool::ffnagent::MoeBindingView primary_weight_bindings,
+                      xpool::ffnagent::MoeBindingView control_weight_bindings) {
+            const auto dtype = require_payload_dtype(payload_dtype, "FFN");
+            const auto io_bytes = xpool::utils::checked::prod(payload_row_capacity, hidden_size,
+                                                              static_cast<std::size_t>(c10::elementSize(dtype)));
+            const auto route_bytes =
+                xpool::utils::checked::prod(payload_row_capacity, effective_topk, sizeof(std::int32_t) + sizeof(float));
+            TORCH_CHECK(capture_input.scalar_type() == dtype && capture_partial.scalar_type() == dtype,
+                        "xpool capture input and partial must match payload dtype");
+            TORCH_CHECK(!capture_payload_rows.has_value() ||
+                            capture_payload_rows->scalar_type() == c10::ScalarType::Long,
+                        "xpool MoE capture payload rows must have int64 dtype");
+            return xpool::ffnagent::MoeCaptureDescriptor{
+                .payload_dtype = dtype,
+                .payload_row_capacity = payload_row_capacity,
+                .hidden_size = hidden_size,
+                .local_intermediate_size = local_intermediate_size,
+                .expert_count = expert_count,
+                .effective_topk = effective_topk,
+                .routed_expert_count = routed_expert_count,
+                .primary_graph_address = primary_graph_address,
+                .control_graph_address = control_graph_address,
+                .capture_input_address = require_cuda_storage(capture_input, "MoE capture input", io_bytes),
+                .capture_partial_address = require_cuda_storage(capture_partial, "MoE capture partial", io_bytes),
+                .capture_workspace = capture_workspace,
+                .capture_routing_metadata_address =
+                    require_cuda_storage(capture_routing_metadata, "MoE capture routing metadata", route_bytes),
+                .capture_payload_rows_address =
+                    capture_payload_rows.has_value()
+                        ? std::optional{require_cuda_storage(*capture_payload_rows, "MoE capture payload rows",
+                                                             sizeof(std::int64_t))}
+                        : std::nullopt,
+                .primary_weight_bindings = std::move(primary_weight_bindings),
+                .control_weight_bindings = std::move(control_weight_bindings),
+            };
+          }),
+          py::arg("payload_dtype"), py::arg("payload_row_capacity"), py::arg("hidden_size"),
+          py::arg("local_intermediate_size"), py::arg("expert_count"), py::arg("effective_topk"),
+          py::arg("routed_expert_count"), py::arg("primary_graph_address"), py::arg("control_graph_address"),
+          py::arg("capture_input"), py::arg("capture_partial"), py::arg("capture_workspace"),
+          py::arg("capture_routing_metadata"), py::arg("capture_payload_rows"), py::arg("primary_weight_bindings"),
+          py::arg("control_weight_bindings"));
 
   py::class_<xpool::ffnagent::LayerExecutionDescriptor>(ffnagent, "LayerExecutionDescriptor",
                                                         "One Plan-addressed local FFN layer.")

@@ -161,7 +161,8 @@ def calibration_experiments(
     packed = ffn.FfnModelSpec(
         model_id=ModelId("calibration/packed-moe"),
         hidden_size=2048,
-        activation=ffn.SiluActivation(alpha=1.702, limit=7.0, up_offset=1.0),
+        activation=ffn.SiluActivation(alpha=1.702),
+        gate_transform=ffn.GateTransform(limit=7.0, up_offset=1.0),
         layers=(
             ffn.MoeFfnSpec(
                 kind=LayerKind.MOE,
@@ -304,11 +305,11 @@ def materialize_calibration_weights(
                 raise ValueError("calibration Plan disagrees with prepared execution width")
             device = torch.device("cuda", torch.cuda.current_device())
             layer_weights = (
-                weights.DenseFfnWeights.allocate(gate_up=layout.gate_up, down=layout.down, device=device)
+                weights.DenseFfnWeights.allocate(i_proj=layout.i_proj, o_proj=layout.o_proj, device=device)
                 if isinstance(layout, preparation.DenseFfnLayerLayout)
                 else weights.MoeFfnWeights.allocate(
-                    gate_up=layout.experts.gate_up,
-                    down=layout.experts.down,
+                    i_proj=layout.i_proj,
+                    o_proj=layout.o_proj,
                     router=layout.router,
                     correction_bias=layout.router_correction_bias,
                     device=device,

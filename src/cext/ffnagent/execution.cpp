@@ -79,8 +79,8 @@ template <typename Signature> void validate_resources(const Signature &signature
   auto primary = shared;
   auto control = shared;
   const auto append_resources = [](auto &intervals, const auto &resources) {
-    append_projection_intervals(intervals, resources.gate_up);
-    append_projection_intervals(intervals, resources.down);
+    append_projection_intervals(intervals, resources.i_proj);
+    append_projection_intervals(intervals, resources.o_proj);
     if constexpr (std::is_same_v<std::remove_cvref_t<decltype(resources)>, MoeBindingView>) {
       if (resources.router.has_value()) {
         append_projection_intervals(intervals, resources.router->projection);
@@ -94,21 +94,17 @@ template <typename Signature> void validate_resources(const Signature &signature
   };
   append_resources(primary, signature.primary_weight_bindings);
   append_resources(control, signature.control_weight_bindings);
-  auto keys = std::unordered_set<std::string>{};
-  for (const auto &region : signature.capture_ranges) {
-    TORCH_CHECK(!region.key.empty() && keys.insert(region.key).second,
-                "xpool captured resource identities must be nonempty and unique");
-    TORCH_CHECK(region.bytes != 0, "xpool captured resource requires a positive logical extent");
-    const auto append_region = [&](auto &intervals, std::uintptr_t address) {
-      TORCH_CHECK(address != 0, "xpool captured resource requires a nonnull address");
-      const auto end = xpool::utils::checked::sum(address, static_cast<std::uintptr_t>(region.bytes));
+  if (signature.capture_workspace.has_value()) {
+    const auto &workspace = *signature.capture_workspace;
+    TORCH_CHECK(workspace.address != 0 && workspace.bytes != 0,
+                "xpool capture workspace requires a nonnull address and positive extent");
+    const auto end = xpool::utils::checked::sum(workspace.address, static_cast<std::uintptr_t>(workspace.bytes));
+    for (const auto &intervals : {primary, control}) {
       for (const auto &[base, other_end] : intervals) {
-        TORCH_CHECK(address >= other_end || base >= end, "xpool captured resource overlaps another declared resource");
+        TORCH_CHECK(workspace.address >= other_end || base >= end,
+                    "xpool capture workspace overlaps another declared resource");
       }
-      intervals.emplace_back(address, end);
-    };
-    append_region(primary, region.primary_address);
-    append_region(control, region.control_address);
+    }
   }
 }
 
@@ -140,15 +136,15 @@ void validate_common(c10::ScalarType payload_dtype, std::size_t payload_row_capa
 bool binding_schema_matches(const CaptureDescriptor &signature, const BindingView &target) {
   if (const auto *dense = std::get_if<DenseCaptureDescriptor>(&signature)) {
     const auto *resources = std::get_if<DenseBindingView>(&target);
-    return resources != nullptr && dense->primary_weight_bindings.gate_up.schema_matches(resources->gate_up) &&
-           dense->primary_weight_bindings.down.schema_matches(resources->down);
+    return resources != nullptr && dense->primary_weight_bindings.i_proj.schema_matches(resources->i_proj) &&
+           dense->primary_weight_bindings.o_proj.schema_matches(resources->o_proj);
   }
   const auto *resources = std::get_if<MoeBindingView>(&target);
   if (resources == nullptr) {
     return false;
   }
   const auto &captured = std::get<MoeCaptureDescriptor>(signature).primary_weight_bindings;
-  return captured.gate_up.schema_matches(resources->gate_up) && captured.down.schema_matches(resources->down) &&
+  return captured.i_proj.schema_matches(resources->i_proj) && captured.o_proj.schema_matches(resources->o_proj) &&
          captured.router.has_value() == resources->router.has_value() &&
          (!captured.router.has_value() || captured.router->schema_matches(*resources->router));
 }
@@ -159,8 +155,8 @@ bool weight_geometry_matches(const CaptureDescriptor &left, const CaptureDescrip
     return right_dense != nullptr && left_dense->payload_dtype == right_dense->payload_dtype &&
            left_dense->hidden_size == right_dense->hidden_size &&
            left_dense->local_intermediate_size == right_dense->local_intermediate_size &&
-           left_dense->primary_weight_bindings.gate_up.schema_matches(right_dense->primary_weight_bindings.gate_up) &&
-           left_dense->primary_weight_bindings.down.schema_matches(right_dense->primary_weight_bindings.down);
+           left_dense->primary_weight_bindings.i_proj.schema_matches(right_dense->primary_weight_bindings.i_proj) &&
+           left_dense->primary_weight_bindings.o_proj.schema_matches(right_dense->primary_weight_bindings.o_proj);
   }
   const auto *left_moe = std::get_if<MoeCaptureDescriptor>(&left);
   const auto *right_moe = std::get_if<MoeCaptureDescriptor>(&right);
@@ -173,8 +169,8 @@ bool weight_geometry_matches(const CaptureDescriptor &left, const CaptureDescrip
          left_moe->local_intermediate_size == right_moe->local_intermediate_size &&
          left_moe->expert_count == right_moe->expert_count &&
          left_moe->routed_expert_count == right_moe->routed_expert_count &&
-         left_resources.gate_up.schema_matches(right_resources.gate_up) &&
-         left_resources.down.schema_matches(right_resources.down) &&
+         left_resources.i_proj.schema_matches(right_resources.i_proj) &&
+         left_resources.o_proj.schema_matches(right_resources.o_proj) &&
          left_resources.router.has_value() == right_resources.router.has_value() &&
          (!left_resources.router.has_value() || left_resources.router->schema_matches(*right_resources.router));
 }
@@ -191,8 +187,8 @@ void validate_layers(const std::vector<CaptureDescriptor> &signatures,
   for (const auto &layer : layers) {
     std::visit(
         [](const auto &value) {
-          value.gate_up.validate();
-          value.down.validate();
+          value.i_proj.validate();
+          value.o_proj.validate();
           if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>, MoeBindingView>) {
             if (value.router.has_value()) {
               value.router->validate();
@@ -244,8 +240,8 @@ void DenseCaptureDescriptor::validate() const {
                   control_graph_address);
   const auto &primary = primary_weight_bindings;
   const auto &control = control_weight_bindings;
-  validate_capture_pair(primary.gate_up, control.gate_up);
-  validate_capture_pair(primary.down, control.down);
+  validate_capture_pair(primary.i_proj, control.i_proj);
+  validate_capture_pair(primary.o_proj, control.o_proj);
   validate_resources(*this);
 }
 
@@ -260,8 +256,8 @@ void MoeCaptureDescriptor::validate() const {
   TORCH_CHECK(capture_payload_rows_address.has_value() == router_owner && primary.router.has_value() == router_owner &&
                   control.router.has_value() == router_owner,
               "xpool moe capture descriptor router ownership and capture resources disagree");
-  validate_capture_pair(primary.gate_up, control.gate_up);
-  validate_capture_pair(primary.down, control.down);
+  validate_capture_pair(primary.i_proj, control.i_proj);
+  validate_capture_pair(primary.o_proj, control.o_proj);
   validate_resources(*this);
   if (!router_owner) {
     return;
@@ -307,15 +303,10 @@ void ExecutionInstallDescriptor::validate() const {
               TORCH_CHECK(capture.effective_topk == other.effective_topk,
                           "xpool captured Lanes disagree on routing geometry");
             }
-            TORCH_CHECK(capture.capture_ranges.size() == other.capture_ranges.size(),
-                        "xpool captured Lanes disagree on resource schema");
-            for (auto resource = std::size_t{0}; resource < capture.capture_ranges.size(); ++resource) {
-              const auto &expected = capture.capture_ranges[resource];
-              const auto &actual = other.capture_ranges[resource];
-              TORCH_CHECK(expected.key == actual.key && expected.bytes == actual.bytes &&
-                              expected.shared_read_only == actual.shared_read_only,
-                          "xpool captured Lanes disagree on resource schema");
-            }
+            TORCH_CHECK(capture.capture_workspace.has_value() == other.capture_workspace.has_value() &&
+                            (!capture.capture_workspace.has_value() ||
+                             capture.capture_workspace->bytes == other.capture_workspace->bytes),
+                        "xpool captured Lanes disagree on workspace schema");
           },
           left);
     }
@@ -329,17 +320,11 @@ void ExecutionInstallDescriptor::validate() const {
                                 left.control_graph_address != right.primary_graph_address &&
                                 left.control_graph_address != right.control_graph_address,
                             "xpool Lanes must own distinct capture graphs");
-                for (const auto &a : left.capture_ranges) {
-                  for (const auto &b : right.capture_ranges) {
-                    for (const auto a_address : {a.primary_address, a.control_address}) {
-                      for (const auto b_address : {b.primary_address, b.control_address}) {
-                        const auto overlap = a_address < b_address + b.bytes && b_address < a_address + a.bytes;
-                        TORCH_CHECK(!overlap || (a.shared_read_only && b.shared_read_only && a.key == b.key &&
-                                                 a_address == b_address && a.bytes == b.bytes),
-                                    "xpool writable capture resources overlap across Lanes");
-                      }
-                    }
-                  }
+                if (left.capture_workspace.has_value() && right.capture_workspace.has_value()) {
+                  const auto &a = *left.capture_workspace;
+                  const auto &b = *right.capture_workspace;
+                  TORCH_CHECK(a.address >= b.address + b.bytes || b.address >= a.address + a.bytes,
+                              "xpool capture workspaces overlap across Lanes");
                 }
               },
               current, earlier);

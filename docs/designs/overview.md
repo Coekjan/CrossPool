@@ -24,7 +24,7 @@ The supported production boundary is:
 - one identical resolved CrossPool configuration in every process;
 - SGLang as the only serving-engine integration;
 - BF16 or FP16 hidden-state payloads; and
-- gated Dense and MoE decoder FFN layers.
+- gated and ungated Dense layers and MoE decoder FFN layers.
 
 Concrete model IDs with qualification suites are listed in
 [Supported Models](../supported-models.md). Model adapters may support
@@ -39,7 +39,7 @@ environment-compatibility checks; they do not define a device model allowlist. S
 
 The supported deployment uses one host, a fixed generation, static placement,
 and one active FFN invocation per Instance at a time. Cross-host IB, expert
-parallelism, Unary FFN, service-time placement changes, model migration,
+parallelism, service-time placement changes, model migration,
 rolling updates, mixed-ABI generations, and request-time fallback require a
 separate accepted design and qualification before they become supported
 capabilities.

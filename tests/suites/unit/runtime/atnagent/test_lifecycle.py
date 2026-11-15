@@ -40,7 +40,6 @@ from xpool.service.client import XpoolClient, XpoolClientError
 from xpool.service.wire import ElasticContextStateControlChannelRef, FabricParticipantReport
 from xtest.harness.support.config import (
     TEST_CALIBRATION_ENVIRONMENT,
-    TEST_EXECUTION_CONTRACT,
     TEST_MODEL_ID,
     install_test_config,
     reset_global_config,
@@ -66,7 +65,6 @@ def fabric_plan(profile: InstanceFfnProfile) -> FabricDeploymentPlan:
     return FabricDeploymentPlan(
         generation=FabricGenerationId(high=1, low=2),
         uid=FabricUid(value="ab" * 128),
-        ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,),
         ffn_memory_estimates=(DeviceMemoryEstimate(retained_bytes=1, peak_bytes=10),),
         pe_placements=(
             FabricPePlacement(role=FabricRole.ATNAGENT, device=0),
@@ -135,11 +133,6 @@ def test_agent_construction_initializes_role_and_devkit(
         lambda **kwargs: FfnModelSpec.model_validate(ffn_model_spec()),
     )
     if agent_type is FfnAgent:
-        monkeypatch.setattr(
-            xpool.runtime.ffnagent.agent.capture_workspace,
-            "prepare_execution_sources",
-            lambda: (TEST_EXECUTION_CONTRACT, ()),
-        )
         monkeypatch.setattr(
             xpool.runtime.ffnagent.agent.memory_calibration,
             "observe_environment",

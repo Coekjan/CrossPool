@@ -23,7 +23,6 @@ from xpool.fabric import (
     InstanceRankTopology,
     place_ffn_layer,
 )
-from xpool.memory import FfnExecutionContract
 from xpool.runtime.ffnagent import preparation
 
 
@@ -120,15 +119,12 @@ class CalibrationExperiment:
             }
         )
 
-    def fabric_plan(
-        self, uid: str, *, config: XpoolConfig, ffn_execution_contracts: tuple[FfnExecutionContract, ...]
-    ) -> FabricPlan:
+    def fabric_plan(self, uid: str, *, config: XpoolConfig) -> FabricPlan:
         """Compose a fresh generation over the complete configured agent fleet."""
 
         return FabricPlan(
             generation=FabricGenerationId.create(),
             uid=FabricUid(uid),
-            ffn_execution_contracts=ffn_execution_contracts,
             pe_placements=tuple(
                 FabricPePlacement(role=FabricRole.ATNAGENT, device=device) for device in config.atn.devices
             )

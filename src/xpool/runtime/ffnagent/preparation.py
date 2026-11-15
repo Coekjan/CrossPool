@@ -9,81 +9,10 @@ import torch
 
 from xpool import ffn
 from xpool.fabric import InstanceFfnProfile
-from xpool.memory import ExecutionResourceRequirement, FfnExecutionContract
-from xpool.quantization import TensorLayout, Unquantized
+from xpool.quantization import TensorLayout
 from xpool.runtime.ffnagent import execution, weights
-from xpool.runtime.ffnagent.operators import moe
-from xpool.utils import align_up
-
-
-@dataclass(frozen=True, slots=True)
-class ExecutionResourceGroup:
-    """One source-owned storage instance needed by any of its Signature users."""
-
-    requirement: ExecutionResourceRequirement
-    signature_indices: tuple[int, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class ExecutionResourcePlan:
-    """Selected Lane and shared resources, retained through execution retirement."""
-
-    lane_resources: tuple[ExecutionResourceGroup, ...]
-    shared_resources: tuple[ExecutionResourceGroup, ...]
-
-    @classmethod
-    def from_signatures(
-        cls,
-        signatures: tuple[execution.ExecutionSignature, ...],
-        *,
-        contract: FfnExecutionContract,
-    ) -> ExecutionResourcePlan:
-        """Resolve compute ranges and source-declared computation use sites.
-
-        Sources own allocation and lifetime policy. This pure projection attaches
-        Signature users after each requirement establishes its accounting contract.
-        """
-
-        lane_resources = []
-        shared_resources = []
-        for index, signature in enumerate(signatures):
-            compute_bytes = compute_workspace_bytes(signature)
-            lane_resources.append(
-                ExecutionResourceGroup(
-                    requirement=ExecutionResourceRequirement(
-                        key="compute",
-                        request_bytes=(compute_bytes,),
-                        logical_extent_bound_bytes=compute_bytes,
-                        exact_logical_bytes=compute_bytes,
-                        alignment_bytes=256,
-                    ),
-                    signature_indices=(index,),
-                )
-            )
-        for declarations, groups in (
-            (contract.lane_resources, lane_resources),
-            (contract.shared_resources, shared_resources),
-        ):
-            for declaration in declarations:
-                source_users = tuple(
-                    index
-                    for index, signature in enumerate(signatures)
-                    if (
-                        (isinstance(signature, execution.DenseFfnExecutionSignature) and "dense" in declaration.uses)
-                        or (
-                            isinstance(signature, execution.MoeFfnExecutionSignature)
-                            and signature.router is not None
-                            and "moe_router" in declaration.uses
-                        )
-                    )
-                )
-                if source_users:
-                    if declaration.requirement.key == "compute":
-                        raise ValueError("execution resource identities overlap within a Signature")
-                    groups.append(
-                        ExecutionResourceGroup(requirement=declaration.requirement, signature_indices=source_users)
-                    )
-        return cls(lane_resources=tuple(lane_resources), shared_resources=tuple(shared_resources))
+from xpool.runtime.ffnagent.operators import dense, moe, routing
+from xpool.runtime.ffnagent.operators.activation import Activation
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,18 +22,18 @@ class DenseFfnLayerLayout:
     layer: ffn.DenseFfnSpec
     hidden_size: int
     payload_dtype: torch.dtype
-    activation: ffn.ActivationSpec
+    activation: Activation
     tp_rank: int
     source_start: int
     source_length: int
     local_intermediate_size: int
-    gate_up: weights.ProjectionLayout
-    down: weights.ProjectionLayout
+    i_proj: weights.ProjectionLayout
+    o_proj: weights.ProjectionLayout
 
     def weight_allocation_bytes(self) -> tuple[int, ...]:
         """Return the ordered physical storage requests for this prepared layer."""
 
-        return self.gate_up.allocation_bytes() + self.down.allocation_bytes()
+        return self.i_proj.allocation_bytes() + self.o_proj.allocation_bytes()
 
     def execution_signatures(self, *, profile: InstanceFfnProfile) -> tuple[execution.DenseFfnExecutionSignature, ...]:
         """Specialize this prepared layout over the Instance Capacity domain."""
@@ -119,8 +48,8 @@ class DenseFfnLayerLayout:
                 hidden_size=self.hidden_size,
                 local_intermediate_size=self.local_intermediate_size,
                 activation=self.activation,
-                gate_up=self.gate_up,
-                down=self.down,
+                i_proj=self.i_proj,
+                o_proj=self.o_proj,
             )
             for capacity in capacities
         )
@@ -133,24 +62,24 @@ class MoeFfnLayerLayout:
     layer: ffn.MoeFfnSpec
     hidden_size: int
     payload_dtype: torch.dtype
-    activation: ffn.ActivationSpec
+    activation: Activation
     tp_rank: int
     source_start: int
     source_length: int
     local_intermediate_size: int
-    experts: weights.ExpertLayout
+    i_proj: weights.ProjectionLayout
+    o_proj: weights.ProjectionLayout
     router: weights.ProjectionLayout | None
     router_correction_bias: TensorLayout | None
-    operation: execution.ExpertOperationKind
 
     def weight_allocation_bytes(self) -> tuple[int, ...]:
         """Return ordered Expert and optional Router storage requests, in bytes."""
 
-        result = self.experts.gate_up.allocation_bytes() + self.experts.down.allocation_bytes()
+        result = self.i_proj.allocation_bytes() + self.o_proj.allocation_bytes()
         if self.router is not None:
             result += self.router.allocation_bytes()
         if self.router_correction_bias is not None:
-            result += (math.prod(self.router_correction_bias.shape) * self.router_correction_bias.dtype.itemsize,)
+            result += (self.router_correction_bias.nbytes,)
         return result
 
     def execution_signatures(self, *, profile: InstanceFfnProfile) -> tuple[execution.MoeFfnExecutionSignature, ...]:
@@ -176,22 +105,13 @@ class MoeFfnLayerLayout:
                     weight_rounding=layer.topk_weight_rounding,
                     projection=self.router,
                     routed_expert_count=layer.routed_expert_count,
-                    router_workspace_bytes=execution.router_workspace_bytes(
-                        layer.router_projection_precision,
-                        payload_dtype=self.payload_dtype,
-                        payload_row_capacity=capacity,
-                        hidden_size=self.hidden_size,
-                        routed_expert_count=layer.routed_expert_count,
-                        routed_topk=layer.routed_topk,
-                    ),
                     correction_bias=self.router_correction_bias,
                     renormalize=layer.renormalize,
                 )
                 if self.router is not None
                 else None,
-                operation=self.operation,
-                gate_up=self.experts.gate_up,
-                down=self.experts.down,
+                i_proj=self.i_proj,
+                o_proj=self.o_proj,
             )
             for capacity in capacities
         )
@@ -201,43 +121,44 @@ type FfnLayerLayout = DenseFfnLayerLayout | MoeFfnLayerLayout
 
 
 @dataclass(frozen=True, slots=True)
-class RouterWorkspaceLayout:
-    """Aligned byte regions in one caller-owned MoE root workspace."""
+class MoeExecutionPlan:
+    """One root backing composed from retained Expert and optional Router plans."""
 
-    projection: slice
-    ids: slice
-    weights: slice
-
-
-@dataclass(frozen=True, slots=True)
-class MoeWorkspaceLayout:
-    """Compose private Expert scratch and common Router storage without allocation."""
-
-    experts: slice
-    router: RouterWorkspaceLayout | None
-    nbytes: int
+    experts: moe.ExpertExecutionPlan
+    router: routing.RouterExecutionPlan | None
+    workspace: execution.WorkspaceLayout
 
     @classmethod
-    def from_signature(cls, signature: execution.MoeFfnExecutionSignature) -> MoeWorkspaceLayout:
-        operation_type = moe.expert_operation_type(signature.operation)
-        expert_bytes = operation_type.workspace_layout(signature).nbytes
-        experts = slice(0, expert_bytes)
-        router = signature.router
-        if router is None:
-            return cls(experts=experts, router=None, nbytes=expert_bytes)
-        routed_topk = signature.effective_topk - (signature.expert_count - router.routed_expert_count)
-        route_count = signature.payload_row_capacity * routed_topk
-        cursor = align_up(expert_bytes, execution.OPERATOR_ALIGNMENT_BYTES)
-        projection = slice(cursor, cursor + router.router_workspace_bytes)
-        cursor = align_up(cursor + router.router_workspace_bytes, execution.OPERATOR_ALIGNMENT_BYTES)
-        ids = slice(cursor, cursor + route_count * torch.int32.itemsize)
-        cursor = align_up(cursor + route_count * torch.int32.itemsize, execution.OPERATOR_ALIGNMENT_BYTES)
-        probabilities = slice(cursor, cursor + route_count * torch.float32.itemsize)
-        return cls(
-            experts=experts,
-            router=RouterWorkspaceLayout(projection=projection, ids=ids, weights=probabilities),
-            nbytes=cursor + route_count * torch.float32.itemsize,
+    def prepare(cls, signature: execution.MoeFfnExecutionSignature) -> MoeExecutionPlan:
+        """Prepare both consumers once and retain their exact aligned byte views."""
+
+        experts = moe.ExpertExecutionPlan.prepare(signature)
+        router = (
+            routing.RouterExecutionPlan.prepare(
+                signature.router,
+                input_layout=TensorLayout(signature.payload_shape, signature.payload_dtype, 0),
+                routed_topk=signature.effective_topk - (signature.expert_count - signature.router.routed_expert_count),
+            )
+            if signature.router is not None
+            else None
         )
+        regions = [(torch.uint8, (experts.workspace.nbytes,))]
+        if router is not None:
+            regions.append((torch.uint8, (router.workspace.nbytes,)))
+        return cls(experts=experts, router=router, workspace=execution.WorkspaceLayout.from_regions(tuple(regions)))
+
+
+def prepare_execution_plans(
+    signatures: tuple[execution.ExecutionSignature, ...],
+) -> tuple[dense.DenseExecutionPlan | MoeExecutionPlan, ...]:
+    """Prepare each Signature's root backing for budgeting and capture."""
+
+    return tuple(
+        dense.DenseExecutionPlan.prepare(signature)
+        if isinstance(signature, execution.DenseFfnExecutionSignature)
+        else MoeExecutionPlan.prepare(signature)
+        for signature in signatures
+    )
 
 
 def prepare_ffn_layer(
@@ -272,43 +193,53 @@ def prepare_ffn_layer(
 
     if isinstance(layer, ffn.DenseFfnSpec):
         projections = layer.projections
-        if any(
-            not isinstance(projection.quantization, Unquantized) or projection.scales_key is not None
-            for projection in (projections.gate, projections.up, projections.down)
-        ):
-            raise ValueError("Dense execution requires unquantized projections without scales")
+        if isinstance(projections, ffn.GatedProjectionSpec):
+            gate = model_spec.gate_transform
+            i_proj_sources = (projections.gate, projections.up)
+        else:
+            gate = None
+            i_proj_sources = (projections.up,)
+        if any(source.quantization != i_proj_sources[0].quantization for source in i_proj_sources):
+            raise ValueError("input projection sources require a homogeneous encoding")
         local_width = intermediate_size // tp_size
-        gate_up = projections.gate.quantization.weight_layout(
-            logical_shape=(2 * local_width, hidden_size), dtype=payload_dtype
+        projected_width = len(i_proj_sources) * local_width
+        i_proj = projections.up.quantization.weight_layout(
+            logical_shape=(projected_width, hidden_size), dtype=payload_dtype
         )
-        down = projections.down.quantization.weight_layout(
+        o_proj = projections.down.quantization.weight_layout(
             logical_shape=(hidden_size, local_width), dtype=payload_dtype
         )
+        if any((source.scales_key is not None) != (i_proj.scales is not None) for source in i_proj_sources) or (
+            (projections.down.scales_key is not None) != (o_proj.scales is not None)
+        ):
+            raise ValueError("Dense projection scale keys disagree with the encoding")
         return DenseFfnLayerLayout(
             layer=layer,
             hidden_size=hidden_size,
             payload_dtype=payload_dtype,
-            activation=model_spec.activation,
+            activation=Activation(function=model_spec.activation, gate=gate),
             tp_rank=tp_rank,
             source_start=tp_rank * local_width,
             source_length=local_width,
             local_intermediate_size=local_width,
-            gate_up=weights.ProjectionLayout(
-                values=gate_up.values,
-                scales=gate_up.scales,
-                bias=TensorLayout((2 * local_width,), payload_dtype, 0)
-                if projections.gate.bias_key is not None or projections.up.bias_key is not None
+            i_proj=weights.ProjectionLayout(
+                quantization=projections.up.quantization,
+                gate_up_order=ffn.GateUpOrder.INTERLEAVED if gate is not None else None,
+                values=i_proj.values,
+                scales=i_proj.scales,
+                bias=TensorLayout((projected_width,), payload_dtype, 0)
+                if any(projection.bias_key is not None for projection in i_proj_sources)
                 else None,
             ),
-            down=weights.ProjectionLayout(
-                values=down.values,
-                scales=down.scales,
+            o_proj=weights.ProjectionLayout(
+                quantization=projections.down.quantization,
+                gate_up_order=None,
+                values=o_proj.values,
+                scales=o_proj.scales,
                 bias=TensorLayout((hidden_size,), payload_dtype, 0) if projections.down.bias_key is not None else None,
             ),
         )
 
-    operation = moe.select_expert_operation(layer, payload_dtype=payload_dtype)
-    operation_type = moe.expert_operation_type(operation)
     source = layer.routed_experts
     if isinstance(source, ffn.StackedExpertSource):
         source_axes = (
@@ -342,15 +273,35 @@ def prepare_ffn_layer(
     stride = (intermediate_size + tp_size * quantum - 1) // (tp_size * quantum) * quantum
     start = min(tp_rank * stride, intermediate_size)
     length = min((tp_rank + 1) * stride, intermediate_size) - start
-    experts = weights.ExpertLayout.from_layer(
-        layer,
-        hidden_size=hidden_size,
-        local_intermediate_size=stride,
-        payload_dtype=payload_dtype,
-        bias_dtype=operation_type.bias_dtype,
-    )
-    if not isinstance(layer.router.quantization, Unquantized) or layer.router.scales_key is not None:
-        raise ValueError("Router execution requires an unquantized projection without scales")
+    gate_up_sources, down_sources = layer.expert_projection_sources()
+    expert_count = layer.routed_expert_count + layer.shared_expert_count
+    projections = []
+    for sources, shape, bias_shape, order in (
+        (
+            gate_up_sources,
+            (expert_count, 2 * stride, hidden_size),
+            (expert_count, 2 * stride),
+            ffn.GateUpOrder.INTERLEAVED,
+        ),
+        (down_sources, (expert_count, hidden_size, stride), (expert_count, hidden_size), None),
+    ):
+        scheme = sources[0].quantization
+        if any(source.quantization != scheme for source in sources):
+            raise ValueError("Expert projection group requires a homogeneous encoding")
+        encoded = scheme.weight_layout(logical_shape=shape, dtype=payload_dtype)
+        if any((source.scales_key is not None) != (encoded.scales is not None) for source in sources):
+            raise ValueError("Expert projection scale keys disagree with the encoding")
+        projections.append(
+            weights.ProjectionLayout(
+                quantization=scheme,
+                values=encoded.values,
+                scales=encoded.scales,
+                bias=TensorLayout(bias_shape, torch.float32, 0)
+                if any(source.bias_key is not None for source in sources)
+                else None,
+                gate_up_order=order,
+            )
+        )
     router_dtype = layer.router_projection_precision.weight_dtype(payload_dtype=payload_dtype)
     encoded_router = layer.router.quantization.weight_layout(
         logical_shape=(layer.routed_expert_count, hidden_size), dtype=router_dtype
@@ -359,13 +310,16 @@ def prepare_ffn_layer(
         layer=layer,
         hidden_size=hidden_size,
         payload_dtype=payload_dtype,
-        activation=model_spec.activation,
+        activation=Activation(function=model_spec.activation, gate=model_spec.gate_transform),
         tp_rank=tp_rank,
         source_start=start,
         source_length=length,
         local_intermediate_size=stride,
-        experts=experts,
+        i_proj=projections[0],
+        o_proj=projections[1],
         router=weights.ProjectionLayout(
+            quantization=layer.router.quantization,
+            gate_up_order=None,
             values=encoded_router.values,
             scales=encoded_router.scales,
             bias=TensorLayout(
@@ -383,17 +337,4 @@ def prepare_ffn_layer(
         router_correction_bias=TensorLayout((layer.routed_expert_count,), torch.float32, 0)
         if tp_rank == 0 and layer.router_correction_bias_key is not None
         else None,
-        operation=operation,
     )
-
-
-def compute_workspace_bytes(signature: execution.ExecutionSignature) -> int:
-    """Size the selected computation without configuration selection or allocation."""
-
-    if isinstance(signature, execution.DenseFfnExecutionSignature):
-        return execution.dense_workspace_bytes(
-            payload_dtype=signature.payload_dtype,
-            row_capacity=signature.payload_row_capacity,
-            local_intermediate_size=signature.local_intermediate_size,
-        )
-    return MoeWorkspaceLayout.from_signature(signature).nbytes

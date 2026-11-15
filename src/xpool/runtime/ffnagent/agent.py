@@ -13,7 +13,6 @@ from xpool.fabric import FabricGenerationPhase, FabricParticipantPhase, FabricRo
 from xpool.native import ABI_VERSION, RuntimeRole
 from xpool.runtime import memory_calibration
 from xpool.runtime.agent import Agent, AgentError, AgentHeartbeat
-from xpool.runtime.ffnagent import capture_workspace
 from xpool.runtime.ffnagent.architecture import load
 from xpool.runtime.ffnagent.loader import materialize_layer_weights
 from xpool.runtime.ffnagent.registry import FfnExecutionRegistry
@@ -43,7 +42,6 @@ class FfnAgent(Agent):
         if torch.cuda.is_initialized():
             raise AgentError("FfnAgent CUDA initialized before native FFN bootstrap")
         super().__init__(device=device, runtime_role=RuntimeRole.FFNAGENT)
-        execution_contract, self.external_resources = capture_workspace.prepare_execution_sources()
         config = get_global_config()
         calibration_environment = (
             memory_calibration.observe_environment(self.device)
@@ -61,7 +59,6 @@ class FfnAgent(Agent):
             calibration_environment=calibration_environment,
             device_free_memory_bytes=device_free_memory_bytes,
             device_total_memory_bytes=device_total_memory_bytes,
-            execution_contract=execution_contract,
             model_specs=model_specs,
             abi_version=ABI_VERSION,
             pid=self.proc_id.pid,
@@ -115,8 +112,6 @@ class FfnAgent(Agent):
             raise AgentError("Fabric Plan executor Lane count disagrees with the process configuration")
         atnagent_count = sum(placement.role is FabricRole.ATNAGENT for placement in plan.pe_placements)
         ffnagent_index = self.fabric_pe() - atnagent_count
-        if plan.ffn_execution_contracts[ffnagent_index] != self.registration.execution_contract:
-            raise AgentError("Fabric Plan differs from registered FfnAgent execution resources")
         estimate = plan.ffn_memory_estimates[ffnagent_index]
         torch.cuda.empty_cache()
         free_memory_bytes, _ = torch.cuda.mem_get_info(self.device)
@@ -160,11 +155,8 @@ class FfnAgent(Agent):
         if self.fabric_plan is None or self.layer_weights is None:
             raise AgentError("FFN execution preparation requires a retained Plan and weights")
         atnagent_count = sum(placement.role is FabricRole.ATNAGENT for placement in self.fabric_plan.pe_placements)
-        self.execution_registry = FfnExecutionRegistry(
-            layer_weights=self.layer_weights, external_resources=self.external_resources
-        )
+        self.execution_registry = FfnExecutionRegistry(layer_weights=self.layer_weights)
         self.layer_weights = None
-        self.external_resources = ()
         self.execution_registry.materialize(
             fabric_plan=self.fabric_plan,
             model_specs=self.registration.model_specs,
@@ -195,4 +187,3 @@ class FfnAgent(Agent):
             self.execution_registry.close()
         self.execution_registry = None
         self.layer_weights = None
-        self.external_resources = ()

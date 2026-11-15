@@ -12,12 +12,11 @@ import torch
 
 import xpool.native
 from xpool import ffn
-from xpool.fabric import FabricPlan, FabricRole, place_ffn_layer
-from xpool.memory import FfnExecutionContract
+from xpool.fabric import FabricPlan, FabricRole
 from xpool.quantization import TensorLayout
-from xpool.runtime.ffnagent import capture_workspace, execution, preparation, weights
+from xpool.runtime.ffnagent import execution, preparation, weights
 from xpool.runtime.ffnagent.device_memory import capture_pool_reservation_bytes
-from xpool.runtime.ffnagent.operators import dense, linear, moe, routing
+from xpool.runtime.ffnagent.operators import dense, moe, routing
 
 logger = logging.getLogger(__name__)
 
@@ -31,25 +30,7 @@ class LaneCaptureResources:
         self.stream: torch.cuda.ExternalStream | None = None
         self.capture_graphs: list[torch.cuda.CUDAGraph] = []
         self.capture_tensors: list[torch.Tensor] = []
-        self.source_resources: dict[str, xpool.native.cuda.CaptureAllocation] = {}
         self.sealed = False
-
-    def snapshot_source_resources(
-        self, contract: FfnExecutionContract
-    ) -> tuple[xpool.native.cuda.CaptureAllocation, ...]:
-        """Enforce fixed cache identity throughout this exclusive capture domain."""
-
-        observed = capture_workspace.snapshot_resources(
-            cast(xpool.native.cuda.OwnedCudaStream, self.stream_owner), contract
-        )
-        if self.source_resources.keys() - {resource.key for resource in observed}:
-            raise ValueError("execution source cache disappeared during capture")
-        for resource in observed:
-            previous = self.source_resources.get(resource.key)
-            if previous is not None and (previous.address != resource.address or previous.bytes != resource.bytes):
-                raise ValueError("execution source cache changed address or size during capture")
-            self.source_resources[resource.key] = resource
-        return observed
 
     def initialize(self) -> None:
         """Acquire owners incrementally after the Registry has retained this Lane."""
@@ -82,36 +63,34 @@ class LaneCaptureResources:
         *,
         primary_launch: Callable[[], None],
         control_launch: Callable[[], None],
-        local_allocations: tuple[xpool.native.cuda.CaptureAllocation, ...],
-        execution_contract: FfnExecutionContract,
-        external_ranges: tuple[xpool.native.ffnagent.CapturedResourceRange, ...],
-    ) -> tuple[
-        torch.cuda.CUDAGraph,
-        torch.cuda.CUDAGraph,
-        tuple[xpool.native.ffnagent.CapturedResourceRange, ...],
-    ]:
-        """Capture P/C and validate Lane allocations; the caller retains external owners.
+        workspace: torch.Tensor,
+    ) -> tuple[torch.cuda.CUDAGraph, torch.cuda.CUDAGraph, xpool.native.ffnagent.CaptureWorkspaceView | None]:
+        """Capture P/C using one retained root and verify its private backing.
 
-        Each launch runs for warmup and capture. Failed capture or observation
-        keeps the acquired Graphs and backing for confirmed native retirement.
+        Each launch runs for warmup and capture. Failures keep the acquired
+        Graphs and backing for confirmed native retirement.
         """
 
         if self.pool is None or self.stream is None or self.sealed:
             raise RuntimeError("capture requires an initialized unsealed Lane")
-        pool = self.pool
-        captures: list[tuple[torch.cuda.CUDAGraph, tuple[xpool.native.cuda.CaptureAllocation, ...]]] = []
+        captures = []
+        used = []
+        address, size = workspace.data_ptr(), workspace.numel()
         for launch in (primary_launch, control_launch):
             graph = self.capture_graph(launch)
-            candidates = (*local_allocations, *self.snapshot_source_resources(execution_contract))
-            allocations = tuple(
-                candidates[index]
-                for index in xpool.native.cuda.graph.used_resource_regions(graph.raw_cuda_graph(), candidates)
-            )
-            capture_workspace.validate_pool_coverage(pool, allocations)
-            captures.append((graph, allocations))
-        (primary_graph, primary_allocations), (control_graph, control_allocations) = captures
-        resources = capture_workspace.pair_resources(primary_allocations, control_allocations)
-        return primary_graph, control_graph, resources + external_ranges
+            captures.append(graph)
+            used.append(size > 0 and xpool.native.cuda.graph.references_range(graph.raw_cuda_graph(), address, size))
+        if used[0] != used[1]:
+            raise ValueError("Primary and Control workspace use disagrees")
+        view = None
+        if used[0]:
+            if not any(
+                address >= segment["address"] and address + size <= segment["address"] + segment["total_size"]
+                for segment in self.pool.snapshot()
+            ):
+                raise ValueError("capture workspace has no retained Lane backing owner")
+            view = xpool.native.ffnagent.CaptureWorkspaceView(address, size)
+        return captures[0], captures[1], view
 
     def release_capture_resources(self) -> None:
         """Seal after native consumption; preserve backing and stream for service."""
@@ -123,10 +102,7 @@ class LaneCaptureResources:
         while self.capture_graphs:
             self.capture_graphs[-1].reset()
             self.capture_graphs.pop()
-        if self.stream_owner is not None:
-            xpool.native.cuda.blas.release_workspaces(self.stream_owner)
         self.capture_tensors.clear()
-        self.source_resources.clear()
         self.sealed = True
 
     def report_reservation(self, estimated_bytes: int) -> None:
@@ -164,16 +140,16 @@ def validate_layer_weights_against_layout(
     if isinstance(layer_layout, preparation.DenseFfnLayerLayout):
         if not isinstance(layer_weights, weights.DenseFfnWeights):
             raise ValueError("Dense preparation requires Dense resources")
-        layer_weights.gate_up.validate(layer_layout.gate_up)
-        layer_weights.down.validate(layer_layout.down)
-        projections = (layer_weights.gate_up, layer_weights.down)
+        layer_weights.i_proj.validate(layer_layout.i_proj)
+        layer_weights.o_proj.validate(layer_layout.o_proj)
+        projections = (layer_weights.i_proj, layer_weights.o_proj)
         tensors: tuple[torch.Tensor, ...] = ()
     else:
         if not isinstance(layer_weights, weights.MoeFfnWeights):
             raise ValueError("MoE preparation requires MoE resources")
-        layer_weights.gate_up.validate(layer_layout.experts.gate_up)
-        layer_weights.down.validate(layer_layout.experts.down)
-        projections = (layer_weights.gate_up, layer_weights.down)
+        layer_weights.i_proj.validate(layer_layout.i_proj)
+        layer_weights.o_proj.validate(layer_layout.o_proj)
+        projections = (layer_weights.i_proj, layer_weights.o_proj)
         tensors = ()
         router = layer_weights.router
         if (router is None) != (layer_layout.router is None):
@@ -204,16 +180,15 @@ def validate_layer_weights_against_layout(
 
 
 def capture_dense_signature(
-    signature: execution.DenseFfnExecutionSignature,
+    plan: dense.DenseExecutionPlan,
     primary_weights: weights.DenseFfnWeights,
     control_probe: weights.DenseFfnWeights,
     *,
     owner: LaneCaptureResources,
-    execution_contract: FfnExecutionContract,
-    external_ranges: tuple[xpool.native.ffnagent.CapturedResourceRange, ...],
 ) -> xpool.native.ffnagent.DenseCaptureDescriptor:
-    """Capture primary/control Dense bodies sharing lane placeholders."""
+    """Capture primary/control Dense bodies from one retained preparation."""
 
+    signature = plan.signature
     placeholder_layout = signature.capture_placeholder_layout()
     hidden_states = torch.zeros(
         placeholder_layout.hidden_states.shape,
@@ -227,25 +202,22 @@ def capture_dense_signature(
         raise AssertionError("Dense capture requires its retained Lane pool")
     stream = cast(torch.cuda.ExternalStream, owner.stream)
     with torch.cuda.use_mem_pool(owner.pool), torch.cuda.stream(stream):
-        workspace = torch.empty(preparation.compute_workspace_bytes(signature), dtype=torch.uint8, device="cuda")
+        workspace = torch.empty(plan.workspace.nbytes, dtype=torch.uint8, device="cuda")
     owner.capture_tensors.append(workspace)
 
+    operation = dense.Dense(plan, workspace)
+
     def launch(layer_weights: weights.DenseFfnWeights) -> None:
-        dense.compute_dense_partial(
+        operation.run_into(
             hidden_states=hidden_states,
             layer_weights=layer_weights,
-            workspace=workspace,
             output=partial,
-            activation=signature.activation,
         )
 
-    compute = xpool.native.cuda.CaptureAllocation("compute", workspace.data_ptr(), workspace.numel())
-    primary_graph, control_graph, capture_ranges = owner.capture_pair(
+    primary_graph, control_graph, capture_workspace = owner.capture_pair(
         primary_launch=lambda: launch(primary_weights),
         control_launch=lambda: launch(control_probe),
-        local_allocations=(compute,),
-        execution_contract=execution_contract,
-        external_ranges=external_ranges,
+        workspace=workspace,
     )
     primary_resources = primary_weights.binding_view()
     control_resources = control_probe.binding_view()
@@ -258,7 +230,7 @@ def capture_dense_signature(
         control_graph_address=control_graph.raw_cuda_graph(),
         capture_input=hidden_states,
         capture_partial=partial,
-        capture_ranges=capture_ranges,
+        capture_workspace=capture_workspace,
         primary_weight_bindings=primary_resources,
         control_weight_bindings=control_resources,
     )
@@ -266,16 +238,15 @@ def capture_dense_signature(
 
 
 def capture_moe_signature(
-    signature: execution.MoeFfnExecutionSignature,
+    plan: preparation.MoeExecutionPlan,
     primary_weights: weights.MoeFfnWeights,
     control_probe: weights.MoeFfnWeights,
     *,
     owner: LaneCaptureResources,
-    execution_contract: FfnExecutionContract,
-    external_ranges: tuple[xpool.native.ffnagent.CapturedResourceRange, ...],
 ) -> xpool.native.ffnagent.MoeCaptureDescriptor:
-    """Capture primary/control MoE bodies sharing lane placeholders."""
+    """Capture primary/control MoE bodies from one retained preparation."""
 
+    signature = plan.experts.signature
     placeholder_layout = signature.capture_placeholder_layout()
     hidden_states = torch.zeros(
         placeholder_layout.hidden_states.shape,
@@ -313,61 +284,26 @@ def capture_moe_signature(
         .expand_as(topk_ids)
     )
     topk_weights.fill_(1.0 / signature.effective_topk)
-    workspace_layout = preparation.MoeWorkspaceLayout.from_signature(signature)
     if owner.pool is None:
         raise AssertionError("MoE capture requires its retained Lane pool")
     stream = cast(torch.cuda.ExternalStream, owner.stream)
     with torch.cuda.use_mem_pool(owner.pool), torch.cuda.stream(stream):
-        workspace = torch.empty(workspace_layout.nbytes, dtype=torch.uint8, device="cuda")
+        workspace = torch.empty(plan.workspace.nbytes, dtype=torch.uint8, device="cuda")
     owner.capture_tensors.append(workspace)
-    operation_type = moe.expert_operation_type(signature.operation)
-    operation = operation_type(signature, workspace[workspace_layout.experts])
-    router_workspace = None
-    routed_ids = None
-    routed_weights = None
-    projection_operation = linear.LinearOperationKind.TORCH
-    router_signature = signature.router
-    router_layout = workspace_layout.router
-    if router_signature is not None and router_layout is not None:
-        routed_topk = signature.effective_topk - (signature.expert_count - router_signature.routed_expert_count)
-        routed_shape = (signature.payload_row_capacity, routed_topk)
-        router_workspace = workspace[router_layout.projection]
-        routed_ids = workspace[router_layout.ids].view(torch.int32).view(routed_shape)
-        routed_weights = workspace[router_layout.weights].view(torch.float32).view(routed_shape)
-        projection_operation = linear.select_router_projection_operation(
-            router_signature,
-            payload_dtype=signature.payload_dtype,
-            row_capacity=signature.payload_row_capacity,
-            device=hidden_states.device,
-        )
+    views = plan.workspace.views(workspace)
+    operation = moe.Experts(plan.experts, views[0])
+    router = routing.Router(plan.router, views[1]) if plan.router is not None else None
 
     def launch(layer_weights: weights.MoeFfnWeights) -> None:
         router_signature = signature.router
-        if router_signature is not None:
+        if router is not None and router_signature is not None:
             router_weights = layer_weights.router
-            if (
-                payload_rows is None
-                or router_weights is None
-                or router_workspace is None
-                or routed_ids is None
-                or routed_weights is None
-            ):
+            if payload_rows is None or router_weights is None:
                 raise AssertionError("Router-owner capture lacks Router resources")
-            routing.compute_routed_topk(
-                router_signature.algorithm,
-                router_signature.projection_precision,
-                projection_operation=projection_operation,
-                weight_rounding=router_signature.weight_rounding,
-                hidden_states=hidden_states,
-                router_weights=router_weights,
-                workspace=router_workspace,
-                routed_ids=routed_ids,
-                routed_weights=routed_weights,
-                renormalize=router_signature.renormalize,
-            )
+            router.run_into(hidden_states=hidden_states, router_weights=router_weights)
             routing.finalize_moe_routing(
-                routed_ids=routed_ids,
-                routed_weights=routed_weights,
+                routed_ids=router.ids,
+                routed_weights=router.weights,
                 final_ids=topk_ids,
                 final_weights=topk_weights,
                 payload_rows=payload_rows,
@@ -375,22 +311,19 @@ def capture_moe_signature(
                 shared_expert_count=signature.expert_count - router_signature.routed_expert_count,
                 routed_scaling_factor=signature.routed_scaling_factor,
             )
-        operation.run(
+        operation.run_into(
             hidden_states=hidden_states,
-            gate_up=layer_weights.gate_up,
-            down=layer_weights.down,
+            i_proj=layer_weights.i_proj,
+            o_proj=layer_weights.o_proj,
             topk_ids=topk_ids,
             topk_weights=topk_weights,
             output=partial,
         )
 
-    compute = xpool.native.cuda.CaptureAllocation("compute", workspace.data_ptr(), workspace.numel())
-    primary_graph, control_graph, capture_ranges = owner.capture_pair(
+    primary_graph, control_graph, capture_workspace = owner.capture_pair(
         primary_launch=lambda: launch(primary_weights),
         control_launch=lambda: launch(control_probe),
-        local_allocations=(compute,),
-        execution_contract=execution_contract,
-        external_ranges=external_ranges,
+        workspace=workspace,
     )
     primary_resources = primary_weights.binding_view()
     control_resources = control_probe.binding_view()
@@ -406,7 +339,7 @@ def capture_moe_signature(
         control_graph_address=control_graph.raw_cuda_graph(),
         capture_input=hidden_states,
         capture_partial=partial,
-        capture_ranges=capture_ranges,
+        capture_workspace=capture_workspace,
         capture_routing_metadata=routing_storage,
         capture_payload_rows=payload_rows,
         primary_weight_bindings=primary_resources,
@@ -422,59 +355,15 @@ class FfnExecutionRegistry:
         self,
         *,
         layer_weights: tuple[tuple[weights.FfnLayerWeights | None, ...], ...],
-        external_resources: tuple[execution.OwnedExecutionResource, ...],
     ) -> None:
-        """Retain service weights and source owners through confirmed native retirement."""
+        """Retain service weights through confirmed native retirement."""
 
         self.layer_weights = layer_weights
-        self.external_resources = external_resources
         self.capture_lanes: list[LaneCaptureResources] = []
         self.capture_weight_pairs: dict[
             execution.ExecutionSignature, tuple[weights.FfnLayerWeights, weights.FfnLayerWeights]
         ] = {}
         self.materialization_started = False
-
-    def validate_external_resources(
-        self, *, resource_plan: preparation.ExecutionResourcePlan, contract: FfnExecutionContract
-    ) -> None:
-        """Match supplied owners to registered facts and require every selected external backing."""
-
-        declared = {declaration.requirement.key: declaration.requirement for declaration in contract.shared_resources}
-        supplied = {resource.region.key for resource in self.external_resources}
-        if len(supplied) != len(self.external_resources):
-            raise ValueError("pool-external execution owners must have unique identities")
-        for resource in self.external_resources:
-            requirement = declared.get(resource.region.key)
-            if requirement is None:
-                raise ValueError("pool-external execution owner has no matching prospective requirement")
-            if (
-                not 0
-                < resource.region.bytes
-                <= min(requirement.logical_extent_bound_bytes, sum(requirement.request_bytes))
-            ):
-                raise ValueError("borrowed execution range exceeds or disagrees with its prospective resource")
-            if not resource.region.shared_read_only:
-                raise ValueError("borrowed execution resource sharing disagrees with its requirement")
-            if (
-                resource.region.primary_address % requirement.alignment_bytes
-                or resource.region.control_address % requirement.alignment_bytes
-            ):
-                raise ValueError("borrowed execution range violates its prospective alignment")
-        required = {group.requirement.key for group in resource_plan.shared_resources}
-        if missing := required - supplied:
-            raise ValueError(f"pool-external execution resource has no retained owner: {sorted(missing)}")
-
-    def external_ranges(
-        self, resource_plan: preparation.ExecutionResourcePlan, signature_index: int
-    ) -> tuple[xpool.native.ffnagent.CapturedResourceRange, ...]:
-        """Select Signature ranges after the complete external inventory has been validated."""
-
-        owners = {resource.region.key: resource for resource in self.external_resources}
-        return tuple(
-            owners[group.requirement.key].region
-            for group in resource_plan.shared_resources
-            if signature_index in group.signature_indices
-        )
 
     def release_capture_resources(self) -> None:
         """Release construction owners after native consumption or confirmed retirement.
@@ -495,7 +384,6 @@ class FfnExecutionRegistry:
             self.capture_lanes[-1].close()
             self.capture_lanes.pop()
         self.capture_weight_pairs.clear()
-        self.external_resources = ()
         self.layer_weights = ()
 
     def materialize(
@@ -539,7 +427,6 @@ class FfnExecutionRegistry:
         ffnagent_count = sum(placement.role is FabricRole.FFNAGENT for placement in fabric_plan.pe_placements)
         if not 0 <= ffnagent_index < ffnagent_count:
             raise ValueError("FfnAgent index is outside the Fabric Plan")
-        execution_contract = fabric_plan.ffn_execution_contracts[ffnagent_index]
         if len(model_specs) != len(fabric_plan.model_plans) or len(layer_weights) != len(model_specs):
             raise ValueError("Model Specs, layer weights, and Model Plans are not co-indexed")
 
@@ -552,14 +439,11 @@ class FfnExecutionRegistry:
         for instance_index, (model_plan, instance_plan, model_spec, model_weights) in enumerate(
             zip(fabric_plan.model_plans, fabric_plan.instance_plans, model_specs, layer_weights, strict=True)
         ):
-            if model_plan.model_spec_digest != model_spec.digest():
-                raise ValueError("Model Plan digest disagrees with the co-indexed Model Spec")
-            if len(model_weights) != len(model_plan.layers) or len(model_spec.layers) != len(model_plan.layers):
+            if len(model_weights) != len(model_plan.layers):
                 raise ValueError("Model Spec, layer weights, and Model Plan layers are not co-indexed")
             profile = instance_plan.ffn_profile
-            profile.require_compatible_model(model_spec)
-            for layer_ordinal, (layer_plan, layer_spec, layer_weights_value) in enumerate(
-                zip(model_plan.layers, model_spec.layers, model_weights, strict=True)
+            for layer_ordinal, (layer_plan, layer_weights_value) in enumerate(
+                zip(model_plan.layers, model_weights, strict=True)
             ):
                 local = ffnagent_index in layer_plan.ffnagent_indices
                 if local != (layer_weights_value is not None):
@@ -574,12 +458,6 @@ class FfnExecutionRegistry:
                     tp_size=len(layer_plan.ffnagent_indices),
                     tp_rank=tp_rank,
                 )
-                if layer_plan != place_ffn_layer(
-                    layer_spec,
-                    layer_plan.ffnagent_indices,
-                    local_intermediate_size=layer_layout.local_intermediate_size,
-                ):
-                    raise ValueError("Layer Plan geometry disagrees with the Model Spec")
                 validate_layer_weights_against_layout(
                     layer_weights=layer_weights_value,
                     layer_layout=layer_layout,
@@ -605,16 +483,10 @@ class FfnExecutionRegistry:
 
         # Lane streams and pools are private; representative weights and
         # Control Capture Probes are shared read-only.
-        resource_plan = preparation.ExecutionResourcePlan.from_signatures(
-            tuple(signatures), contract=execution_contract
-        )
-        self.validate_external_resources(resource_plan=resource_plan, contract=execution_contract)
+        compute_plans = preparation.prepare_execution_plans(tuple(signatures))
         capture_started_at = monotonic()
         lane_descriptors = []
-        estimated_pool_bytes = capture_pool_reservation_bytes(resource_plan)
-        signature_external_ranges = tuple(
-            self.external_ranges(resource_plan, index) for index in range(len(signatures))
-        )
+        estimated_pool_bytes = capture_pool_reservation_bytes(compute_plans)
         capture_weight_pair_keys = tuple(execution.capture_weight_pair_key(signature) for signature in signatures)
         for _ in range(fabric_plan.executor_lane_count):
             lane = LaneCaptureResources()
@@ -624,18 +496,26 @@ class FfnExecutionRegistry:
             ] = []
             if signatures:
                 lane.initialize()
-            for signature, representative, external_ranges, key in zip(
-                signatures, representatives, signature_external_ranges, capture_weight_pair_keys, strict=True
+            for signature, compute_plan, representative, key in zip(
+                signatures,
+                compute_plans,
+                representatives,
+                capture_weight_pair_keys,
+                strict=True,
             ):
                 capture_weight_pair = self.capture_weight_pairs.get(key)
                 if capture_weight_pair is None:
                     device = torch.device("cuda", torch.cuda.current_device())
                     probe = (
-                        weights.DenseFfnWeights.allocate(gate_up=signature.gate_up, down=signature.down, device=device)
+                        weights.DenseFfnWeights.allocate(
+                            i_proj=signature.i_proj,
+                            o_proj=signature.o_proj,
+                            device=device,
+                        )
                         if isinstance(signature, execution.DenseFfnExecutionSignature)
                         else weights.MoeFfnWeights.allocate(
-                            gate_up=signature.gate_up,
-                            down=signature.down,
+                            i_proj=signature.i_proj,
+                            o_proj=signature.o_proj,
                             router=None if signature.router is None else signature.router.projection,
                             correction_bias=None if signature.router is None else signature.router.correction_bias,
                             device=device,
@@ -644,18 +524,16 @@ class FfnExecutionRegistry:
                     capture_weight_pair = (representative, probe)
                     self.capture_weight_pairs[key] = capture_weight_pair
                 # Admission and the signature-keyed cache preserve the weight kind.
-                if isinstance(signature, execution.DenseFfnExecutionSignature):
+                if isinstance(compute_plan, dense.DenseExecutionPlan):
                     dense_weights, dense_probe = cast(
                         tuple[weights.DenseFfnWeights, weights.DenseFfnWeights], capture_weight_pair
                     )
                     captures.append(
                         capture_dense_signature(
-                            signature,
+                            compute_plan,
                             dense_weights,
                             dense_probe,
                             owner=lane,
-                            execution_contract=execution_contract,
-                            external_ranges=external_ranges,
                         )
                     )
                 else:
@@ -664,12 +542,10 @@ class FfnExecutionRegistry:
                     )
                     captures.append(
                         capture_moe_signature(
-                            signature,
+                            compute_plan,
                             moe_weights,
                             moe_probe,
                             owner=lane,
-                            execution_contract=execution_contract,
-                            external_ranges=external_ranges,
                         )
                     )
             if signatures:

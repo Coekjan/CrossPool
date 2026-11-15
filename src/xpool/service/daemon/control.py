@@ -733,7 +733,6 @@ class ControlPlane:
                 model_specs=membership.model_specs,
                 instance_plans=membership.instance_plans,
                 ffnagent_free_memory_bytes=membership.ffnagent_free_memory_bytes,
-                ffn_execution_contracts=membership.memory_context.ffn_execution,
                 coefficients=coefficients,
             )
             if not all(owner.is_alive() for owner in membership.owners()):
@@ -741,7 +740,6 @@ class ControlPlane:
             plan = FabricDeploymentPlan(
                 generation=FabricGenerationId.create(),
                 uid=FabricUid(value=xpool.native.fabric.create_uid()),
-                ffn_execution_contracts=membership.memory_context.ffn_execution,
                 ffn_memory_estimates=placement.memory_estimates,
                 pe_placements=membership.pe_placements,
                 executor_lane_count=config.scheduler.ffn_concurrency,

@@ -11,10 +11,9 @@ import torch
 
 import xpool.native
 from xpool.fabric import FABRIC_UID_HEX_LENGTH
-from xpool.memory import ExecutionResourceDeclaration, ExecutionResourceRequirement
-from xpool.runtime.ffnagent import execution, preparation, registry, weights
+from xpool.runtime.ffnagent import registry, weights
 from xpool.runtime.ffnagent.memory_profile import corpus
-from xtest.harness.support.config import TEST_EXECUTION_CONTRACT, synthetic_config
+from xtest.harness.support.config import synthetic_config
 
 
 @dataclass
@@ -66,11 +65,6 @@ def test_pool_prediction_error_is_reported_without_releasing_backing(caplog: pyt
     assert not owner.sealed
 
 
-@pytest.fixture(autouse=True)
-def release_source_maps(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(xpool.native.cuda.blas, "release_workspaces", lambda address: None)
-
-
 @pytest.mark.parametrize("failure_site", ("primary", "control", "observation"))
 def test_failed_capture_pair_stays_owned_until_explicit_release(
     monkeypatch: pytest.MonkeyPatch, failure_site: str
@@ -118,25 +112,19 @@ def test_failed_capture_pair_stays_owned_until_explicit_release(
         if failure_site == "control" and control_launches == 2:
             raise original
 
-    def source_snapshot(
-        stream: torch.cuda.Stream, contract: registry.FfnExecutionContract
-    ) -> tuple[xpool.native.cuda.CaptureAllocation, ...]:
+    def references_range(graph: int, address: int, size: int) -> bool:
         if failure_site == "observation":
             raise original
-        return ()
+        return False
 
-    monkeypatch.setattr(registry.capture_workspace, "snapshot_resources", source_snapshot)
-    monkeypatch.setattr(
-        xpool.native.cuda.graph, "used_resource_regions", lambda graph, allocations: range(len(allocations))
-    )
+    monkeypatch.setattr(xpool.native.cuda.graph, "references_range", references_range)
+    workspace = torch.empty(1, dtype=torch.uint8)
 
     with pytest.raises(RuntimeError) as caught:
         owner.capture_pair(
             primary_launch=primary_launch,
             control_launch=control_launch,
-            local_allocations=(),
-            execution_contract=TEST_EXECUTION_CONTRACT,
-            external_ranges=(),
+            workspace=workspace,
         )
 
     assert caught.value is original
@@ -162,23 +150,12 @@ def test_registry_completion_releases_locals_and_retains_service_backing(
     config = synthetic_config()
     experiments, _ = corpus.calibration_experiments(config)
     experiment = experiments[0]
-    plan = experiment.fabric_plan(
-        "a" * FABRIC_UID_HEX_LENGTH, config=config, ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,)
-    )
-    external = torch.empty(1)
-    external_ref = weakref.ref(external)
+    plan = experiment.fabric_plan("a" * FABRIC_UID_HEX_LENGTH, config=config)
     service_weight = torch.empty(1)
     weight_ref = weakref.ref(service_weight)
     installation = registry.FfnExecutionRegistry(
-        external_resources=(
-            execution.OwnedExecutionResource(
-                owner=external,
-                region=xpool.native.ffnagent.CapturedResourceRange("table", 0x1000, 0x1000, 4, True),
-            ),
-        ),
         layer_weights=((cast(weights.FfnLayerWeights, service_weight),),),
     )
-    del external
     del service_weight
     temporary_refs: list[weakref.ReferenceType[torch.Tensor]] = []
     backing_refs: list[weakref.ReferenceType[PoolSnapshot]] = []
@@ -236,7 +213,6 @@ def test_registry_completion_releases_locals_and_retains_service_backing(
     phases = ["construction", "before_trim", "trim", "after_trim"]
     assert events == (phases if failure_site is None else phases[: phases.index(failure_site) + 1])
     assert backing_refs[0]() is not None
-    assert external_ref() is not None
     assert weight_ref() is not None
     assert installation.capture_lanes[0].pool is backing_refs[0]()
     if failure_site == "construction":
@@ -245,16 +221,13 @@ def test_registry_completion_releases_locals_and_retains_service_backing(
     with pytest.raises(RuntimeError, match="cannot be retried"):
         materialize()
     installation.close()
-    assert external_ref() is None
     assert weight_ref() is None
 
 
 def test_registry_close_failure_retains_weight_ownership() -> None:
     service_weight = torch.empty(1)
     weight_ref = weakref.ref(service_weight)
-    installation = registry.FfnExecutionRegistry(
-        layer_weights=((cast(weights.FfnLayerWeights, service_weight),),), external_resources=()
-    )
+    installation = registry.FfnExecutionRegistry(layer_weights=((cast(weights.FfnLayerWeights, service_weight),),))
     del service_weight
     stream = CaptureStream(failure=RuntimeError("retirement cleanup failed"))
     lane = registry.LaneCaptureResources()
@@ -275,10 +248,9 @@ def test_empty_participant_installs_once_and_seals_before_completion(monkeypatch
     plan = experiment.fabric_plan(
         "a" * FABRIC_UID_HEX_LENGTH,
         config=config,
-        ffn_execution_contracts=(TEST_EXECUTION_CONTRACT,) * 2,
     )
     installation = registry.FfnExecutionRegistry(
-        external_resources=(), layer_weights=tuple(tuple(None for _ in spec.layers) for spec in experiment.model_specs)
+        layer_weights=tuple(tuple(None for _ in spec.layers) for spec in experiment.model_specs)
     )
     events: list[str] = []
 
@@ -305,101 +277,8 @@ def test_empty_participant_installs_once_and_seals_before_completion(monkeypatch
     assert events == ["install", "synchronize", "trim", "synchronize"]
 
 
-@pytest.fixture
-def external_declaration() -> ExecutionResourceDeclaration:
-    return ExecutionResourceDeclaration(
-        requirement=ExecutionResourceRequirement(
-            key="table",
-            request_bytes=(1024,),
-            logical_extent_bound_bytes=1024,
-            exact_logical_bytes=1024,
-            alignment_bytes=256,
-        ),
-        aliases=("table",),
-        uses=("dense",),
-    )
-
-
-@pytest.mark.parametrize(("key", "extent"), (("table", 1025), ("other", 1024)))
-def test_external_owner_cannot_outgrow_or_change_its_prospective_resource(
-    key: str, extent: int, external_declaration: ExecutionResourceDeclaration
-) -> None:
-    resource = execution.OwnedExecutionResource(
-        owner=object(),
-        region=xpool.native.ffnagent.CapturedResourceRange(key, 0x1000, 0x1000, extent, True),
-    )
-    installation = registry.FfnExecutionRegistry(layer_weights=(), external_resources=(resource,))
-    contract = TEST_EXECUTION_CONTRACT.model_copy(update={"shared_resources": (external_declaration,)})
-    plan = preparation.ExecutionResourcePlan(lane_resources=(), shared_resources=())
-    with pytest.raises(ValueError, match="prospective"):
-        installation.validate_external_resources(resource_plan=plan, contract=contract)
-
-
-@pytest.mark.parametrize("shared_read_only", (False, True))
-def test_external_owner_requires_matching_prepared_budget_and_read_only_sharing(
-    shared_read_only: bool, external_declaration: ExecutionResourceDeclaration
-) -> None:
-    resource = execution.OwnedExecutionResource(
-        owner=object(),
-        region=xpool.native.ffnagent.CapturedResourceRange("table", 0x1000, 0x1000, 512, shared_read_only),
-    )
-    installation = registry.FfnExecutionRegistry(layer_weights=(), external_resources=(resource,))
-    plan = preparation.ExecutionResourcePlan(lane_resources=(), shared_resources=())
-    with pytest.raises(ValueError, match="no matching prospective requirement"):
-        installation.validate_external_resources(resource_plan=plan, contract=TEST_EXECUTION_CONTRACT)
-    contract = TEST_EXECUTION_CONTRACT.model_copy(update={"shared_resources": (external_declaration,)})
-    if not shared_read_only:
-        with pytest.raises(ValueError, match="sharing disagrees"):
-            installation.validate_external_resources(resource_plan=plan, contract=contract)
-        return
-    installation.validate_external_resources(resource_plan=plan, contract=contract)
-    selected = preparation.ExecutionResourcePlan(
-        lane_resources=(),
-        shared_resources=(preparation.ExecutionResourceGroup(external_declaration.requirement, (0,)),),
-    )
-    assert installation.external_ranges(selected, 0) == (resource.region,)
-    assert installation.external_ranges(plan, 0) == ()
-
-
-def test_selected_external_resource_requires_a_retained_owner(
-    external_declaration: ExecutionResourceDeclaration,
-) -> None:
-    experiments, _ = corpus.calibration_experiments(synthetic_config())
-    model = experiments[0].models[0]
-    profile = model.instance_plan().ffn_profile
-    layout = preparation.prepare_ffn_layer(
-        model.spec, layer_ordinal=0, payload_dtype=profile.payload_dtype, tp_size=model.ffn_tp_size, tp_rank=0
-    )
-    signatures = layout.execution_signatures(profile=profile)
-    contract = TEST_EXECUTION_CONTRACT.model_copy(update={"shared_resources": (external_declaration,)})
-    plan = preparation.ExecutionResourcePlan.from_signatures(signatures, contract=contract)
-    installation = registry.FfnExecutionRegistry(layer_weights=(), external_resources=())
-    with pytest.raises(ValueError, match="no retained owner"):
-        installation.validate_external_resources(resource_plan=plan, contract=contract)
-
-
-@pytest.mark.parametrize("change", ("address", "size", "missing"))
-def test_fixed_source_backing_cannot_change_between_captures(monkeypatch: pytest.MonkeyPatch, change: str) -> None:
-    lane = registry.LaneCaptureResources()
-    lane.stream = cast(torch.cuda.ExternalStream, CaptureStream())
-    snapshots = [
-        (xpool.native.cuda.CaptureAllocation("source", 0x1000, 512),),
-        ()
-        if change == "missing"
-        else (
-            xpool.native.cuda.CaptureAllocation(
-                "source", 0x2000 if change == "address" else 0x1000, 1024 if change == "size" else 512
-            ),
-        ),
-    ]
-    monkeypatch.setattr(registry.capture_workspace, "snapshot_resources", lambda *args: snapshots.pop(0))
-    lane.snapshot_source_resources(TEST_EXECUTION_CONTRACT)
-    with pytest.raises(ValueError, match="source cache"):
-        lane.snapshot_source_resources(TEST_EXECUTION_CONTRACT)
-
-
-@pytest.mark.parametrize("failure_site", ("stream", "graph", "source_maps"))
-def test_failed_capture_release_preserves_remaining_owners(failure_site: str, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("failure_site", ("stream", "graph"))
+def test_failed_capture_release_preserves_remaining_owners(failure_site: str) -> None:
     owner = registry.LaneCaptureResources()
     original = RuntimeError("cleanup failed")
     stream = CaptureStream(failure=original if failure_site == "stream" else None)
@@ -410,11 +289,6 @@ def test_failed_capture_release_preserves_remaining_owners(failure_site: str, mo
     owner.capture_graphs.append(cast(torch.cuda.CUDAGraph, graph))
     owner.capture_tensors.append(tensor)
 
-    def release_maps(address: int) -> None:
-        if failure_site == "source_maps":
-            raise original
-
-    monkeypatch.setattr(xpool.native.cuda.blas, "release_workspaces", release_maps)
     with pytest.raises(RuntimeError) as caught:
         owner.release_capture_resources()
 
@@ -426,7 +300,6 @@ def test_failed_capture_release_preserves_remaining_owners(failure_site: str, mo
     assert not stream.destroyed
     stream.failure = None
     graph.failure = None
-    monkeypatch.setattr(xpool.native.cuda.blas, "release_workspaces", lambda address: None)
     owner.release_capture_resources()
     assert graph.resets == 1
     assert not owner.capture_graphs
