@@ -24,6 +24,8 @@ class ErrorCode(StrEnum):
     UNKNOWN_KIND = "unknown_kind"
     IDENTITY_CONFLICT = "identity_conflict"
     EVENT_CONFLICT = "event_conflict"
+    INVALID_SAMPLE = "invalid_sample"
+    SAMPLE_CONFLICT = "sample_conflict"
 
 
 class ObservationError(ValueError):

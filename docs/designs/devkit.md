@@ -123,11 +123,35 @@ Identical Event identities are retained once with all input locations. Local
 protocol boundaries also deduplicate equivalent facts under different Event
 identities. Conflicting boundary evidence and conflicting repeated facts have
 separate structured error codes. Derived durations require retained endpoints,
-a common raw clock domain and nondecreasing times. Cross-domain calibration
-fitting and legacy snapshot projections are outside this library. Offline
+a common raw clock domain and nondecreasing times. Offline
 identity and provenance inventories grow with input size rather than using the
 runtime collection budgets. Reference artifacts live under
 `tests/resources/observability/`.
+
+
+## Offline clock calibration
+
+`build_calibration()` joins reconstructed paired samples with explicit sampler
+declarations. Algorithm version 1 uses fixed ten-attempt blocks, with positions
+4 and 9 held out for validation. Exact rational affine fitting preserves Host
+bracketing constraints and reports unavailable blocks when evidence is missing,
+failed or inconsistent. Declarations supply attempted ranges; retained samples
+alone cannot establish completeness. Clock jumps invalidate subsequent blocks
+within the same raw-clock Epoch.
+
+`map_event()` and `CalibrationIndex.map_raw()` preserve raw clock identity and
+map through exactly one supported model to the common Host reference. Queries
+outside support or covered by multiple models remain unavailable. Duration and
+drift estimates retain conditional uncertainty bounds; a mapped timestamp never
+establishes a causal edge.
+
+`build_calibration_report()` emits deterministic contract-version-seven JSON with
+algorithm version 1, sampler diagnostics, domain coverage and retained quality
+evidence. Time coverage and retained-event coverage use separate denominators.
+Missing caller measurements remain unavailable, and process-wide counters are
+never apportioned to sampler Epochs. The library operates on immutable offline
+artifacts; synthetic agreement does not establish loaded, MPS, multiprocess or
+multi-Device hardware precision.
 
 
 ### Transport boundary results

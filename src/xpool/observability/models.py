@@ -17,15 +17,16 @@ from xpool.observability.wire import (
     ContractVersion,
     EventKind,
     PresenceBit,
+    SampleFailureCode,
 )
 
 __all__ = [
-    "CalibrationSample",
     "Counters",
     "Event",
     "EventRecord",
     "Finding",
     "Metadata",
+    "PairedClockSample",
     "PeMember",
     "QualityCheckpoint",
     "RoutingAttachment",
@@ -578,7 +579,11 @@ class EventRecord(StrictModel):
 
 
 class Counters(StrictModel):
-    """Cumulative u64 collection, export, attachment and sampling counters."""
+    """Unsigned process-scoped cumulative counts; checkpoints validate conservation.
+
+    Sample attempts exclude busy scheduling skips. These counters retain their
+    process scope and cannot be apportioned to individual sampler Epochs.
+    """
 
     attempted: uint64
     committed: uint64
@@ -720,15 +725,15 @@ class Finding:
 
 
 @dataclass(frozen=True)
-class CalibrationSample:
+class PairedClockSample:
     """A raw paired attempt for clock calibration; failed Device reads remain absent."""
 
     source: Source
-    attempt_sequence: int
-    device_clock_domain_id: int
-    raw_epoch: int
-    host_before_ns: int
-    device_time_ns: int | None
-    host_after_ns: int | None
+    attempt_sequence: positive_uint64
+    device_clock_domain_id: positive_uint64
+    raw_epoch: positive_uint64
+    host_before_ns: uint64
+    device_time_ns: uint64 | None
+    host_after_ns: uint64 | None
     outcome: Literal["succeeded", "failed"]
-    failure_code: Literal["enqueue_failed", "completion_failed", "timed_out", "shutdown"] | None
+    failure_code: SampleFailureCode | None
