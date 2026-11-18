@@ -6,20 +6,20 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from itertools import repeat
 from pathlib import Path
 from threading import Barrier
+from typing import Literal
 
+from xkit.envs import DETERMINISTIC_PATH
 from xkit.serving.sglang.graph import SglangGraphSettings
 from xkit.serving.sglang.system import XpoolServingSystem
 from xpool.integrations.sglang.devkit import SglangGraphEvent
 from xpool.model import ModelId
 from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.sglang.catalog import E2eServingCase
-from xtest.harness.sglang.serving.alignment import ServingGraphArtifact, TokenOutput
 from xtest.harness.sglang.serving.graph import read_graph_events
 from xtest.harness.sglang.serving.launch import prepare
-from xtest.harness.sglang.serving.server import SglangProbeServer, SglangServerResult
+from xtest.harness.sglang.serving.server import SglangProbeServer, SglangServerResult, generation_request
 
 PROBE_TIMEOUT_SECONDS = 30 * 60
 
@@ -31,20 +31,11 @@ class ProbeRun:
     model_ids: tuple[ModelId, ...]
     observer_outdir: Path
     graph_settings: SglangGraphSettings
-    deterministic: bool
     results: tuple[SglangServerResult, ...]
     events: list[SglangGraphEvent]
     daemon_startup_seconds: float
     duration_seconds: float
-
-    def serving_graph_artifact(self) -> ServingGraphArtifact:
-        """Project this completed probe to portable serving-graph evidence."""
-
-        return ServingGraphArtifact(
-            graph_settings=self.graph_settings,
-            deterministic=self.deterministic,
-            outputs=tuple(TokenOutput(result.model_id, result.output_ids) for result in self.results),
-        )
+    sampling_record_path: Path | None = None
 
 
 @dataclass(slots=True)
@@ -55,7 +46,8 @@ class ProbeAttempt:
     base_config: ResolvedConfig
     graph_settings: SglangGraphSettings
     workdir: Path
-    deterministic: bool = False
+    deterministic_mode: Literal["none", "record", "replay"] = "none"
+    replay_path: Path | None = None
     system: XpoolServingSystem | None = None
 
     @property
@@ -83,25 +75,27 @@ class ProbeAttempt:
                 base_config=self.base_config,
                 workdir=self.workdir,
                 graph_settings=self.graph_settings,
-                deterministic=self.deterministic,
+                deterministic_mode=self.deterministic_mode,
+                replay_path=self.replay_path,
             )
             self.system = XpoolServingSystem()
             self.system.start(launch, workdir=self.workdir, startup_timeout_seconds=PROBE_TIMEOUT_SECONDS)
             assert self.system.cluster is not None
-            config = self.system.launch.config
-            servers = [
-                SglangProbeServer(
-                    server,
-                    self.workdir / "models" / server.model.model_id.uri_encode() / "inference.json",
-                    config.debug.prefill_logit_observer.outdir if config.debug.prefill_logit_observer.enable else None,
-                )
-                for server in self.system.servers
-            ]
+            servers = [SglangProbeServer(server) for server in self.system.servers]
             try:
                 if workload is None:
                     request_barrier = Barrier(len(servers))
+
+                    def generate(server: SglangProbeServer) -> SglangServerResult:
+                        model_id = server.process.model.model_id
+                        return server.generate(
+                            generation_request(f"xpool-serving-{model_id}"),
+                            record_path=self.workdir / "models" / model_id.uri_encode() / "inference.json",
+                            request_barrier=request_barrier,
+                        )
+
                     with ThreadPoolExecutor(max_workers=len(servers)) as executor:
-                        results = tuple(executor.map(SglangProbeServer.result, servers, repeat(request_barrier)))
+                        results = tuple(executor.map(generate, servers))
                 else:
                     results = workload(servers)
             except BaseException as error:
@@ -118,9 +112,11 @@ class ProbeAttempt:
             model_ids=tuple(model.model_id for model in launch.models),
             observer_outdir=self.observer_outdir,
             graph_settings=self.graph_settings,
-            deterministic=self.deterministic,
             results=results,
             events=read_graph_events(self.observer_outdir),
             daemon_startup_seconds=daemon_startup_seconds,
             duration_seconds=time.monotonic() - started_at,
+            sampling_record_path=Path(launch.environment[DETERMINISTIC_PATH.name])
+            if self.deterministic_mode != "none"
+            else None,
         )

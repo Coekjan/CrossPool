@@ -19,13 +19,13 @@ def test_launch_requires_exact_instance_coverage(tmp_path: Path) -> None:
         },
         env={},
     )
-    a = SglangLaunchModel(ModelId("test/a"), SglangGraphMode.EAGER)
-    b = SglangLaunchModel(ModelId("test/b"), SglangGraphMode.EAGER)
+    a = SglangLaunchModel(ModelId("test/a"), SglangGraphMode.EAGER.settings())
+    b = SglangLaunchModel(ModelId("test/b"), SglangGraphMode.EAGER.settings())
     assert ServingLaunch(config, {}, tmp_path, (b, a)).models == (b, a)
     for models in (
         (a,),
         (a, a),
-        (a, SglangLaunchModel(ModelId("test/c"), SglangGraphMode.EAGER)),
+        (a, SglangLaunchModel(ModelId("test/c"), SglangGraphMode.EAGER.settings())),
     ):
         with pytest.raises(ValueError, match="all runtime"):
             ServingLaunch(config, {}, tmp_path, models)

@@ -1,22 +1,25 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import pytest
 import tomli_w
 from tests import TEST_CATALOG_PATH
 
 import xkit.device
-from xkit.serving.sglang.graph import SglangGraphMode, SglangGraphSettings
+from xkit.serving.sglang.graph import SglangGraphSettings
 from xpool.config import XpoolConfig
 from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.sglang.catalog import TestCatalog
 from xtest.harness.sglang.serving.launch import prepare
 
 
+@pytest.mark.parametrize("decode_backend", ["full", "disabled"])
 def test_prepare_applies_deployment_policy_and_sanitizes_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    decode_backend: Literal["full", "disabled"],
 ) -> None:
     manifest = TestCatalog.from_file(TEST_CATALOG_PATH)
     case = next(
@@ -38,7 +41,7 @@ def test_prepare_applies_deployment_policy_and_sanitizes_environment(
         case,
         base_config=base_config,
         workdir=tmp_path / "attempt",
-        graph_settings=SglangGraphSettings(decode_backend="full", prefill_backend="breakable"),
+        graph_settings=SglangGraphSettings(decode_backend=decode_backend, prefill_backend="breakable"),
     )
 
     assert launch.config.scheduler.slo == case.deployment_config.slo
@@ -46,6 +49,7 @@ def test_prepare_applies_deployment_policy_and_sanitizes_environment(
     assert launch.config.atn.devices == [0]
     assert launch.config.ffn.devices == [1, 2]
     assert [model.id for model in launch.config.models] == [model.model_id for model in launch.models]
+    assert all(model.graph_settings == SglangGraphSettings(decode_backend, "breakable") for model in launch.models)
     for model in launch.config.models:
         assert launch.config.model_path_of(model.id) == base_config.config.model_path_of(model.id)
         assert model.ffn_tp_size == 1 and model.slo is None
@@ -55,8 +59,6 @@ def test_prepare_applies_deployment_policy_and_sanitizes_environment(
     assert "SGLANG_GRPC_PORT" not in launch.environment
     assert launch.config.debug.transport_observer.record_capacity == 32_768
     assert launch.config.debug.fabric_observer.record_capacity == 65_536
-    assert launch.config.debug.prefill_logit_observer.enable is (case.elastic_kv is not None)
-    assert ("XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE" in launch.environment) is (case.elastic_kv is not None)
 
 
 @pytest.mark.parametrize(
@@ -90,7 +92,6 @@ def test_prepare_elastic_kv_preserves_absolute_memory_budget(
     )
 
     assert launch.config.atn.device_memory_utilization == pytest.approx(expected_utilization)
-    assert launch.config.debug.prefill_logit_observer.enable
 
 
 @pytest.mark.parametrize(
@@ -121,56 +122,6 @@ def test_prepare_rejects_incompatible_elastic_kv_gpu_capacity(
             workdir=tmp_path / "attempt",
             graph_settings=SglangGraphSettings(decode_backend="full", prefill_backend="breakable"),
         )
-
-
-@pytest.mark.parametrize(
-    ("graph_mode", "expected_enable"),
-    [
-        (SglangGraphMode.EAGER, True),
-        (SglangGraphMode.DECODE_FULL, False),
-        (SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE, True),
-    ],
-)
-def test_prepare_enables_prefill_logit_observer_for_alignment_modes(
-    tmp_path: Path,
-    graph_mode: SglangGraphMode,
-    expected_enable: bool,
-) -> None:
-    manifest = TestCatalog.from_file(TEST_CATALOG_PATH)
-    case = manifest.serving_cases[0].model_copy(
-        update={
-            "graph_modes": (
-                SglangGraphMode.EAGER,
-                SglangGraphMode.DECODE_FULL,
-                SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE,
-            )
-        }
-    )
-    base_config = base_e2e_config(manifest, tmp_path)
-
-    launch = prepare(
-        case,
-        base_config=base_config,
-        workdir=tmp_path / "attempt",
-        graph_settings=graph_mode.settings(),
-    )
-
-    assert launch.config.debug.prefill_logit_observer.enable is expected_enable
-    assert ("XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE" in launch.environment) is expected_enable
-
-
-def test_prepare_keeps_prefill_logit_observer_off_for_routine_serving(tmp_path: Path) -> None:
-    manifest = TestCatalog.from_file(TEST_CATALOG_PATH)
-    case = manifest.serving_cases[0]
-
-    launch = prepare(
-        case,
-        base_config=base_e2e_config(manifest, tmp_path),
-        workdir=tmp_path / "attempt",
-        graph_settings=case.graph_modes[0].settings(),
-    )
-
-    assert not launch.config.debug.prefill_logit_observer.enable
 
 
 def base_e2e_config(

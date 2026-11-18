@@ -48,7 +48,6 @@ __all__ = [
     "LoggingConfig",
     "MissingRequiredConfig",
     "ModelConfig",
-    "PrefillLogitObserverDebugConfig",
     "SchedulerConfig",
     "TopologyError",
     "VendorConfig",
@@ -139,24 +138,6 @@ CONFIG_REGISTRY: tuple[ConfigSetting, ...] = (
         default=None,
         env_var="XPOOL_DEBUG_GRAPH_OBSERVER_OUTDIR",
         description="Directory for SGLang graph event files and native FFN Graph snapshots.",
-    ),
-    ConfigSetting(
-        name="debug_prefill_logit_observer_enable",
-        path=("debug", "prefill_logit_observer", "enable"),
-        parser="bool",
-        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
-        default=False,
-        env_var="XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE",
-        description="Development-only switch that records request-prefill logits from SGLang.",
-    ),
-    ConfigSetting(
-        name="debug_prefill_logit_observer_outdir",
-        path=("debug", "prefill_logit_observer", "outdir"),
-        parser="raw",
-        allowed_sources=(ConfigSource.ENV, ConfigSource.DEFAULT),
-        default=None,
-        env_var="XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_OUTDIR",
-        description="Directory used by the prefill-logit observer for Safetensors output.",
     ),
     ConfigSetting(
         name="debug_transport_observer_enable",
@@ -729,35 +710,6 @@ class GraphObserverDebugConfig(BaseModel):
         return self
 
 
-class PrefillLogitObserverDebugConfig(BaseModel):
-    """Debug-only request-prefill logit observer settings."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enable: bool = Field(
-        default=False,
-        description="Whether the SGLang plugin should record request-prefill next-token logits.",
-    )
-    outdir: Path | None = Field(
-        default=None,
-        description="Directory where the observer writes per-process Safetensors files.",
-    )
-
-    @model_validator(mode="after")
-    def validate_prefill_logit_observer(self) -> PrefillLogitObserverDebugConfig:
-        """Normalize and validate prefill-logit observer output settings."""
-
-        if self.enable != (self.outdir is not None):
-            raise ValueError(
-                "debug.prefill_logit_observer.enable and debug.prefill_logit_observer.outdir "
-                "must be set or unset together"
-            )
-        if self.outdir is not None:
-            outdir = self.outdir.expanduser()
-            self.outdir = outdir.resolve() if outdir.is_absolute() else (Path.cwd() / outdir).resolve()
-        return self
-
-
 class TransportObserverDebugConfig(BaseModel):
     """Debug-only native transport device-phase observer settings."""
 
@@ -864,10 +816,6 @@ class DebugConfig(BaseModel):
     graph_observer: GraphObserverDebugConfig = Field(
         default_factory=GraphObserverDebugConfig,
         description="SGLang and native FFN CUDA Graph observer debug settings.",
-    )
-    prefill_logit_observer: PrefillLogitObserverDebugConfig = Field(
-        default_factory=PrefillLogitObserverDebugConfig,
-        description="SGLang request-prefill logit observer debug settings.",
     )
     transport_observer: TransportObserverDebugConfig = Field(
         default_factory=TransportObserverDebugConfig,
@@ -1101,6 +1049,19 @@ class XpoolConfig(ConfigModel):
                 model_path = self.vendor.model_base_uri / model.id.relative_path
             return model_path
         raise MissingRequiredConfig(f"unknown configured model id: {model_id}")
+
+    def model_id_of_path(self, model_path: str | Path) -> ModelId:
+        """Resolve a configured Model ID from an absolute or caller-relative path.
+
+        Raises:
+            RuntimeError: If no configured checkpoint resolves to this path.
+        """
+
+        resolved = Path(model_path).expanduser().resolve()
+        for model in self.models:
+            if self.model_path_of(model.id).resolve() == resolved:
+                return model.id
+        raise RuntimeError(f"xpool config has no model entry for model path {resolved}")
 
     @model_validator(mode="after")
     def validate_references(self) -> XpoolConfig:

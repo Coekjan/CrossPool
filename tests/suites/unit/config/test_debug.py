@@ -155,27 +155,6 @@ def test_env_source_parses_graph_observer_settings(tmp_path: Path) -> None:
     assert enabled.debug.graph_observer.outdir == outdir
 
 
-def test_env_source_parses_prefill_logit_observer_settings(tmp_path: Path) -> None:
-    payload = {
-        "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
-        "atn": {"devices": [0]},
-        "ffn": {"devices": [1]},
-        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
-    }
-    outdir = tmp_path.resolve()
-
-    enabled = XpoolConfig.from_mapping(
-        payload,
-        env={
-            "XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE": "1",
-            "XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_OUTDIR": str(outdir),
-        },
-    )
-
-    assert enabled.debug.prefill_logit_observer.enable is True
-    assert enabled.debug.prefill_logit_observer.outdir == outdir
-
-
 def test_graph_observer_outdir_accepts_relative_env_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -203,7 +182,6 @@ def test_graph_observer_outdir_accepts_relative_env_path(
     "env_var",
     [
         "XPOOL_DEBUG_GRAPH_OBSERVER_ENABLE",
-        "XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE",
         "XPOOL_DEBUG_TRANSPORT_OBSERVER_ENABLE",
         "XPOOL_DEBUG_FABRIC_OBSERVER_ENABLE",
     ],
@@ -226,11 +204,6 @@ def test_env_source_rejects_malformed_debug_boolean(env_var: str) -> None:
     [
         ({"graph_observer": {"enable": True}}, "debug_graph_observer_enable"),
         ({"graph_observer": {"outdir": "/tmp/xpool-graph-events"}}, "debug_graph_observer_outdir"),
-        ({"prefill_logit_observer": {"enable": True}}, "debug_prefill_logit_observer_enable"),
-        (
-            {"prefill_logit_observer": {"outdir": "/tmp/xpool-prefill-logits"}},
-            "debug_prefill_logit_observer_outdir",
-        ),
     ],
 )
 def test_debug_graph_observer_cannot_be_set_from_toml(
@@ -257,30 +230,6 @@ def test_debug_graph_observer_cannot_be_set_from_toml(
     ],
 )
 def test_graph_observer_requires_enable_and_outdir_together(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    env: dict[str, str],
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    payload = {
-        "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
-        "atn": {"devices": [0]},
-        "ffn": {"devices": [1]},
-        "models": [{"id": str(TEST_MODEL_ID), "path": "/models/m"}],
-    }
-
-    with pytest.raises(ValidationError, match="must be set or unset together"):
-        XpoolConfig.from_mapping(payload, env=env)
-
-
-@pytest.mark.parametrize(
-    "env",
-    [
-        {"XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE": "1"},
-        {"XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_OUTDIR": "events"},
-    ],
-)
-def test_prefill_logit_observer_requires_enable_and_outdir_together(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     env: dict[str, str],

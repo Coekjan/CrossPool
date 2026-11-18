@@ -110,5 +110,4 @@ def unit_case() -> xtest.harness.runner.plan.CollectedTestCase:
         requirements=ResourceRequirements(0, False, ()),
         estimated_duration_seconds=None,
         timeout_seconds=10,
-        artifact_group=None,
     )

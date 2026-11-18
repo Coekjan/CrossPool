@@ -31,7 +31,7 @@ from xtest.harness.native.ffn.topology import (
 )
 from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.sglang.catalog import E2eFfnTopologyCase
-from xtest.harness.sglang.reference.ffn import SglangFfnReferenceCase, SglangFfnReferenceRunner
+from xtest.harness.sglang.reference.ffn import SglangFfnReferenceCase, run_ffn_reference
 from xtest.harness.support.ffn import (
     FFN_OUTPUT_ATOL,
     FFN_OUTPUT_MAXIMUM_SCALED_ERROR_LIMIT,
@@ -201,14 +201,13 @@ def run_references(
             SglangFfnReferenceCase(
                 case_id=f"{case.id}-request-{ordinal}",
                 layer_id=model_spec.layers[instance.layer_ordinal].layer_id,
-                hidden_states=hidden_states[ordinal].clone(),
+                hidden_states=hidden_states[ordinal],
             )
             for ordinal in request_ordinals
         )
-        reference_results = SglangFfnReferenceRunner(
+        reference_results = run_ffn_reference(
             workdir=workdir / f"instance-{instance_index}",
             timeout_seconds=remaining_seconds(deadline, "FFN topology Reference"),
-        ).run(
             model_path=base_config.model_path_of(instance.model_id),
             tensor_parallel_size=base_config.model_by_id[instance.model_id].ffn_tp_size or len(base_config.ffn.devices),
             cases=reference_cases,

@@ -8,7 +8,6 @@ import pytest
 
 import xpool.devkit.registry
 import xpool.integrations.sglang.devkit.graph_observer
-import xpool.integrations.sglang.devkit.prefill_logit_observer
 from xpool.native import RuntimeRole
 from xtest.harness.support.config import install_test_config, reset_global_config
 from xtest.harness.support.devkit import observer_enabled_config
@@ -52,22 +51,3 @@ def test_registry_skips_graph_observer_for_atnagent(
     install_test_config(config=observer_enabled_config("graph_observer", tmp_path))
 
     xpool.devkit.registry.install("xpool.integrations.sglang.devkit")
-
-
-def test_registry_installs_enabled_prefill_logit_observer_for_instance(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    events: list[Path | None] = []
-    config = observer_enabled_config("prefill_logit_observer", tmp_path)
-    monkeypatch.setattr(xpool.devkit.registry, "get_runtime_role", lambda: RuntimeRole.INSTANCE)
-    monkeypatch.setattr(
-        xpool.integrations.sglang.devkit.prefill_logit_observer,
-        "install",
-        lambda: events.append(config.debug.prefill_logit_observer.outdir),
-    )
-    install_test_config(config=config)
-
-    xpool.devkit.registry.install("xpool.integrations.sglang.devkit")
-
-    assert events == [tmp_path.resolve()]

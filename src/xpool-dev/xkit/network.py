@@ -212,15 +212,18 @@ class TcpEndpointReservation:
 
 
 def create_tcp_listener(address: tuple[str, int]) -> socket.socket:
-    """Create a reusable listener; an IPv6 wildcard also covers IPv4 binds."""
+    """Create a reusable IPv4 listener, requiring a literal bind address."""
 
-    family = socket.AF_INET6 if ":" in address[0] else socket.AF_INET
-    listener = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        socket.inet_pton(socket.AF_INET, address[0])
+    except OSError as error:
+        raise OSError(
+            errno.EAFNOSUPPORT, f"local TCP endpoint requires an IPv4 address literal: {address[0]}"
+        ) from error
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         listener.set_inheritable(False)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        if address[0] == "::":
-            listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
         listener.bind(address)
         listener.listen()
     except BaseException:
@@ -238,34 +241,24 @@ def create_qualified_tcp_listener(address: tuple[str, int], *, deadline: float |
     if deadline is not None and time.monotonic() >= deadline:
         raise TimeoutError("TCP endpoint allocation exceeded the startup deadline")
     listener = create_tcp_listener(address)
-    family = listener.family
-    client = socket.socket(family, socket.SOCK_STREAM)
-    connection: socket.socket | None = None
     try:
-        remaining = 1.0 if deadline is None else deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("TCP endpoint allocation exceeded the startup deadline")
-        client.settimeout(min(1.0, remaining))
-        match address[0]:
-            case "0.0.0.0":
-                connect_address = ("127.0.0.1", address[1])
-            case "::":
-                connect_address = ("::1", address[1])
-            case _:
-                connect_address = address
-        client.connect(connect_address)
-        remaining = 1.0 if deadline is None else deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("TCP endpoint allocation exceeded the startup deadline")
-        listener.settimeout(min(1.0, remaining))
-        connection, _ = listener.accept()
-        client.close()
-        connection.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+            remaining = 1.0 if deadline is None else deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("TCP endpoint allocation exceeded the startup deadline")
+            client.settimeout(min(1.0, remaining))
+            connect_address = ("127.0.0.1", address[1]) if address[0] == "0.0.0.0" else address
+            client.connect(connect_address)
+            remaining = 1.0 if deadline is None else deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("TCP endpoint allocation exceeded the startup deadline")
+            listener.settimeout(min(1.0, remaining))
+            connection, _ = listener.accept()
+            with connection:
+                # Keep TIME_WAIT on the client's ephemeral port.
+                client.close()
         listener.settimeout(None)
     except OSError as error:
-        client.close()
-        if connection is not None:
-            connection.close()
         listener.close()
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError("TCP endpoint allocation exceeded the startup deadline") from error

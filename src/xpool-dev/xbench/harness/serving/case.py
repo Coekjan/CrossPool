@@ -285,7 +285,7 @@ def resolve_deployment(case: OwnedBenchCase) -> XpoolConfig:
         config,
         {},
         Path.cwd(),
-        tuple(SglangLaunchModel(target.model_id, target.graph_mode) for target in case.targets),
+        tuple(SglangLaunchModel(target.model_id, target.graph_mode.settings()) for target in case.targets),
     )
     return config
 

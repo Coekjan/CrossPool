@@ -7,14 +7,12 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from _pytest.mark.structures import Mark, MarkDecorator, ParameterSet
 
 from xkit import ResourceRequirements
 from xkit.config import ToolConfigRecord, XpoolDevConfig, init_global_config
 from xkit.declaration import Parameterization
 from xkit.serving.sglang.graph import SglangGraphMode
 from xkit.source import resolve_source_path
-from xtest.harness.runner.artifact import ArtifactGroupRef
 from xtest.harness.runner.bootstrap import TestBootstrapError, ensure_test_native
 from xtest.harness.runner.plan import (
     CaseInspection,
@@ -87,10 +85,6 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "requires_device(min_devices=1): selects tests declaring device resources")
     config.addinivalue_line("markers", "requires_model_weights(model_id): selects tests declaring local checkpoints")
     config.addinivalue_line("markers", "estimated_duration(seconds): estimated test runtime used by tests")
-    config.addinivalue_line(
-        "markers",
-        "serving_graph_group(name, expected_case_count): complete cross-task serving graph group",
-    )
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
@@ -152,21 +146,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         inputs = declaration.values
         values = declaration.values
     if declaration.rows is not None:
-        expanded: list[object] = []
-        for input_index, value in enumerate(inputs):
-            group_name = f"{metafunc.definition.nodeid}[case-{input_index}]"
-            for row in declaration.rows(value):
-                if isinstance(row, ParameterSet):
-                    marks: list[Mark | MarkDecorator] = []
-                    for marker in row.marks:
-                        mark = marker.mark if isinstance(marker, MarkDecorator) else marker
-                        if mark.name == "serving_graph_group" and "name" not in mark.kwargs:
-                            marks.append(pytest.mark.serving_graph_group(*mark.args, name=group_name, **mark.kwargs))
-                        else:
-                            marks.append(marker)
-                    row = pytest.param(*row.values, id=row.id, marks=marks)
-                expanded.append(row)
-        values = tuple(expanded)
+        values = tuple(row for value in inputs for row in declaration.rows(value))
     names = declaration.argument_names[0] if len(declaration.argument_names) == 1 else declaration.argument_names
     metafunc.parametrize(names, values)
 
@@ -228,9 +208,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         for model_id in resources.model_ids:
             item.add_marker(pytest.mark.requires_model_weights(model_id))
         estimated_duration(item)
-        serving_graph_group_ref = serving_graph_group(item)
-        if serving_graph_group_ref is not None and list(item.iter_markers("xfail")):
-            raise pytest.UsageError(f"{item.nodeid}: serving graph cases cannot use xfail")
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
@@ -261,25 +238,6 @@ def estimated_duration(item: pytest.Item) -> float | None:
     if marker.args or set(marker.kwargs) != {"seconds"}:
         raise pytest.UsageError(f"{item.nodeid}: estimated_duration expects seconds=<positive number>")
     return positive_number(item, "estimated_duration", marker.kwargs["seconds"])
-
-
-def serving_graph_group(item: pytest.Item) -> ArtifactGroupRef | None:
-    """Return the closest validated complete serving-graph group reference."""
-
-    marker = item.get_closest_marker("serving_graph_group")
-    if marker is None:
-        return None
-    if marker.args or set(marker.kwargs) != {"name", "expected_case_count"}:
-        raise pytest.UsageError(
-            f"{item.nodeid}: serving_graph_group expects name=<non-empty string>, expected_case_count=<integer>"
-        )
-    name = marker.kwargs["name"]
-    expected_case_count = marker.kwargs["expected_case_count"]
-    if not isinstance(name, str) or not name:
-        raise pytest.UsageError(f"{item.nodeid}: serving_graph_group expects name=<non-empty string>")
-    if not isinstance(expected_case_count, int) or isinstance(expected_case_count, bool) or expected_case_count < 2:
-        raise pytest.UsageError(f"{item.nodeid}: serving_graph_group expected_case_count must be at least two")
-    return ArtifactGroupRef(kind="serving_graph", name=name, expected_case_count=expected_case_count)
 
 
 def timeout_seconds(item: pytest.Item) -> float:
@@ -348,7 +306,11 @@ def pytest_collection_finish(session: pytest.Session) -> None:
                     description=known_case.description,
                     models=models,
                     deployment=known_case.deployment_config,
-                    graph_mode=graph_mode if isinstance(graph_mode, SglangGraphMode) else None,
+                    graph_modes=(graph_mode,)
+                    if isinstance(graph_mode, SglangGraphMode)
+                    else known_case.graph_modes
+                    if isinstance(known_case, E2eServingCase)
+                    else (),
                 )
         cases.append(
             CollectedTestCase(
@@ -358,7 +320,6 @@ def pytest_collection_finish(session: pytest.Session) -> None:
                 requirements=item.stash[resource_requirements_key],
                 estimated_duration_seconds=estimated_duration(item),
                 timeout_seconds=timeout_seconds(item),
-                artifact_group=serving_graph_group(item),
                 inspection=inspection,
             )
         )

@@ -85,7 +85,6 @@ def test_execution_uses_collection_scope_and_parent_configuration(
         requirements=ResourceRequirements(0, False, ()),
         estimated_duration_seconds=1,
         timeout_seconds=10,
-        artifact_group=None,
     )
 
     class FakeCollectionWorker:

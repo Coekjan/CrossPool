@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-import xtest.harness.runner.artifact
 import xtest.harness.runner.plan
 from xkit import ResourceRequirements
 from xtest.harness.support.config import TEST_MODEL_ID
@@ -42,7 +41,6 @@ def test_collected_case_rejects_stage_and_resource_drift() -> None:
             requirements=ResourceRequirements(0, False, ()),
             estimated_duration_seconds=None,
             timeout_seconds=10,
-            artifact_group=None,
         )
     with pytest.raises(ValueError, match="unit tests cannot require devices"):
         xtest.harness.runner.plan.CollectedTestCase(
@@ -52,7 +50,6 @@ def test_collected_case_rejects_stage_and_resource_drift() -> None:
             requirements=ResourceRequirements(1, False, ()),
             estimated_duration_seconds=None,
             timeout_seconds=10,
-            artifact_group=None,
         )
 
 
@@ -73,28 +70,10 @@ def test_collection_rejects_nonfinite_times(field: str, value: float, tmp_path: 
         xtest.harness.runner.plan.TestPlan.read(path)
 
 
-def test_plan_rejects_duplicate_nodes_and_incomplete_serving_graph_groups() -> None:
+def test_plan_rejects_duplicate_nodes() -> None:
     case = unit_case()
     with pytest.raises(ValueError, match="nodeids must be unique"):
         xtest.harness.runner.plan.TestPlan((case, case))
-    with pytest.raises(ValueError, match="every expected case"):
-        xtest.harness.runner.plan.TestPlan((e2e_case("eager"),))
-
-
-def test_plan_rejects_inconsistent_serving_graph_group_cardinality() -> None:
-    eager = e2e_case("eager")
-    full = xtest.harness.runner.plan.CollectedTestCase(
-        path=eager.path,
-        nodeid=f"{eager.path}::test_e2e_example[full]",
-        stage=eager.stage,
-        requirements=eager.requirements,
-        estimated_duration_seconds=eager.estimated_duration_seconds,
-        timeout_seconds=eager.timeout_seconds,
-        artifact_group=xtest.harness.runner.artifact.ArtifactGroupRef("serving_graph", "example", 3),
-    )
-
-    with pytest.raises(ValueError, match="inconsistent expected_case_count"):
-        xtest.harness.runner.plan.TestPlan((eager, full))
 
 
 def unit_case() -> xtest.harness.runner.plan.CollectedTestCase:
@@ -105,7 +84,6 @@ def unit_case() -> xtest.harness.runner.plan.CollectedTestCase:
         requirements=ResourceRequirements(0, False, ()),
         estimated_duration_seconds=None,
         timeout_seconds=10,
-        artifact_group=None,
     )
 
 
@@ -118,5 +96,4 @@ def e2e_case(mode: str) -> xtest.harness.runner.plan.CollectedTestCase:
         requirements=ResourceRequirements(2, True, (TEST_MODEL_ID,)),
         estimated_duration_seconds=60,
         timeout_seconds=120,
-        artifact_group=xtest.harness.runner.artifact.ArtifactGroupRef("serving_graph", "example", 2),
     )

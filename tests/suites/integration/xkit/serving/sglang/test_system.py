@@ -6,12 +6,14 @@ import sys
 import threading
 import time
 from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal, cast
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import xkit.network
 import xkit.serving.cluster
@@ -20,6 +22,7 @@ import xkit.serving.sglang.system
 from xkit.network import TcpEndpointConflict, TcpEndpointReservation, TcpEndpointUnreachable, TcpPortSpace
 from xkit.process import OwnedProcessGroup
 from xkit.serving.cluster import XpoolCluster
+from xkit.serving.sglang.deterministic import SamplingRecord
 from xkit.serving.sglang.endpoints import SglangEndpointFamilyLease
 from xkit.serving.sglang.graph import SglangGraphMode
 from xkit.serving.sglang.launch import ServingLaunch, SglangLaunchModel
@@ -30,13 +33,48 @@ from xpool.model import ModelId
 from xpool.utils.sighandler import defer_signal_exceptions
 
 
-@pytest.mark.parametrize("startup", ["success", "failure", "conflict", "deployment-failure"])
+@pytest.mark.parametrize(
+    "startup,deterministic_mode",
+    [
+        ("success", "none"),
+        ("failure", "none"),
+        ("conflict", "none"),
+        ("deployment-failure", "none"),
+        ("success", "record"),
+        ("success", "replay"),
+    ],
+)
 def test_system_complete_startup_or_partial_rollback(
     startup: Literal["success", "failure", "conflict", "deployment-failure"],
+    deterministic_mode: Literal["none", "record", "replay"],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     launch = serving_launch(tmp_path)
+    record_path = tmp_path / "caller" / "sampling-record.jsonl"
+    if deterministic_mode != "none":
+        record_path.parent.mkdir()
+        monkeypatch.chdir(record_path.parent)
+        launch = replace(
+            launch,
+            environment={
+                **launch.environment,
+                "XKIT_DETERMINISTIC_MODE": deterministic_mode,
+                "XKIT_DETERMINISTIC_PATH": record_path.name,
+            },
+        )
+        if deterministic_mode == "replay":
+            sample = SamplingRecord(
+                ModelId("test/a"),
+                "sample",
+                {"input_ids": [1], "sampling_params": {}},
+                1,
+                (2,),
+                {"type": "length", "length": 1},
+                None,
+            )
+            record_path.write_bytes(TypeAdapter(SamplingRecord).dump_json(sample) + b"\n")
+    original_environment = dict(launch.environment)
     events: list[str] = []
     leases: list[SglangEndpointFamilyLease] = []
     acquire = SglangEndpointFamilyLease.acquire
@@ -64,7 +102,11 @@ def test_system_complete_startup_or_partial_rollback(
         assert cluster_launch.environment["SGLANG_PLUGINS"] == "other-plugin,xpool"
         assert cluster_launch.environment["HF_HUB_OFFLINE"] == "1"
         assert cluster_launch.environment["TRANSFORMERS_OFFLINE"] == "1"
-        assert launch.environment == {"SGLANG_PLUGINS": "other-plugin,xpool", "HF_HUB_OFFLINE": "0"}
+        assert launch.environment == original_environment
+        if deterministic_mode != "none":
+            assert cluster_launch.cwd != record_path.parent
+            assert cluster_launch.environment["XKIT_DETERMINISTIC_PATH"] == str(record_path)
+            assert record_path.is_file()
         endpoint.release_for_spawn()
         events.append("cluster-start")
 
@@ -295,5 +337,5 @@ def serving_launch(tmp_path: Path) -> ServingLaunch:
         config,
         {"SGLANG_PLUGINS": "other-plugin,xpool", "HF_HUB_OFFLINE": "0"},
         tmp_path,
-        tuple(SglangLaunchModel(ModelId(id), SglangGraphMode.EAGER) for id in ("test/a", "test/b")),
+        tuple(SglangLaunchModel(ModelId(id), SglangGraphMode.EAGER.settings()) for id in ("test/a", "test/b")),
     )

@@ -14,6 +14,7 @@ import httpx
 from xkit.process import OwnedProcessGroup, wait_for_process_group
 from xkit.serving.cluster import XpoolClusterLaunch, process_diagnostics
 from xkit.serving.readiness import ReadinessEvidence
+from xkit.serving.sglang.deterministic import DeterministicConfig
 from xkit.serving.sglang.endpoints import SglangEndpointFamily, SglangEndpointFamilyLease
 from xkit.serving.sglang.launch import SglangLaunchModel
 from xkit.task import get_task_root
@@ -49,7 +50,10 @@ class SglangServerProcess:
         """Consume one reservation and launch the pinned installed CLI."""
 
         environment = dict(launch.environment)
-        environment["SGLANG_PLUGINS"] = "xpool,xkit_deterministic" if model.deterministic else "xpool"
+        plugins = environment.get("SGLANG_PLUGINS", "xpool").split(",")
+        if DeterministicConfig.from_environment(environment).mode != "none" and "xkit_deterministic" not in plugins:
+            plugins.append("xkit_deterministic")
+        environment["SGLANG_PLUGINS"] = ",".join(plugins)
         environment["SGLANG_GRPC_PORT"] = str(endpoint.family.grpc_port)
         command = server_command(
             launch=launch,
@@ -161,8 +165,7 @@ class SglangServerProcess:
     def url(self) -> str:
         """Return this server's loopback URL."""
 
-        host = f"[{self.endpoint.host}]" if ":" in self.endpoint.host else self.endpoint.host
-        return f"http://{host}:{self.endpoint.http_port}"
+        return f"http://{self.endpoint.host}:{self.endpoint.http_port}"
 
 
 def server_command(
@@ -171,10 +174,10 @@ def server_command(
     model: SglangLaunchModel,
     endpoint: SglangEndpointFamily,
 ) -> list[str]:
-    """Project one E2E model and graph mode to the pinned SGLang CLI."""
+    """Project one model and its concrete graph settings to the pinned SGLang CLI."""
 
     model_config = launch.config.model_by_id[model.model_id]
-    graph_settings = model.graph_mode.settings()
+    graph_settings = model.graph_settings
     command = [
         "xpool",
         "exec",

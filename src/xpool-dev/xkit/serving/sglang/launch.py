@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from xkit.serving.sglang.graph import SglangGraphMode
+from xkit.serving.sglang.graph import SglangGraphSettings
 from xpool.config import XpoolConfig
 from xpool.model import ModelId
 
@@ -15,21 +15,16 @@ __all__ = ["ServingLaunch", "SglangLaunchModel"]
 
 @dataclass(frozen=True, slots=True)
 class SglangLaunchModel:
-    """One Instance's graph policy and optional deterministic comparison request.
-
-    Runtime configuration owns geometry. The selected xkit plugin owns the
-    comparison controls requested by ``deterministic``.
-    """
+    """One Instance's graph policy; runtime configuration owns geometry."""
 
     model_id: ModelId
-    graph_mode: SglangGraphMode
-    deterministic: bool = False
+    graph_settings: SglangGraphSettings
 
     def __post_init__(self) -> None:
         if not isinstance(self.model_id, ModelId):
             raise ValueError("serving model_id must be a ModelId")
-        if not isinstance(self.graph_mode, SglangGraphMode):
-            raise ValueError("serving graph_mode must be a supported SGLang graph mode")
+        if not isinstance(self.graph_settings, SglangGraphSettings):
+            raise ValueError("serving graph_settings must be SGLang graph settings")
 
 
 @dataclass(frozen=True, slots=True)

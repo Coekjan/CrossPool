@@ -95,7 +95,13 @@ def make_case(case_id: str = "case", layer_id: int = 0) -> ffn.SglangFfnReferenc
     )
 
 
-def test_runner_rejects_invalid_requests_before_creating_workdir(
+@pytest.mark.parametrize("ids", (((-1, 0),), ((0, 0),)))
+def test_routing_rejects_negative_and_duplicate_expert_ids(ids: tuple[tuple[int, ...], ...]) -> None:
+    with pytest.raises(ValueError, match="distinct nonnegative IDs"):
+        ffn.SglangFfnRouting(torch.tensor(ids, dtype=torch.int32), torch.full((1, 2), 0.5))
+
+
+def test_reference_rejects_invalid_requests_before_creating_workdir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -104,7 +110,13 @@ def test_runner_rejects_invalid_requests_before_creating_workdir(
     monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
 
     with pytest.raises(ValueError, match="timeout_seconds"):
-        ffn.SglangFfnReferenceRunner(workdir=tmp_path / "timeout", timeout_seconds=0)
+        ffn.run_ffn_reference(
+            workdir=tmp_path / "timeout",
+            timeout_seconds=0,
+            model_path=model_path,
+            tensor_parallel_size=1,
+            cases=(make_case(),),
+        )
 
     invalid_batches = (
         (),
@@ -125,22 +137,42 @@ def test_runner_rejects_invalid_requests_before_creating_workdir(
                 hidden_states=torch.ones((1, 4), dtype=torch.int32),
             ),
         ),
+        (
+            ffn.SglangFfnReferenceCase(
+                "routing-rows",
+                0,
+                torch.ones((1, 4)),
+                ffn.SglangFfnRouting(torch.zeros((2, 1), dtype=torch.int32), torch.ones((2, 1))),
+            ),
+        ),
     )
     for index, cases in enumerate(invalid_batches):
         workdir = tmp_path / f"invalid-{index}"
-        runner = ffn.SglangFfnReferenceRunner(workdir=workdir, timeout_seconds=5)
         with pytest.raises(ValueError):
-            runner.run(model_path=model_path, tensor_parallel_size=1, cases=cases)
+            ffn.run_ffn_reference(
+                workdir=workdir, timeout_seconds=5, model_path=model_path, tensor_parallel_size=1, cases=cases
+            )
         assert not workdir.exists()
 
-    runner = ffn.SglangFfnReferenceRunner(workdir=tmp_path / "placement", timeout_seconds=5)
     with pytest.raises(ValueError, match="tensor_parallel_size"):
-        runner.run(model_path=model_path, tensor_parallel_size=3, cases=(make_case(),))
+        ffn.run_ffn_reference(
+            workdir=tmp_path / "placement",
+            timeout_seconds=5,
+            model_path=model_path,
+            tensor_parallel_size=3,
+            cases=(make_case(),),
+        )
     with pytest.raises(ValueError, match="model_path"):
-        runner.run(model_path=tmp_path / "missing", tensor_parallel_size=1, cases=(make_case(),))
+        ffn.run_ffn_reference(
+            workdir=tmp_path / "placement",
+            timeout_seconds=5,
+            model_path=tmp_path / "missing",
+            tensor_parallel_size=1,
+            cases=(make_case(),),
+        )
 
 
-def test_runner_preserves_order_normalizes_inputs_and_is_single_use(
+def test_reference_preserves_order_normalizes_inputs_and_is_single_use(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -162,15 +194,14 @@ def test_runner_preserves_order_normalizes_inputs_and_is_single_use(
         ffn.SglangFfnReferenceCase("first", 1, torch.ones((2, 4))),
     )
     workdir = tmp_path / "reference"
-    runner = ffn.SglangFfnReferenceRunner(workdir=workdir, timeout_seconds=5)
 
-    results = runner.run(model_path=model_path, tensor_parallel_size=2, cases=cases)
+    results = ffn.run_ffn_reference(
+        workdir=workdir, timeout_seconds=5, model_path=model_path, tensor_parallel_size=2, cases=cases
+    )
 
     assert tuple(result.case_id for result in results) == ("second", "first")
-    assert tuple(result.layer_id for result in results) == (2, 1)
     torch.testing.assert_close(results[0].output, first_input.detach().contiguous() + 2)
     torch.testing.assert_close(results[1].output, torch.full((2, 4), 2.0))
-    assert all(result.routing is None for result in results)
     job = state["job"]
     assert job is not None
     assert job.tensor_parallel_size == 2
@@ -185,10 +216,12 @@ def test_runner_preserves_order_normalizes_inputs_and_is_single_use(
         }
 
     with pytest.raises(FileExistsError):
-        runner.run(model_path=model_path, tensor_parallel_size=1, cases=(make_case(),))
+        ffn.run_ffn_reference(
+            workdir=workdir, timeout_seconds=5, model_path=model_path, tensor_parallel_size=1, cases=(make_case(),)
+        )
 
 
-def test_runner_projects_moe_routing_evidence(
+def test_reference_serializes_prescribed_routes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -196,26 +229,34 @@ def test_runner_projects_moe_routing_evidence(
     model_path.mkdir()
 
     def output_factory(spec: ffn_protocol.FfnReferenceCaseSpec) -> dict[str, torch.Tensor]:
-        hidden_states = safetensors.torch.load_file(spec.input_path)["hidden_states"]
-        return {
-            "hidden_states": hidden_states,
-            "topk_ids": torch.tensor([[3, 1], [2, 0], [1, 3]], dtype=torch.int32),
-            "topk_weights": torch.full((3, 2), 0.5, dtype=torch.float32),
-        }
+        tensors = safetensors.torch.load_file(spec.input_path)
+        assert tensors["topk_ids"].tolist() == [[3, 1], [2, 0], [1, 3]]
+        assert torch.equal(tensors["topk_weights"], torch.full((3, 2), 0.5))
+        return {"hidden_states": tensors["hidden_states"]}
 
     install_fake_child(monkeypatch, output_factory=output_factory)
-    result = ffn.SglangFfnReferenceRunner(
+    result = ffn.run_ffn_reference(
         workdir=tmp_path / "reference",
         timeout_seconds=5,
-    ).run(model_path=model_path, tensor_parallel_size=1, cases=(make_case(),))[0]
+        model_path=model_path,
+        tensor_parallel_size=1,
+        cases=(
+            ffn.SglangFfnReferenceCase(
+                "case",
+                0,
+                make_case().hidden_states,
+                ffn.SglangFfnRouting(
+                    torch.tensor([[3, 1], [2, 0], [1, 3]], dtype=torch.int32), torch.full((3, 2), 0.5)
+                ),
+            ),
+        ),
+    )[0]
 
-    assert result.routing is not None
-    assert result.routing.topk_ids.dtype == torch.int32
-    assert result.routing.topk_weights.dtype == torch.float32
-    assert result.routing.topk_ids.tolist() == [[3, 1], [2, 0], [1, 3]]
+    assert result.case_id == "case"
+    assert torch.equal(result.output, make_case().hidden_states)
 
 
-def test_runner_terminates_failed_child_without_returning_partial_results(
+def test_reference_terminates_failed_child_without_returning_partial_results(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -226,10 +267,12 @@ def test_runner_terminates_failed_child_without_returning_partial_results(
         output_factory=lambda spec: {"hidden_states": safetensors.torch.load_file(spec.input_path)["hidden_states"]},
         receive_error=RuntimeError("child failed"),
     )
-    runner = ffn.SglangFfnReferenceRunner(workdir=tmp_path / "reference", timeout_seconds=5)
+    workdir = tmp_path / "reference"
 
     with pytest.raises(RuntimeError, match="child failed"):
-        runner.run(model_path=model_path, tensor_parallel_size=1, cases=(make_case(),))
+        ffn.run_ffn_reference(
+            workdir=workdir, timeout_seconds=5, model_path=model_path, tensor_parallel_size=1, cases=(make_case(),)
+        )
 
     assert state["terminated"] is True
     assert state["closed"] is True
@@ -250,7 +293,7 @@ def test_runner_terminates_failed_child_without_returning_partial_results(
         ),
     ],
 )
-def test_runner_rejects_incomplete_or_malformed_completion(
+def test_reference_rejects_incomplete_or_malformed_completion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     completed_count: int | None,
@@ -264,7 +307,9 @@ def test_runner_rejects_incomplete_or_malformed_completion(
         output_factory=output_factory,
         completed_count=completed_count,
     )
-    runner = ffn.SglangFfnReferenceRunner(workdir=tmp_path / "reference", timeout_seconds=5)
+    workdir = tmp_path / "reference"
 
     with pytest.raises(RuntimeError, match=message):
-        runner.run(model_path=model_path, tensor_parallel_size=1, cases=(make_case(),))
+        ffn.run_ffn_reference(
+            workdir=workdir, timeout_seconds=5, model_path=model_path, tensor_parallel_size=1, cases=(make_case(),)
+        )

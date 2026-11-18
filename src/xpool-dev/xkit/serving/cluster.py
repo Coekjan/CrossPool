@@ -276,9 +276,7 @@ class XpoolCluster:
 def daemon_url(launch: XpoolClusterLaunch) -> str:
     """Return the effective daemon URL for one materialized launch."""
 
-    host = launch.config.daemon.host
-    formatted_host = f"[{host}]" if ":" in host else host
-    return f"http://{formatted_host}:{launch.config.daemon.port}"
+    return f"http://{launch.config.daemon.host}:{launch.config.daemon.port}"
 
 
 def spawn_process(

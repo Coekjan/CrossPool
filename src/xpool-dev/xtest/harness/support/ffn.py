@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Self, cast
@@ -12,6 +13,7 @@ import torch
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from xpool.fabric import FabricGenerationId
+from xpool.ffn import MoeFfnSpec, RouterAlgorithm, TopKWeightRounding
 from xpool.model import ModelId
 from xpool.utils.dtype import TorchDtype
 
@@ -141,19 +143,24 @@ class FfnOutputComparison:
 
 
 @dataclass(frozen=True, slots=True)
-class FfnRoutingComparison:
-    """Canonical expert-route comparison and first mismatch evidence."""
+class FfnRouterComparison:
+    """Stage-local Router accuracy and exact installed-execution agreement."""
 
     passed: bool
-    first_mismatch_token: int | None
-    first_mismatch_pair: int | None
-    reference_expert_id: int | None
-    actual_expert_id: int | None
-    reference_weight: float | None
-    actual_weight: float | None
-    maximum_absolute_weight_error: float
-    atol: float
-    rtol: float
+    execution_capacity: int
+    projection_outlier_count: int
+    projection_maximum_absolute_error: float
+    projection_atol: float
+    projection_rtol: float
+    selection_violation_count: int
+    boundary_ambiguity_count: int
+    coefficient_outlier_count: int
+    coefficient_maximum_absolute_error: float
+    coefficient_atol: float
+    coefficient_rtol: float
+    installed_ids_equal: bool
+    installed_weights_equal: bool
+    eager_graph_equal: bool
 
 
 class FfnNumericalSampleEvidence(BaseModel):
@@ -164,7 +171,7 @@ class FfnNumericalSampleEvidence(BaseModel):
     layer_id: int = Field(ge=0)
     row_count: int = Field(gt=0)
     output: FfnOutputComparison
-    routing: FfnRoutingComparison | None
+    router: FfnRouterComparison | None
 
 
 class FfnNumericalEvidence(BaseModel):
@@ -334,68 +341,151 @@ def compare_ffn_outputs(
     )
 
 
-def compare_ffn_routing(
-    reference_ids: torch.Tensor,
-    reference_weights: torch.Tensor,
-    actual_ids: torch.Tensor,
-    actual_weights: torch.Tensor,
+def router_selection_bounds(
+    logits: torch.Tensor,
     *,
-    expert_count: int,
-    atol: float,
-    rtol: float,
-) -> FfnRoutingComparison:
-    """Compare semantic routes after sorting each token's pairs by expert ID."""
+    algorithm: RouterAlgorithm,
+    correction_bias: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return FP64 score bounds and FP32 exponential arguments for selection.
 
-    if expert_count <= 0:
-        raise ValueError("FFN routing expert_count must be positive")
-    if atol < 0 or rtol < 0:
-        raise ValueError("FFN routing tolerances must be nonnegative")
-    for name, ids, weights in (
-        ("reference", reference_ids, reference_weights),
-        ("actual", actual_ids, actual_weights),
-    ):
-        if ids.ndim != 2 or ids.shape != weights.shape or ids.numel() == 0:
-            raise AssertionError(f"FFN {name} routing IDs and weights must be nonempty matching rank-two tensors")
-        if ids.dtype != torch.int32 or weights.dtype != torch.float32:
-            raise AssertionError(
-                f"FFN {name} routing dtypes must be int32/float32, received {ids.dtype}/{weights.dtype}"
-            )
-        if ids.device.type != "cpu" or weights.device.type != "cpu":
-            raise AssertionError(f"FFN {name} routing evidence must be on CPU")
-        if not torch.isfinite(weights).all():
-            raise AssertionError(f"FFN {name} routing weights must be finite")
-        if (ids < 0).any() or (ids >= expert_count).any():
-            raise AssertionError(f"FFN {name} routing contains an illegal expert ID")
-        sorted_ids = ids.sort(dim=1).values
-        if (sorted_ids[:, 1:] == sorted_ids[:, :-1]).any():
-            raise AssertionError(f"FFN {name} routing contains duplicate expert IDs for one token")
-    if reference_ids.shape != actual_ids.shape:
-        raise AssertionError(f"FFN routing shape mismatch: reference={reference_ids.shape}, actual={actual_ids.shape}")
+    This engineering policy covers uncorrected Softmax and stored-FP32 Sigmoid.
+    Its approximate-operation allowance is not a portable instruction proof.
+    """
 
-    reference_order = reference_ids.argsort(dim=1)
-    actual_order = actual_ids.argsort(dim=1)
-    reference_ids = reference_ids.gather(1, reference_order)
-    actual_ids = actual_ids.gather(1, actual_order)
-    reference_weights = reference_weights.gather(1, reference_order)
-    actual_weights = actual_weights.gather(1, actual_order)
-    absolute_weight_error = (actual_weights - reference_weights).abs()
-    weight_outliers = absolute_weight_error > atol + rtol * reference_weights.abs()
-    mismatches = (actual_ids != reference_ids) | weight_outliers
-    mismatch_indices = mismatches.nonzero()
-    if mismatch_indices.numel() == 0:
-        first_token = first_pair = None
+    # Include FP32 RN and the inspected NVIDIA exp2/divide approximation errors.
+    unit_roundoff = 2.0**-24
+    relative_error = 5 * unit_roundoff / (1 - 4 * unit_roundoff)
+    absolute_error = 2.5 * 2.0**-149 / (1 - 4 * unit_roundoff)
+    values = logits.float()
+    log2_e = torch.tensor(math.log2(math.e), dtype=torch.float32)
+    if algorithm is RouterAlgorithm.SOFTMAX:
+        if correction_bias is not None:
+            raise ValueError("Router selection policy does not cover corrected Softmax")
+        argument = (values - values.max(dim=-1, keepdim=True).values) * log2_e
+        # Softmax's common denominator cancels in ranking; work in log2 space.
+        lower = argument.double() + 2 * math.log2(1 - relative_error)
+        upper = argument.double() + 2 * math.log2(1 + relative_error)
     else:
-        first_token, first_pair = (int(value) for value in mismatch_indices[0].tolist())
+        argument = -values * log2_e
+        exponential = torch.exp2(argument.double())
+        exponential_lower = (exponential * (1 - relative_error) - absolute_error).clamp_min(0)
+        exponential_upper = exponential * (1 + relative_error) + absolute_error
+        lower = ((1 - relative_error) / ((1 + exponential_upper) * (1 + unit_roundoff)) - absolute_error).clamp_min(0)
+        upper = (1 + relative_error) / ((1 + exponential_lower) * (1 - unit_roundoff)) + absolute_error
+        lower = torch.where(lower < 2.0**-126, 0.0, lower)
+        upper = torch.where(upper < 2.0**-126, 0.0, upper)
+        if correction_bias is not None:
+            lower = lower + correction_bias.double()
+            upper = upper + correction_bias.double()
+        lower, upper = lower.float().double(), upper.float().double()
+    if not torch.isfinite(argument).all():
+        raise ValueError("Router selection policy requires finite FP32 exponential arguments")
+    return lower, upper, argument
 
-    return FfnRoutingComparison(
-        passed=first_token is None,
-        first_mismatch_token=first_token,
-        first_mismatch_pair=first_pair,
-        reference_expert_id=None if first_token is None else int(reference_ids[first_token, first_pair].item()),
-        actual_expert_id=None if first_token is None else int(actual_ids[first_token, first_pair].item()),
-        reference_weight=None if first_token is None else float(reference_weights[first_token, first_pair].item()),
-        actual_weight=None if first_token is None else float(actual_weights[first_token, first_pair].item()),
-        maximum_absolute_weight_error=float(absolute_weight_error.max().item()),
-        atol=atol,
-        rtol=rtol,
+
+def router_coefficient_outliers(
+    actual: torch.Tensor, reference: torch.Tensor, *, rounding_dtype: torch.dtype
+) -> torch.Tensor:
+    """Apply the FP32 coefficient allowance before the declared final store."""
+
+    error = FFN_ROUTING_ATOL + FFN_ROUTING_RTOL * reference.abs()
+    lower = (reference - error).to(rounding_dtype).float()
+    upper = (reference + error).to(rounding_dtype).float()
+    return (actual != actual.to(rounding_dtype).float()) | (actual < lower) | (actual > upper) | ~torch.isfinite(actual)
+
+
+def compare_ffn_router(
+    *,
+    layer: MoeFfnSpec,
+    execution_capacity: int,
+    logits: torch.Tensor,
+    reference_logits: torch.Tensor,
+    correction_bias: torch.Tensor | None,
+    topk_ids: torch.Tensor,
+    topk_weights: torch.Tensor,
+    installed_ids_equal: bool,
+    installed_weights_equal: bool,
+    eager_graph_equal: bool,
+) -> FfnRouterComparison:
+    """Check projection, selection and coefficients at their own stored boundaries.
+
+    Inputs are CPU tensors from one prepared Router. The caller checks carrier
+    geometry and separately establishes exact production and Graph agreement.
+    """
+
+    projected_reference = reference_logits.to(logits.dtype).double()
+    projection_atol, projection_rtol = (0.02, 0.02) if logits.dtype != torch.float32 else (1e-4, 1e-3)
+    projection_error = (logits.double() - projected_reference).abs()
+    projection_outliers = projection_error > projection_atol + projection_rtol * projected_reference.abs()
+
+    lower, upper, argument = router_selection_bounds(
+        logits, algorithm=layer.router_algorithm, correction_bias=correction_bias
+    )
+    if layer.router_algorithm is RouterAlgorithm.SOFTMAX:
+        unit_roundoff = 2.0**-24
+        relative_error = 5 * unit_roundoff / (1 - 4 * unit_roundoff)
+        sum_error = (layer.routed_expert_count - 1) * unit_roundoff
+        sum_bound = layer.routed_expert_count * (1 + relative_error) / (1 - sum_error)
+        cutoff = lower.topk(layer.routed_topk, dim=-1).values[:, -1] - math.log2(sum_bound)
+        if not (cutoff > -126).all():
+            raise ValueError("Router selection policy does not cover a subnormal Softmax cutoff")
+
+    sorted_ids = topk_ids.sort(dim=-1).values
+    invalid_rows = ((topk_ids < 0) | (topk_ids >= layer.routed_expert_count)).any(dim=-1)
+    invalid_rows |= (sorted_ids[:, 1:] == sorted_ids[:, :-1]).any(dim=-1)
+    indices = topk_ids.long().clamp(0, layer.routed_expert_count - 1)
+    selected = torch.zeros_like(lower, dtype=torch.bool).scatter_(1, indices, True)
+    same_source = argument.gather(1, indices).unsqueeze(-1) == argument.unsqueeze(1)
+    if correction_bias is not None:
+        same_source &= correction_bias[indices].unsqueeze(-1) == correction_bias.reshape(1, 1, -1)
+    other_ids = torch.arange(layer.routed_expert_count).reshape(1, 1, -1)
+    preferred = (
+        other_ids < indices.unsqueeze(-1)
+        if layer.router_algorithm is RouterAlgorithm.SOFTMAX
+        else other_ids > indices.unsqueeze(-1)
+    )
+    selected_upper = upper.gather(1, indices).unsqueeze(-1)
+    forced_tie = lower.unsqueeze(1) == selected_upper
+    wrong_tie = ((same_source | forced_tie) & preferred & ~selected.unsqueeze(1)).any(dim=(1, 2))
+    excluded_lower = lower.masked_fill(selected, -math.inf).max(dim=-1).values
+    violations = invalid_rows | wrong_tie | (excluded_lower > selected_upper.squeeze(-1).min(dim=-1).values)
+    selected_lower = lower.gather(1, indices).unsqueeze(-1)
+    could_reverse = (upper.unsqueeze(1) > selected_lower) | ((upper.unsqueeze(1) == selected_lower) & preferred)
+    ambiguous = (could_reverse & ~selected.unsqueeze(1) & ~same_source).any(dim=(1, 2))
+
+    scores = (
+        torch.softmax(logits.float(), dim=-1)
+        if layer.router_algorithm is RouterAlgorithm.SOFTMAX
+        else torch.sigmoid(logits.float())
+    )
+    coefficients = scores.gather(1, indices)
+    if layer.renormalize:
+        normalizer = coefficients.sum(dim=-1, keepdim=True)
+        coefficients = coefficients / torch.where(normalizer > 0, normalizer, 1)
+    rounding_dtype = logits.dtype if layer.topk_weight_rounding is TopKWeightRounding.LOGITS_DTYPE else torch.float32
+    coefficient_outliers = router_coefficient_outliers(topk_weights, coefficients, rounding_dtype=rounding_dtype)
+    finite = bool(torch.isfinite(logits).all() and torch.isfinite(reference_logits).all())
+    return FfnRouterComparison(
+        passed=(
+            finite
+            and not bool(projection_outliers.any() or violations.any() or coefficient_outliers.any())
+            and installed_ids_equal
+            and installed_weights_equal
+            and eager_graph_equal
+        ),
+        execution_capacity=execution_capacity,
+        projection_outlier_count=int(projection_outliers.sum()),
+        projection_maximum_absolute_error=float(projection_error.max()),
+        projection_atol=projection_atol,
+        projection_rtol=projection_rtol,
+        selection_violation_count=int(violations.sum()),
+        boundary_ambiguity_count=int(ambiguous.sum()),
+        coefficient_outlier_count=int(coefficient_outliers.sum()),
+        coefficient_maximum_absolute_error=float((topk_weights - coefficients).abs().max()),
+        coefficient_atol=FFN_ROUTING_ATOL,
+        coefficient_rtol=FFN_ROUTING_RTOL,
+        installed_ids_equal=installed_ids_equal,
+        installed_weights_equal=installed_weights_equal,
+        eager_graph_equal=eager_graph_equal,
     )

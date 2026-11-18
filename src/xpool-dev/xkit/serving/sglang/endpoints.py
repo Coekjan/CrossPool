@@ -67,7 +67,7 @@ class SglangEndpointFamilyLease:
 
         if dp_size <= 0:
             raise ValueError("SGLang endpoint family dp_size must be positive")
-        wildcard_host = "::" if socket.has_dualstack_ipv6() else "0.0.0.0"
+        wildcard_host = "0.0.0.0"
         last_collision: OSError | None = None
         for http_port in port_space.candidates():
             if deadline is not None and time.monotonic() >= deadline:

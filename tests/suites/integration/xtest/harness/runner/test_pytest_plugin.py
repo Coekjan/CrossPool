@@ -126,19 +126,18 @@ def test_referenced_module_requires_one_collectable_bound_entry(
     assert f"expected one catalogue-bound entry, found {entry_count}" in result.stdout.str()
 
 
-def test_expanded_graph_inputs_keep_distinct_groups_and_stable_task_recollection(
+def test_model_inputs_keep_mode_inventory_and_stable_task_recollection(
     pytester: pytest.Pytester, bound_catalogue: Path
 ) -> None:
     program = pytester.path / "tests/suites/integration/test_graph_program.py"
     program.write_text(
         f"""
-from functools import partial
 from pathlib import Path
 
 import xtest
 from xkit.serving.sglang.graph import SglangGraphMode
 from xtest.harness.sglang.catalog import TestCatalog
-from xtest.harness.sglang.serving.qualification import graph_rows
+from xtest.harness.sglang.serving.qualification import model_rows
 
 base = TestCatalog.from_file(Path({str(bound_catalogue)!r})).serving_cases[0]
 cases = tuple(
@@ -149,11 +148,9 @@ cases = tuple(
     for index in range(2)
 )
 
-@xtest.parameterize(("case", "graph_mode"), cases, rows=partial(graph_rows, compare_modes=True))
-def test_graph(case, graph_mode, request, tmp_path):
-    marker = request.node.get_closest_marker("serving_graph_group")
-    function_nodeid = request.node.nodeid.split("[", 1)[0]
-    assert marker.kwargs == {{"name": f"{{function_nodeid}}[case-{{case.description}}]", "expected_case_count": 3}}
+@xtest.parameterize("case", cases, rows=model_rows)
+def test_graph(case, tmp_path):
+    assert len(case.graph_modes) == 3
     assert tmp_path.is_dir()
 """,
         encoding="utf-8",
@@ -169,16 +166,13 @@ def test_graph(case, graph_mode, request, tmp_path):
     collected = pytester.runpytest_subprocess(*arguments, "--collect-only", f"--xpool-test-plan={output}", str(program))
     assert collected.ret == 0
     plan = xtest.harness.runner.plan.TestPlan.read(output)
-    assert len(plan.cases) == 6
-    assert len({case.nodeid for case in plan.cases}) == 6
-    for index in range(2):
-        rows = plan.cases[index * 3 : (index + 1) * 3]
-        assert all(case.artifact_group is not None for case in rows)
-        assert {case.artifact_group.name for case in rows if case.artifact_group is not None} == {
-            f"tests/suites/integration/test_graph_program.py::test_graph[case-{index}]"
-        }
-        assert all(case.estimated_duration_seconds == 3 for case in rows)
-        assert all(case.timeout_seconds == 12 for case in rows)
+    assert len(plan.cases) == 2
+    assert len({case.nodeid for case in plan.cases}) == 2
+    for case in plan.cases:
+        assert case.inspection is not None
+        assert len(case.inspection.graph_modes) == 3
+        assert case.estimated_duration_seconds == 12
+        assert case.timeout_seconds == 48
     recollected = pytester.runpytest_subprocess(
         *arguments, "--collect-only", f"--xpool-test-plan={output}", str(program)
     )
@@ -335,60 +329,6 @@ def test_configuration(row, e2e_base_config, observations):
     plan = xtest.harness.runner.plan.TestPlan.read(output)
     assert len(plan.cases) == 2
     assert all(case.requirements.model_ids == (TEST_MODEL_ID, other_model_id) for case in plan.cases)
-
-
-def test_collection_requires_complete_serving_graph_group(pytester: pytest.Pytester) -> None:
-    pytester.makeini("[pytest]\n")
-    test_directory = pytester.path / "tests" / "suites" / "e2e"
-    test_directory.mkdir(parents=True)
-    (test_directory / "test_e2e_example.py").write_text(
-        """
-import pytest
-
-@pytest.mark.serving_graph_group(name="example", expected_case_count=2)
-@pytest.mark.parametrize("mode", ["eager", "full"])
-def test_e2e_example(mode):
-    pass
-""",
-        encoding="utf-8",
-    )
-
-    result = pytester.runpytest(
-        "-p",
-        "xtest.harness.runner.pytest_plugin",
-        f"--xpool-test-catalog={TEST_CATALOG_PATH}",
-        f"--rootdir={pytester.path}",
-        "--collect-only",
-        "-q",
-        "-o",
-        "timeout=10",
-        "-k",
-        "eager",
-        f"--xpool-test-plan={pytester.path / 'plan.json'}",
-        str(test_directory),
-    )
-
-    assert result.ret != 0
-    assert "artifact groups must contain every expected case" in result.stderr.str()
-
-
-def test_collection_rejects_xfail_serving_graph_case(pytester: pytest.Pytester) -> None:
-    pytester.makepyfile(
-        """
-        import pytest
-
-        @pytest.mark.xfail(reason="not supported")
-        @pytest.mark.serving_graph_group(name="example", expected_case_count=2)
-        def test_e2e_example():
-            pass
-        """
-    )
-
-    result = pytester.runpytest(
-        "-p", "xtest.harness.runner.pytest_plugin", f"--xpool-test-catalog={TEST_CATALOG_PATH}", "--collect-only", "-q"
-    )
-
-    result.stderr.fnmatch_lines(["*serving graph cases cannot use xfail*"])
 
 
 def test_collection_worker_writes_final_typed_item_metadata(pytester: pytest.Pytester) -> None:

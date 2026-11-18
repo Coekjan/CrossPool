@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pydantic import TypeAdapter
+
 from xkit.serving.sglang.graph import SglangGraphSettings
 from xpool.integrations.sglang.devkit import SglangGraphEvent
 from xtest.harness.sglang.serving.attempt import ProbeRun
+from xtest.harness.sglang.serving.server import SglangInferenceRecord
 
 
 def assert_run_graph_evidence(run: ProbeRun) -> None:
@@ -14,6 +17,18 @@ def assert_run_graph_evidence(run: ProbeRun) -> None:
     for result, model_id in zip(run.results, run.model_ids, strict=True):
         assert result.model_id == model_id
         assert result.resolved_graph_settings == run.graph_settings
+        record = TypeAdapter(SglangInferenceRecord).validate_json(result.inference_path.read_bytes())
+        measured = [event for event in run.events if record.started_ns <= event["time_ns"] <= record.finished_ns]
+        decode = [event for event in measured if event["forward_phase"] == "decode"]
+        prefill = [event for event in measured if event["forward_phase"] == "prefill"]
+        if run.graph_settings.decode_backend == "full":
+            assert sum(event["event"] == "execute_end" for event in decode) >= len(result.output_ids) - 1
+        else:
+            assert not decode
+        if run.graph_settings.prefill_backend == "breakable":
+            assert any(event["event"] == "execute_end" for event in prefill)
+        else:
+            assert not prefill
     assert_graph_events(run.graph_settings, run.events)
 
 

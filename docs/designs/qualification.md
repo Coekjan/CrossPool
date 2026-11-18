@@ -8,8 +8,11 @@ suite placement and developer commands live in
 
 Dtype-specific component coverage exercises BF16 and FP16 weight conversion,
 Dense and MoE operator execution, captured Graph replay, and native TP1/TP>1
-delivery. It compares both admitted dtypes with an FP32 reference using the
-existing numerical policy. Standalone activation coverage exercises gated and
+delivery. Operator comparisons use FP32 references; synthetic native references
+use FP64 projections with explicit payload stage rounding. Activation, Router
+scoring, route weighting and ordered TP reduction remain FP32; weighted routes
+and TP partials retain their payload stores. Both use the existing numerical
+policies. Standalone activation coverage exercises gated and
 ungated SiLU and ReLU, plus gated GELU with exact and tanh formulas. ReLU
 coverage compares every FP16 and BF16 bit pattern
 with Torch for both in-place and separate outputs. Routine end-to-end serving
@@ -21,10 +24,31 @@ realization, with an independent SGLang FFN reference. Shared native topology
 cases exercise other TP cardinalities with the same topology-test logic and an
 unsharded reference. These evidence surfaces are orthogonal: model suites own
 model semantics while shared topology suites own delivery cardinalities.
+For MoE, qualify Router projection, selection and coefficients independently,
+then compare Expert outputs with original SGLang consuming production's actual
+IDs and weights. Projection uses FP64 references with the declared stores.
+Selection uses a fixed FP64 reference policy for cutoff ambiguity and declared
+ID ties. It covers uncorrected Softmax with a normal cutoff and stored-FP32
+Sigmoid; unsupported numerical domains fail qualification. Coefficient allowances
+pass through the declared final weight store. Clearly wrong selections fail,
+while justified cutoff ambiguity remains visible.
+Dense retains its direct independent output comparison.
+
+Production retires before a standalone Router child reproduces the observed
+Capacity, layout and precision and checks exact installed-routing agreement.
+That child exits before the SGLang reference starts, isolating CrossPool's
+process-global GEMM policy. Router failures stop the reference stage. Raw Router
+tensors retain case ID, Layer ID and observed Capacity before numerical comparison.
+Each reference TP rank uses the prescribed routes
+through a local TopK hook. Shared Expert and scaling conversion belongs to this
+reference boundary; the hook is removed after each case. Stages share readonly
+CPU tensors and retained files; CUDA resources remain owned by their children.
+
 The numerical harness starts every attention TP rank and compares each complete
-output with the independent reference. Attention DP is one for these cases.
+output with the independent reference at the existing output limits. Attention
+DP is one for these cases.
 Rank zero writes `ffn-numerical.json`; additional ranks write
-`ffn-numerical-rank-<rank>.json`. Routing evidence is shared by the invocation.
+`ffn-numerical-rank-<rank>.json`. Router results are shared by the invocation.
 FFN qualification stops new invocations after observing a retained failure.
 Its owning harness remains responsible for participant retirement.
 
@@ -43,20 +67,38 @@ and numerical evidence. Reference and production outputs must have matching
 admitted dtypes. Both dtypes use the same numerical metrics and tolerances.
 Checkpoint metadata does not implicitly select the qualification payload dtype.
 
-Serving graph qualification has two verdicts. Decode compares Eager and Decode
-Full token IDs with eager prefill in both runs. Prefill compares Eager and the
-combined Decode Full plus Prefill Breakable mode's final Prefill logits with
-full-distribution forward KL while the Graph Observer proves that Breakable
-execution actually occurred. Prefill token identity is diagnostic, not a
-correctness requirement.
-Cross-mode numerical comparisons select the shared xkit deterministic policy
-and retain that selection in their artifacts. These comparisons qualify Graph
-equivalence under the selected policy rather than default-production token
-invariance. Independent FFN references and numerical limits retain their existing
-contracts. Default-policy serving separately proves completion, actual Graph
-execution and cleanup.
-The two nonempty `[1, V]` logits tensors must have identical shapes before KL;
-different vocabulary widths fail qualification rather than broadcasting.
+Serving Graph numerical qualification records an ordinary Eager continuation,
+then replays its token choices after each candidate computes its own original
+distribution. Every request starts cold with reported `cached_tokens=0`, neutral
+greedy sampling and eight returned predictions: terminal Prefill followed by
+seven real Decode steps. Complete prescribed-token equality establishes the
+conditioning input; full-vocabulary forward KL determines the numerical verdict.
+
+| Stage | Reference | Maximum KL per prediction |
+| --- | --- | --- |
+| Terminal Prefill | Ordinary Eager Prefill | 0.05 nats |
+| Decode | Eager Decode with the candidate's Prefill backend | 0.001 nats |
+
+Matching the Prefill backend separates Decode changes from differences already
+present in KV construction. A three-mode case therefore adds Breakable Prefill
+with Eager Decode, yielding four serial deployments under one device lease.
+Each deployment retires before the next starts. Two-mode cases reuse ordinary
+Eager as their Decode reference; singleton cases retain structural qualification.
+Shared [sampling records](tooling.md#shared-serving-lifecycle) retain the exact
+continuation while every deployment builds its own hidden states and KV.
+
+Raw HTTP responses and CPU FP32 logprob matrices remain unchanged. Comparison
+validates model identity, complete equal-width vocabularies, finite values and
+identical token prefixes, then normalizes and reduces in CPU FP64. Limits are
+inclusive, and any failing position fails the case. `numerical.json` separates
+stage verdicts from ordinary-Eager-to-candidate end-to-end diagnostics, retaining
+the latter's original discrepancies and limits. Graph Observer events within
+measured request windows must prove actual Prefill execution and Decode replay.
+
+Eager still uses CrossPool's Fabric and native FFN Graphs. Stage agreement
+qualifies execution consistency on the recorded continuation; independent FFN
+references retain their own contracts. Ordinary serving E2E retains free
+generation, completion, observed Graph execution and verified cleanup.
 
 Routine serving E2E proves installed HTTP completion, graph-mode startup and
 observed Graph structure, and Transport and Fabric behavior at attention TP1
@@ -147,10 +189,13 @@ mandatory Elastic Context State startup under the combined graph mode. The dedic
 Elastic Context State E2E observes a confirmed prefix-cache hit decrease after peer
 pressure, a positive stable hit after repopulation within the current active
 capacity, and concurrent request completion by both models on the same device
-under Decode Full plus Prefill Breakable. Cross-path Prefill numerical checks
-compare each prompt's initial full-vocabulary next-token logits with its
-cache-hit, post-pressure and restored Prefill logits. They use the same
-finite-input, shape and forward-KL contract as serving graph qualification.
+under Decode Full plus Prefill Breakable. Six terminal-Prefill comparisons on
+the prefix-serving model compare each prompt's initial full-vocabulary logprobs
+with cache-hit, post-pressure and restored results. Its eight numerical probes
+generate one token each; ordinary, pressure and sustained requests generate
+eight. Comparisons reuse the serving generation capture and forward-KL comparator
+with the Prefill limit. ECS owns its cache workload and free continuation;
+it adds no Decode verdict.
 Greedy output IDs remain diagnostic across different Prefill geometries.
 Absolute `cached_tokens` counts are diagnostic evidence, not fixed qualification
 thresholds. Native and integration tests own capacity commands, terminal

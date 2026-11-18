@@ -14,7 +14,6 @@ from xtest.harness.report import (
     list_test_artifacts,
     report_test_runs,
 )
-from xtest.harness.runner.artifact import ArtifactGroupResult
 from xtest.harness.runner.pytest_report import PytestCaseReport, PytestCaseStatus
 from xtest.harness.support.config import reset_development_config, tool_config_record
 
@@ -47,9 +46,13 @@ def test_report_preserves_original_failure_and_group_verdict(tmp_path: Path, mon
             cases=(PytestCaseReport("example", PytestCaseStatus.FAILED, "assertion failed", 0.25),),
         )
     )
-    writer.groups((ArtifactGroupResult("parity", 1, "different token output"),))
     writer.finish(1, cleanup_verified=True)
     run.complete()
+    # Historical results retain group verdicts even though live comparisons now belong to pytest.
+    results_path = run.directory / "results.json"
+    historical = json.loads(results_path.read_bytes())
+    historical["groups"] = [{"name": "parity", "result_code": 1, "detail": "different token output"}]
+    results_path.write_text(json.dumps(historical))
     before = (run.directory / "results.json").read_bytes()
     assert list_test_artifacts(run.directory.parent) == (run.directory.name,)
     monkeypatch.chdir(tmp_path)

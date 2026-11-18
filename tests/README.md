@@ -229,8 +229,8 @@ The package runner performs these steps:
 4. Run each Python task in a `SupervisedTaskScope`; managed owners protect
    their clients from generic descendant signals. Return the allocation only
    after resource cleanup proof and complete descendant-domain reaping.
-5. Parse JUnit and E2E artifacts, evaluate declared serving-graph groups, and
-   retain logs under `test-runs/` in the resolved cache root.
+5. Parse JUnit and retained artifacts and keep logs under `test-runs/` in the
+   resolved cache root. Numerical verdicts execute inside their pytest case.
 
 Task `RUNNING` and terminal `PASSED` or `FAILED` lines identify leased physical
 device indices and UUIDs. Terminal lines report task elapsed time and available
@@ -242,15 +242,22 @@ newest 20 inactive entries by default; use `--keep N`, `--all`, and
 `--dry-run` to select or preview another cleanup. Concurrent active runs are
 never removed.
 
-Each E2E SGLang server writes `models/<model-id.uri_encode()>/inference.json` beside
-its server log within the attempt directory.
-It contains the exact public `/generate` request and response and is written
-before HTTP-status and token-shape validation. JUnit describes case outcome,
-`*.duration.json` records timing and resolved graph mode. Explicit Models
-qualification compares Eager and Decode Full token output plus Eager and
-combined-mode logits at the end of Prefill. Model suites own numerical parity;
-routine E2E owns installed serving, observed graph structure, and Transport/Fabric
-behavior.
+Serving capture retains the exact public `/generate` request, response and
+host-monotonic request window before HTTP-status or token-shape validation.
+Ordinary E2E writes `models/<model-id.uri_encode()>/inference.json` in its attempt;
+numerical model cases retain each configuration's generation evidence and CPU
+FP32 logprobs under the case artifacts. JUnit owns the verdict, duration JSON
+records each concrete backend pair, and `numerical.json` distinguishes stage KL
+acceptance from end-to-end diagnostics.
+
+One model/topology pytest item owns its serial deployments and prescribed
+continuation. It compares Prefill with ordinary Eager and Decode with Eager
+Decode using the same Prefill backend, following
+[Qualification](../docs/designs/qualification.md#numerical-and-graph-evidence).
+Its time budget includes derived references. Independent FFN cases qualify the
+Router and same-route Expert output at their own limits; routine E2E retains
+free generation, installed serving, observed Graph structure and Transport/Fabric
+evidence. Historical cross-task group verdicts remain readable by offline reports.
 
 ## Commands
 

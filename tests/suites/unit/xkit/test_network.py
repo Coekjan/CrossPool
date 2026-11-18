@@ -13,7 +13,15 @@ from xkit.network import (
     TcpEndpointReservation,
     TcpEndpointUnreachable,
     TcpPortSpace,
+    create_tcp_listener,
 )
+
+
+@pytest.mark.parametrize("host", ["localhost", "::1"])
+def test_tcp_listener_requires_ipv4_literal(host: str) -> None:
+    with pytest.raises(OSError, match="requires an IPv4 address literal") as error:
+        create_tcp_listener((host, 20_001))
+    assert error.value.errno == errno.EAFNOSUPPORT
 
 
 def test_port_space_parses_linux_policy_and_rejects_ineligible_ports() -> None:

@@ -91,20 +91,10 @@ class SglangInstanceRankBinding:
             ConfigError: If model topology cannot be derived safely.
         """
 
-        model_path = Path(model_runner.model_config.model_path).expanduser().resolve()
         config = get_global_config()
-        matched_model_instance = next(
-            (
-                (model, instance)
-                for model, instance in zip(config.models, config.instances, strict=True)
-                if config.model_path_of(model.id).resolve() == model_path
-            ),
-            None,
-        )
-        if matched_model_instance is None:
-            raise RuntimeError(f"xpool config has no model entry for SGLang model path {model_path}")
-
-        model, instance = matched_model_instance
+        model_id = config.model_id_of_path(model_runner.model_config.model_path)
+        model = config.model_by_id[model_id]
+        instance = config.instance_by_model_id[model_id]
         spec = SglangModelMetadata.load(config.model_path_of(model.id), model_id=model.id)
         policy = SglangAttentionTopology.from_runtime(
             spec,
@@ -149,7 +139,7 @@ class SglangInstanceRankBinding:
             raise RuntimeError("xpool SGLang rank does not use TP-fastest attention coordinates")
         return cls(
             model_id=instance.model_id,
-            model_path=model_path,
+            model_path=config.model_path_of(model_id).resolve(),
             instance_index=instance.instance_index,
             worker_rank=worker_rank,
             device=config.atn.devices[worker_rank],

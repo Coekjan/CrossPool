@@ -6,8 +6,6 @@ import logging
 import os
 import sys
 import time
-from collections import defaultdict
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -16,8 +14,7 @@ from xkit.device import DevicePool
 from xkit.scheduler import ActiveTask, TaskScheduler
 from xkit.supervisor import TaskCompletion, TaskCompletionKind
 from xtest.harness.report import TaskReportRecord, TestResultWriter
-from xtest.harness.runner.artifact import ArtifactGroupAdapter, ArtifactGroupRef, ArtifactGroupResult
-from xtest.harness.runner.plan import CollectedTestCase, TestPlan, TestStage
+from xtest.harness.runner.plan import TestPlan, TestStage
 from xtest.harness.runner.pytest_report import PytestTaskReport
 from xtest.harness.runner.task import ExecutionTask, compile_execution_tasks
 
@@ -67,7 +64,6 @@ class SuiteRunner:
         strict_requirements: bool,
         catalogue_path: Path,
         tool_config_path: Path,
-        artifact_group_adapters: Sequence[ArtifactGroupAdapter] = (),
         device_pool: DevicePool | None = None,
         result_writer: TestResultWriter | None = None,
     ) -> None:
@@ -79,13 +75,6 @@ class SuiteRunner:
         self.strict_requirements = strict_requirements
         self.catalogue_path = catalogue_path
         self.tool_config_path = tool_config_path
-        self.artifact_group_adapters = {adapter.kind: adapter for adapter in artifact_group_adapters}
-        if len(self.artifact_group_adapters) != len(artifact_group_adapters):
-            raise ValueError("artifact group adapter kinds must be unique")
-        declared_kinds = {case.artifact_group.kind for case in plan.cases if case.artifact_group is not None}
-        missing_kinds = declared_kinds - self.artifact_group_adapters.keys()
-        if missing_kinds:
-            raise ValueError(f"artifact groups have no injected adapter: {sorted(missing_kinds)}")
         self.scheduler = TaskScheduler[ExecutionTask](device_pool=device_pool, on_complete=self.complete_task)
         self.outcomes: dict[str, TaskOutcome] = {}
         self.stop_signal: int | None = None
@@ -127,12 +116,7 @@ class SuiteRunner:
                 return self.result_code(e2e_code)
             models_code = self.run_stage(TestStage.MODELS)
             self.report_stage(TestStage.MODELS, models_code)
-            artifact_results = self.artifact_group_results()
-            if self.result_writer is not None:
-                self.result_writer.groups(artifact_results)
-            self.report_artifact_groups(artifact_results)
-            artifact_code = max((result.result_code for result in artifact_results), default=0)
-            return self.result_code(max(e2e_code, models_code, artifact_code))
+            return self.result_code(max(e2e_code, models_code))
         except (OSError, RuntimeError, ValueError) as error:
             print(f"xpool test infrastructure failure: {error}", file=sys.stderr)
             try:
@@ -264,55 +248,6 @@ class SuiteRunner:
             for case in outcome.report.cases:
                 duration = "unavailable" if case.elapsed_seconds is None else f"{case.elapsed_seconds:.3f}s"
                 logger.info("  %s elapsed=%s", case.nodeid, duration)
-
-    def artifact_group_results(self) -> tuple[ArtifactGroupResult, ...]:
-        """Classify every complete cross-task artifact group."""
-
-        groups: dict[tuple[str, str], list[CollectedTestCase]] = defaultdict(list)
-        task_by_nodeid = {case.nodeid: task for task in self.tasks for case in task.cases}
-        for case in self.plan.cases:
-            if case.artifact_group is not None:
-                groups[(case.artifact_group.kind, case.artifact_group.name)].append(case)
-        results: list[ArtifactGroupResult] = []
-        for (kind, name), cases in sorted(groups.items()):
-            tasks = tuple(task_by_nodeid[case.nodeid] for case in cases)
-            outcomes = tuple(self.outcomes.get(task.key) for task in tasks)
-            if any(
-                outcome is None
-                or outcome.completion.kind is not TaskCompletionKind.EXITED
-                or outcome.result_code == 2
-                or outcome.report is None
-                for outcome in outcomes
-            ):
-                continue
-            reports = tuple(
-                outcome.report.case(case.nodeid)
-                for case, outcome in zip(cases, outcomes, strict=True)
-                if outcome is not None and outcome.report is not None
-            )
-            declared_group = cases[0].artifact_group
-            assert declared_group is not None
-            group = ArtifactGroupRef(kind, name, declared_group.expected_case_count)
-            adapter = self.artifact_group_adapters[kind]
-            result = adapter.evaluate(
-                group,
-                reports,
-                tuple(outcome.directory / "artifacts" for outcome in outcomes if outcome is not None),
-            )
-            if result.name != name or result.result_code not in {0, 1, 2}:
-                raise SuiteInfrastructureFailure(f"artifact adapter {kind!r} returned an invalid result: {result!r}")
-            results.append(result)
-        return tuple(results)
-
-    @staticmethod
-    def report_artifact_groups(results: tuple[ArtifactGroupResult, ...]) -> None:
-        """Print one concise diagnostic for every classified artifact group."""
-
-        for result in results:
-            message = f"ARTIFACT GROUP {result.name}: code={result.result_code}"
-            if result.detail is not None:
-                message += f": {result.detail}"
-            print(message, file=sys.stderr if result.result_code else sys.stdout)
 
     @property
     def resources_releasable(self) -> bool:

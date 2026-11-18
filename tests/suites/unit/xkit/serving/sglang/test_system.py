@@ -34,7 +34,7 @@ def test_system_cleanup_retains_live_clients_and_classifies_conflicts_after_reti
             SimpleNamespace(
                 family=family,
                 tcp_released=True,
-                reacquire_tcp=lambda: events.append("endpoint-inspect") or (("::", family.nccl_port),),
+                reacquire_tcp=lambda: events.append("endpoint-inspect") or (("0.0.0.0", family.nccl_port),),
                 close=lambda: events.append("endpoint-close"),
             ),
         )
@@ -47,7 +47,7 @@ def test_system_cleanup_retains_live_clients_and_classifies_conflicts_after_reti
     else:
         with pytest.raises(TcpEndpointConflict) as error:
             system.close()
-        assert error.value.addresses == (("::", family.nccl_port),)
+        assert error.value.addresses == (("0.0.0.0", family.nccl_port),)
         assert events == ["server-close", "cluster-close", "endpoint-inspect", "endpoint-close"]
         assert system.closed
 

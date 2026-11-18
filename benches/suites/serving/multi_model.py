@@ -116,7 +116,9 @@ async def run_serving(case: BenchCase, directory: Path) -> None:
                         config=config,
                         environment=dict(os.environ),
                         cwd=deployment.cwd,
-                        models=tuple(SglangLaunchModel(target.model_id, target.graph_mode) for target in case.targets),
+                        models=tuple(
+                            SglangLaunchModel(target.model_id, target.graph_mode.settings()) for target in case.targets
+                        ),
                     )
                     print("xbench phase=startup", file=sys.stderr)
                     system = XpoolServingSystem()

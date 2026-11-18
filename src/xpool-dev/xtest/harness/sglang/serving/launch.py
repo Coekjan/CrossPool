@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from types import MappingProxyType
+from typing import Literal
 
 import xkit.device
 from xkit.config import assemble_config
-from xkit.serving.sglang.graph import SglangGraphMode, SglangGraphSettings
+from xkit.envs import DETERMINISTIC_MODE, DETERMINISTIC_PATH
+from xkit.serving.sglang.graph import SglangGraphSettings
 from xkit.serving.sglang.launch import ServingLaunch, SglangLaunchModel
 from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.sglang.catalog import E2eServingCase
@@ -21,7 +23,8 @@ def prepare(
     base_config: ResolvedConfig,
     workdir: Path,
     graph_settings: SglangGraphSettings,
-    deterministic: bool = False,
+    deterministic_mode: Literal["none", "record", "replay"] = "none",
+    replay_path: Path | None = None,
 ) -> ServingLaunch:
     """Prepare deployment policy and test observer inputs for startup.
 
@@ -30,12 +33,10 @@ def prepare(
     paths, while applying deployment-owned SLO and Elastic KV memory policy.
     """
 
-    graph_mode = next(mode for mode in SglangGraphMode if mode.settings() == graph_settings)
     launch_models = tuple(
         SglangLaunchModel(
             model_id=model_id,
-            graph_mode=graph_mode,
-            deterministic=deterministic,
+            graph_settings=graph_settings,
         )
         for model_id in case.models
     )
@@ -64,17 +65,13 @@ def prepare(
         )
         overrides["atn"] = atn_overrides
 
-    environment = runtime_environment(
-        observer_outdir=observer_outdir,
-        prefill_logit_observer=(
-            case.elastic_kv is not None
-            or (
-                {SglangGraphMode.EAGER, SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE}.issubset(case.graph_modes)
-                and graph_settings
-                in {SglangGraphMode.EAGER.settings(), SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings()}
-            )
-        ),
-    )
+    environment = runtime_environment(observer_outdir=observer_outdir)
+    if deterministic_mode != "none":
+        path = workdir / "sampling-record.jsonl" if deterministic_mode == "record" else replay_path
+        if path is None:
+            raise ValueError("replay launch requires a reference record path")
+        DETERMINISTIC_MODE.set(deterministic_mode, env=environment)
+        DETERMINISTIC_PATH.set(str(path.resolve()), env=environment)
     config = assemble_config(
         tuple(model.model_id for model in launch_models),
         deployment=case.deployment,
@@ -93,7 +90,6 @@ def prepare(
 def runtime_environment(
     *,
     observer_outdir: Path,
-    prefill_logit_observer: bool,
 ) -> dict[str, str]:
     """Return a sanitized process environment for the E2E runtime tree."""
 
@@ -111,11 +107,4 @@ def runtime_environment(
             "XPOOL_DEBUG_FABRIC_OBSERVER_RECORD_CAPACITY": "65536",
         }
     )
-    if prefill_logit_observer:
-        environment.update(
-            {
-                "XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_ENABLE": "1",
-                "XPOOL_DEBUG_PREFILL_LOGIT_OBSERVER_OUTDIR": str(observer_outdir),
-            }
-        )
     return environment

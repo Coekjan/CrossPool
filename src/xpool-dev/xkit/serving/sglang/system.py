@@ -13,6 +13,7 @@ from typing import NoReturn, cast
 
 import httpx
 
+from xkit.envs import DETERMINISTIC_PATH
 from xkit.network import TcpEndpointConflict, TcpEndpointReservation, TcpPortSpace
 from xkit.serving.cluster import (
     CONTROL_PLANE_HTTP_TIMEOUT_SECONDS,
@@ -23,6 +24,7 @@ from xkit.serving.cluster import (
 )
 from xkit.serving.launch import ServingEndpoint, snapshot_cluster_launch
 from xkit.serving.readiness import ReadinessEvidence, ReadinessTimeout
+from xkit.serving.sglang.deterministic import DeterministicConfig
 from xkit.serving.sglang.endpoints import SglangEndpointFamilyLease
 from xkit.serving.sglang.launch import ServingLaunch
 from xkit.serving.sglang.server import HTTP_TIMEOUT_SECONDS, SglangServerProcess
@@ -144,6 +146,11 @@ class XpoolServingSystem:
             raise RuntimeError("serving startup requires its retained deadline")
         workdir.mkdir(parents=True, exist_ok=True)
         self.check_startup_active()
+        deterministic = DeterministicConfig.from_environment(launch.environment)
+        deterministic.prepare()
+        environment = dict(launch.environment)
+        if deterministic.path is not None:
+            DETERMINISTIC_PATH.set(str(deterministic.path), env=environment)
         port_space = TcpPortSpace.local()
         host = launch.config.daemon.host
         with defer_signal_exceptions():
@@ -164,7 +171,7 @@ class XpoolServingSystem:
             workdir=workdir / "launch",
             daemon_port=self.daemon_endpoint.port,
             environment={
-                **launch.environment,
+                **environment,
                 "HF_HUB_OFFLINE": "1",
                 "TRANSFORMERS_OFFLINE": "1",
             },

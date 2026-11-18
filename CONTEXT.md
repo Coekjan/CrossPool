@@ -38,6 +38,20 @@ The `namespace/name` identity of one model, preserving its spelling independentl
 of its local checkpoint path or particular serving deployment.
 _Avoid_: Checkpoint path, model directory
 
+**Prediction Distribution**:
+The conditional probability distribution of the next token over one model's
+vocabulary for an exact token prefix. Measured finite-precision approximations
+also depend on the arithmetic and execution path used to evaluate it.
+
+**Sampling Record**:
+A completed request's token continuation and any requested logprobs, retained
+with its input and generation conditions for later replay.
+
+**Sampler Replay**:
+Generation that computes its own prediction distributions while choosing the
+tokens prescribed by a Sampling Record. It fixes the continuation while each
+execution retains its arithmetic and scheduling behavior.
+
 **Benchmark Target**:
 One model-serving endpoint measured in a benchmark case, identified by its Model
 ID and corresponding to a configured Instance or an externally supplied endpoint.

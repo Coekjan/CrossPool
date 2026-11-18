@@ -30,5 +30,4 @@ def test_e2e_model_serving(
         e2e_base_config,
         tmp_path,
         task_artifact_dir,
-        compare_modes=False,
     )

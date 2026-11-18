@@ -13,7 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, JsonValue, model
 from xkit.config import ToolConfigRecord
 from xkit.results import RunStore, write_json
 from xkit.supervisor import TaskCompletion
-from xtest.harness.runner.artifact import ArtifactGroupResult
 from xtest.harness.runner.pytest_report import PytestCaseReport
 
 
@@ -22,6 +21,14 @@ class TestRecord(BaseModel):
 
     __test__: ClassVar[bool] = False
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class ArtifactGroupResult(TestRecord):
+    """Original group verdict retained for historical offline reports."""
+
+    name: str = Field(min_length=1)
+    result_code: Literal[0, 1, 2]
+    detail: str | None
 
 
 class TestRunManifest(TestRecord):
@@ -114,10 +121,6 @@ class TestResultWriter:
 
     def stage(self, stage: str, result_code: int) -> None:
         self.results = self.results.model_copy(update={"stages": {**self.results.stages, stage: result_code}})
-        self.checkpoint()
-
-    def groups(self, results: Sequence[ArtifactGroupResult]) -> None:
-        self.results = self.results.model_copy(update={"groups": tuple(results)})
         self.checkpoint()
 
     def cleanup(self, verified: bool) -> None:

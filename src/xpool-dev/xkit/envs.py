@@ -4,7 +4,7 @@ import os
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 
-__all__ = ["TASK_ROOT_CONTROL_FD", "EnvironmentVariable"]
+__all__ = ["DETERMINISTIC_MODE", "DETERMINISTIC_PATH", "TASK_ROOT_CONTROL_FD", "EnvironmentVariable"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,3 +42,5 @@ class EnvironmentVariable:
 
 
 TASK_ROOT_CONTROL_FD = EnvironmentVariable("XKIT_TASK_ROOT_CONTROL_FD")
+DETERMINISTIC_MODE = EnvironmentVariable("XKIT_DETERMINISTIC_MODE")
+DETERMINISTIC_PATH = EnvironmentVariable("XKIT_DETERMINISTIC_PATH")

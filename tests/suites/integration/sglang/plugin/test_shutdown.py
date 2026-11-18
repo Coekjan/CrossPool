@@ -12,7 +12,7 @@ from concurrent.futures import Future
 from multiprocessing.process import BaseProcess
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import NoReturn, cast
 
 import pytest
 import zmq
@@ -370,6 +370,82 @@ def test_destructive_exit_confirms_all_affected_clients_before_any_host_signal(
         assert str(retention_errors[0]) == "context termination unconfirmed"
     assert terminated == [child.pid for child in children]
     assert root.poll() is None
+
+
+def test_startup_client_attaching_after_observation_is_confirmed_before_host_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    serving_tree: tuple[subprocess.Popen[str], tuple[ProcUniqId, ...]],
+) -> None:
+    root, children = serving_tree
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-00000000-0000-0000-0000-000000000001")
+    owner = shutdown.ShutdownHookSet()
+    owner.deadline = time.monotonic() + 5
+    owner.failed = True
+    owner.schedulers = children
+    attached = False
+    terminated: list[int] = []
+
+    def management(self: MpsEndpoint, command: str, *, deadline: float) -> str:
+        nonlocal attached
+        assert deadline == owner.deadline
+        if command == "get_server_list":
+            return "42"
+        if not attached:
+            attached = True
+            return ""
+        return "\n".join(str(child.pid) for child in children)
+
+    class Client:
+        def terminate_serving_client(self, request: MpsClientTermination) -> None:
+            assert attached and all(child.is_alive() for child in children)
+            assert request.deadline == owner.deadline
+            terminated.append(request.pid)
+
+        def close(self) -> None:
+            pass
+
+    def retain(error: BaseException) -> NoReturn:
+        raise RuntimeError("startup client was not safely retired") from error
+
+    monkeypatch.setattr(MpsEndpoint, "run_control", management)
+    monkeypatch.setattr(shutdown, "XpoolClient", lambda **kwargs: cast(XpoolClient, Client()))
+    monkeypatch.setattr(owner, "retain_owner", retain)
+    owner.around_kill_process_tree(None, root.pid, include_parent=False, wait_timeout=3)
+    assert terminated == [child.pid for child in children]
+    assert not any(child.is_alive() for child in children)
+    assert root.poll() is None
+
+
+def test_absent_startup_client_expiry_preserves_live_owners(
+    monkeypatch: pytest.MonkeyPatch,
+    serving_tree: tuple[subprocess.Popen[str], tuple[ProcUniqId, ...]],
+) -> None:
+    root, children = serving_tree
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-00000000-0000-0000-0000-000000000001")
+    owner = shutdown.ShutdownHookSet()
+    owner.deadline = 0.5
+    owner.failed = True
+    owner.schedulers = children
+    now = 0.0
+
+    def wait(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    def retain(error: BaseException) -> NoReturn:
+        assert isinstance(error, TimeoutError)
+        assert owner.deadline == 0.5
+        assert all(child.is_alive() for child in children)
+        raise RuntimeError("retained absent startup client") from error
+
+    monkeypatch.setattr(shutdown, "time", SimpleNamespace(monotonic=lambda: now, sleep=wait))
+    monkeypatch.setattr(
+        MpsEndpoint, "run_control", lambda self, command, **kwargs: "42" if command == "get_server_list" else ""
+    )
+    monkeypatch.setattr(owner, "retain_owner", retain)
+    with pytest.raises(RuntimeError, match="retained absent startup client"):
+        owner.around_kill_process_tree(None, root.pid, include_parent=False)
+    assert root.poll() is None and all(child.is_alive() for child in children)
 
 
 def test_cache_exporter_context_is_terminated_after_its_consumers(

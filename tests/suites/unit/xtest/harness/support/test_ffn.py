@@ -16,7 +16,6 @@ from xtest.harness.support.ffn import (
     FfnTopologyOutputEvidence,
     FfnTopologyProcessEvidence,
     compare_ffn_outputs,
-    compare_ffn_routing,
     generate_ffn_hidden_states,
 )
 
@@ -130,70 +129,6 @@ def test_output_comparison_rejects_invalid_evidence(
         )
 
 
-def test_routing_comparison_is_column_order_independent() -> None:
-    reference_ids = torch.tensor([[3, 1], [0, 2]], dtype=torch.int32)
-    reference_weights = torch.tensor([[0.25, 0.75], [0.6, 0.4]], dtype=torch.float32)
-    actual_ids = torch.tensor([[1, 3], [2, 0]], dtype=torch.int32)
-    actual_weights = torch.tensor([[0.75, 0.25], [0.40001, 0.59999]], dtype=torch.float32)
-
-    comparison = compare_ffn_routing(
-        reference_ids,
-        reference_weights,
-        actual_ids,
-        actual_weights,
-        expert_count=4,
-        atol=0.0001,
-        rtol=0.001,
-    )
-
-    assert comparison.passed
-    assert comparison.first_mismatch_token is None
-
-
-def test_routing_comparison_reports_first_semantic_mismatch() -> None:
-    comparison = compare_ffn_routing(
-        torch.tensor([[1, 3], [0, 2]], dtype=torch.int32),
-        torch.tensor([[0.7, 0.3], [0.6, 0.4]], dtype=torch.float32),
-        torch.tensor([[1, 2], [0, 2]], dtype=torch.int32),
-        torch.tensor([[0.7, 0.3], [0.6, 0.5]], dtype=torch.float32),
-        expert_count=4,
-        atol=0.0001,
-        rtol=0.001,
-    )
-
-    assert not comparison.passed
-    assert (comparison.first_mismatch_token, comparison.first_mismatch_pair) == (0, 1)
-    assert (comparison.reference_expert_id, comparison.actual_expert_id) == (3, 2)
-    assert comparison.reference_weight == pytest.approx(0.3)
-    assert comparison.actual_weight == pytest.approx(0.3)
-
-
-@pytest.mark.parametrize(
-    ("ids", "weights", "message"),
-    [
-        (torch.tensor([[0, 0]], dtype=torch.int32), torch.ones((1, 2)), "duplicate"),
-        (torch.tensor([[0, 4]], dtype=torch.int32), torch.ones((1, 2)), "illegal"),
-        (torch.tensor([[0, 1]], dtype=torch.int64), torch.ones((1, 2)), "dtypes"),
-        (torch.tensor([[0, 1]], dtype=torch.int32), torch.tensor([[1.0, float("nan")]]), "finite"),
-    ],
-)
-def test_routing_comparison_rejects_invalid_evidence(
-    ids: torch.Tensor,
-    weights: torch.Tensor,
-    message: str,
-) -> None:
-    with pytest.raises(AssertionError, match=message):
-        compare_ffn_routing(
-            ids,
-            weights,
-            ids.clone(),
-            weights.clone(),
-            expert_count=4,
-            atol=0.0001,
-            rtol=0.001,
-        )
-
-
 @pytest.mark.parametrize("dtype", (torch.bfloat16, torch.float16))
 def test_numerical_evidence_writes_one_strict_artifact(tmp_path: Path, dtype: torch.dtype) -> None:
     output = compare_ffn_outputs(
@@ -209,7 +144,7 @@ def test_numerical_evidence_writes_one_strict_artifact(tmp_path: Path, dtype: to
         model_spec_digest="1" * 64,
         generation=FabricGenerationId(high=1, low=2),
         payload_dtype=dtype,
-        samples=(FfnNumericalSampleEvidence(layer_id=0, row_count=1, output=output, routing=None),),
+        samples=(FfnNumericalSampleEvidence(layer_id=0, row_count=1, output=output, router=None),),
     )
     path = tmp_path / "ffn-numerical.json"
 

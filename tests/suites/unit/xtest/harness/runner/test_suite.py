@@ -9,16 +9,13 @@ from pathlib import Path
 import pytest
 
 import xkit.scheduler
-import xtest.harness.runner.artifact
 import xtest.harness.runner.console
 import xtest.harness.runner.plan
 import xtest.harness.runner.pytest_report
 import xtest.harness.runner.suite
 import xtest.harness.runner.task
-import xtest.harness.sglang.serving.alignment
 from xkit import ResourceRequirements
 from xkit.device import DevicePool
-from xkit.serving.sglang.graph import SglangGraphMode
 from xkit.supervisor import (
     TaskCompletion,
     TaskCompletionKind,
@@ -27,12 +24,6 @@ from xkit.supervisor import (
     TaskStartFailure,
 )
 from xpool.model import ModelId
-from xtest.harness.sglang.serving.alignment import (
-    SERVING_GRAPH_ARTIFACT_FILENAME,
-    ServingGraphArtifact,
-    TokenOutput,
-)
-from xtest.harness.support.config import TEST_MODEL_ID
 
 
 def test_task_formatter_colors_only_status_on_tty() -> None:
@@ -43,16 +34,6 @@ def test_task_formatter_colors_only_status_on_tty() -> None:
     assert xtest.harness.runner.console.TaskFormatter(color=True).format(record) == (
         "\x1b[32mPASSED\x1b[0m case elapsed=1.0s"
     )
-
-
-@pytest.mark.parametrize("result_code", [True, 1.0])
-def test_artifact_group_rejects_noninteger_result_codes(result_code: bool | float) -> None:
-    with pytest.raises(ValueError, match="result_code"):
-        xtest.harness.runner.artifact.ArtifactGroupResult(
-            "comparison",
-            result_code,  # ty: ignore[invalid-argument-type]
-            None,
-        )
 
 
 def test_compiler_builds_stage_tasks_with_exact_gpu_batching() -> None:
@@ -670,87 +651,6 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
     assert runner.resources_releasable
 
 
-@pytest.mark.parametrize(
-    ("statuses", "details", "expected_status"),
-    (
-        (
-            (
-                xtest.harness.runner.pytest_report.PytestCaseStatus.PASSED,
-                xtest.harness.runner.pytest_report.PytestCaseStatus.PASSED,
-            ),
-            (None, None),
-            xtest.harness.sglang.serving.alignment.ServingGraphGroupStatus.COMPARED,
-        ),
-        (
-            (
-                xtest.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
-                xtest.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
-            ),
-            ("missing config", "missing config"),
-            xtest.harness.sglang.serving.alignment.ServingGraphGroupStatus.SKIPPED,
-        ),
-        (
-            (
-                xtest.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
-                xtest.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
-            ),
-            ("missing config", "missing weights"),
-            xtest.harness.sglang.serving.alignment.ServingGraphGroupStatus.INCONSISTENT,
-        ),
-        (
-            (
-                xtest.harness.runner.pytest_report.PytestCaseStatus.PASSED,
-                xtest.harness.runner.pytest_report.PytestCaseStatus.SKIPPED,
-            ),
-            (None, "missing config"),
-            xtest.harness.sglang.serving.alignment.ServingGraphGroupStatus.INCONSISTENT,
-        ),
-        (
-            (
-                xtest.harness.runner.pytest_report.PytestCaseStatus.FAILED,
-                xtest.harness.runner.pytest_report.PytestCaseStatus.PASSED,
-            ),
-            ("assertion failed", None),
-            xtest.harness.sglang.serving.alignment.ServingGraphGroupStatus.FAILED,
-        ),
-    ),
-)
-def test_serving_graph_group_results_follow_case_outcomes(
-    statuses: tuple[
-        xtest.harness.runner.pytest_report.PytestCaseStatus, xtest.harness.runner.pytest_report.PytestCaseStatus
-    ],
-    details: tuple[str | None, str | None],
-    expected_status: xtest.harness.sglang.serving.alignment.ServingGraphGroupStatus,
-    tmp_path: Path,
-) -> None:
-    runner = serving_graph_runner(tmp_path, statuses, details)
-
-    (result,) = runner.artifact_group_results()
-
-    assert result.name == "example"
-    assert result.detail is not None and result.detail.startswith(expected_status.value)
-
-
-def test_serving_graph_omits_group_without_complete_ordinary_outcomes(tmp_path: Path) -> None:
-    runner = serving_graph_runner(
-        tmp_path,
-        (
-            xtest.harness.runner.pytest_report.PytestCaseStatus.PASSED,
-            xtest.harness.runner.pytest_report.PytestCaseStatus.PASSED,
-        ),
-        (None, None),
-    )
-    first = runner.tasks[0]
-    runner.outcomes[first.key] = xtest.harness.runner.suite.TaskOutcome(
-        first,
-        TaskCompletion(TaskCompletionKind.TIMED_OUT, None, "deadline"),
-        None,
-        runner.outcomes[first.key].directory,
-    )
-
-    assert runner.artifact_group_results() == ()
-
-
 @dataclass(slots=True)
 class FakeScope:
     result: TaskCompletion
@@ -813,7 +713,6 @@ def case(
     requirements: ResourceRequirements,
     timeout: float = 10,
     estimate: float | None = None,
-    artifact_group: xtest.harness.runner.artifact.ArtifactGroupRef | None = None,
 ) -> xtest.harness.runner.plan.CollectedTestCase:
     return xtest.harness.runner.plan.CollectedTestCase(
         path=path,
@@ -822,7 +721,6 @@ def case(
         requirements=requirements,
         estimated_duration_seconds=estimate,
         timeout_seconds=timeout,
-        artifact_group=artifact_group,
     )
 
 
@@ -837,62 +735,3 @@ def requirements(
         requires_config=requires_config,
         model_ids=model_ids,
     )
-
-
-def serving_graph_runner(
-    root: Path,
-    statuses: tuple[
-        xtest.harness.runner.pytest_report.PytestCaseStatus, xtest.harness.runner.pytest_report.PytestCaseStatus
-    ],
-    details: tuple[str | None, str | None],
-) -> xtest.harness.runner.suite.SuiteRunner:
-    """Build one fully classified two-mode serving graph group without subprocesses."""
-
-    group = xtest.harness.runner.artifact.ArtifactGroupRef("serving_graph", "example", 2)
-    plan = xtest.harness.runner.plan.TestPlan(
-        (
-            case(
-                "tests/suites/e2e/test_e2e_model.py",
-                "test_model[eager]",
-                requirements=requirements(),
-                artifact_group=group,
-            ),
-            case(
-                "tests/suites/e2e/test_e2e_model.py",
-                "test_model[full]",
-                requirements=requirements(),
-                artifact_group=group,
-            ),
-        )
-    )
-    runner = xtest.harness.runner.suite.SuiteRunner(
-        plan,
-        repository_root=root,
-        catalogue_path=root / "tests/tests.toml",
-        tool_config_path=root / "tool-config.json",
-        run_directory=root / "run",
-        strict_requirements=False,
-        artifact_group_adapters=(xtest.harness.sglang.serving.alignment.ServingGraphAdapter(),),
-    )
-    graph_modes = (SglangGraphMode.EAGER, SglangGraphMode.DECODE_FULL)
-    for task, status, detail, graph_mode in zip(runner.tasks, statuses, details, graph_modes, strict=True):
-        directory = root / task.key
-        artifact_directory = directory / "artifacts"
-        artifact_directory.mkdir(parents=True)
-        report = xtest.harness.runner.pytest_report.PytestTaskReport(
-            (xtest.harness.runner.pytest_report.PytestCaseReport(task.cases[0].nodeid, status, detail),)
-        )
-        returncode = 1 if status is xtest.harness.runner.pytest_report.PytestCaseStatus.FAILED else 0
-        runner.outcomes[task.key] = xtest.harness.runner.suite.TaskOutcome(
-            task,
-            TaskCompletion(TaskCompletionKind.EXITED, returncode, None),
-            report,
-            directory,
-        )
-        if status is xtest.harness.runner.pytest_report.PytestCaseStatus.PASSED:
-            ServingGraphArtifact(
-                graph_settings=graph_mode.settings(),
-                deterministic=True,
-                outputs=(TokenOutput(TEST_MODEL_ID, (1, 2, 3)),),
-            ).write(artifact_directory / SERVING_GRAPH_ARTIFACT_FILENAME)
-    return runner

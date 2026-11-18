@@ -466,43 +466,48 @@ class ShutdownHookSet(SglangHookSet):
     def confirm_context_termination(self, targets: Sequence[ProcUniqId], deadline: float) -> None:
         visibility = visible_uuids()
         endpoint = MpsEndpoint(tuple(visibility[index] for index in get_global_config().atn.devices))
-        servers = endpoint.parse_process_ids(
-            endpoint.run_control("get_server_list", deadline=deadline), allow_empty=True
-        )
-        clients = {
-            pid
-            for server in servers
-            for pid in endpoint.parse_process_ids(
-                endpoint.run_control(f"get_client_list {server}", deadline=deadline), allow_empty=True
-            )
-        }
         cache_pids = {process.pid for process in self.caches}
         ordered = sorted(targets, key=lambda target: target.pid in cache_pids)
         client: XpoolClient | None = None
         try:
             for target in ordered:
-                if not target.is_alive() or target in self.terminated_clients:
+                if target in self.terminated_clients:
                     continue
-                if target.pid not in clients:
-                    # An initialized client can detach while finishing host
-                    # cleanup. MPS absence supplies no permission to kill it.
-                    if target in self.schedulers or target.pid in cache_pids:
-                        while target.is_alive() and time.monotonic() < deadline:
-                            time.sleep(0.05)
-                        if target.is_alive():
-                            raise TimeoutError(f"detached serving client {target.pid} has not retired")
-                    continue
-                if client is None:
+                while target.is_alive():
+                    servers = endpoint.parse_process_ids(
+                        endpoint.run_control("get_server_list", deadline=deadline), allow_empty=True
+                    )
+                    clients = {
+                        pid
+                        for server in servers
+                        for pid in endpoint.parse_process_ids(
+                            endpoint.run_control(f"get_client_list {server}", deadline=deadline), allow_empty=True
+                        )
+                    }
+                    if target.pid in clients:
+                        if client is None:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                raise TimeoutError("serving context termination deadline expired")
+                            client = XpoolClient(timeout_s=min(5.0, remaining))
+                        client.terminate_serving_client(
+                            MpsClientTermination(
+                                pid=target.pid,
+                                create_time=target.create_time,
+                                abi_version=ABI_VERSION,
+                                deadline=deadline,
+                            )
+                        )
+                        self.terminated_clients.add(target)
+                        break
+                    if target not in self.schedulers and target.pid not in cache_pids:
+                        break
+                    # A startup worker can attach after an earlier observation;
+                    # absence alone authorizes neither host exit nor a stale wait.
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        raise TimeoutError("serving context termination deadline expired")
-                    client = XpoolClient(timeout_s=min(5.0, remaining))
-                client.terminate_serving_client(
-                    MpsClientTermination(
-                        pid=target.pid, create_time=target.create_time, abi_version=ABI_VERSION, deadline=deadline
-                    )
-                )
-                self.terminated_clients.add(target)
+                        raise TimeoutError(f"serving client {target.pid} has not retired")
+                    time.sleep(min(1.0, remaining))
         finally:
             if client is not None:
                 client.close()

@@ -499,6 +499,9 @@ absence. Ordinary daemon SIGTERM/SIGINT does not signal serving processes.
 An empty MPS client snapshot proves current attachment absence, not a fence
 against future connections. Serving owners enforce launch/retirement ordering;
 they also retain CPU-only startup and helper processes through retirement.
+While a retained scheduler or cache owner remains alive, the serving owner
+refreshes current membership within its original retirement deadline. Confirmed
+context termination precedes destructive host exit for an attached client.
 Controller/server domain retirement remains the scope's responsibility.
 
 An Instance rank's exit retires its Generation rather than leaving it reusable.

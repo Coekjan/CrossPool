@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -8,195 +6,72 @@ import torch
 from safetensors.torch import save_file
 
 from xkit.serving.sglang.graph import SglangGraphMode
-from xtest.harness.runner.artifact import ArtifactGroupRef
-from xtest.harness.runner.pytest_report import PytestCaseReport, PytestCaseStatus
 from xtest.harness.sglang.serving.alignment import (
-    PREFILL_DISTRIBUTION_KL_LIMIT,
-    PREFILL_LOGITS_ARTIFACT_FILENAME,
-    SERVING_GRAPH_ARTIFACT_FILENAME,
-    ServingGraphAdapter,
-    ServingGraphArtifact,
-    TokenOutput,
-    assert_prefill_alignment,
-    assert_serving_graph_alignment,
+    DECODE_DISTRIBUTION_KL_LIMIT,
+    DistributionComparison,
+    compare_distributions,
 )
+from xtest.harness.sglang.serving.server import SglangServerResult
 from xtest.harness.support.config import TEST_MODEL_ID
 
 
-def artifact(
-    mode: SglangGraphMode,
-    output_ids: tuple[int, ...] = (1, 2, 3),
-    *,
-    deterministic: bool = True,
-) -> ServingGraphArtifact:
-    return ServingGraphArtifact(
-        graph_settings=mode.settings(),
-        deterministic=deterministic,
-        outputs=(TokenOutput(TEST_MODEL_ID, output_ids),),
+def result(tmp_path: Path, name: str, logprobs: torch.Tensor) -> SglangServerResult:
+    path = tmp_path / f"{name}.safetensors"
+    save_file({"logprobs": logprobs}, path)
+    return SglangServerResult(
+        model_id=TEST_MODEL_ID,
+        resolved_graph_settings=SglangGraphMode.EAGER.settings(),
+        request_id=name,
+        input_ids=(1, 2),
+        output_ids=tuple(range(logprobs.shape[0])),
+        cached_tokens=0,
+        inference_path=tmp_path / f"{name}.json",
+        logprobs_path=path,
     )
 
 
-def test_serving_graph_artifact_round_trips_and_rejects_overwrite(tmp_path: Path) -> None:
-    path = tmp_path / "result.json"
-    expected = artifact(SglangGraphMode.EAGER)
+def test_close_distributions_allow_different_argmax_and_generated_tokens(tmp_path: Path) -> None:
+    reference = result(tmp_path, "reference", torch.tensor([[0.0, 0.001]]))
+    actual = replace(result(tmp_path, "actual", torch.tensor([[0.001, 0.0]])), output_ids=(1,))
 
-    expected.write(path)
+    comparison = compare_distributions(reference, actual, prefix_lengths=(2,))
 
-    assert ServingGraphArtifact.read(path) == expected
-    with pytest.raises(FileExistsError):
-        expected.write(path)
-    raw = json.loads(path.read_text())
-    raw["outputs"][0]["output_ids"][-1] = -1
-    path.write_text(json.dumps(raw), encoding="utf-8")
-    with pytest.raises(ValueError, match="nonnegative"):
-        ServingGraphArtifact.read(path)
+    comparison.assert_within(DECODE_DISTRIBUTION_KL_LIMIT)
 
 
-def test_prefill_alignment_accepts_close_distributions_with_different_argmax() -> None:
-    assert_prefill_alignment(torch.tensor([[0.0, 0.001]]), torch.tensor([[0.001, 0.0]]))
+def test_one_bad_position_is_not_hidden_by_averaging(tmp_path: Path) -> None:
+    reference = result(tmp_path, "reference", torch.tensor([[0.0, 0.0], [0.0, -8.0]]))
+    actual = result(tmp_path, "actual", torch.tensor([[0.0, 0.0], [-8.0, 0.0]]))
+
+    comparison = compare_distributions(reference, actual, prefix_lengths=(2, 3))
+
+    assert comparison.kl_values[0] == 0
+    with pytest.raises(AssertionError, match="prefix 3"):
+        comparison.assert_within(DECODE_DISTRIBUTION_KL_LIMIT)
 
 
-def test_serving_graph_alignment_compares_decode_tokens_and_prefill_distributions() -> None:
-    eager_logits = torch.tensor([[0.012589254, 0.987410746]], dtype=torch.float32).log()
-    breakable_logits = torch.tensor([[0.070794578, 0.929205422]], dtype=torch.float32).log()
-
-    assert_serving_graph_alignment(
-        (
-            artifact(SglangGraphMode.EAGER),
-            artifact(SglangGraphMode.DECODE_FULL),
-            artifact(SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE, (9, 8, 7)),
-        ),
-        {
-            SglangGraphMode.EAGER.settings(): eager_logits,
-            SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings(): breakable_logits,
-        },
-    )
+def test_rejects_different_conditioning(tmp_path: Path) -> None:
+    reference = result(tmp_path, "reference", torch.zeros((2, 2)))
+    actual = replace(result(tmp_path, "actual", torch.zeros((2, 2))), output_ids=(1, 0))
+    with pytest.raises(AssertionError, match="conditioning differs at prefix 3"):
+        compare_distributions(reference, actual, prefix_lengths=(2, 3))
 
 
-def test_serving_graph_alignment_rejects_prefill_distribution_divergence() -> None:
-    eager_logits = torch.tensor([[0.070794578, 0.929205422]], dtype=torch.float32).log()
-    breakable_logits = torch.tensor([[0.012589254, 0.987410746]], dtype=torch.float32).log()
-
-    with pytest.raises(
-        AssertionError,
-        match="prefill distribution KL divergence failed",
-    ):
-        assert_serving_graph_alignment(
-            (
-                artifact(SglangGraphMode.EAGER),
-                artifact(SglangGraphMode.DECODE_FULL),
-                artifact(SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE),
-            ),
-            {
-                SglangGraphMode.EAGER.settings(): eager_logits,
-                SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings(): breakable_logits,
-            },
-        )
+@pytest.mark.parametrize(
+    "values",
+    [
+        torch.zeros((1, 2)),
+        torch.zeros((2, 3)),
+        torch.full((2, 2), float("nan")),
+        torch.zeros((2, 2), dtype=torch.float16),
+    ],
+)
+def test_rejects_incompatible_distribution_evidence(tmp_path: Path, values: torch.Tensor) -> None:
+    reference = result(tmp_path, "reference", torch.zeros((2, 2)))
+    actual = result(tmp_path, "actual", values)
+    with pytest.raises(AssertionError):
+        compare_distributions(reference, actual, prefix_lengths=(2, 3))
 
 
-def test_serving_graph_alignment_rejects_nonfinite_kl_from_finite_logits() -> None:
-    logits = torch.tensor([[3e38, -3e38]], dtype=torch.float32)
-    with pytest.raises(AssertionError, match="prefill distribution KL divergence failed"):
-        assert_serving_graph_alignment(
-            (
-                artifact(SglangGraphMode.EAGER),
-                artifact(SglangGraphMode.DECODE_FULL),
-                artifact(SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE),
-            ),
-            {
-                SglangGraphMode.EAGER.settings(): logits,
-                SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings(): logits.flip(-1),
-            },
-        )
-
-
-def test_serving_graph_alignment_rejects_mismatched_vocabulary_shapes() -> None:
-    with pytest.raises(AssertionError, match="prefill logits shapes differ"):
-        assert_serving_graph_alignment(
-            (
-                artifact(SglangGraphMode.EAGER),
-                artifact(SglangGraphMode.DECODE_FULL),
-                artifact(SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE),
-            ),
-            {
-                SglangGraphMode.EAGER.settings(): torch.tensor([[0.0, -100.0, -100.0]]),
-                SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings(): torch.tensor([[0.0]]),
-            },
-        )
-
-
-def test_serving_graph_alignment_accepts_prefill_distribution_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    logits = torch.tensor([[1.0, 2.0]], dtype=torch.float32)
-    monkeypatch.setattr(
-        torch.nn.functional,
-        "kl_div",
-        lambda *args, **kwargs: torch.tensor(PREFILL_DISTRIBUTION_KL_LIMIT),
-    )
-
-    assert_serving_graph_alignment(
-        (
-            artifact(SglangGraphMode.EAGER),
-            artifact(SglangGraphMode.DECODE_FULL),
-            artifact(SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE),
-        ),
-        {
-            SglangGraphMode.EAGER.settings(): logits,
-            SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings(): logits,
-        },
-    )
-
-
-def test_serving_graph_alignment_requires_matching_deterministic_policies() -> None:
-    with pytest.raises(AssertionError, match="different deterministic policies"):
-        assert_serving_graph_alignment(
-            (
-                artifact(SglangGraphMode.EAGER),
-                artifact(SglangGraphMode.DECODE_FULL, deterministic=False),
-            ),
-            {},
-        )
-
-
-def test_serving_graph_alignment_rejects_decode_token_mismatch() -> None:
-    with pytest.raises(AssertionError, match="decode output parity failed"):
-        assert_serving_graph_alignment(
-            (artifact(SglangGraphMode.EAGER), artifact(SglangGraphMode.DECODE_FULL, (4, 5, 6))),
-            {},
-        )
-
-
-def test_serving_graph_alignment_requires_breakable_prefill_logits() -> None:
-    with pytest.raises(AssertionError, match="exactly Eager and combined-mode logits"):
-        assert_serving_graph_alignment(
-            (
-                artifact(SglangGraphMode.EAGER),
-                artifact(SglangGraphMode.DECODE_FULL),
-                artifact(SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE),
-            ),
-            {},
-        )
-
-
-def test_serving_graph_adapter_reads_breakable_group_artifacts(tmp_path: Path) -> None:
-    modes = (
-        SglangGraphMode.EAGER,
-        SglangGraphMode.DECODE_FULL,
-        SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE,
-    )
-    directories = tuple(tmp_path / mode.value for mode in modes)
-    logits = torch.tensor([[1.0, 2.0, 3.0]], dtype=torch.float32)
-    for mode, directory in zip(modes, directories, strict=True):
-        directory.mkdir()
-        artifact(mode).write(directory / SERVING_GRAPH_ARTIFACT_FILENAME)
-        if mode is not SglangGraphMode.DECODE_FULL:
-            save_file({"next_token_logits": logits}, directory / PREFILL_LOGITS_ARTIFACT_FILENAME)
-    reports = tuple(PytestCaseReport(mode.value, PytestCaseStatus.PASSED, None) for mode in modes)
-
-    result = ServingGraphAdapter().evaluate(
-        ArtifactGroupRef("serving_graph", "case", len(modes)),
-        reports,
-        directories,
-    )
-
-    assert result.result_code == 0
-    assert result.detail == "compared"
+def test_accepts_inclusive_bound() -> None:
+    DistributionComparison((2,), (DECODE_DISTRIBUTION_KL_LIMIT,)).assert_within(DECODE_DISTRIBUTION_KL_LIMIT)

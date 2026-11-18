@@ -85,8 +85,7 @@ runner implementations. Native Graph snapshots retain their existing production
 model. [Tooling](tooling.md#shared-serving-lifecycle) owns file-input validation
 and the separate semantic qualification assertions.
 
-The SGLang Prefill-logit Observer retains one FP32 next-token distribution per
-controlled qualification request on TP rank zero. Each EXTEND replaces that
-request's snapshot, so completion exposes the final Prefill chunk. Files identify
-the process and URI-encoded request ID; metadata retains the original request ID.
-Serving-graph and Elastic Context State qualification share this observation.
+Serving numerical qualification captures distributions through SGLang's public
+generation API. Shared sampler recording and replay belong to
+[Tooling](tooling.md#shared-serving-lifecycle); numerical verdicts belong to
+[Qualification](qualification.md#numerical-and-graph-evidence).

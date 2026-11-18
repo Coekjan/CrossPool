@@ -1,63 +1,64 @@
-from __future__ import annotations
+from pathlib import Path
 
 import pytest
-from sglang.srt.layers.attention.flashattention_backend import FlashAttentionBackend
-from sglang.srt.plugins.hook_registry import HookRegistry
+from pydantic import TypeAdapter
 
-import xkit.serving.sglang.deterministic
-
-
-@pytest.mark.parametrize("fail", [False, True])
-def test_decode_policy_restores_backend_after_return_or_failure(fail: bool) -> None:
-    backend = object.__new__(FlashAttentionBackend)
-    backend.fa_impl_ver = 3
-    backend.use_mla = True
-    backend.num_splits = 4
-
-    def execute(current: FlashAttentionBackend) -> int:
-        assert current.num_splits == 1
-        if fail:
-            raise RuntimeError("decode failed")
-        return 17
-
-    if fail:
-        with pytest.raises(RuntimeError, match="decode failed"):
-            xkit.serving.sglang.deterministic.around_decode(execute, backend)
-    else:
-        assert xkit.serving.sglang.deterministic.around_decode(execute, backend) == 17
-    assert backend.num_splits == 4
+from xkit.envs import DETERMINISTIC_MODE, DETERMINISTIC_PATH
+from xkit.serving.sglang.deterministic import DeterministicConfig, SamplingRecord, SamplingSelection, install
+from xtest.harness.support.config import TEST_MODEL_ID
 
 
-@pytest.mark.parametrize(("version", "mla"), [(3, False), (4, True)])
-def test_other_attention_paths_retain_their_policy(version: int, mla: bool) -> None:
-    backend = object.__new__(FlashAttentionBackend)
-    backend.fa_impl_ver = version
-    backend.use_mla = mla
-    backend.num_splits = 4
-
-    def execute(current: FlashAttentionBackend) -> int:
-        return current.num_splits
-
-    assert xkit.serving.sglang.deterministic.around_decode(execute, backend) == 4
-
-
-def test_automatic_plugin_discovery_does_not_enable_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SGLANG_PLUGINS", raising=False)
-
-    def register(*args: object, **kwargs: object) -> None:
-        pytest.fail("automatic discovery installed the deterministic policy")
-
-    monkeypatch.setattr(HookRegistry, "register", register)
-    xkit.serving.sglang.deterministic.install()
+def sampling_record(request_id: str = "request") -> SamplingRecord:
+    return SamplingRecord(
+        TEST_MODEL_ID,
+        request_id,
+        {"input_ids": [1, 2], "sampling_params": {"max_new_tokens": 2}},
+        2,
+        (3, 4),
+        {"type": "length", "length": 2},
+        None,
+    )
 
 
-def test_explicit_policy_rejects_an_unapplied_hook(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SGLANG_PLUGINS", "xkit_deterministic")
-    monkeypatch.setattr(HookRegistry, "register", lambda *args, **kwargs: None)
-    monkeypatch.setattr(HookRegistry, "apply_hooks", classmethod(lambda registry: None))
-    monkeypatch.setattr(HookRegistry, "_patched", set())
+def test_inactive_plugin_preserves_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "reference.jsonl"
+    path.write_bytes(b"retained evidence")
+    monkeypatch.setenv(DETERMINISTIC_MODE.name, "none")
+    monkeypatch.setenv(DETERMINISTIC_PATH.name, str(path))
+    install()
+    assert path.read_bytes() == b"retained evidence"
 
-    xkit.serving.sglang.deterministic.install()
 
-    with pytest.raises(SystemExit, match="deterministic hook was not applied"):
-        HookRegistry.apply_hooks()
+def test_record_output_is_exclusive_and_replay_is_read_only(tmp_path: Path) -> None:
+    path = tmp_path / "reference.jsonl"
+    settings = DeterministicConfig.from_environment(
+        {DETERMINISTIC_MODE.name: "record", DETERMINISTIC_PATH.name: str(path)}
+    )
+    settings.prepare()
+    contents = TypeAdapter(SamplingRecord).dump_json(sampling_record()) + b"\n"
+    path.write_bytes(contents)
+    with pytest.raises(FileExistsError):
+        settings.prepare()
+    DeterministicConfig("replay", path).prepare()
+    assert tuple(SamplingRecord.read(path)) == (sampling_record(),)
+    assert path.read_bytes() == contents
+
+
+@pytest.mark.parametrize("malformed", ["partial", "duplicate"])
+def test_rejects_incomplete_or_duplicate_records(tmp_path: Path, malformed: str) -> None:
+    path = tmp_path / "reference.jsonl"
+    encoded = TypeAdapter(SamplingRecord).dump_json(sampling_record())
+    path.write_bytes(encoded if malformed == "partial" else (encoded + b"\n") * 2)
+    with pytest.raises(ValueError, match=r"incomplete|duplicate"):
+        tuple(SamplingRecord.read(path))
+
+
+@pytest.mark.parametrize(("prefix", "token"), [(1, None), (2, 3), (3, 4), (4, None)])
+def test_choices_follow_logical_prefix_and_preserve_lookahead(prefix: int, token: int | None) -> None:
+    assert SamplingSelection(0, sampling_record(), prefix, "decode", 0).token_id == token
+
+
+@pytest.mark.parametrize("environment", [{DETERMINISTIC_MODE.name: "invalid"}, {DETERMINISTIC_MODE.name: "replay"}])
+def test_rejects_invalid_activation(environment: dict[str, str]) -> None:
+    with pytest.raises(ValueError):
+        DeterministicConfig.from_environment(environment)

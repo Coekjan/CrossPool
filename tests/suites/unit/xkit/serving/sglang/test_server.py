@@ -27,19 +27,19 @@ from xtest.harness.support.config import TEST_MODEL_ID
     ("model", "enable_dp_attention", "decode_backend", "prefill_backend"),
     [
         (
-            SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER),
+            SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER.settings()),
             False,
             "disabled",
             "disabled",
         ),
         (
-            SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE),
+            SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings()),
             False,
             "full",
             "breakable",
         ),
         (
-            SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE),
+            SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.DECODE_FULL_PREFILL_BREAKABLE.settings()),
             True,
             "full",
             "breakable",
@@ -73,17 +73,15 @@ def test_server_command_projects_pinned_cli_policy(
     assert ("--enable-dp-attention" in command) is enable_dp_attention
 
 
-@pytest.mark.parametrize("deterministic", [False, True])
 def test_server_start_prepares_process_environment_and_log_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    deterministic: bool,
 ) -> None:
     launch = replace(
         server_launch(tmp_path),
         environment=MappingProxyType({"SGLANG_GRPC_PORT": "discarded", "XPOOL_TEST_VALUE": "preserved"}),
     )
-    model = SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER, deterministic=deterministic)
+    model = SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER.settings())
     family = SglangEndpointFamily("127.0.0.1", 19_000, 19_001, 19_002, 1)
     events: list[str] = []
     endpoint = cast(
@@ -120,7 +118,7 @@ def test_server_start_prepares_process_environment_and_log_directory(
     assert events == ["released", "spawned"]
     assert captured["env"] == {
         "SGLANG_GRPC_PORT": "19002",
-        "SGLANG_PLUGINS": "xpool,xkit_deterministic" if deterministic else "xpool",
+        "SGLANG_PLUGINS": "xpool",
         "XPOOL_TEST_VALUE": "preserved",
     }
     assert launch.environment == {"SGLANG_GRPC_PORT": "discarded", "XPOOL_TEST_VALUE": "preserved"}
@@ -144,7 +142,7 @@ def test_server_health_records_live_http_observations(
         ),
     )
     server = SglangServerProcess(
-        model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER),
+        model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER.settings()),
         owner=owner,
         endpoint=family,
     )
@@ -174,7 +172,7 @@ def test_server_health_records_early_exit_before_raising() -> None:
         ),
     )
     server = SglangServerProcess(
-        model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER),
+        model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER.settings()),
         owner=owner,
         endpoint=family,
     )
@@ -201,7 +199,7 @@ def test_server_close_owns_only_process_resources(monkeypatch: pytest.MonkeyPatc
         ),
     )
     server = SglangServerProcess(
-        model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER),
+        model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER.settings()),
         owner=owner,
         endpoint=family,
     )
@@ -237,7 +235,7 @@ def test_server_close_signals_only_live_leader_on_orderly_path(monkeypatch: pyte
         ),
     )
     server = SglangServerProcess(
-        model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER),
+        model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER.settings()),
         owner=owner,
         endpoint=family,
     )
@@ -268,7 +266,7 @@ def test_server_close_retains_owner_past_deadline_until_confirmed_exit(monkeypat
         ),
     )
     server = SglangServerProcess(
-        model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER),
+        model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER.settings()),
         owner=owner,
         endpoint=family,
     )

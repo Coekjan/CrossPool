@@ -24,7 +24,6 @@ from xtest.harness.runner.pytest_report import PytestCaseStatus
 from xtest.harness.runner.selection import collect_plan, select_suites
 from xtest.harness.runner.suite import SuiteRunner
 from xtest.harness.runner.task import compile_execution_tasks
-from xtest.harness.sglang.serving.alignment import ServingGraphAdapter
 
 
 def run_tests(selectors: tuple[str, ...], config: XpoolDevConfig) -> int:
@@ -174,7 +173,6 @@ def execute_test_run(
             repository_root=repository_root,
             run_directory=run_directory,
             strict_requirements=strict_requirements,
-            artifact_group_adapters=(ServingGraphAdapter(),),
             device_pool=device_pool,
             result_writer=result_writer,
             catalogue_path=catalogue_path,

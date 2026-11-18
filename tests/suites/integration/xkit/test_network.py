@@ -7,9 +7,11 @@ import socket
 
 import pytest
 
+import xkit.network
 from xkit.network import (
     TcpEndpointAllocationError,
     TcpEndpointReservation,
+    TcpEndpointUnreachable,
     TcpPortSpace,
 )
 
@@ -19,6 +21,8 @@ def test_endpoint_reservation_holds_port_until_spawn_release() -> None:
     reservation = TcpEndpointReservation.reserve("127.0.0.1", port_space=port_space)
     competing = TcpEndpointReservation.reserve("127.0.0.1", port_space=port_space)
     try:
+        assert reservation.listener is not None
+        assert reservation.listener.family == socket.AF_INET
         assert reservation.port != competing.port
         assert port_space.is_eligible(reservation.port)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -30,6 +34,24 @@ def test_endpoint_reservation_holds_port_until_spawn_release() -> None:
     finally:
         reservation.close()
         competing.close()
+
+
+def test_unreachable_endpoint_closes_owned_listener(monkeypatch: pytest.MonkeyPatch) -> None:
+    listener = xkit.network.create_tcp_listener(("0.0.0.0", 0))
+    address = ("0.0.0.0", listener.getsockname()[1])
+
+    def refuse_connection(client: socket.socket, address: tuple[str, int]) -> None:
+        raise ConnectionRefusedError(errno.ECONNREFUSED, "injected connection refusal")
+
+    monkeypatch.setattr(xkit.network, "create_tcp_listener", lambda address: listener)
+    monkeypatch.setattr(socket.socket, "connect", refuse_connection)
+    try:
+        with pytest.raises(TcpEndpointUnreachable) as error:
+            xkit.network.create_qualified_tcp_listener(address)
+        assert isinstance(error.value.__cause__, ConnectionRefusedError)
+        assert listener.fileno() == -1
+    finally:
+        listener.close()
 
 
 def test_exact_endpoint_reservation_releases_owned_listener() -> None:

@@ -83,8 +83,7 @@ def test_probe_adapter_uses_shared_system_and_always_closes(
     failure: Literal["none", "startup", "inference"], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     attempt = probe_attempt(tmp_path)
-    attempt.deterministic = True
-    launch = probe_launch(tmp_path, deterministic=True)
+    launch = probe_launch(tmp_path)
     events: list[str] = []
     owner = cast(OwnedProcessGroup, SimpleNamespace(name="sglang-test"))
     model = launch.models[0]
@@ -110,8 +109,7 @@ def test_probe_adapter_uses_shared_system_and_always_closes(
         diagnostics=lambda: "test diagnostics",
     )
 
-    def prepare(*args: object, deterministic: bool, **kwargs: object) -> ServingLaunch:
-        assert deterministic is True
+    def prepare(*args: object, **kwargs: object) -> ServingLaunch:
         return launch
 
     monkeypatch.setattr(xtest.harness.sglang.serving.attempt, "prepare", prepare)
@@ -131,11 +129,21 @@ def test_probe_adapter_uses_shared_system_and_always_closes(
 
     def workload(servers: list[SglangProbeServer]) -> tuple[SglangServerResult, ...]:
         assert servers[0].process is server
-        assert servers[0].inference_path == attempt.workdir / "models" / TEST_MODEL_ID.uri_encode() / "inference.json"
         events.append("test-request")
         if failure == "inference":
             raise RuntimeError("inference failed")
-        return (SglangServerResult(model.model_id, model.graph_mode.settings(), tuple(range(8)), None),)
+        return (
+            SglangServerResult(
+                model.model_id,
+                model.graph_settings,
+                "test",
+                (1,),
+                tuple(range(8)),
+                None,
+                tmp_path / "inference.json",
+                None,
+            ),
+        )
 
     if failure == "startup":
         with pytest.raises(TcpEndpointConflict) as error:
@@ -148,7 +156,6 @@ def test_probe_adapter_uses_shared_system_and_always_closes(
     else:
         result = attempt.run(workload)
         assert result.daemon_startup_seconds == 0.5
-        assert result.deterministic is True
         assert result.model_ids == (TEST_MODEL_ID,)
         assert result.observer_outdir == (attempt.workdir / "observers").resolve()
     if failure != "startup":
@@ -180,10 +187,10 @@ def probe_config(tmp_path: Path) -> ResolvedConfig:
     return ResolvedConfig(config_path, config)
 
 
-def probe_launch(tmp_path: Path, *, deterministic: bool = False) -> ServingLaunch:
+def probe_launch(tmp_path: Path) -> ServingLaunch:
     return ServingLaunch(
         cwd=tmp_path,
-        models=(SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER, deterministic=deterministic),),
+        models=(SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER.settings()),),
         config=probe_config(tmp_path).config,
         environment={},
     )

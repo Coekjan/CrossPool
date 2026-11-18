@@ -14,7 +14,7 @@ from _pytest.mark.structures import ParameterSet
 from xkit import ResourceRequirements
 from xkit.config import assemble_config
 from xkit.network import TcpEndpointReservation, TcpPortSpace
-from xpool.fabric import InstanceFfnLayerProfile, InstanceFfnProfile
+from xpool.fabric import FabricGenerationId, InstanceFfnLayerProfile, InstanceFfnProfile
 from xpool.ffn import FfnLayerSpec, MoeFfnSpec
 from xpool.native.ffn import DpRowLayout, ForwardMode, OutputRequirement
 from xpool.runtime.ffnagent import architecture
@@ -23,22 +23,21 @@ from xtest.harness.native.ffn.protocol import FfnInstanceSpec, FfnInvocationSpec
 from xtest.harness.native.ffn.topology import ffn_cluster_environment, materialize_ffn_cluster_launch, run_ffn_topology
 from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.sglang.catalog import E2eFfnNumericalCase
-from xtest.harness.sglang.reference.ffn import SglangFfnReferenceCase, SglangFfnReferenceRunner
+from xtest.harness.sglang.reference.ffn import SglangFfnReferenceCase, SglangFfnRouting, run_ffn_reference
+from xtest.harness.sglang.reference.router import RouterReferenceCase, run_router_reference
 from xtest.harness.support.ffn import (
     FFN_NUMERICAL_ARTIFACT_FILENAME,
     FFN_OUTPUT_ATOL,
     FFN_OUTPUT_MAXIMUM_SCALED_ERROR_LIMIT,
     FFN_OUTPUT_NORMALIZED_RMSE_LIMIT,
     FFN_OUTPUT_RTOL,
-    FFN_ROUTING_ATOL,
-    FFN_ROUTING_RTOL,
     FfnNumericalEvidence,
     FfnNumericalSampleEvidence,
     compare_ffn_outputs,
-    compare_ffn_routing,
     generate_ffn_hidden_states,
     read_ffn_routing_records,
 )
+from xtest.harness.support.native.observer import read_fabric_observer_snapshots
 from xtest.harness.support.wait import remaining_seconds
 
 FFN_NUMERICAL_HARNESS_RESERVE_SECONDS = 120.0
@@ -110,20 +109,11 @@ def run_numerical_case(
         SglangFfnReferenceCase(
             case_id=sample_id(layer_id, row_count),
             layer_id=layer_id,
-            hidden_states=values.clone(),
+            hidden_states=values,
         )
         for layer_id in case.layer_ids
         for row_count, values in zip(case.input_matrix.row_counts, hidden_states, strict=True)
     )
-    reference_results = SglangFfnReferenceRunner(
-        workdir=tmp_path / "reference",
-        timeout_seconds=remaining_seconds(deadline, "FFN numerical Reference"),
-    ).run(
-        model_path=model_path,
-        tensor_parallel_size=ffn_tp_size,
-        cases=reference_cases,
-    )
-
     endpoint = TcpEndpointReservation.reserve(config.daemon.host, port_space=TcpPortSpace.local())
     launch = materialize_ffn_cluster_launch(
         config=config,
@@ -192,31 +182,72 @@ def run_numerical_case(
     )
 
     observed_routing = read_ffn_routing_records(production_workdir / "observers", ready[0].generation)
+    capacities = (
+        read_execution_capacities(production_workdir / "observers", ready[0].generation)
+        if any(
+            isinstance(model_spec.layers[invocation.layer_ordinal], MoeFfnSpec)
+            for invocation in instance_specs[0].invocations
+        )
+        else {}
+    )
+    controlled_cases: list[SglangFfnReferenceCase] = []
+    router_cases: list[RouterReferenceCase] = []
+    for invocation_index, (invocation, reference_case) in enumerate(
+        zip(instance_specs[0].invocations, reference_cases, strict=True)
+    ):
+        layer = model_spec.layers[invocation.layer_ordinal]
+        route = None
+        if isinstance(layer, MoeFfnSpec):
+            routing_key = (ready[0].instance_index, invocation_index + 1, invocation.layer_ordinal)
+            try:
+                actual_ids, actual_weights = observed_routing.pop(routing_key)
+                capacity = capacities[routing_key]
+            except KeyError as error:
+                raise AssertionError(f"production omitted FFN Routing or Capacity record {routing_key}") from error
+            route = SglangFfnRouting(actual_ids.contiguous(), actual_weights.contiguous())
+            router_cases.append(
+                RouterReferenceCase(
+                    reference_case.case_id,
+                    layer.layer_id,
+                    reference_case.hidden_states,
+                    capacity,
+                    route.topk_ids,
+                    route.topk_weights,
+                )
+            )
+        controlled_cases.append(
+            SglangFfnReferenceCase(reference_case.case_id, layer.layer_id, reference_case.hidden_states, routing=route)
+        )
+    if observed_routing:
+        raise AssertionError(f"production returned unexpected FFN Routing records: {tuple(observed_routing)}")
+    router_results = (
+        run_router_reference(
+            model_spec=model_spec,
+            model_path=model_path,
+            tensor_parallel_size=ffn_tp_size,
+            cases=router_cases,
+            device=0,
+            workdir=tmp_path / "router-reference",
+            timeout_seconds=remaining_seconds(deadline, "FFN numerical Router"),
+        )
+        if router_cases
+        else {}
+    )
+    failed_router_cases = [case_id for case_id, comparison in router_results.items() if not comparison.passed]
+    if failed_router_cases:
+        raise AssertionError(f"FFN Router mismatch: {failed_router_cases}; evidence: {tmp_path / 'router-reference'}")
+    reference_results = run_ffn_reference(
+        workdir=tmp_path / "reference",
+        timeout_seconds=remaining_seconds(deadline, "FFN numerical Reference"),
+        model_path=model_path,
+        tensor_parallel_size=ffn_tp_size,
+        cases=controlled_cases,
+    )
     samples_by_rank: list[list[FfnNumericalSampleEvidence]] = [[] for _ in instance_specs]
     reference_by_id = {result.case_id: result for result in reference_results}
     for invocation_index, invocation in enumerate(instance_specs[0].invocations):
         reference = reference_by_id[invocation.case_id]
         layer = model_spec.layers[invocation.layer_ordinal]
-        routing_comparison = None
-        if isinstance(layer, MoeFfnSpec):
-            if reference.routing is None:
-                raise AssertionError("MoE Reference omitted Routing evidence")
-            routing_key = (ready[0].instance_index, invocation_index + 1, invocation.layer_ordinal)
-            try:
-                actual_ids, actual_weights = observed_routing.pop(routing_key)
-            except KeyError as error:
-                raise AssertionError(f"production omitted FFN Routing record {routing_key}") from error
-            routing_comparison = compare_ffn_routing(
-                reference.routing.topk_ids,
-                reference.routing.topk_weights,
-                actual_ids,
-                actual_weights,
-                expert_count=layer.routed_expert_count + layer.shared_expert_count,
-                atol=FFN_ROUTING_ATOL,
-                rtol=FFN_ROUTING_RTOL,
-            )
-        elif reference.routing is not None:
-            raise AssertionError("Dense Reference unexpectedly returned Routing evidence")
         for spec, samples in zip(instance_specs, samples_by_rank, strict=True):
             output_path = spec.invocations[invocation_index].output_path
             actual_tensors = safetensors.torch.load_file(output_path, device="cpu")
@@ -237,11 +268,9 @@ def run_numerical_case(
                     layer_id=layer.layer_id,
                     row_count=reference.output.shape[0],
                     output=output_comparison,
-                    routing=routing_comparison,
+                    router=router_results.get(invocation.case_id),
                 )
             )
-    if observed_routing:
-        raise AssertionError(f"production returned unexpected FFN Routing records: {tuple(observed_routing)}")
     for rank, samples in enumerate(samples_by_rank):
         evidence = FfnNumericalEvidence(
             model_id=case.model_id,
@@ -256,7 +285,24 @@ def run_numerical_case(
         assert all(sample.output.passed for sample in samples), (
             f"FFN numerical output mismatch on attention rank {rank}"
         )
-    assert all(sample.routing is None or sample.routing.passed for sample in samples_by_rank[0])
+
+
+def read_execution_capacities(directory: Path, generation: FabricGenerationId) -> dict[tuple[int, int, int], int]:
+    """Read the actual selected Capacity, requiring agreement across FFN TP ranks."""
+
+    capacities: dict[tuple[int, int, int], int] = {}
+    for snapshot in read_fabric_observer_snapshots(directory):
+        if snapshot["generation"] != generation.format() or snapshot["dropped"]:
+            raise AssertionError("production returned dropped or unrelated Fabric records")
+        for record in snapshot["records"]:
+            if record["kind"] != "ffnagent":
+                continue
+            key = (record["instance_index"], record["invocation_sequence"], record["layer_ordinal"])
+            capacity = record["facts"]["payload_row_capacity"]
+            if key in capacities and capacities[key] != capacity:
+                raise AssertionError(f"FFN TP ranks disagree on execution Capacity for {key}")
+            capacities[key] = capacity
+    return capacities
 
 
 def representative_layer_ids(layers: tuple[FfnLayerSpec, ...]) -> tuple[int, ...]:

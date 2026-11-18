@@ -4,172 +4,117 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import httpx
 import pytest
 import torch
-from pydantic import JsonValue, TypeAdapter, ValidationError
-from safetensors.torch import save_file
+from pydantic import JsonValue, TypeAdapter
+from safetensors.torch import load_file
 
 import xtest.harness.sglang.serving.server
 from xkit.process import OwnedProcessGroup
 from xkit.serving.sglang.endpoints import SglangEndpointFamily
-from xkit.serving.sglang.graph import SglangGraphMode, SglangGraphSettings
+from xkit.serving.sglang.graph import SglangGraphMode
 from xkit.serving.sglang.launch import SglangLaunchModel
 from xkit.serving.sglang.server import SglangServerProcess
-from xtest.harness.sglang.serving.server import PROMPT, SglangInferenceRecord, SglangProbeServer
+from xtest.harness.sglang.serving.server import SglangInferenceRecord, SglangProbeServer, generation_request
 from xtest.harness.support.config import TEST_MODEL_ID
 
 
-@pytest.mark.parametrize(
-    "graph_settings",
-    [
-        SglangGraphSettings("full", "disabled"),
-        SglangGraphSettings("disabled", "breakable"),
-        SglangGraphSettings("breakable", "full"),
-    ],
-)
-def test_server_result_reads_resolved_modes_and_exact_output_ids(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    graph_settings: SglangGraphSettings,
-) -> None:
-    responses = {
-        "/server_info": FakeResponse(
-            {
-                "cuda_graph_config": {
-                    "decode": {"backend": graph_settings.decode_backend},
-                    "prefill": {"backend": graph_settings.prefill_backend},
-                }
-            }
-        ),
-        "/generate": FakeResponse({"output_ids": list(range(8))}),
-    }
-    monkeypatch.setattr(xtest.harness.sglang.serving.server.httpx, "Client", lambda **kwargs: FakeClient(responses))
-    prefill_logits_path = tmp_path / "xpool.prefill-logits.123.safetensors"
-    save_file(
-        {"next_token_logits": torch.ones((1, 3), dtype=torch.float32)},
-        prefill_logits_path,
-        metadata={"rid": f"xpool-serving-graph-{TEST_MODEL_ID}"},
-    )
-    server = SglangProbeServer(
-        process=SglangServerProcess(
-            model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER),
+@pytest.fixture
+def server() -> SglangProbeServer:
+    return SglangProbeServer(
+        SglangServerProcess(
+            model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.DECODE_FULL.settings()),
             owner=cast(OwnedProcessGroup, SimpleNamespace(name="sglang-test")),
-            endpoint=SglangEndpointFamily("127.0.0.1", 19_000, 19_001, 19_002, 1),
-        ),
-        inference_path=tmp_path / "inference.json",
-        prefill_logit_outdir=tmp_path,
+            endpoint=SglangEndpointFamily("127.0.0.1", 19000, 19001, 19002, 1),
+        )
     )
 
-    result = server.result()
+
+def install_response(monkeypatch: pytest.MonkeyPatch, payload: JsonValue, *, status: int = 200) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/server_info":
+            return httpx.Response(
+                200, json={"cuda_graph_config": {"decode": {"backend": "full"}, "prefill": {"backend": "disabled"}}}
+            )
+        return httpx.Response(status, json=payload)
+
+    client = httpx.Client(base_url="http://127.0.0.1:19000", transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(xtest.harness.sglang.serving.server.httpx, "Client", lambda **kwargs: client)
+
+
+def test_generation_retains_conditioning_and_full_vocabulary_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server: SglangProbeServer
+) -> None:
+    request = generation_request("test", input_ids=(1, 2), vocab_size=3, max_new_tokens=2)
+    rows: JsonValue = [
+        [[-3.0, 2, None], [-1.0, 0, None], [-2.0, 1, None]],
+        [[-4.0, 0, None], [-5.0, 1, None], [-6.0, 2, None]],
+    ]
+    response: JsonValue = {
+        "prompt_token_ids": [1, 2],
+        "output_ids": [0, 1],
+        "meta_info": {"cached_tokens": 1, "output_token_ids_logprobs": rows},
+    }
+    install_response(monkeypatch, response)
+    path = tmp_path / "request.json"
+
+    result = server.generate(request, record_path=path)
 
     assert result.model_id == TEST_MODEL_ID
-    assert result.resolved_graph_settings == graph_settings
-    assert result.output_ids == tuple(range(8))
-    assert result.prefill_logits_path == prefill_logits_path
-    record = TypeAdapter(SglangInferenceRecord).validate_json(server.inference_path.read_bytes())
-    assert record.model_id == TEST_MODEL_ID
-    assert record.url == "http://127.0.0.1:19000/generate"
-    assert record.request["text"] == PROMPT
-    assert record.request["rid"] == f"xpool-serving-graph-{TEST_MODEL_ID}"
-    assert record.response_status_code == 200
-    assert record.response == {"output_ids": list(range(8))}
+    assert result.resolved_graph_settings == SglangGraphMode.DECODE_FULL.settings()
+    assert result.request_id == "test" and result.cached_tokens == 1
+    assert result.input_ids + result.output_ids == (1, 2, 0, 1)
+    assert result.prefix_lengths == (2, 3)
+    assert result.logprobs_path is not None
+    torch.testing.assert_close(
+        load_file(result.logprobs_path)["logprobs"], torch.tensor([[-1.0, -2.0, -3.0], [-4.0, -5.0, -6.0]])
+    )
+    record = TypeAdapter(SglangInferenceRecord).validate_json(path.read_bytes())
+    assert record.request == request and record.response == response
+    assert record.started_ns <= record.finished_ns
 
 
 @pytest.mark.parametrize(
-    ("payload", "cause"),
-    [
-        ({}, KeyError),
-        (None, TypeError),
-        (
-            {"cuda_graph_config": {"decode": {"backend": "disabled"}, "prefill": {"backend": "unknown"}}},
-            ValidationError,
-        ),
-    ],
+    "bad_rows", [None, [], [[[0.0, 0, None], [0.0, 0, None]]], [[[1e100, 0, None], [0.0, 1, None]]]]
 )
-def test_server_result_rejects_invalid_graph_settings_before_inference(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    payload: JsonValue,
-    cause: type[Exception],
+def test_rejects_missing_or_malformed_distributions_after_retaining_http_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server: SglangProbeServer, bad_rows: JsonValue
 ) -> None:
-    client = FakeClient({"/server_info": FakeResponse(payload)})
-    monkeypatch.setattr(xtest.harness.sglang.serving.server.httpx, "Client", lambda **kwargs: client)
-    server = SglangProbeServer(
-        process=SglangServerProcess(
-            model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER),
-            owner=cast(OwnedProcessGroup, SimpleNamespace(name="sglang-test")),
-            endpoint=SglangEndpointFamily("127.0.0.1", 19_000, 19_001, 19_002, 1),
-        ),
-        inference_path=tmp_path / "inference.json",
-    )
+    request = generation_request("invalid", input_ids=(1,), vocab_size=2, max_new_tokens=1)
+    payload: JsonValue = {
+        "prompt_token_ids": [1],
+        "output_ids": [0],
+        "meta_info": {"output_token_ids_logprobs": bad_rows},
+    }
+    install_response(monkeypatch, payload)
+    path = tmp_path / "invalid.json"
 
-    with pytest.raises(RuntimeError, match="invalid CUDA Graph settings") as error:
-        server.result()
+    with pytest.raises((ValueError, RuntimeError)):
+        server.generate(request, record_path=path)
 
-    assert isinstance(error.value.__cause__, cause)
-    assert client.post_paths == []
-    assert not server.inference_path.exists()
+    assert path.is_file()
+    assert not path.with_suffix(".logprobs.safetensors").exists()
+
+
+def test_retains_failed_http_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server: SglangProbeServer
+) -> None:
+    install_response(monkeypatch, {"error": "rejected"}, status=400)
+    path = tmp_path / "failed.json"
+
+    with pytest.raises(httpx.HTTPStatusError):
+        server.generate(generation_request("failed"), record_path=path)
+
+    record = TypeAdapter(SglangInferenceRecord).validate_json(path.read_bytes())
+    assert record.response_status_code == 400 and record.response == {"error": "rejected"}
 
 
 @pytest.mark.parametrize("invalid_id", [True, -1])
-def test_server_result_rejects_invalid_token_ids(
-    invalid_id: bool | int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_rejects_invalid_token_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server: SglangProbeServer, invalid_id: bool | int
 ) -> None:
-    responses = {
-        "/server_info": FakeResponse(
-            {
-                "cuda_graph_config": {
-                    "decode": {"backend": "disabled"},
-                    "prefill": {"backend": "disabled"},
-                }
-            }
-        ),
-        "/generate": FakeResponse({"output_ids": [0, 1, 2, 3, 4, 5, 6, invalid_id]}),
-    }
-    monkeypatch.setattr(xtest.harness.sglang.serving.server.httpx, "Client", lambda **kwargs: FakeClient(responses))
-    server = SglangProbeServer(
-        process=SglangServerProcess(
-            model=SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER),
-            owner=cast(OwnedProcessGroup, SimpleNamespace(name="sglang-test")),
-            endpoint=SglangEndpointFamily("127.0.0.1", 19_000, 19_001, 19_002, 1),
-        ),
-        inference_path=tmp_path / "inference.json",
-    )
-
-    with pytest.raises(RuntimeError, match="invalid output_ids"):
-        server.result()
-
-    assert server.inference_path.is_file()
-
-
-class FakeResponse:
-    def __init__(self, payload: JsonValue) -> None:
-        self.payload = payload
-        self.status_code = 200
-        self.headers = {"content-type": "application/json"}
-        self.text = ""
-
-    def raise_for_status(self) -> None:
-        return None
-
-    def json(self) -> JsonValue:
-        return self.payload
-
-
-class FakeClient:
-    def __init__(self, responses: dict[str, FakeResponse]) -> None:
-        self.responses = responses
-        self.post_paths: list[str] = []
-
-    def __enter__(self) -> FakeClient:
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        return None
-
-    def get(self, path: str) -> FakeResponse:
-        return self.responses[path]
-
-    def post(self, path: str, *, json: object) -> FakeResponse:
-        self.post_paths.append(path)
-        return self.responses[path]
+    install_response(monkeypatch, {"prompt_token_ids": [1], "output_ids": [invalid_id], "meta_info": {}})
+    request = generation_request("invalid-ids", max_new_tokens=1)
+    with pytest.raises(ValueError):
+        server.generate(request, record_path=tmp_path / "ids.json")

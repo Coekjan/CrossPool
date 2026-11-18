@@ -17,7 +17,6 @@ from xkit.config import DeploymentConfig
 from xkit.results import write_json
 from xkit.serving.sglang.graph import SglangGraphMode
 from xpool.model import ModelId
-from xtest.harness.runner.artifact import ArtifactGroupRef
 
 type JsonObject = dict[str, object]
 
@@ -57,7 +56,7 @@ class CaseInspection(BaseModel):
     description: str
     models: tuple[ModelId, ...]
     deployment: DeploymentConfig
-    graph_mode: SglangGraphMode | None
+    graph_modes: tuple[SglangGraphMode, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +69,6 @@ class CollectedTestCase:
     requirements: ResourceRequirements
     estimated_duration_seconds: float | None
     timeout_seconds: float
-    artifact_group: ArtifactGroupRef | None
     inspection: CaseInspection | None = None
 
     def __post_init__(self) -> None:
@@ -101,7 +99,6 @@ class CollectedTestCase:
             "requirements",
             "estimated_duration_seconds",
             "timeout_seconds",
-            "artifact_group",
             "inspection",
         }
         if not is_json_object(raw) or set(raw) != expected:
@@ -111,7 +108,6 @@ class CollectedTestCase:
         stage = raw["stage"]
         estimate = raw["estimated_duration_seconds"]
         timeout = raw["timeout_seconds"]
-        artifact_group = raw["artifact_group"]
         if not isinstance(path, str) or not isinstance(nodeid, str) or not isinstance(stage, str):
             raise ValueError("collected test path, nodeid, and stage must be strings")
         if estimate is not None and (not isinstance(estimate, int | float) or isinstance(estimate, bool)):
@@ -125,7 +121,6 @@ class CollectedTestCase:
             requirements=ResourceRequirements.from_raw(raw["requirements"]),
             estimated_duration_seconds=float(estimate) if estimate is not None else None,
             timeout_seconds=float(timeout),
-            artifact_group=ArtifactGroupRef.from_raw(artifact_group) if artifact_group is not None else None,
             inspection=CaseInspection.model_validate_json(json.dumps(raw["inspection"]))
             if raw["inspection"] is not None
             else None,
@@ -141,7 +136,6 @@ class CollectedTestCase:
             "requirements": self.requirements.raw(),
             "estimated_duration_seconds": self.estimated_duration_seconds,
             "timeout_seconds": self.timeout_seconds,
-            "artifact_group": self.artifact_group.raw() if self.artifact_group is not None else None,
             "inspection": self.inspection.model_dump(mode="json") if self.inspection is not None else None,
         }
 
@@ -159,22 +153,6 @@ class TestPlan:
         nodeids = tuple(case.nodeid for case in self.cases)
         if len(nodeids) != len(set(nodeids)):
             raise ValueError("test plan nodeids must be unique")
-        artifact_groups: dict[tuple[str, str], tuple[int, int]] = {}
-        for case in self.cases:
-            if case.artifact_group is not None:
-                group = case.artifact_group
-                key = (group.kind, group.name)
-                collected_count, expected_count = artifact_groups.get(key, (0, group.expected_case_count))
-                if group.expected_case_count != expected_count:
-                    raise ValueError(f"artifact group {key!r} has inconsistent expected_case_count values")
-                artifact_groups[key] = (collected_count + 1, expected_count)
-        incomplete = sorted(
-            key
-            for key, (collected_count, expected_count) in artifact_groups.items()
-            if collected_count != expected_count
-        )
-        if incomplete:
-            raise ValueError(f"artifact groups must contain every expected case: {incomplete}")
 
     @classmethod
     def from_raw(cls, raw: object) -> Self:

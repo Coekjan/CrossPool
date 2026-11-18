@@ -391,7 +391,11 @@ role placement are retained separately. Nested benchmark E2E execution stays
 within its outer test lease; inner cleanup does not replace the outer supervisor's proof.
 
 `xkit.network` reserves listeners through `bind -> listen -> local connect ->
-accept` qualification. `xkit.serving.sglang.endpoints` groups SGLang HTTP, NCCL,
+accept` qualification using IPv4 literals. Owned serving hosts are IPv4 loopback
+addresses; wildcard reservations use `0.0.0.0` and qualify a connection through
+`127.0.0.1`. Unsupported address families fail before acquisition. Dependency-owned
+listeners retain their engine-selected families.
+`xkit.serving.sglang.endpoints` groups SGLang HTTP, NCCL,
 gRPC, handshake and derived ZMQ endpoints into one owned family.
 NCCL/TCPStore reservations match its wildcard bind scope; HTTP, gRPC and the DP
 handshake retain their declared host. Fixed DP ZMQ reservations cover upstream
@@ -422,7 +426,9 @@ containing effective configuration, environment, invocation working directory
 and ordered `SglangLaunchModel` declarations before resource binding.
 Models cover every effective runtime Instance exactly once;
 each attention TP-by-DP geometry agrees with the configured attention devices.
-Graph mode remains attention-side policy. Shared command construction uses
+Each launch carries concrete Decode/Prefill backend settings; test and benchmark
+inputs retain their named modes. Graph policy remains attention-side policy.
+Shared command construction uses
 `xpool exec -- sglang serve` with attention-local base zero and step one; runtime
 preparation normalizes the complete deployment visibility before engine import.
 
@@ -447,14 +453,35 @@ is occupied.
 The test probe closes Systems whose resource retirement remains pending.
 Unconfirmed retirement retains ownership and prevents replay.
 
-Owned SGLang startup always selects the production `xpool` plugin. A model
-launch's deterministic intent additionally selects `xkit_deterministic` before
-Graph capture. This development plugin activates only through explicit
-selection. Its [implementation](../../src/xpool-dev/xkit/serving/sglang/deterministic.py)
-owns the supported controls and hook-application check; it can also be selected
-independently for an original-SGLang serving comparison. Ordinary serving and
-benchmark launches retain their default policy. Qualification owns when tests
-select the control and what their comparisons establish.
+Owned startup defaults to the production `xpool` plugin and preserves an explicit
+plugin selection. `XKIT_DETERMINISTIC_MODE=none|record|replay` controls the shared
+[sampling hook](../../src/xpool-dev/xkit/serving/sglang/deterministic.py); active
+modes require `XKIT_DETERMINISTIC_PATH` and add `xkit_deterministic` to selection.
+The default `none` installs no sampling hooks or file operations.
+
+The System resolves the active record/replay path once against the shared
+launcher's working directory and passes its absolute path to children.
+It exclusively creates a new record file before child startup; an
+existing output fails without truncation. Tokenizer processes append one complete
+request per locked JSONL write, retaining the configured Model ID, RID, public
+input and generation parameters, delivered IDs and requested logprob fields.
+Incomplete or duplicate records fail loading. Replay reads the source unchanged
+and requires matching public requests and complete recorded output. Startup and
+engine health requests pass through separately from workload records.
+
+Replay identifies each live sampler row by Model ID, RID and actual token-prefix
+length on every participating TP rank. It replaces the selected ID after the
+original distribution is computed and before history updates, repairing that
+token's scalar logprob from the original distribution. Full-vocabulary logprobs
+remain unchanged. Each deployment constructs its own KV; replay fixes token
+choices while arithmetic and scheduling remain engine-owned. Qualification
+checks returned-position, phase and rank coverage through compact control records
+in its existing observer directory. Benchmark reuse supplies its own stable RIDs,
+record paths and workload; recording/replay timings include instrumentation cost.
+Replay uses the owned model configuration and ordinary non-speculative sampling.
+Intermediate Prefill and overlap lookahead pass through; returned output must
+still match the complete recording.
+
 Startup sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` in the child
 environment. The generic command wrapper preserves the selected environment
 and forwards engine arguments unchanged. After reserving
@@ -478,11 +505,12 @@ meaning. Each owned worker installs its frozen global configuration once.
 
 `xtest` supplies its case projection and observers, then evaluates
 qualification evidence. Test preparation supplies launch inputs; `ProbeRun`
-retains expected Model IDs, the selected deterministic policy, its observer
-directory, results and qualification evidence. The running cluster owns the runtime launch.
+retains expected Model IDs, concrete Graph settings, observer directory, request
+results and sampling-record source. The running cluster owns the runtime launch.
 The test probe validates `/server_info` Graph settings against the shared
-settings declaration at its HTTP reading boundary and retains the typed result
-before sending its fixed greedy request.
+settings declaration at its HTTP reading boundary. Shared generation capture
+retains raw HTTP evidence and complete CPU FP32 logprobs; callers own caching,
+record/replay and numerical policy.
 `xbench` supplies the complete case-resolved deployment
 and its own workload. Benchmark execution does not enable test observers or
 reuse the test probe's fixed requests and verdict policy. The shared installed
@@ -508,8 +536,8 @@ and acquires no device/MPS resources; native collection prerequisites still appl
 `xtest run` compiles the typed collection plan, performs required resource
 preflight and executes CTest, Unit, Integration, E2E and explicitly selected
 Models in canonical order. Device tasks are ordered by resource count and estimated
-duration and backfilled over idle leases. Test strictness, JUnit classification
-and cross-task qualification verdicts remain test-owned.
+duration and backfilled over idle leases. Test strictness and JUnit classification
+remain test-owned; grouped numerical cases evaluate their own verdicts.
 
 Native skip handling under `--strict-requirements` follows
 [Test Architecture](../../tests/README.md#requirements).
@@ -524,9 +552,10 @@ directory, and file-write failures propagate.
 
 `run.json` retains required `tool_config`, source-labeled tool software metadata, selections, strictness,
 expected cases and task/artifact mapping. Atomic `results.json`
-checkpoints retain supervision outcomes, JUnit projections, stage/group verdicts,
+checkpoints retain supervision outcomes, JUnit projections, stage verdicts,
 timing and nullable final result and cleanup proof. Cases never admitted remain
 unexecuted, not passed or skipped. Recording failure is an infrastructure failure.
+Historical group verdicts remain readable without current-policy reevaluation.
 
 JUnit phase records are grouped by the collected node ID into one result per
 item, in collection order. Any phase failure or error makes the item failed;
@@ -535,11 +564,12 @@ A missing record duration leaves the item's duration unavailable. XML summary
 counters are validated against raw records and outcomes before this projection;
 retained report totals count unique test items.
 
-The collected plan and retained task/artifact mapping own serving comparison
-membership. Serving artifacts supply graph settings, numerical policy and model outputs for that
-assignment. Numerical samples use Layer-by-Rows labels local to their case's
-isolated reference and production workdirs. The runner mapping supplies test
-attribution for both evidence types.
+The collected plan and retained task/artifact mapping own case attribution.
+One model/topology item owns its required serial Graph configurations and retains
+stage acceptance separately from end-to-end diagnostics. Independent FFN samples
+use Layer-by-Rows labels local to their isolated production, Router and SGLang
+reference workdirs. [Qualification](qualification.md#numerical-and-graph-evidence)
+owns their numerical acceptance.
 
 `TestRunReport` projects that original outcome without recollection or current
 qualification reevaluation. `xtest report` writes JSON/Markdown with retained

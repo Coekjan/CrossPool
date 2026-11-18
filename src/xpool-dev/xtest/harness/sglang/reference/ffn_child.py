@@ -36,8 +36,8 @@ def read_routing_output(output: object) -> tuple[torch.Tensor, torch.Tensor]:
 
     if isinstance(output, (StandardTopKOutput, StandardTopKOutputPacked)):
         return (
-            output.topk_ids.detach().to(device="cpu", dtype=torch.int32).clone(),
-            output.topk_weights.detach().to(device="cpu", dtype=torch.float32).clone(),
+            output.topk_ids.detach().to(device="cpu", dtype=torch.int32),
+            output.topk_weights.detach().to(device="cpu", dtype=torch.float32),
         )
     if not isinstance(output, TritonKernelTopKOutput):
         raise RuntimeError(f"FFN reference received an unsupported TopK carrier: {type(output).__name__}")
@@ -53,6 +53,34 @@ def read_routing_output(output: object) -> tuple[torch.Tensor, torch.Tensor]:
     token_expert_ids[scatter] = expert_ids
     token_weights[scatter] = output.gate_scal.detach().to(device="cpu", dtype=torch.float32)
     return token_expert_ids.view(-1, output.n_expts_act), token_weights.view(-1, output.n_expts_act)
+
+
+def replace_routing_output(
+    output: object,
+    *,
+    router_logits: torch.Tensor,
+    topk_ids: torch.Tensor,
+    topk_weights: torch.Tensor,
+) -> object:
+    """Rebuild the actual upstream carrier and verify its prescribed consumption."""
+
+    from sglang.srt.layers.moe.topk import StandardTopKOutput, TritonKernelTopKOutput, routing
+
+    if isinstance(output, StandardTopKOutput):
+        expected_weights = topk_weights.to(output.topk_weights.dtype)
+        result = StandardTopKOutput(expected_weights, topk_ids.to(output.topk_ids.dtype), output.router_logits)
+    elif isinstance(output, TritonKernelTopKOutput):
+        metadata, gather, scatter, _, count = routing(router_logits, topk_ids.shape[1], expt_indx=topk_ids)
+        expected_weights = topk_weights.to(output.gate_scal.dtype)
+        result = TritonKernelTopKOutput(metadata, gather, scatter, expected_weights.flatten()[scatter.long()], count)
+    else:
+        raise RuntimeError(f"FFN reference cannot prescribe TopK carrier {type(output).__name__}")
+    consumed_ids, consumed_weights = read_routing_output(result)
+    if not torch.equal(consumed_ids, topk_ids.cpu().int()) or not torch.equal(
+        consumed_weights, expected_weights.cpu().float()
+    ):
+        raise RuntimeError("FFN reference carrier did not preserve prescribed IDs and weights")
+    return result
 
 
 def run_ffn_reference_child(
@@ -104,7 +132,6 @@ def run_ffn_reference_rank(
     import sglang.srt.distributed
     import sglang.srt.distributed.parallel_state
     import sglang.srt.layers.dp_attention
-    import sglang.srt.layers.moe.topk
     import sglang.srt.layers.moe.utils
     import sglang.srt.layers.utils
     import sglang.srt.model_loader
@@ -244,11 +271,10 @@ def execute_ffn_reference_case(
 
     import safetensors.torch
     import sglang.srt.layers.dp_attention
-    import sglang.srt.layers.moe.topk
     import torch
 
     tensors = safetensors.torch.load_file(case.input_path, device="cpu")
-    if set(tensors) != {"hidden_states"}:
+    if set(tensors) not in ({"hidden_states"}, {"hidden_states", "topk_ids", "topk_weights"}):
         raise RuntimeError(f"FFN reference input has invalid tensor keys: {sorted(tensors)}")
     hidden_states = tensors["hidden_states"]
     if hidden_states.ndim != 2 or hidden_states.shape[1] != hidden_size:
@@ -266,47 +292,35 @@ def execute_ffn_reference_case(
     )
     sglang.srt.layers.dp_attention.set_is_extend_in_batch(False)
 
-    captured_routing: list[tuple[torch.Tensor, torch.Tensor]] = []
-    shared_expert_calls: list[None] = []
-    hook_handles: list[torch.utils.hooks.RemovableHandle] = []
+    hook_handle = None
+    topk_calls = 0
+    if "topk_ids" in tensors:
+        topk = getattr(mlp, "topk", None)
+        if topk is None:
+            raise RuntimeError("Dense FFN reference cannot consume prescribed routes")
+        ids = tensors["topk_ids"].to(device="cuda")
+        coefficients = tensors["topk_weights"].to(device="cuda")
+        shared_count = int(getattr(mlp, "n_shared_experts", getattr(mlp, "num_shared_experts", 0)) or 0)
+        fused_shared_count = int(getattr(mlp, "num_fused_shared_experts", 0) or 0)
+        if shared_count and not fused_shared_count:
+            ids = ids[:, :-shared_count].contiguous()
+            coefficients = coefficients[:, :-shared_count].contiguous()
+        if getattr(getattr(mlp, "experts", None), "should_fuse_routed_scaling_factor_in_topk", False):
+            coefficients = coefficients * float(getattr(mlp, "routed_scaling_factor"))
 
-    # Rank zero records the router's actual carrier rather than reconstructing
-    # routing from logits, preserving model-specific correction semantics.
-    topk = getattr(mlp, "topk", None)
-    if persist_result and topk is not None:
+        def prescribe_topk(module: torch.nn.Module, inputs: tuple[torch.Tensor, ...], output: object) -> object:
+            nonlocal topk_calls
+            del module
+            if (
+                ids.shape != (hidden_states.shape[0], topk.topk_config.top_k)
+                or (ids >= inputs[1].shape[1] + fused_shared_count).any()
+            ):
+                raise ValueError("FFN reference prescribed routes disagree with the loaded model")
+            result = replace_routing_output(output, router_logits=inputs[1], topk_ids=ids, topk_weights=coefficients)
+            topk_calls += 1
+            return result
 
-        def capture_topk(
-            module: torch.nn.Module,
-            inputs: tuple[torch.Tensor, ...],
-            output: (
-                sglang.srt.layers.moe.topk.StandardTopKOutput
-                | sglang.srt.layers.moe.topk.StandardTopKOutputPacked
-                | sglang.srt.layers.moe.topk.TritonKernelTopKOutput
-            ),
-        ) -> None:
-            del module, inputs
-            captured_routing.append(read_routing_output(output))
-
-        hook_handles.append(topk.register_forward_hook(capture_topk))
-
-    shared_expert_count = int(getattr(mlp, "n_shared_experts", getattr(mlp, "num_shared_experts", 0)) or 0)
-    fused_shared_expert_count = int(getattr(mlp, "num_fused_shared_experts", 0) or 0)
-    shared_expert = getattr(mlp, "shared_experts", getattr(mlp, "shared_expert", None))
-    # Separately executed shared experts are appended to routed evidence; fused
-    # implementations already include them in the router's output carrier.
-    if persist_result and shared_expert_count > 0 and fused_shared_expert_count == 0:
-        if shared_expert is None:
-            raise RuntimeError("FFN reference could not find the separately executed shared expert")
-
-        def capture_shared_expert(
-            module: torch.nn.Module,
-            inputs: tuple[torch.Tensor, ...],
-            output: torch.Tensor,
-        ) -> None:
-            del module, inputs, output
-            shared_expert_calls.append(None)
-
-        hook_handles.append(shared_expert.register_forward_hook(capture_shared_expert))
+        hook_handle = topk.register_forward_hook(prescribe_topk)
 
     try:
         with torch.inference_mode():
@@ -315,8 +329,8 @@ def execute_ffn_reference_case(
             raise RuntimeError(f"FFN reference MLP returned {type(output).__name__}, expected Tensor")
         output = output.detach().to(device="cpu").contiguous()
     finally:
-        for handle in hook_handles:
-            handle.remove()
+        if hook_handle is not None:
+            hook_handle.remove()
 
     if output.shape != hidden_states.shape or output.dtype != hidden_states.dtype:
         raise RuntimeError(
@@ -325,38 +339,10 @@ def execute_ffn_reference_case(
         )
     if not torch.isfinite(output).all():
         raise RuntimeError("FFN reference output contains non-finite values")
+    if hook_handle is not None and topk_calls != 1:
+        raise RuntimeError(f"FFN reference observed {topk_calls} TopK calls, expected one")
     if not persist_result:
         return
 
-    output_tensors = {"hidden_states": output}
-    if topk is not None:
-        if len(captured_routing) != 1:
-            raise RuntimeError(f"FFN reference observed {len(captured_routing)} TopK calls, expected one")
-        topk_ids, topk_weights = captured_routing[0]
-        if shared_expert_count > 0 and fused_shared_expert_count == 0:
-            if len(shared_expert_calls) != 1:
-                raise RuntimeError(
-                    f"FFN reference observed {len(shared_expert_calls)} shared-expert calls, expected one"
-                )
-            routed_expert_count = int(
-                getattr(
-                    mlp,
-                    "num_experts",
-                    getattr(getattr(mlp, "config", None), "n_routed_experts"),
-                )
-            )
-            shared_ids = torch.arange(
-                routed_expert_count,
-                routed_expert_count + shared_expert_count,
-                dtype=torch.int32,
-            ).expand(topk_ids.shape[0], -1)
-            topk_ids = torch.cat((topk_ids, shared_ids), dim=1)
-            topk_weights = torch.cat(
-                (topk_weights, torch.ones_like(shared_ids, dtype=torch.float32)),
-                dim=1,
-            )
-        output_tensors["topk_ids"] = topk_ids.contiguous()
-        output_tensors["topk_weights"] = topk_weights.contiguous()
-
     with case.output_path.open("xb") as output_file:
-        output_file.write(safetensors.torch.save(output_tensors))
+        output_file.write(safetensors.torch.save({"hidden_states": output}))

@@ -55,8 +55,6 @@ def test_defaults_fill_missing_optional_sections() -> None:
 
     assert config.debug.graph_observer.enable is False
     assert config.debug.graph_observer.outdir is None
-    assert config.debug.prefill_logit_observer.enable is False
-    assert config.debug.prefill_logit_observer.outdir is None
     assert config.daemon.host == "127.0.0.1"
     assert config.daemon.port == 9810
     assert config.scheduler.ffn_concurrency == 1

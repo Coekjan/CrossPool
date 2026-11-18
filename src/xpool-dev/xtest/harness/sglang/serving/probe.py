@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 from xkit.network import TcpEndpointConflict
 from xkit.serving.sglang.graph import SglangGraphSettings
@@ -21,8 +22,9 @@ def run_probe(
     base_config: ResolvedConfig,
     graph_settings: SglangGraphSettings,
     workdir: Path,
-    deterministic: bool = False,
     workload: Callable[[list[SglangProbeServer]], tuple[SglangServerResult, ...]] | None = None,
+    deterministic_mode: Literal["none", "record", "replay"] = "none",
+    replay_path: Path | None = None,
 ) -> ProbeRun:
     """Run one rematerialized attempt, retrying confirmed bind conflicts only."""
 
@@ -33,7 +35,8 @@ def run_probe(
             base_config=base_config,
             graph_settings=graph_settings,
             workdir=workdir / f"attempt-{attempt_number}",
-            deterministic=deterministic,
+            deterministic_mode=deterministic_mode,
+            replay_path=replay_path,
         )
         try:
             return attempt.run(workload)

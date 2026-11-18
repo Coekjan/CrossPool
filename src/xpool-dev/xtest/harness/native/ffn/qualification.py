@@ -295,7 +295,7 @@ def dense_partial_reference(
     layer_ordinal: int = 0,
     intermediate_size: int = DENSE_INTERMEDIATE_SIZE,
 ) -> torch.Tensor:
-    """Evaluate one deterministic rank-local Dense partial in payload dtype."""
+    """Reference a Dense partial with FP64 projections and payload stage rounding."""
 
     gate, up, down = dense_full_weights(
         device=hidden_states.device.index,
@@ -307,10 +307,11 @@ def dense_partial_reference(
     local_width = intermediate_size // ffnagent_count
     begin = ffnagent_index * local_width
     end = begin + local_width
-    gate_values = torch.mm(hidden_states, gate[begin:end].t())
-    up_values = torch.mm(hidden_states, up[begin:end].t())
+    inputs = hidden_states.double()
+    gate_values = torch.mm(inputs, gate[begin:end].double().t()).to(hidden_states.dtype)
+    up_values = torch.mm(inputs, up[begin:end].double().t()).to(hidden_states.dtype)
     activated = (torch.nn.functional.silu(gate_values.float()) * up_values.float()).to(hidden_states.dtype)
-    return torch.mm(activated, down[:, begin:end].t())
+    return torch.mm(activated.double(), down[:, begin:end].double().t()).to(hidden_states.dtype)
 
 
 def dense_full_weights(
@@ -403,7 +404,7 @@ def moe_partial_reference(
     layer_ordinal: int = 0,
     intermediate_size: int = MOE_INTERMEDIATE_SIZE,
 ) -> torch.Tensor:
-    """Evaluate one deterministic rank-local MoE partial in payload dtype."""
+    """Reference a MoE partial, rounding weighted routes before FP32 reduction."""
 
     router, gate, up, down = moe_full_weights(
         device=hidden_states.device.index,
@@ -412,21 +413,27 @@ def moe_partial_reference(
         hidden_size=hidden_states.shape[-1],
         intermediate_size=intermediate_size,
     )
-    scores = torch.softmax(torch.mm(hidden_states, router.t()).float(), dim=-1)
+    inputs = hidden_states.double()
+    logits = torch.mm(inputs, router.double().t()).to(hidden_states.dtype)
+    scores = torch.softmax(logits.float(), dim=-1)
     route_weights, route_ids = torch.topk(scores, MOE_TOPK, dim=-1)
     route_weights /= route_weights.sum(dim=-1, keepdim=True)
     local_width = intermediate_size // ffnagent_count
     begin = ffnagent_index * local_width
     end = begin + local_width
+    gate = gate[:, begin:end].double()
+    up = up[:, begin:end].double()
+    down = down[:, :, begin:end].double()
     partial = torch.zeros_like(hidden_states, dtype=torch.float32)
     for row in range(hidden_states.shape[0]):
         for route in range(MOE_TOPK):
             expert = int(route_ids[row, route])
-            gate_values = torch.mv(gate[expert, begin:end], hidden_states[row])
-            up_values = torch.mv(up[expert, begin:end], hidden_states[row])
+            gate_values = torch.mv(gate[expert], inputs[row]).to(hidden_states.dtype)
+            up_values = torch.mv(up[expert], inputs[row]).to(hidden_states.dtype)
             activated = (torch.nn.functional.silu(gate_values.float()) * up_values.float()).to(hidden_states.dtype)
-            expert_output = torch.mv(down[expert, :, begin:end], activated)
-            partial[row].add_(expert_output.float() * route_weights[row, route])
+            expert_output = torch.mv(down[expert], activated.double()).float()
+            weighted = (expert_output * route_weights[row, route]).to(hidden_states.dtype)
+            partial[row].add_(weighted.float())
     return partial.to(hidden_states.dtype)
 
 
