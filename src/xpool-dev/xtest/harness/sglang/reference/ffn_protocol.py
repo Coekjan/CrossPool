@@ -15,6 +15,12 @@ class FfnReferenceCaseSpec:
     input_path: Path
     output_path: Path
 
+    @property
+    def routing_path(self) -> Path:
+        """Return the natural/prescribed routing sidecar beside this output."""
+
+        return self.output_path.with_name("routing.safetensors")
+
 
 @dataclass(frozen=True, slots=True)
 class FfnReferenceJob:

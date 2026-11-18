@@ -578,6 +578,12 @@ stage acceptance separately from end-to-end diagnostics. Independent FFN samples
 use Layer-by-Rows labels local to their isolated production, Router and SGLang
 reference workdirs. [Qualification](qualification.md#numerical-and-graph-evidence)
 owns their numerical acceptance.
+Controlled MoE reference cases retain natural and effective prescribed CPU
+routing beside their output on the result-writing rank. The parent requires
+that evidence, validates its case/layer attribution and tensor geometry, and
+records a diagnostic summary with each sample. Missing or malformed expected
+evidence fails the reference stage. Dense and unprescribed references retain
+their direct output path.
 
 `TestRunReport` projects that original outcome without recollection or current
 qualification reevaluation. `xtest report` writes JSON/Markdown with retained

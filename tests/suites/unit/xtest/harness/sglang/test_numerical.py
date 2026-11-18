@@ -24,6 +24,7 @@ from xtest.harness.sglang.catalog import E2eFfnInputMatrix, E2eFfnNumericalCase
 from xtest.harness.sglang.reference.ffn import (
     SglangFfnReferenceCase,
     SglangFfnReferenceResult,
+    SglangFfnRouting,
 )
 from xtest.harness.sglang.reference.router import RouterReferenceCase
 from xtest.harness.support.config import TEST_MODEL_ID, synthetic_config
@@ -98,7 +99,12 @@ def test_numerical_case_compares_and_retains_every_rank(
         results = []
         for sample in cases:
             assert (sample.routing is not None) == moe
-            results.append(SglangFfnReferenceResult(sample.case_id, sample.hidden_states.clone()))
+            natural = None
+            if sample.routing is not None:
+                natural = SglangFfnRouting(sample.routing.topk_ids + 1, sample.routing.topk_weights + 0.25)
+            results.append(
+                SglangFfnReferenceResult(sample.case_id, sample.hidden_states.clone(), natural, sample.routing)
+            )
         return tuple(results)
 
     def run_router(
@@ -132,7 +138,10 @@ def test_numerical_case_compares_and_retains_every_rank(
             )
         return results
 
-    def materialize_launch(*, config: XpoolConfig, daemon_port: int, workdir: Path) -> XpoolClusterLaunch:
+    def materialize_launch(
+        *, config: XpoolConfig, daemon_address: tuple[str, int], workdir: Path
+    ) -> XpoolClusterLaunch:
+        assert daemon_address == endpoint.address
         workdir.mkdir()
         return XpoolClusterLaunch(config=config, config_path=workdir / "xpool.toml", environment={}, cwd=workdir)
 
@@ -195,5 +204,12 @@ def test_numerical_case_compares_and_retains_every_rank(
         assert evidence.payload_dtype == dtype
         assert all(sample.output.passed == (rank != bad_rank) for sample in evidence.samples)
         assert all((sample.router is not None) == moe for sample in evidence.samples)
+        for sample in evidence.samples:
+            if moe:
+                assert sample.routing_diagnostic is not None
+                assert sample.routing_diagnostic.differing_expert_set_count == sample.row_count
+                assert sample.routing_diagnostic.maximum_common_weight_difference == 0.25
+            else:
+                assert sample.routing_diagnostic is None
         assert all(sample.router is None or sample.router.passed == (not bad_router) for sample in evidence.samples)
     assert events == (["production", "router", "reference"] if moe else ["production", "reference"])

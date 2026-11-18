@@ -36,8 +36,8 @@ def read_routing_output(output: object) -> tuple[torch.Tensor, torch.Tensor]:
 
     if isinstance(output, (StandardTopKOutput, StandardTopKOutputPacked)):
         return (
-            output.topk_ids.detach().to(device="cpu", dtype=torch.int32),
-            output.topk_weights.detach().to(device="cpu", dtype=torch.float32),
+            output.topk_ids.detach().to(device="cpu", dtype=torch.int32).contiguous(),
+            output.topk_weights.detach().to(device="cpu", dtype=torch.float32).contiguous(),
         )
     if not isinstance(output, TritonKernelTopKOutput):
         raise RuntimeError(f"FFN reference received an unsupported TopK carrier: {type(output).__name__}")
@@ -294,6 +294,8 @@ def execute_ffn_reference_case(
 
     hook_handle = None
     topk_calls = 0
+    natural_routing: tuple[torch.Tensor, torch.Tensor] | None = None
+    prescribed_routing: tuple[torch.Tensor, torch.Tensor] | None = None
     if "topk_ids" in tensors:
         topk = getattr(mlp, "topk", None)
         if topk is None:
@@ -309,14 +311,18 @@ def execute_ffn_reference_case(
             coefficients = coefficients * float(getattr(mlp, "routed_scaling_factor"))
 
         def prescribe_topk(module: torch.nn.Module, inputs: tuple[torch.Tensor, ...], output: object) -> object:
-            nonlocal topk_calls
+            nonlocal topk_calls, natural_routing, prescribed_routing
             del module
             if (
                 ids.shape != (hidden_states.shape[0], topk.topk_config.top_k)
                 or (ids >= inputs[1].shape[1] + fused_shared_count).any()
             ):
                 raise ValueError("FFN reference prescribed routes disagree with the loaded model")
+            if persist_result:
+                natural_routing = read_routing_output(output)
             result = replace_routing_output(output, router_logits=inputs[1], topk_ids=ids, topk_weights=coefficients)
+            if persist_result:
+                prescribed_routing = read_routing_output(result)
             topk_calls += 1
             return result
 
@@ -346,3 +352,18 @@ def execute_ffn_reference_case(
 
     with case.output_path.open("xb") as output_file:
         output_file.write(safetensors.torch.save({"hidden_states": output}))
+    if hook_handle is not None:
+        if natural_routing is None or prescribed_routing is None:
+            raise RuntimeError("FFN reference did not retain its controlled routing evidence")
+        with case.routing_path.open("xb") as routing_file:
+            routing_file.write(
+                safetensors.torch.save(
+                    {
+                        "natural_ids": natural_routing[0],
+                        "natural_weights": natural_routing[1],
+                        "prescribed_ids": prescribed_routing[0],
+                        "prescribed_weights": prescribed_routing[1],
+                    },
+                    metadata={"case_id": case.case_id, "layer_id": str(case.layer_id)},
+                )
+            )

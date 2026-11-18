@@ -197,6 +197,26 @@ def test_router_correction_affects_selection_but_not_coefficients(layer: ffn.Moe
         assert result.selection_violation_count == 0
 
 
+def test_router_selection_rejects_nonfinite_correction_bias(layer: ffn.MoeFfnSpec) -> None:
+    layer = layer.model_copy(
+        update={"router_algorithm": ffn.RouterAlgorithm.SIGMOID, "routed_expert_count": 3, "routed_topk": 1}
+    )
+    logits = torch.zeros((1, 3))
+    with pytest.raises(ValueError, match="requires finite correction bias"):
+        compare_ffn_router(
+            layer=layer,
+            execution_capacity=1,
+            logits=logits,
+            reference_logits=logits.double(),
+            correction_bias=torch.tensor((0.0, torch.nan, 1.0)),
+            topk_ids=torch.tensor(((0,),), dtype=torch.int32),
+            topk_weights=torch.ones((1, 1)),
+            installed_ids_equal=True,
+            installed_weights_equal=True,
+            eager_graph_equal=True,
+        )
+
+
 def test_selection_policy_rejects_an_uncovered_softmax_domain(layer: ffn.MoeFfnSpec) -> None:
     logits = torch.arange(17, dtype=torch.float32).view(1, -1) * 1000
     with pytest.raises(ValueError, match="subnormal Softmax cutoff"):

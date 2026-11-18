@@ -17,7 +17,7 @@ from xtest.harness.support.wait import remaining_seconds
 
 @dataclass(frozen=True, slots=True)
 class SglangFfnRouting:
-    """CPU token-major routes before the model's overall routed scale."""
+    """Contiguous CPU token-major expert IDs and FP32-represented weights."""
 
     topk_ids: torch.Tensor
     topk_weights: torch.Tensor
@@ -44,7 +44,7 @@ class SglangFfnRouting:
 
 @dataclass(frozen=True, slots=True)
 class SglangFfnReferenceCase:
-    """One FFN input, optionally prescribing routes instead of natural TopK."""
+    """One FFN input, with optional routes before the model's overall routed scale."""
 
     case_id: str
     layer_id: int
@@ -54,10 +54,12 @@ class SglangFfnReferenceCase:
 
 @dataclass(frozen=True, slots=True)
 class SglangFfnReferenceResult:
-    """One original-SGLang FFN result returned on CPU."""
+    """CPU output and optional natural/effective prescribed SGLang carriers."""
 
     case_id: str
     output: torch.Tensor
+    natural_routing: SglangFfnRouting | None
+    prescribed_routing: SglangFfnRouting | None
 
 
 def run_ffn_reference(
@@ -143,14 +145,17 @@ def run_ffn_reference(
         if completed.case_count != len(case_specs):
             raise RuntimeError(f"FFN reference completed {completed.case_count} cases, expected {len(case_specs)}")
         process.wait(timeout_seconds=remaining_seconds(deadline, "child exit"))
-        return tuple(read_reference_result(spec) for spec in case_specs)
+        return tuple(
+            read_reference_result(spec, expect_routing=case.routing is not None)
+            for spec, case in zip(case_specs, normalized_cases, strict=True)
+        )
     finally:
         if process.process.is_alive():
             PythonChildProcess.terminate_all((process,))
         process.close()
 
 
-def read_reference_result(spec: ffn_protocol.FfnReferenceCaseSpec) -> SglangFfnReferenceResult:
+def read_reference_result(spec: ffn_protocol.FfnReferenceCaseSpec, *, expect_routing: bool) -> SglangFfnReferenceResult:
     """Read one child-owned CPU output under its requested case identity."""
 
     try:
@@ -159,4 +164,30 @@ def read_reference_result(spec: ffn_protocol.FfnReferenceCaseSpec) -> SglangFfnR
         raise RuntimeError(f"FFN reference could not read {spec.output_path}: {error}") from error
     if set(tensors) != {"hidden_states"}:
         raise RuntimeError(f"FFN reference output has invalid tensor keys: {sorted(tensors)}")
-    return SglangFfnReferenceResult(case_id=spec.case_id, output=tensors["hidden_states"])
+    natural_routing = prescribed_routing = None
+    if expect_routing:
+        try:
+            with safetensors.safe_open(spec.routing_path, framework="pt", device="cpu") as sidecar:
+                if sidecar.metadata() != {"case_id": spec.case_id, "layer_id": str(spec.layer_id)}:
+                    raise ValueError("routing metadata does not match the requested case")
+                if set(sidecar.keys()) != {"natural_ids", "natural_weights", "prescribed_ids", "prescribed_weights"}:
+                    raise ValueError("routing sidecar has invalid tensor keys")
+                natural_routing = SglangFfnRouting(
+                    sidecar.get_tensor("natural_ids"), sidecar.get_tensor("natural_weights")
+                )
+                prescribed_routing = SglangFfnRouting(
+                    sidecar.get_tensor("prescribed_ids"), sidecar.get_tensor("prescribed_weights")
+                )
+                if (
+                    natural_routing.topk_ids.shape != prescribed_routing.topk_ids.shape
+                    or natural_routing.topk_ids.shape[0] != tensors["hidden_states"].shape[0]
+                ):
+                    raise ValueError("routing sidecar geometry does not match the reference output")
+        except Exception as error:
+            raise RuntimeError(f"FFN reference could not read {spec.routing_path}: {error}") from error
+    return SglangFfnReferenceResult(
+        case_id=spec.case_id,
+        output=tensors["hidden_states"],
+        natural_routing=natural_routing,
+        prescribed_routing=prescribed_routing,
+    )

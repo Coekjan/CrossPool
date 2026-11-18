@@ -11,6 +11,7 @@ from xtest.harness.support.config import TEST_MODEL_ID
 from xtest.harness.support.ffn import (
     FfnNumericalEvidence,
     FfnNumericalSampleEvidence,
+    FfnRoutingDiagnostic,
     FfnTopologyEvidence,
     FfnTopologyMpsServerEvidence,
     FfnTopologyOutputEvidence,
@@ -144,7 +145,9 @@ def test_numerical_evidence_writes_one_strict_artifact(tmp_path: Path, dtype: to
         model_spec_digest="1" * 64,
         generation=FabricGenerationId(high=1, low=2),
         payload_dtype=dtype,
-        samples=(FfnNumericalSampleEvidence(layer_id=0, row_count=1, output=output, router=None),),
+        samples=(
+            FfnNumericalSampleEvidence(layer_id=0, row_count=1, output=output, router=None, routing_diagnostic=None),
+        ),
     )
     path = tmp_path / "ffn-numerical.json"
 
@@ -189,3 +192,27 @@ def test_topology_evidence_writes_complete_process_and_output_facts(tmp_path: Pa
     evidence.write(path)
 
     assert FfnTopologyEvidence.model_validate_json(path.read_bytes()) == evidence
+
+
+@pytest.mark.parametrize(
+    ("prescribed_ids", "prescribed_weights", "different_sets", "common_pairs", "maximum_difference"),
+    [
+        ((2, 1), (0.75, 0.25), 0, 2, 0.0),
+        ((2, 3), (0.5, 0.5), 1, 1, 0.25),
+        ((3, 4), (0.25, 0.75), 1, 0, None),
+    ],
+)
+def test_routing_diagnostic_matches_experts_independently_of_slots(
+    prescribed_ids: tuple[int, int],
+    prescribed_weights: tuple[float, float],
+    different_sets: int,
+    common_pairs: int,
+    maximum_difference: float | None,
+) -> None:
+    diagnostic = FfnRoutingDiagnostic.from_routes(
+        torch.tensor([[1, 2]], dtype=torch.int32),
+        torch.tensor([[0.25, 0.75]]),
+        torch.tensor([prescribed_ids], dtype=torch.int32),
+        torch.tensor([prescribed_weights]),
+    )
+    assert diagnostic == FfnRoutingDiagnostic(1, different_sets, common_pairs, maximum_difference)

@@ -262,6 +262,10 @@ Its time budget includes derived references. Independent FFN cases qualify the
 Router and same-route Expert output at their own limits; routine E2E retains
 free generation, installed serving, observed Graph structure and Transport/Fabric
 evidence. Historical cross-task group verdicts remain readable by offline reports.
+Controlled MoE reference cases write `reference/cases/case-<ordinal>/routing.safetensors`
+beside their input and output. The file retains natural and effective prescribed
+IDs and weights with case/layer metadata; `ffn-numerical.json` and its rank
+variants contain the diagnostic summaries. Dense samples carry null diagnostics.
 
 ## Commands
 

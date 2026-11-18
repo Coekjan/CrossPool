@@ -200,6 +200,7 @@ def test_reference_preserves_order_normalizes_inputs_and_is_single_use(
     )
 
     assert tuple(result.case_id for result in results) == ("second", "first")
+    assert all(result.natural_routing is result.prescribed_routing is None for result in results)
     torch.testing.assert_close(results[0].output, first_input.detach().contiguous() + 2)
     torch.testing.assert_close(results[1].output, torch.full((2, 4), 2.0))
     job = state["job"]
@@ -232,6 +233,16 @@ def test_reference_serializes_prescribed_routes(
         tensors = safetensors.torch.load_file(spec.input_path)
         assert tensors["topk_ids"].tolist() == [[3, 1], [2, 0], [1, 3]]
         assert torch.equal(tensors["topk_weights"], torch.full((3, 2), 0.5))
+        safetensors.torch.save_file(
+            {
+                "natural_ids": tensors["topk_ids"].flip(1),
+                "natural_weights": torch.full((3, 2), 0.25),
+                "prescribed_ids": tensors["topk_ids"],
+                "prescribed_weights": tensors["topk_weights"],
+            },
+            spec.routing_path,
+            metadata={"case_id": spec.case_id, "layer_id": str(spec.layer_id)},
+        )
         return {"hidden_states": tensors["hidden_states"]}
 
     install_fake_child(monkeypatch, output_factory=output_factory)
@@ -254,6 +265,11 @@ def test_reference_serializes_prescribed_routes(
 
     assert result.case_id == "case"
     assert torch.equal(result.output, make_case().hidden_states)
+    assert result.natural_routing is not None and result.prescribed_routing is not None
+    assert result.natural_routing.topk_ids.tolist() == [[1, 3], [0, 2], [3, 1]]
+    assert torch.equal(result.natural_routing.topk_weights, torch.full((3, 2), 0.25))
+    assert result.prescribed_routing.topk_ids.tolist() == [[3, 1], [2, 0], [1, 3]]
+    assert torch.equal(result.prescribed_routing.topk_weights, torch.full((3, 2), 0.5))
 
 
 def test_reference_terminates_failed_child_without_returning_partial_results(
@@ -313,3 +329,31 @@ def test_reference_rejects_incomplete_or_malformed_completion(
         ffn.run_ffn_reference(
             workdir=workdir, timeout_seconds=5, model_path=model_path, tensor_parallel_size=1, cases=(make_case(),)
         )
+
+
+@pytest.mark.parametrize("fault", ("missing", "attribution", "keys", "dtype", "geometry"))
+def test_controlled_reference_requires_attributed_valid_routing_evidence(tmp_path: Path, fault: str) -> None:
+    spec = ffn_protocol.FfnReferenceCaseSpec(
+        "controlled", 7, tmp_path / "input.safetensors", tmp_path / "output.safetensors"
+    )
+    safetensors.torch.save_file({"hidden_states": torch.ones((3, 4))}, spec.output_path)
+    tensors = {
+        "natural_ids": torch.tensor([[1, 2]] * 3, dtype=torch.int32),
+        "natural_weights": torch.full((3, 2), 0.5),
+        "prescribed_ids": torch.tensor([[2, 3]] * 3, dtype=torch.int32),
+        "prescribed_weights": torch.full((3, 2), 0.5),
+    }
+    metadata = {"case_id": spec.case_id, "layer_id": str(spec.layer_id)}
+    if fault == "attribution":
+        metadata["case_id"] = "another-case"
+    elif fault == "keys":
+        del tensors["natural_weights"]
+    elif fault == "dtype":
+        tensors["natural_ids"] = tensors["natural_ids"].long()
+    elif fault == "geometry":
+        tensors = {key: value[:1].clone() for key, value in tensors.items()}
+    if fault != "missing":
+        safetensors.torch.save_file(tensors, spec.routing_path, metadata=metadata)
+
+    with pytest.raises(RuntimeError, match=r"routing\.safetensors"):
+        ffn.read_reference_result(spec, expect_routing=True)

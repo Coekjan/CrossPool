@@ -163,6 +163,36 @@ class FfnRouterComparison:
     eager_graph_equal: bool
 
 
+@dataclass(frozen=True, slots=True)
+class FfnRoutingDiagnostic:
+    """Natural/prescribed SGLang route differences without a numerical verdict."""
+
+    token_count: int
+    differing_expert_set_count: int
+    common_expert_pair_count: int
+    maximum_common_weight_difference: float | None
+
+    @classmethod
+    def from_routes(
+        cls,
+        natural_ids: torch.Tensor,
+        natural_weights: torch.Tensor,
+        prescribed_ids: torch.Tensor,
+        prescribed_weights: torch.Tensor,
+    ) -> Self:
+        """Summarize already validated token-major carriers by expert identity."""
+
+        common = natural_ids.unsqueeze(2) == prescribed_ids.unsqueeze(1)
+        differences = (natural_weights.unsqueeze(2) - prescribed_weights.unsqueeze(1)).abs()[common]
+        different_sets = (natural_ids.sort(dim=-1).values != prescribed_ids.sort(dim=-1).values).any(dim=-1)
+        return cls(
+            token_count=natural_ids.shape[0],
+            differing_expert_set_count=int(different_sets.sum()),
+            common_expert_pair_count=differences.numel(),
+            maximum_common_weight_difference=float(differences.max()) if differences.numel() else None,
+        )
+
+
 class FfnNumericalSampleEvidence(BaseModel):
     """One model-layer-row numerical comparison."""
 
@@ -172,6 +202,7 @@ class FfnNumericalSampleEvidence(BaseModel):
     row_count: int = Field(gt=0)
     output: FfnOutputComparison
     router: FfnRouterComparison | None
+    routing_diagnostic: FfnRoutingDiagnostic | None
 
 
 class FfnNumericalEvidence(BaseModel):
@@ -376,6 +407,8 @@ def router_selection_bounds(
         lower = torch.where(lower < 2.0**-126, 0.0, lower)
         upper = torch.where(upper < 2.0**-126, 0.0, upper)
         if correction_bias is not None:
+            if not torch.isfinite(correction_bias).all():
+                raise ValueError("Router selection policy requires finite correction bias")
             lower = lower + correction_bias.double()
             upper = upper + correction_bias.double()
         lower, upper = lower.float().double(), upper.float().double()

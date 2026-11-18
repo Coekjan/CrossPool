@@ -33,6 +33,7 @@ from xtest.harness.support.ffn import (
     FFN_OUTPUT_RTOL,
     FfnNumericalEvidence,
     FfnNumericalSampleEvidence,
+    FfnRoutingDiagnostic,
     compare_ffn_outputs,
     generate_ffn_hidden_states,
     read_ffn_routing_records,
@@ -248,6 +249,14 @@ def run_numerical_case(
     for invocation_index, invocation in enumerate(instance_specs[0].invocations):
         reference = reference_by_id[invocation.case_id]
         layer = model_spec.layers[invocation.layer_ordinal]
+        diagnostic = None
+        if reference.natural_routing is not None and reference.prescribed_routing is not None:
+            diagnostic = FfnRoutingDiagnostic.from_routes(
+                reference.natural_routing.topk_ids,
+                reference.natural_routing.topk_weights,
+                reference.prescribed_routing.topk_ids,
+                reference.prescribed_routing.topk_weights,
+            )
         for spec, samples in zip(instance_specs, samples_by_rank, strict=True):
             output_path = spec.invocations[invocation_index].output_path
             actual_tensors = safetensors.torch.load_file(output_path, device="cpu")
@@ -269,6 +278,7 @@ def run_numerical_case(
                     row_count=reference.output.shape[0],
                     output=output_comparison,
                     router=router_results.get(invocation.case_id),
+                    routing_diagnostic=diagnostic,
                 )
             )
     for rank, samples in enumerate(samples_by_rank):

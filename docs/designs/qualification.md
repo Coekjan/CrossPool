@@ -29,7 +29,8 @@ then compare Expert outputs with original SGLang consuming production's actual
 IDs and weights. Projection uses FP64 references with the declared stores.
 Selection uses a fixed FP64 reference policy for cutoff ambiguity and declared
 ID ties. It covers uncorrected Softmax with a normal cutoff and stored-FP32
-Sigmoid; unsupported numerical domains fail qualification. Coefficient allowances
+Sigmoid. Corrected Sigmoid requires finite correction bias. Unsupported
+numerical domains fail qualification. Coefficient allowances
 pass through the declared final weight store. Clearly wrong selections fail,
 while justified cutoff ambiguity remains visible.
 Dense retains its direct independent output comparison.
@@ -43,6 +44,14 @@ Each reference TP rank uses the prescribed routes
 through a local TopK hook. Shared Expert and scaling conversion belongs to this
 reference boundary; the hook is removed after each case. Stages share readonly
 CPU tensors and retained files; CUDA resources remain owned by their children.
+
+The result-writing rank retains natural and effective prescribed SGLang routing
+from that same TopK invocation. Both carriers reflect SGLang's actual storage
+rounding. Diagnostics count tokens with different Expert sets independently of
+slot order and compare weights for
+common Experts. These differences do not change either numerical gate and do
+not establish a bound on whole-MoE output error under independently chosen
+routes. Capturing them adds no FFN forward or model load.
 
 The numerical harness starts every attention TP rank and compares each complete
 output with the independent reference at the existing output limits. Attention
