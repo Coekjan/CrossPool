@@ -422,3 +422,9 @@ Real-model evidence of memory-estimation accuracy, startup behavior and safe
 resource retirement, with analytic-only and calibrated predictions identified
 separately.
 _Avoid_: Memory profiling, calibration fitting
+
+**Transport Boundary Result**:
+The result actually published or observed at one Transport protocol boundary.
+Distinct boundaries of one Operation can retain different results; successful
+execution and a later shutdown close are separate observed facts.
+_Avoid_: One inferred final result for the whole Operation
