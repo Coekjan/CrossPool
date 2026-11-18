@@ -24,7 +24,6 @@ RAGGED_METADATA_BLOCK_SIZES_LOG2 = (4, 5, 6, 7)
 @triton.jit
 def compute_route_order_kernel(
     sorted_to_original,
-    original_to_sorted,
     route_ids,
     token_count,
     partial_column_sums,
@@ -55,7 +54,6 @@ def compute_route_order_kernel(
     )
     sorted_index += language.load(column_offsets + expert, valid, other=0)
     sorted_index += within_expert
-    language.store(original_to_sorted + original, sorted_index, valid)
     language.store(sorted_to_original + sorted_index, original, valid)
 
 
@@ -150,7 +148,7 @@ class ExpertExecutionPlan:
                 (torch.int32, (align_up(experts, 128),)),
                 (torch.int32, (align_up(experts, 32), triton.cdiv(capacity, 128) * 4)),
                 (torch.int32, (experts,)),
-                (torch.int32, (2 * routes,)),
+                (torch.int32, (routes,)),
                 (torch.int32, (routes,)),
                 (torch.int32, (routes,)),
                 (torch.float32, (routes,)),
@@ -252,7 +250,7 @@ class Experts:
         route_count = capacity * topk
         bitmatrix._bitmatrix_metadata_compute_stage1.run(
             self.ordered,
-            2 * route_count,
+            route_count,
             -1,
             1024,
             self.histogram,
@@ -264,12 +262,11 @@ class Experts:
             self.partials.stride(1),
             BLOCK_M=512,
             BLOCK_N=512,
-            grid=(triton.cdiv(2 * route_count, 1024) + experts + 1,),
+            grid=(triton.cdiv(route_count, 1024) + experts + 1,),
             warmup=False,
         )
         compute_route_order_kernel.run(
-            self.ordered[:route_count],
-            self.ordered[route_count:],
+            self.ordered,
             topk_ids,
             capacity,
             self.partials,
