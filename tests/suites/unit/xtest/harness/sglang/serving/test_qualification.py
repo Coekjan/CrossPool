@@ -113,6 +113,8 @@ def test_model_case_replays_same_phase_and_enforces_kl_without_runner_artifacts(
             0,
             record_path,
             path,
+            reported_prefill_attention_backend="fa3",
+            reported_decode_attention_backend="fa3",
         )
 
     monkeypatch.setattr(SglangProbeServer, "generate", generate)
@@ -190,6 +192,15 @@ def test_model_case_replays_same_phase_and_enforces_kl_without_runner_artifacts(
     assert all(cast(dict, request["sampling_params"])["max_new_tokens"] == 8 for request in requests)
     if failure != "control":
         report = json.loads((tmp_path / "numerical/numerical.json").read_text())
+        assert report["configured_decode_policy"] == "matched_arithmetic"
+        assert report["attempts"] == [
+            {
+                "model_id": str(TEST_MODEL_ID),
+                "graph_settings": TypeAdapter(SglangGraphSettings).dump_python(settings, mode="json"),
+                "reported_attention_backends": {"prefill": "fa3", "decode": "fa3"},
+            }
+            for settings in expected_settings
+        ]
         decode = next(
             entry
             for entry in report["stage_comparisons"]

@@ -23,7 +23,7 @@ def test_snapshot_preserves_complete_settings_and_freezes_environment(tmp_path: 
     original_environment = environment.copy()
     config = XpoolConfig.from_mapping(
         {
-            "daemon": {"port": 19999},
+            "daemon": {"host": "localhost", "port": 19999},
             "vendor": {"model_base_uri": str(tmp_path / "models")},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1], "device_memory_calibration": str(calibration)},
@@ -36,10 +36,10 @@ def test_snapshot_preserves_complete_settings_and_freezes_environment(tmp_path: 
         env=environment,
     )
     launch = snapshot_cluster_launch(
-        config, workdir=tmp_path / "launch", daemon_port=19810, environment=environment, cwd=tmp_path
+        config, workdir=tmp_path / "launch", daemon_address=("127.0.0.1", 19810), environment=environment, cwd=tmp_path
     )
     expected = config.model_dump(mode="json")
-    expected["daemon"]["port"] = 19810
+    expected["daemon"] = {"host": "127.0.0.1", "port": 19810}
     assert launch.config.model_dump(mode="json") == expected
     assert launch.config.sources != config.sources
     assert "XPOOL_LOG_LEVEL" not in launch.environment
@@ -55,3 +55,4 @@ def test_snapshot_preserves_complete_settings_and_freezes_environment(tmp_path: 
     assert launch.config.debug.graph_observer.enable
     assert launch.cwd == tmp_path
     assert environment == original_environment
+    assert config.daemon.host == "localhost" and config.daemon.port == 19999

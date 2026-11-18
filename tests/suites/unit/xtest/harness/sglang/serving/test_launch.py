@@ -5,9 +5,12 @@ from typing import Literal
 
 import pytest
 import tomli_w
+from pydantic import TypeAdapter
 from tests import TEST_CATALOG_PATH
 
 import xkit.device
+from xkit.envs import DETERMINISTIC_MODE, DETERMINISTIC_PATH
+from xkit.serving.sglang.deterministic import SamplingRecord
 from xkit.serving.sglang.graph import SglangGraphSettings
 from xpool.config import XpoolConfig
 from xtest.harness.runner.requirements import ResolvedConfig
@@ -59,6 +62,46 @@ def test_prepare_applies_deployment_policy_and_sanitizes_environment(
     assert "SGLANG_GRPC_PORT" not in launch.environment
     assert launch.config.debug.transport_observer.record_capacity == 32_768
     assert launch.config.debug.fabric_observer.record_capacity == 65_536
+
+
+def test_prepare_owns_record_files_and_reuses_replay_source(tmp_path: Path) -> None:
+    manifest = TestCatalog.from_file(TEST_CATALOG_PATH)
+    case = manifest.serving_cases[0]
+    base_config = base_e2e_config(manifest, tmp_path)
+    graph_settings = SglangGraphSettings(decode_backend="disabled", prefill_backend="disabled")
+    recordings = tuple(
+        prepare(
+            case,
+            base_config=base_config,
+            workdir=tmp_path / f"record-{attempt}",
+            graph_settings=graph_settings,
+            deterministic_mode="record",
+        )
+        for attempt in (1, 2)
+    )
+    source, other = (Path(launch.environment[DETERMINISTIC_PATH.name]) for launch in recordings)
+    assert source != other
+    for launch, path in zip(recordings, (source, other), strict=True):
+        assert path.read_bytes() == b""
+        assert launch.environment[DETERMINISTIC_MODE.name] == "record"
+        assert launch.environment["SGLANG_PLUGINS"] == "xpool,xkit_deterministic"
+    record = SamplingRecord(case.models[0], "sample", {"text": "input", "sampling_params": {}}, 1, (2,), {}, None)
+    original = TypeAdapter(SamplingRecord).dump_json(record) + b"\n"
+    source.write_bytes(original)
+
+    replay = prepare(
+        case,
+        base_config=base_config,
+        workdir=tmp_path / "replay",
+        graph_settings=graph_settings,
+        deterministic_mode="replay",
+        replay_path=source,
+    )
+
+    assert replay.environment[DETERMINISTIC_PATH.name] == str(source)
+    assert replay.environment[DETERMINISTIC_MODE.name] == "replay"
+    assert replay.environment["SGLANG_PLUGINS"] == "xpool,xkit_deterministic"
+    assert source.read_bytes() == original
 
 
 @pytest.mark.parametrize(

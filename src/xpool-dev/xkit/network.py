@@ -173,6 +173,7 @@ class TcpEndpointReservation:
 
         if port <= 0 or port > 65_535:
             raise ValueError(f"TCP endpoint port must be in 1..65535, got {port}")
+        host = "127.0.0.1" if host == "localhost" else host
         address = (host, port)
         return cls(address=address, listener=create_qualified_tcp_listener(address, deadline=deadline))
 

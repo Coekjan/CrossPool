@@ -38,6 +38,8 @@ class SglangServerResult:
     cached_tokens: int | None
     inference_path: Path
     logprobs_path: Path | None
+    reported_prefill_attention_backend: str | None = None
+    reported_decode_attention_backend: str | None = None
 
     @property
     def prefix_lengths(self) -> tuple[int, ...]:
@@ -168,6 +170,8 @@ class SglangProbeServer:
                 raise RuntimeError("SGLang logprobs must be finite FP32 values")
             logprobs_path = record_path.with_suffix(".logprobs.safetensors")
             save_file({"logprobs": logprobs}, logprobs_path)
+        backend_name = TypeAdapter(str | None)
+        attention_backend = info.get("attention_backend")
         return SglangServerResult(
             model_id=self.process.model.model_id,
             resolved_graph_settings=settings,
@@ -177,6 +181,12 @@ class SglangProbeServer:
             cached_tokens=cached_tokens,
             inference_path=record_path,
             logprobs_path=logprobs_path,
+            reported_prefill_attention_backend=backend_name.validate_python(
+                info.get("prefill_attention_backend") or attention_backend, strict=True
+            ),
+            reported_decode_attention_backend=backend_name.validate_python(
+                info.get("decode_attention_backend") or attention_backend, strict=True
+            ),
         )
 
 

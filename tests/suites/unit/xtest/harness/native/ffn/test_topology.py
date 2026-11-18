@@ -59,7 +59,7 @@ def test_materialization_freezes_selected_topology_and_model_policy(
 
     launch = materialize_ffn_cluster_launch(
         config=config,
-        daemon_port=19001,
+        daemon_address=("127.0.0.1", 19001),
         workdir=workdir,
     )
 

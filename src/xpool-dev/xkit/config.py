@@ -15,7 +15,7 @@ from typing import ClassVar, Literal, Self, cast
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, PrivateAttr, TypeAdapter, field_validator
 
 import xpool.config
-from xkit.envs import TASK_ROOT_CONTROL_FD
+from xkit.envs import DETERMINISTIC_MODE, DETERMINISTIC_PATH, TASK_ROOT_CONTROL_FD
 from xpool.config import (
     AtnConfig,
     FfnConfig,
@@ -267,7 +267,9 @@ class XpoolDevConfig(ConfigModel):
 
     registry: ClassVar[tuple[ConfigSetting, ...]] = CONFIG_REGISTRY
     env_prefix: ClassVar[str] = "XKIT_"
-    non_config_env_vars: ClassVar[frozenset[str]] = frozenset({TASK_ROOT_CONTROL_FD.name})
+    non_config_env_vars: ClassVar[frozenset[str]] = frozenset(
+        {TASK_ROOT_CONTROL_FD.name, DETERMINISTIC_MODE.name, DETERMINISTIC_PATH.name}
+    )
 
     keep_runs: int = Field(strict=True, gt=0)
     xtest: XtestConfig

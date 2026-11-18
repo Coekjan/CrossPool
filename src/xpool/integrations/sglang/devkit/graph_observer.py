@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import functools
-import json
 import logging
 import os
 import time
@@ -12,6 +11,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Literal, TextIO
 
+from pydantic import TypeAdapter
 from sglang.srt.model_executor.runner.decode_cuda_graph_runner import DecodeCudaGraphRunner
 from sglang.srt.model_executor.runner.prefill_cuda_graph_runner import PrefillCudaGraphRunner
 
@@ -34,6 +34,7 @@ event_handle: TextIO | None = None
 install_lock = Lock()
 write_lock = Lock()
 installed = False
+event_adapter = TypeAdapter(SglangGraphEvent)
 
 
 def install() -> None:
@@ -147,12 +148,13 @@ def write_event(forward_phase: ForwardPhase, event: str, runner: GraphRunner) ->
             return
         payload: SglangGraphEvent = {
             "pid": os.getpid(),
+            "model_id": get_global_config().model_id_of_path(runner.model_runner.model_config.model_path),
             "time_ns": time.monotonic_ns(),
             "forward_phase": forward_phase,
             "backend_class": type(runner.backend).__name__,
             "event": event,
         }
-        line = json.dumps(payload, sort_keys=True) + "\n"
+        line = event_adapter.dump_json(payload).decode("utf-8") + "\n"
         with write_lock:
             current_handle.write(line)
             current_handle.flush()

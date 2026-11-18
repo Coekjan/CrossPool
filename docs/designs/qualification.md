@@ -67,7 +67,7 @@ and numerical evidence. Reference and production outputs must have matching
 admitted dtypes. Both dtypes use the same numerical metrics and tolerances.
 Checkpoint metadata does not implicitly select the qualification payload dtype.
 
-Serving Graph numerical qualification records an ordinary Eager continuation,
+Serving Graph numerical qualification records an Eager continuation,
 then replays its token choices after each candidate computes its own original
 distribution. Every request starts cold with reported `cached_tokens=0`, neutral
 greedy sampling and eight returned predictions: terminal Prefill followed by
@@ -76,24 +76,34 @@ conditioning input; full-vocabulary forward KL determines the numerical verdict.
 
 | Stage | Reference | Maximum KL per prediction |
 | --- | --- | --- |
-| Terminal Prefill | Ordinary Eager Prefill | 0.05 nats |
+| Terminal Prefill | Eager Prefill | 0.05 nats |
 | Decode | Eager Decode with the candidate's Prefill backend | 0.001 nats |
 
 Matching the Prefill backend separates Decode changes from differences already
 present in KV construction. A three-mode case therefore adds Breakable Prefill
 with Eager Decode, yielding four serial deployments under one device lease.
-Each deployment retires before the next starts. Two-mode cases reuse ordinary
-Eager as their Decode reference; singleton cases retain structural qualification.
+Each deployment retires before the next starts. Two-mode cases use the Eager
+recording as their Decode reference. Singleton cases retain structural
+qualification.
 Shared [sampling records](tooling.md#shared-serving-lifecycle) retain the exact
 continuation while every deployment builds its own hidden states and KV.
+The active qualification plugin matches FA3 MLA Decode arithmetic for the
+recording and candidate captures. The numerical verdict applies under these
+comparison conditions.
 
 Raw HTTP responses and CPU FP32 logprob matrices remain unchanged. Comparison
 validates model identity, complete equal-width vocabularies, finite values and
 identical token prefixes, then normalizes and reduces in CPU FP64. Limits are
-inclusive, and any failing position fails the case. `numerical.json` separates
-stage verdicts from ordinary-Eager-to-candidate end-to-end diagnostics, retaining
-the latter's original discrepancies and limits. Graph Observer events within
-measured request windows must prove actual Prefill execution and Decode replay.
+inclusive, and any failing position fails the case. `numerical.json` reports
+the configured Decode policy and server-reported Attention backends per model
+and Graph setting. It separates stage verdicts from Eager-to-candidate
+end-to-end diagnostics, retaining their discrepancies and limits. Graph evidence
+is selected by Model ID before applying each measured request window. Each
+enabled Graph phase requires that model's capture events from its complete event
+stream and actual Prefill execution or Decode replay within its request window.
+Full Decode requires one process to replay at least as many steps as the
+returned prediction count minus one. Sampler evidence separately covers
+every participating TP rank's token prefixes.
 
 Eager still uses CrossPool's Fabric and native FFN Graphs. Stage agreement
 qualifies execution consistency on the recorded continuation; independent FFN

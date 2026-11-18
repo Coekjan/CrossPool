@@ -117,7 +117,7 @@ def run_numerical_case(
     endpoint = TcpEndpointReservation.reserve(config.daemon.host, port_space=TcpPortSpace.local())
     launch = materialize_ffn_cluster_launch(
         config=config,
-        daemon_port=endpoint.port,
+        daemon_address=endpoint.address,
         workdir=production_workdir,
     )
     exchange_directory = production_workdir / "exchange"

@@ -70,7 +70,7 @@ class FfnLiveTopologyObservation:
 def materialize_ffn_cluster_launch(
     *,
     config: XpoolConfig,
-    daemon_port: int,
+    daemon_address: tuple[str, int],
     workdir: Path,
 ) -> XpoolClusterLaunch:
     """Materialize one task-local config for an installed FFN process tree."""
@@ -83,7 +83,7 @@ def materialize_ffn_cluster_launch(
     return snapshot_cluster_launch(
         config,
         workdir=workdir,
-        daemon_port=daemon_port,
+        daemon_address=daemon_address,
         environment=environment,
         cwd=Path.cwd(),
     )

@@ -37,11 +37,12 @@ def test_endpoint_family_matches_pinned_dp_attention_port_projection(
         encoding="utf-8",
     )
     lease = SglangEndpointFamilyLease.acquire(
-        "127.0.0.1",
+        "localhost",
         dp_size=2,
         port_space=TcpPortSpace.local(),
     )
     family = lease.family
+    assert family.host == "127.0.0.1"
     lease.release_tcp_for_spawn()
     try:
         monkeypatch.setenv("SGLANG_GRPC_PORT", str(family.grpc_port))

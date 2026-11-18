@@ -35,7 +35,13 @@ def install_response(monkeypatch: pytest.MonkeyPatch, payload: JsonValue, *, sta
     def respond(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/server_info":
             return httpx.Response(
-                200, json={"cuda_graph_config": {"decode": {"backend": "full"}, "prefill": {"backend": "disabled"}}}
+                200,
+                json={
+                    "cuda_graph_config": {"decode": {"backend": "full"}, "prefill": {"backend": "disabled"}},
+                    "attention_backend": "fa3",
+                    "prefill_attention_backend": None,
+                    "decode_attention_backend": "triton",
+                },
             )
         return httpx.Response(status, json=payload)
 
@@ -63,6 +69,8 @@ def test_generation_retains_conditioning_and_full_vocabulary_rows(
 
     assert result.model_id == TEST_MODEL_ID
     assert result.resolved_graph_settings == SglangGraphMode.DECODE_FULL.settings()
+    assert result.reported_prefill_attention_backend == "fa3"
+    assert result.reported_decode_attention_backend == "triton"
     assert result.request_id == "test" and result.cached_tokens == 1
     assert result.input_ids + result.output_ids == (1, 2, 0, 1)
     assert result.prefix_lengths == (2, 3)

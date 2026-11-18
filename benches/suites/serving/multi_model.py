@@ -26,6 +26,7 @@ from xbench.harness.serving.measure import BenchCaseManifest, RepetitionManifest
 from xbench.harness.serving.workload import PreparedWorkload
 from xkit import ResourceRequirements
 from xkit.config import DeploymentConfig
+from xkit.envs import DETERMINISTIC_MODE, DETERMINISTIC_PATH
 from xkit.results import write_json
 from xkit.serving.sglang.launch import ServingLaunch, SglangLaunchModel
 from xkit.serving.sglang.system import XpoolServingSystem
@@ -112,9 +113,12 @@ async def run_serving(case: BenchCase, directory: Path) -> None:
                     if deployment is None:
                         raise ValueError("owned workload lacks its resolved configuration")
                     config = XpoolConfig.model_validate_json(json.dumps(deployment.effective))
+                    launch_environment = dict(os.environ)
+                    DETERMINISTIC_MODE.clear(env=launch_environment)
+                    DETERMINISTIC_PATH.clear(env=launch_environment)
                     launch = ServingLaunch(
                         config=config,
-                        environment=dict(os.environ),
+                        environment=launch_environment,
                         cwd=deployment.cwd,
                         models=tuple(
                             SglangLaunchModel(target.model_id, target.graph_mode.settings()) for target in case.targets

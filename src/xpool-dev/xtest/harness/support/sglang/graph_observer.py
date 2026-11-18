@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Protocol
 
 import pytest
@@ -37,6 +38,7 @@ class FullCudaGraphBackend:
 class FakeDecodeCudaGraphRunnerState:
     def __init__(self) -> None:
         self.backend = FullCudaGraphBackend()
+        self.model_runner = SimpleNamespace(model_config=SimpleNamespace(model_path="/models/m"))
 
 
 class BreakableCudaGraphBackend:
@@ -46,6 +48,7 @@ class BreakableCudaGraphBackend:
 class FakePrefillCudaGraphRunnerState:
     def __init__(self) -> None:
         self.backend = BreakableCudaGraphBackend()
+        self.model_runner = SimpleNamespace(model_config=SimpleNamespace(model_path="/models/m"))
 
 
 class SuccessfulGraphRunner(Protocol):

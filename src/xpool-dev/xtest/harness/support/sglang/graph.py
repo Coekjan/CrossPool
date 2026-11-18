@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 from pydantic import TypeAdapter
 
 from xkit.serving.sglang.graph import SglangGraphSettings
@@ -18,18 +20,20 @@ def assert_run_graph_evidence(run: ProbeRun) -> None:
         assert result.model_id == model_id
         assert result.resolved_graph_settings == run.graph_settings
         record = TypeAdapter(SglangInferenceRecord).validate_json(result.inference_path.read_bytes())
-        measured = [event for event in run.events if record.started_ns <= event["time_ns"] <= record.finished_ns]
+        model_events = [event for event in run.events if event["model_id"] == model_id]
+        measured = [event for event in model_events if record.started_ns <= event["time_ns"] <= record.finished_ns]
         decode = [event for event in measured if event["forward_phase"] == "decode"]
         prefill = [event for event in measured if event["forward_phase"] == "prefill"]
         if run.graph_settings.decode_backend == "full":
-            assert sum(event["event"] == "execute_end" for event in decode) >= len(result.output_ids) - 1
+            replays_by_pid = Counter(event["pid"] for event in decode if event["event"] == "execute_end")
+            assert max(replays_by_pid.values(), default=0) >= len(result.output_ids) - 1
         else:
             assert not decode
         if run.graph_settings.prefill_backend == "breakable":
             assert any(event["event"] == "execute_end" for event in prefill)
         else:
             assert not prefill
-    assert_graph_events(run.graph_settings, run.events)
+        assert_graph_events(run.graph_settings, model_events)
 
 
 def assert_graph_events(

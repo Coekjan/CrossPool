@@ -13,7 +13,6 @@ from typing import Literal, cast
 
 import httpx
 import pytest
-from pydantic import TypeAdapter
 
 import xkit.network
 import xkit.serving.cluster
@@ -22,7 +21,6 @@ import xkit.serving.sglang.system
 from xkit.network import TcpEndpointConflict, TcpEndpointReservation, TcpEndpointUnreachable, TcpPortSpace
 from xkit.process import OwnedProcessGroup
 from xkit.serving.cluster import XpoolCluster
-from xkit.serving.sglang.deterministic import SamplingRecord
 from xkit.serving.sglang.endpoints import SglangEndpointFamilyLease
 from xkit.serving.sglang.graph import SglangGraphMode
 from xkit.serving.sglang.launch import ServingLaunch, SglangLaunchModel
@@ -33,47 +31,13 @@ from xpool.model import ModelId
 from xpool.utils.sighandler import defer_signal_exceptions
 
 
-@pytest.mark.parametrize(
-    "startup,deterministic_mode",
-    [
-        ("success", "none"),
-        ("failure", "none"),
-        ("conflict", "none"),
-        ("deployment-failure", "none"),
-        ("success", "record"),
-        ("success", "replay"),
-    ],
-)
+@pytest.mark.parametrize("startup", ["success", "failure", "conflict", "deployment-failure"])
 def test_system_complete_startup_or_partial_rollback(
     startup: Literal["success", "failure", "conflict", "deployment-failure"],
-    deterministic_mode: Literal["none", "record", "replay"],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     launch = serving_launch(tmp_path)
-    record_path = tmp_path / "caller" / "sampling-record.jsonl"
-    if deterministic_mode != "none":
-        record_path.parent.mkdir()
-        monkeypatch.chdir(record_path.parent)
-        launch = replace(
-            launch,
-            environment={
-                **launch.environment,
-                "XKIT_DETERMINISTIC_MODE": deterministic_mode,
-                "XKIT_DETERMINISTIC_PATH": record_path.name,
-            },
-        )
-        if deterministic_mode == "replay":
-            sample = SamplingRecord(
-                ModelId("test/a"),
-                "sample",
-                {"input_ids": [1], "sampling_params": {}},
-                1,
-                (2,),
-                {"type": "length", "length": 1},
-                None,
-            )
-            record_path.write_bytes(TypeAdapter(SamplingRecord).dump_json(sample) + b"\n")
     original_environment = dict(launch.environment)
     events: list[str] = []
     leases: list[SglangEndpointFamilyLease] = []
@@ -98,15 +62,12 @@ def test_system_complete_startup_or_partial_rollback(
         cluster_launch = cluster.launch
         assert kwargs["startup_deadline"] is not None
         assert kwargs["enclosing_scope"] is system.task_scope
-        assert cluster_launch.config.daemon.port == endpoint.port
+        assert (cluster_launch.config.daemon.host, cluster_launch.config.daemon.port) == endpoint.address
+        assert endpoint.host == "127.0.0.1"
         assert cluster_launch.environment["SGLANG_PLUGINS"] == "other-plugin,xpool"
         assert cluster_launch.environment["HF_HUB_OFFLINE"] == "1"
         assert cluster_launch.environment["TRANSFORMERS_OFFLINE"] == "1"
         assert launch.environment == original_environment
-        if deterministic_mode != "none":
-            assert cluster_launch.cwd != record_path.parent
-            assert cluster_launch.environment["XKIT_DETERMINISTIC_PATH"] == str(record_path)
-            assert record_path.is_file()
         endpoint.release_for_spawn()
         events.append("cluster-start")
 
@@ -127,6 +88,7 @@ def test_system_complete_startup_or_partial_rollback(
         endpoint: SglangEndpointFamilyLease,
         **kwargs: object,
     ) -> SglangServerProcess:
+        assert endpoint.family.host == "127.0.0.1"
         endpoint.release_tcp_for_spawn()
         events.append(f"start-{model.model_id}")
         if startup in ("failure", "conflict") and model.model_id == ModelId("test/b"):
@@ -174,6 +136,7 @@ def test_system_complete_startup_or_partial_rollback(
                     ModelId("test/a"),
                     ModelId("test/b"),
                 )
+                assert all(endpoint.base_url.startswith("http://127.0.0.1:") for endpoint in system.endpoints)
                 system.check_alive()
                 if startup == "deployment-failure":
                     listener = foreign.enter_context(socket.socket())
@@ -193,6 +156,19 @@ def test_system_complete_startup_or_partial_rollback(
             if not system.closed:
                 system.close()
     assert all(lease.closed and all(item.listener is None for item in lease.tcp_reservations) for lease in leases)
+
+
+def test_owned_startup_rejects_plugin_selection_without_xpool(tmp_path: Path) -> None:
+    launch = replace(serving_launch(tmp_path), environment={"SGLANG_PLUGINS": "__none__"})
+    system = XpoolServingSystem()
+
+    with pytest.raises(ValueError, match="requires the xpool SGLang plugin"):
+        system.start(launch, workdir=tmp_path / "run", startup_timeout_seconds=10)
+
+    assert system.closed
+    assert system.daemon_endpoint is None
+    assert not system.server_endpoints
+    assert system.cluster is None
 
 
 def test_startup_allocation_deadline_rolls_back_partial_reservations(
@@ -326,6 +302,7 @@ def serving_launch(tmp_path: Path) -> ServingLaunch:
     config = XpoolConfig.from_mapping(
         {
             "vendor": {"model_base_uri": str(tmp_path / "models")},
+            "daemon": {"host": "localhost"},
             "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
             "atn": {"devices": [0]},
             "ffn": {"devices": [1]},

@@ -282,6 +282,19 @@ def run_model_case(
     write_json(
         root / "numerical.json",
         {
+            "configured_decode_policy": "matched_arithmetic",
+            "attempts": [
+                {
+                    "model_id": str(model_id),
+                    "graph_settings": TypeAdapter(SglangGraphSettings).dump_python(settings, mode="json"),
+                    "reported_attention_backends": {
+                        "prefill": result.reported_prefill_attention_backend,
+                        "decode": result.reported_decode_attention_backend,
+                    },
+                }
+                for settings, outputs in results.items()
+                for model_id, result in outputs.items()
+            ],
             "prefill_kl_limit": PREFILL_DISTRIBUTION_KL_LIMIT,
             "decode_kl_limit": DECODE_DISTRIBUTION_KL_LIMIT,
             "stage_comparisons": stage_reports,

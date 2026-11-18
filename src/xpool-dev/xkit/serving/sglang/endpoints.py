@@ -79,9 +79,9 @@ class SglangEndpointFamilyLease:
                 reservations.append(http)
                 nccl = TcpEndpointReservation.reserve(wildcard_host, port_space=port_space, deadline=deadline)
                 reservations.append(nccl)
-                grpc = TcpEndpointReservation.reserve(host, port_space=port_space, deadline=deadline)
+                grpc = TcpEndpointReservation.reserve(http.host, port_space=port_space, deadline=deadline)
                 reservations.append(grpc)
-                family = SglangEndpointFamily(host, http.port, nccl.port, grpc.port, dp_size)
+                family = SglangEndpointFamily(http.host, http.port, nccl.port, grpc.port, dp_size)
                 if not all(port_space.is_eligible(port) for port in family.ports):
                     raise ValueError("SGLang endpoint family contains an ineligible port")
                 reserved_ports = {http.port, nccl.port, grpc.port}
@@ -89,7 +89,9 @@ class SglangEndpointFamilyLease:
                     if port not in reserved_ports:
                         # Fixed DP ZMQ ports undergo wildcard availability checks;
                         # the controller's handshake binds the declared host.
-                        bind_host = host if port == http_port + DP_ATTENTION_HANDSHAKE_PORT_DELTA else wildcard_host
+                        bind_host = (
+                            http.host if port == http_port + DP_ATTENTION_HANDSHAKE_PORT_DELTA else wildcard_host
+                        )
                         reservations.append(TcpEndpointReservation.reserve_exact(bind_host, port, deadline=deadline))
                         reserved_ports.add(port)
                 locks.extend(reserve_namespace_lock(port) for port in family.ports)

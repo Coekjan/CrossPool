@@ -10,6 +10,7 @@ from typing import Literal
 import xkit.device
 from xkit.config import assemble_config
 from xkit.envs import DETERMINISTIC_MODE, DETERMINISTIC_PATH
+from xkit.serving.sglang.deterministic import DeterministicConfig
 from xkit.serving.sglang.graph import SglangGraphSettings
 from xkit.serving.sglang.launch import ServingLaunch, SglangLaunchModel
 from xtest.harness.runner.requirements import ResolvedConfig
@@ -70,8 +71,11 @@ def prepare(
         path = workdir / "sampling-record.jsonl" if deterministic_mode == "record" else replay_path
         if path is None:
             raise ValueError("replay launch requires a reference record path")
+        path = path.resolve()
+        DeterministicConfig(deterministic_mode, path).prepare()
+        environment["SGLANG_PLUGINS"] = "xpool,xkit_deterministic"
         DETERMINISTIC_MODE.set(deterministic_mode, env=environment)
-        DETERMINISTIC_PATH.set(str(path.resolve()), env=environment)
+        DETERMINISTIC_PATH.set(str(path), env=environment)
     config = assemble_config(
         tuple(model.model_id for model in launch_models),
         deployment=case.deployment,

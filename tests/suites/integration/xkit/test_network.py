@@ -55,12 +55,13 @@ def test_unreachable_endpoint_closes_owned_listener(monkeypatch: pytest.MonkeyPa
 
 
 def test_exact_endpoint_reservation_releases_owned_listener() -> None:
-    selected = TcpEndpointReservation.reserve("127.0.0.1", port_space=TcpPortSpace.local())
+    selected = TcpEndpointReservation.reserve("localhost", port_space=TcpPortSpace.local())
     port = selected.port
     selected.close()
 
-    exact = TcpEndpointReservation.reserve_exact("127.0.0.1", port)
+    exact = TcpEndpointReservation.reserve_exact("localhost", port)
     try:
+        assert exact.address == ("127.0.0.1", port)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             with pytest.raises(OSError):
                 listener.bind((exact.host, exact.port))
@@ -69,12 +70,13 @@ def test_exact_endpoint_reservation_releases_owned_listener() -> None:
 
 
 def test_endpoint_reservation_reacquires_released_listener() -> None:
-    reservation = TcpEndpointReservation.reserve("127.0.0.1", port_space=TcpPortSpace.local())
+    reservation = TcpEndpointReservation.reserve("localhost", port_space=TcpPortSpace.local())
     try:
         with pytest.raises(RuntimeError, match="already reserved"):
             reservation.reacquire()
         reservation.release_for_spawn()
         reservation.reacquire()
+        assert reservation.host == "127.0.0.1"
         assert reservation.listener is not None
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as competitor:
             with pytest.raises(OSError) as error:

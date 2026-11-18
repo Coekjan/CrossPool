@@ -81,7 +81,10 @@ the JSON payload carries its canonical scalar Model ID for readers.
 
 The production SGLang Devkit package owns its lightweight Graph-event
 declaration, shared by the event writer and readers independently of Graph
-runner implementations. Native Graph snapshots retain their existing production
+runner implementations. Each event derives its Model ID from the runner's
+configured model path and uses the Model ID's canonical JSON codec; readers
+recover the typed identity alongside PID, phase and monotonic timestamp.
+Native Graph snapshots retain their existing production
 model. [Tooling](tooling.md#shared-serving-lifecycle) owns file-input validation
 and the separate semantic qualification assertions.
 

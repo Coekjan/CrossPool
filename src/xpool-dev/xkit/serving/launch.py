@@ -29,11 +29,11 @@ def snapshot_cluster_launch(
     config: XpoolConfig,
     *,
     workdir: Path,
-    daemon_port: int,
+    daemon_address: tuple[str, int],
     environment: Mapping[str, str],
     cwd: Path,
 ) -> XpoolClusterLaunch:
-    """Bind a reserved daemon port and freeze all effective runtime settings.
+    """Bind a reserved daemon address and freeze all effective runtime settings.
 
     Registered ordinary environment overrides are removed from children;
     env-only debug settings retain their effective values. Other environment
@@ -43,11 +43,12 @@ def snapshot_cluster_launch(
     neither installs global configuration nor acquires process/device resources.
     """
 
-    if isinstance(daemon_port, bool) or not 1 <= daemon_port <= 65_535:
+    host, port = daemon_address
+    if isinstance(port, bool) or not 1 <= port <= 65_535:
         raise ValueError("serving daemon port must be in 1..65535")
     workdir.mkdir(parents=True, exist_ok=True)
     config_path = (workdir / "xpool.toml").resolve()
-    daemon = XpoolDaemonConfig(host=config.daemon.host, port=daemon_port)
+    daemon = XpoolDaemonConfig(host=host, port=port)
     payload = config.to_config_mapping()
     payload["daemon"] = daemon.model_dump(mode="json")
     with config_path.open("x", encoding="utf-8") as output:

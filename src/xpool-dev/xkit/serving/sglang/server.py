@@ -14,7 +14,6 @@ import httpx
 from xkit.process import OwnedProcessGroup, wait_for_process_group
 from xkit.serving.cluster import XpoolClusterLaunch, process_diagnostics
 from xkit.serving.readiness import ReadinessEvidence
-from xkit.serving.sglang.deterministic import DeterministicConfig
 from xkit.serving.sglang.endpoints import SglangEndpointFamily, SglangEndpointFamilyLease
 from xkit.serving.sglang.launch import SglangLaunchModel
 from xkit.task import get_task_root
@@ -50,10 +49,6 @@ class SglangServerProcess:
         """Consume one reservation and launch the pinned installed CLI."""
 
         environment = dict(launch.environment)
-        plugins = environment.get("SGLANG_PLUGINS", "xpool").split(",")
-        if DeterministicConfig.from_environment(environment).mode != "none" and "xkit_deterministic" not in plugins:
-            plugins.append("xkit_deterministic")
-        environment["SGLANG_PLUGINS"] = ",".join(plugins)
         environment["SGLANG_GRPC_PORT"] = str(endpoint.family.grpc_port)
         command = server_command(
             launch=launch,

@@ -121,7 +121,7 @@ def test_e2e_ffn_topology(
     endpoint = TcpEndpointReservation.reserve(task_config.daemon.host, port_space=TcpPortSpace.local())
     launch = materialize_ffn_cluster_launch(
         config=task_config,
-        daemon_port=endpoint.port,
+        daemon_address=endpoint.address,
         workdir=production_workdir,
     )
     exchange_directory = production_workdir / "exchange"

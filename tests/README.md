@@ -246,12 +246,16 @@ Serving capture retains the exact public `/generate` request, response and
 host-monotonic request window before HTTP-status or token-shape validation.
 Ordinary E2E writes `models/<model-id.uri_encode()>/inference.json` in its attempt;
 numerical model cases retain each configuration's generation evidence and CPU
-FP32 logprobs under the case artifacts. JUnit owns the verdict, duration JSON
-records each concrete backend pair, and `numerical.json` distinguishes stage KL
-acceptance from end-to-end diagnostics.
+FP32 logprobs under the case artifacts. JUnit owns the verdict. Duration JSON
+records each Graph setting. `numerical.json` retains the configured Decode
+policy and server-reported Attention backends, with stage KL verdicts and
+end-to-end diagnostics.
+Graph events retain typed Model IDs; qualification checks each model's requested
+Graph phases using its capture evidence and executions within the measured
+request window separately.
 
 One model/topology pytest item owns its serial deployments and prescribed
-continuation. It compares Prefill with ordinary Eager and Decode with Eager
+continuation. It compares Prefill with Eager and Decode with Eager
 Decode using the same Prefill backend, following
 [Qualification](../docs/designs/qualification.md#numerical-and-graph-evidence).
 Its time budget includes derived references. Independent FFN cases qualify the
@@ -293,7 +297,7 @@ uv run xtest clean --dry-run
 uv run xtest clean --keep 5
 uv run xtest clean --all
 
-# Focused debugging without cross-task scheduling or parity aggregation.
+# Run selected pytest items directly.
 uv run pytest tests/suites/unit/config/test_schema.py
 uv run pytest tests/suites/integration/native/test_transport_lifecycle.py -s
 ```
@@ -305,7 +309,7 @@ command before running native or E2E tests.
 Explicit `--suite` establishes scope; `-k` and `-m` narrow its Python rows.
 Explicit Python paths without `--suite` establish their own Python scope.
 Filter-only invocations use configured Python suites and do not implicitly run
-CTest. Model qualification retains complete graph-comparison groups. See the
+CTest. Each model numerical item runs all of its Graph comparison modes. See the
 [tooling tutorial](../docs/tutorials/tooling.md) for configuration, catalogue
 cloning, artifact IDs and report exports.
 

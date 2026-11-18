@@ -18,6 +18,7 @@ from xbench.harness.serving.report import load_series
 from xbench.harness.serving.workload import ScheduledRequest
 from xkit.case import CaseId
 from xkit.deployment import resolve_deployment_path
+from xkit.envs import DETERMINISTIC_MODE, DETERMINISTIC_PATH
 from xkit.task import get_task_root
 from xpool.utils.device import visible_uuids
 from xpool.utils.sighandler import defer_signal_exceptions
@@ -96,6 +97,12 @@ def test_e2e_owned_benchmark_measures_both_targets_with_assigned_devices(
     process: subprocess.Popen[str] | None = None
     stdout_path = workdir / "cli.stdout.log"
     stderr_path = workdir / "cli.stderr.log"
+    sampling_path = workdir / "ambient-sampling.jsonl"
+    environment = dict(
+        os.environ, SGLANG_PLUGINS="xpool,xkit_deterministic", HF_HUB_OFFLINE="0", TRANSFORMERS_OFFLINE="0"
+    )
+    DETERMINISTIC_MODE.set("record", env=environment)
+    DETERMINISTIC_PATH.set(str(sampling_path), env=environment)
     with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open("w", encoding="utf-8") as stderr:
         try:
             if root is not None:
@@ -118,7 +125,7 @@ def test_e2e_owned_benchmark_measures_both_targets_with_assigned_devices(
                         str(result_root.parent),
                     ],
                     cwd=REPOSITORY_ROOT,
-                    env=dict(os.environ, SGLANG_PLUGINS="xpool", HF_HUB_OFFLINE="0", TRANSFORMERS_OFFLINE="0"),
+                    env=environment,
                     stdout=stdout,
                     stderr=stderr,
                     text=True,
@@ -138,6 +145,7 @@ def test_e2e_owned_benchmark_measures_both_targets_with_assigned_devices(
     output_text = stdout_path.read_text(encoding="utf-8")
     errors = stderr_path.read_text(encoding="utf-8")
     assert returncode == 0, output_text + errors
+    assert not sampling_path.exists()
     run = Path(output_text.strip())
     manifest = BenchRunManifest.model_validate_json((run / "run.json").read_bytes())
     assert manifest.finished and manifest.result_code == 0

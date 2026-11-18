@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, Literal, cast
+from typing import Annotated, Concatenate, Literal, cast
 
 from pydantic import Field, JsonValue, TypeAdapter
 
@@ -45,7 +45,7 @@ class DeterministicConfig:
     def prepare(self) -> None:
         """Create one new output or validate a replay source before child startup.
 
-        The shared serving owner calls this once, before its model processes.
+        The qualification launch prepares its file before starting model processes.
         Existing recordings and failed attempts are never truncated.
         """
 
@@ -169,6 +169,7 @@ def install() -> None:
 
     import fastapi
     import torch
+    from sglang.srt.layers.attention.flashattention_backend import FlashAttentionBackend
     from sglang.srt.layers.logits_processor import LogitsProcessorOutput
     from sglang.srt.layers.logprob_processor import LogprobResult, OutputLogprobProcessor
     from sglang.srt.layers.sampler import Sampler
@@ -345,6 +346,27 @@ def install() -> None:
                 for value in evidence:
                     output.write(dumps_json(TypeAdapter(SamplerReplayEvidence).dump_python(value, mode="json")) + b"\n")
 
+    def around_fa3_mla_decode[**P, R](
+        original: Callable[Concatenate[FlashAttentionBackend, P], R],
+        backend: FlashAttentionBackend,
+        /,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R:
+        if backend.fa_impl_ver != 3 or not backend.use_mla:
+            return original(backend, *args, **kwargs)
+        previous = backend.num_splits
+        backend.num_splits = 1
+        try:
+            return original(backend, *args, **kwargs)
+        finally:
+            backend.num_splits = previous
+
+    HookRegistry.register(
+        "sglang.srt.layers.attention.flashattention_backend.FlashAttentionBackend.forward_decode",
+        around_fa3_mla_decode,
+        HookType.AROUND,
+    )
     HookRegistry.register(
         "sglang.srt.managers.tokenizer_manager.TokenizerManager._stream_one_response", around_response, HookType.AROUND
     )

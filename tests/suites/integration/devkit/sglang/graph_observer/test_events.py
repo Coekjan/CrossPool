@@ -6,7 +6,7 @@ import pytest
 
 import xpool.integrations.sglang.devkit.graph_observer
 from xtest.harness.sglang.serving.graph import read_graph_events
-from xtest.harness.support.config import install_test_config, reset_global_config
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
 from xtest.harness.support.devkit import observer_enabled_config
 from xtest.harness.support.sglang.graph_observer import (
     FakeDecodeCudaGraphRunnerState,
@@ -38,6 +38,7 @@ def test_graph_observer_records_success_events(
     assert prefill_runner.execute() == "prefill-executed"
 
     events = read_graph_events(tmp_path)
+    assert {event["model_id"] for event in events} == {TEST_MODEL_ID}
     assert [(event["forward_phase"], event["event"]) for event in events] == [
         ("decode", "capture_begin"),
         ("decode", "capture_end"),

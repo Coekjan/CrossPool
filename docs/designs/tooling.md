@@ -140,13 +140,9 @@ suite's `requirements_of` with `functools.partial`.
 [Test Architecture](../../tests/README.md#requirements) owns authoring examples
 and resource policy.
 
-For graph comparisons, collection derives comparison coordinates from
-the declaring function's node ID and the original input index before expanding
-graph-mode rows. Rows from one input share a comparison group, including when
-different inputs reuse a deployment or display label. Initial inventory and task
-recollection derive the same coordinates from the frozen declaration. Display
-labels use the catalogue ID or deployment basename plus graph mode; pytest owns
-duplicate display-ID handling.
+A model serving qualification item runs its declared Graph comparisons
+serially under one device lease and evaluates the stage verdicts in the item.
+Structural serving cases can expand into independent Graph-mode rows.
 
 Every pytest process loads its complete portable test catalogue once before
 collection, including Unit-only sessions. This resolves declarations and portable
@@ -392,9 +388,11 @@ within its outer test lease; inner cleanup does not replace the outer supervisor
 
 `xkit.network` reserves listeners through `bind -> listen -> local connect ->
 accept` qualification using IPv4 literals. Owned serving hosts are IPv4 loopback
-addresses; wildcard reservations use `0.0.0.0` and qualify a connection through
-`127.0.0.1`. Unsupported address families fail before acquisition. Dependency-owned
-listeners retain their engine-selected families.
+addresses. Reservation acquisition canonicalizes `localhost` to `127.0.0.1`;
+the stored address flows through reacquisition, runtime snapshots, engine
+arguments and client URLs. Wildcard reservations use `0.0.0.0` and qualify a
+connection through `127.0.0.1`. Unsupported address families fail before
+acquisition. Dependency-owned listeners retain their engine-selected families.
 `xkit.serving.sglang.endpoints` groups SGLang HTTP, NCCL,
 gRPC, handshake and derived ZMQ endpoints into one owned family.
 NCCL/TCPStore reservations match its wildcard bind scope; HTTP, gRPC and the DP
@@ -453,40 +451,50 @@ is occupied.
 The test probe closes Systems whose resource retirement remains pending.
 Unconfirmed retirement retains ownership and prevents replay.
 
-Owned startup defaults to the production `xpool` plugin and preserves an explicit
-plugin selection. `XKIT_DETERMINISTIC_MODE=none|record|replay` controls the shared
-[sampling hook](../../src/xpool-dev/xkit/serving/sglang/deterministic.py); active
-modes require `XKIT_DETERMINISTIC_PATH` and add `xkit_deterministic` to selection.
-The default `none` installs no sampling hooks or file operations.
+Owned startup defaults to the production `xpool` plugin. A nonempty
+`SGLANG_PLUGINS` selection must include `xpool`. The shared launcher rejects
+conflicting selections before reserving endpoints. An empty value delegates
+discovery to SGLang. The launch snapshot records the effective selection.
 
-The System resolves the active record/replay path once against the shared
-launcher's working directory and passes its absolute path to children.
-It exclusively creates a new record file before child startup; an
-existing output fails without truncation. Tokenizer processes append one complete
-request per locked JSONL write, retaining the configured Model ID, RID, public
-input and generation parameters, delivered IDs and requested logprob fields.
-Incomplete or duplicate records fail loading. Replay reads the source unchanged
-and requires matching public requests and complete recorded output. Startup and
-engine health requests pass through separately from workload records.
+The `xtest` qualification launcher selects `xkit_deterministic` alongside
+`xpool` for controlled comparison runs. It exclusively creates a fresh
+attempt-local recording or validates the replay source before child startup.
+The launcher passes the mode and absolute path to the
+[qualification plugin](../../src/xpool-dev/xkit/serving/sglang/deterministic.py)
+as `XKIT_DETERMINISTIC_MODE` and `XKIT_DETERMINISTIC_PATH`.
+Tooling diagnostics recognize these names as internal environment metadata.
+Owned benchmark launches clear the two variables.
+
+Tokenizer processes append one complete request per locked JSONL write,
+including Model ID, RID, public input and generation parameters, delivered
+IDs and requested logprob fields. Incomplete or duplicate records fail
+loading. Replay reads the source unchanged and requires matching public
+requests and complete recorded output. Startup and engine health requests
+pass through separately from workload records.
 
 Replay identifies each live sampler row by Model ID, RID and actual token-prefix
 length on every participating TP rank. It replaces the selected ID after the
 original distribution is computed and before history updates, repairing that
 token's scalar logprob from the original distribution. Full-vocabulary logprobs
-remain unchanged. Each deployment constructs its own KV; replay fixes token
-choices while arithmetic and scheduling remain engine-owned. Qualification
-checks returned-position, phase and rank coverage through compact control records
-in its existing observer directory. Benchmark reuse supplies its own stable RIDs,
-record paths and workload; recording/replay timings include instrumentation cost.
+remain unchanged. Each deployment constructs its own KV while replay fixes
+the continuation. Qualification checks returned-position, phase and rank
+coverage through compact control records in its existing observer directory.
 Replay uses the owned model configuration and ordinary non-speculative sampling.
 Intermediate Prefill and overlap lookahead pass through; returned output must
 still match the complete recording.
 
+For both active modes, the plugin fixes FA3 MLA Decode to one split for the
+duration of each Decode forward. This covers Eager execution and the forwards
+used for Full Decode Graph capture. Graph replay uses that captured computation.
+The plugin restores the backend's setting after the call. Prefill and other
+Attention backends follow the engine policy.
+
 Startup sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` in the child
 environment. The generic command wrapper preserves the selected environment
 and forwards engine arguments unchanged. After reserving
-the daemon endpoint, it calls shared `snapshot_cluster_launch` once to bind its
-port, write the runtime TOML and freeze child inputs. The running
+the daemon endpoint, the System calls shared `snapshot_cluster_launch` once to bind its
+complete address, write the runtime TOML and freeze child inputs. The caller's
+original configuration remains unchanged. The running
 cluster owns the resulting `XpoolClusterLaunch`; `XpoolServingSystem.launch`
 exposes that cluster-owned launch.
 Launch snapshots use the configuration-owned serialization contract in

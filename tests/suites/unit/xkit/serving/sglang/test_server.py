@@ -79,7 +79,13 @@ def test_server_start_prepares_process_environment_and_log_directory(
 ) -> None:
     launch = replace(
         server_launch(tmp_path),
-        environment=MappingProxyType({"SGLANG_GRPC_PORT": "discarded", "XPOOL_TEST_VALUE": "preserved"}),
+        environment=MappingProxyType(
+            {
+                "SGLANG_GRPC_PORT": "discarded",
+                "SGLANG_PLUGINS": "xpool,other-plugin",
+                "XPOOL_TEST_VALUE": "preserved",
+            }
+        ),
     )
     model = SglangLaunchModel(TEST_MODEL_ID, SglangGraphMode.EAGER.settings())
     family = SglangEndpointFamily("127.0.0.1", 19_000, 19_001, 19_002, 1)
@@ -118,10 +124,10 @@ def test_server_start_prepares_process_environment_and_log_directory(
     assert events == ["released", "spawned"]
     assert captured["env"] == {
         "SGLANG_GRPC_PORT": "19002",
-        "SGLANG_PLUGINS": "xpool",
+        "SGLANG_PLUGINS": "xpool,other-plugin",
         "XPOOL_TEST_VALUE": "preserved",
     }
-    assert launch.environment == {"SGLANG_GRPC_PORT": "discarded", "XPOOL_TEST_VALUE": "preserved"}
+    assert launch.environment["SGLANG_GRPC_PORT"] == "discarded"
     assert server.endpoint is family
     assert captured["cwd"] == launch.cwd
     assert captured["log_path"] == tmp_path / "artifacts/models" / TEST_MODEL_ID.uri_encode() / "server.log"

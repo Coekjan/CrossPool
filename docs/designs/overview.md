@@ -89,13 +89,13 @@ functions rather than Torch operators.
 The native Python root exposes ABI identity, role and initialization. FFN
 semantics, ECS channels, Debug options, Transport, Fabric, FfnAgent and
 Devkit Observers live in their own submodules. `xpool.native.cuda` exposes
-stream ownership, BLAS workspace observation and Graph resource inspection.
+stream ownership and Graph resource inspection.
 
 C++ uses the same domain boundaries. ABI identity lives in `xpool::abi`,
 Hook Points in `xpool::hooks` and Python conversions in `xpool::bindings`.
-`xpool::utils::cuda` owns CUDA queries and streams; its `graph` and `blas`
-namespaces own the underlying library calls. Transport and FFN choose launch
-geometry and manage their own lifetimes.
+`xpool::utils::cuda` owns CUDA queries and streams. Its `graph` namespace
+owns native Graph operations. Transport and FFN choose launch geometry and
+manage their own lifetimes.
 
 The daemon installs the same immutable Host Debug options as participants but
 creates no CUDA Device mirror and joins no NVSHMEM PE. Participant lifecycle
