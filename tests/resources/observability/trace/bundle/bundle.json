@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "perfetto_version": "0.58.2",
+  "processor_version": "v57.2",
+  "traces": [
+    {
+      "path": "0000-raw.pftrace",
+      "sha256": "d37c0d04bd474a90201f74e2fcc7230d5af696e843bf6bccd95a37b2b5ea9189",
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "kind": "raw",
+      "reference": "1",
+      "origin_ns": 10
+    },
+    {
+      "path": "0001-raw.pftrace",
+      "sha256": "2119f042a33b3bf37b08ef6636c559117cceb1946101b2d497538b2953b6898f",
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "kind": "raw",
+      "reference": "2",
+      "origin_ns": 100
+    },
+    {
+      "path": "0002-raw.pftrace",
+      "sha256": "172b0a571f3aaa14c6dc63e74d4777cb93edf94fc0843dab2e8f169e6442043a",
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "kind": "raw",
+      "reference": "3",
+      "origin_ns": 130
+    },
+    {
+      "path": "0003-raw.pftrace",
+      "sha256": "1aeed9b3bda3f2f37ca155a4465149665bfddcc4d94a5821919481ab76845b5c",
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "kind": "raw",
+      "reference": "4",
+      "origin_ns": 155
+    },
+    {
+      "path": "0004-unified.pftrace",
+      "sha256": "2304f2e6dba194721b5f98f5152338f1101fbd9a64f294a95b66152d2b8ad37b",
+      "run_id": "11111111-1111-4111-8111-111111111111",
+      "kind": "unified",
+      "reference": "55555555-5555-4555-8555-555555555555",
+      "origin_ns": 10
+    }
+  ],
+  "inputs": []
+}

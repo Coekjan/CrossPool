@@ -20,6 +20,7 @@ dependencies = [
     "httpx>=0.28.1",
     "nvidia-nvshmem-cu13==3.7.2",
     "ortools==9.15.6755",
+    "perfetto==0.58.2",
     "pydantic>=2.13.4",
     "psutil>=7.2.2",
     "safetensors>=0.8.0",
