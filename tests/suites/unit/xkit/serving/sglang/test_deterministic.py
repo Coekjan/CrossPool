@@ -15,8 +15,6 @@ def sampling_record(request_id: str = "request") -> SamplingRecord:
         {"input_ids": [1, 2], "sampling_params": {"max_new_tokens": 2}},
         2,
         (3, 4),
-        {"type": "length", "length": 2},
-        None,
     )
 
 

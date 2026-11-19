@@ -37,7 +37,7 @@ def test_router_projection_bias_is_fused_before_rounding_and_replays_without_all
         projection=weights.ProjectionWeights(
             values=torch.randn((8, 16), device="cuda", dtype=dtype),
             scales=None,
-            bias=torch.linspace(-2, 2, 8, device="cuda", dtype=bias_dtype),
+            bias=torch.linspace(-2, 2, 8, device="cuda", dtype=bias_dtype).float(),
         ),
         correction_bias=None,
     )
@@ -95,14 +95,14 @@ def test_dense_projection_bias_preserves_fused_rounding_without_capture_allocati
             gate_up_order=ffn.GateUpOrder.CONCATENATED,
             values=TensorLayout((16, 16), torch.bfloat16, 0),
             scales=None,
-            bias=TensorLayout((16,), torch.bfloat16, 0),
+            bias=TensorLayout((16,), torch.float32, 0),
         ),
         o_proj=weights.ProjectionLayout(
             quantization=quantization.Unquantized(),
             gate_up_order=None,
             values=TensorLayout((16, 8), torch.bfloat16, 0),
             scales=None,
-            bias=TensorLayout((16,), torch.bfloat16, 0),
+            bias=TensorLayout((16,), torch.float32, 0),
         ),
         device=device,
     )

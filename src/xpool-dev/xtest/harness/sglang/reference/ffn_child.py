@@ -10,6 +10,7 @@ from multiprocessing.connection import Connection
 import torch
 
 from xtest.harness.sglang.reference import ffn_protocol
+from xtest.harness.support.environment import qualification_environment
 
 SGLANG_PLUGIN_SENTINEL = "__xpool_sglang_ffn_reference_no_plugins__"
 SUPPORTED_MODEL_CLASSES = frozenset(
@@ -32,9 +33,9 @@ def read_routing_output(output: object) -> tuple[torch.Tensor, torch.Tensor]:
     set, so the external carrier types are resolved at this boundary.
     """
 
-    from sglang.srt.layers.moe.topk import StandardTopKOutput, StandardTopKOutputPacked, TritonKernelTopKOutput
+    from sglang.srt.layers.moe.topk import StandardTopKOutput, TritonKernelTopKOutput
 
-    if isinstance(output, (StandardTopKOutput, StandardTopKOutputPacked)):
+    if isinstance(output, StandardTopKOutput):
         return (
             output.topk_ids.detach().to(device="cpu", dtype=torch.int32).contiguous(),
             output.topk_weights.detach().to(device="cpu", dtype=torch.float32).contiguous(),
@@ -87,8 +88,11 @@ def run_ffn_reference_child(
     connection: Connection,
     job: ffn_protocol.FfnReferenceJob,
 ) -> None:
-    """Run every TP rank after isolating the original SGLang plugin set."""
+    """Filter the inherited settings before SGLang or its TP ranks start."""
 
+    environment = qualification_environment()
+    os.environ.clear()
+    os.environ.update(environment)
     os.environ["SGLANG_PLUGINS"] = SGLANG_PLUGIN_SENTINEL
     if any(
         name == "xpool.integrations.sglang" or name.startswith("xpool.integrations.sglang.") for name in sys.modules

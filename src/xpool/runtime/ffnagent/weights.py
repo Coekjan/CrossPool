@@ -52,9 +52,9 @@ def validate_weight_tensor(
 class ProjectionLayout:
     """Final physical allocation order and neutral initialization for a projection.
 
-    Values, optional scales and optional additive bias are independent storages.
-    The selected operation determines the bias dtype; the encoding determines
-    value/scale layouts. This description retains no Tensor or device state.
+    Values, optional scales and optional FP32 additive bias are independent
+    storages. The encoding determines value and scale layouts. This description
+    retains no Tensor or device state.
     """
 
     quantization: QuantizationSpec

@@ -33,8 +33,6 @@ def append_record(arguments: tuple[Path, int]) -> None:
         {"text": "prompt", "sampling_params": {"max_new_tokens": 2}},
         1,
         (index, index + 1),
-        {"type": "length", "length": 2},
-        {"output_token_logprobs": [[-0.5, index, None], [-1.0, index + 1, None]]},
     ).append(path)
 
 
@@ -47,9 +45,6 @@ def test_concurrent_model_writers_preserve_complete_request_records(tmp_path: Pa
     assert len(records) == 12
     for index in range(12):
         assert records[f"request-{index}"].output_ids == (index, index + 1)
-        assert records[f"request-{index}"].logprobs == {
-            "output_token_logprobs": [[-0.5, index, None], [-1.0, index + 1, None]]
-        }
 
 
 @pytest.mark.parametrize("return_logprob", [False, True])
@@ -65,8 +60,6 @@ def test_real_logprob_processor_preserves_distributions_when_replay_changes_toke
             {"input_ids": [1, 2], "sampling_params": {}},
             2,
             (3, 2),
-            {"type": "length", "length": 2},
-            None,
         ).append(path)
     config = XpoolConfig.from_mapping(
         {
@@ -154,16 +147,11 @@ def test_native_response_recording_and_replay_completion(
 ) -> None:
     path = tmp_path / "reference.jsonl"
     DeterministicConfig("record", path).prepare()
+    record = SamplingRecord(
+        TEST_MODEL_ID, "request", {"input_ids": [1, 2], "sampling_params": {"max_new_tokens": 2}}, 2, (3, 4)
+    )
     if mode == "replay":
-        SamplingRecord(
-            TEST_MODEL_ID,
-            "request",
-            {"input_ids": [1, 2], "sampling_params": {"max_new_tokens": 2}},
-            2,
-            (3, 4),
-            {"type": "length", "length": 2},
-            {"output_token_logprobs": [[-0.5, 3, None], [-1.0, 4, None]]},
-        ).append(path)
+        record.append(path)
     before = path.read_bytes()
     config = XpoolConfig.from_mapping(
         {
@@ -216,7 +204,7 @@ def test_native_response_recording_and_replay_completion(
                 await anext(response)
         else:
             assert await anext(response) == native
-        assert next(SamplingRecord.read(path)).logprobs == {"output_token_logprobs": [[-0.5, 3, None], [-1.0, 4, None]]}
+        assert tuple(SamplingRecord.read(path)) == (record,)
 
     asyncio.run(consume())
     if mode == "replay":

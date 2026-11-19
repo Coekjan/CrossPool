@@ -6,7 +6,7 @@ import fcntl
 import os
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Concatenate, Literal, cast
 
@@ -63,7 +63,7 @@ class DeterministicConfig:
 
 @dataclass(frozen=True, slots=True)
 class SamplingRecord:
-    """One completed request; logprob fields retain SGLang's response format.
+    """One completed request's public input and token continuation.
 
     request contains the public text/input_ids and requested sampling_params.
     prompt_tokens is the existing response count, not a tokenizer reconstruction.
@@ -75,8 +75,6 @@ class SamplingRecord:
     request: dict[str, JsonValue]
     prompt_tokens: Annotated[int, Field(gt=0, strict=True)]
     output_ids: tuple[Annotated[int, Field(ge=0, strict=True)], ...]
-    finish_reason: dict[str, JsonValue]
-    logprobs: dict[str, JsonValue] | None
 
     def __post_init__(self) -> None:
         if not self.request_id or self.prompt_tokens <= 0 or not self.output_ids:
@@ -95,13 +93,10 @@ class SamplingRecord:
     def append(self, path: Path) -> None:
         """Append one complete JSONL record under the shared local file lock.
 
-        The launch owner has already created the file. Serialization follows
-        the engine's HTTP handling of non-finite logprob values.
+        The launch owner has already created the file.
         """
 
-        from sglang.srt.utils.json_response import dumps_json
-
-        payload = dumps_json(TypeAdapter(SamplingRecord).dump_python(self, mode="json")) + b"\n"
+        payload = TypeAdapter(SamplingRecord).dump_json(self) + b"\n"
         with path.open("r+b") as output:
             fcntl.flock(output.fileno(), fcntl.LOCK_EX)
             output.seek(0, os.SEEK_END)
@@ -188,7 +183,7 @@ def install() -> None:
 
     path = cast(Path, settings.path)
     records = (
-        {(record.model_id, record.request_id): replace(record, logprobs=None) for record in SamplingRecord.read(path)}
+        {(record.model_id, record.request_id): record for record in SamplingRecord.read(path)}
         if settings.mode == "replay"
         else {}
     )
@@ -242,27 +237,21 @@ def install() -> None:
                 reason = TypeAdapter(dict[str, JsonValue]).validate_python(response_meta["finish_reason"])
                 if reason["type"] != "abort":
                     model_id = get_global_config().model_id_of_path(manager.model_config.model_path)
+                    output_ids = TypeAdapter(tuple[Annotated[int, Field(ge=0, strict=True)], ...]).validate_python(
+                        response["output_ids"]
+                    )
+                    prompt_tokens = TypeAdapter(int).validate_python(response_meta["prompt_tokens"], strict=True)
                     if settings.mode == "replay":
                         reference = records[model_id, cast(str, obj.rid)]
-                        output_ids = TypeAdapter(tuple[Annotated[int, Field(ge=0, strict=True)], ...]).validate_python(
-                            response["output_ids"]
-                        )
-                        prompt_tokens = TypeAdapter(int).validate_python(response_meta["prompt_tokens"], strict=True)
                         if output_ids != reference.output_ids or prompt_tokens != reference.prompt_tokens:
                             raise ValueError(f"incomplete or mismatched sampler replay: {obj.rid}")
                     else:
-                        payload = TypeAdapter(dict[str, JsonValue]).validate_json(dumps_json(response))
-                        meta = cast(dict[str, JsonValue], payload["meta_info"])
                         SamplingRecord(
                             model_id=model_id,
                             request_id=cast(str, obj.rid),
                             request=public_request(obj),
-                            prompt_tokens=TypeAdapter(int).validate_python(meta["prompt_tokens"], strict=True),
-                            output_ids=TypeAdapter(tuple[int, ...]).validate_python(payload["output_ids"]),
-                            finish_reason=reason,
-                            logprobs={key: value for key, value in meta.items() if "logprobs" in key}
-                            if obj.return_logprob
-                            else None,
+                            prompt_tokens=prompt_tokens,
+                            output_ids=output_ids,
                         ).append(path)
             yield response
 

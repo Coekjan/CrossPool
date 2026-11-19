@@ -96,6 +96,11 @@ class RouterProjectionPrecision(IntEnum):
             raise ValueError("Router requires BF16 or FP16 payloads")
         return torch.float32 if self is RouterProjectionPrecision.FP32 else payload_dtype
 
+    def bias_round_dtype(self, *, payload_dtype: torch.dtype) -> torch.dtype | None:
+        """Select payload rounding before retaining the additive bias in FP32."""
+
+        return payload_dtype if self is RouterProjectionPrecision.PAYLOAD else None
+
 
 class TopKWeightRounding(IntEnum):
     """Additional rounding of normalized routed-Expert mixing coefficients.

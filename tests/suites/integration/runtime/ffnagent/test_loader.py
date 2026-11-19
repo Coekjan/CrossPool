@@ -554,7 +554,7 @@ def test_stacked_packed_loading_preserves_source_slices_padding_and_single_bias_
         "gate_up.bias": torch.linspace(-2, 2, experts * 2 * intermediate).bfloat16().view(experts, 2 * intermediate),
         "down.bias": torch.linspace(-2, 2, experts * hidden).bfloat16().view(experts, hidden),
         "router": torch.arange(experts * hidden).bfloat16().view(experts, hidden),
-        "router.bias": torch.arange(experts).bfloat16(),
+        "router.bias": torch.linspace(-1, 1, experts),
     }
     stored = dict(tensors)
     stored["gate_up"] = tensors["gate_up"].view(experts, 2 * intermediate, hidden // 32, 16)
@@ -631,7 +631,9 @@ def test_stacked_packed_loading_preserves_source_slices_padding_and_single_bias_
         if loaded.router is not None:
             assert loaded.router.projection.bias is not None
             torch.testing.assert_close(loaded.router.projection.values.cpu(), tensors["router"], rtol=0, atol=0)
-            torch.testing.assert_close(loaded.router.projection.bias.cpu(), tensors["router.bias"], rtol=0, atol=0)
+            torch.testing.assert_close(
+                loaded.router.projection.bias.cpu(), tensors["router.bias"].bfloat16().float(), rtol=0, atol=0
+            )
         signature = layout.execution_signatures(profile=profile)[-1]
         assert isinstance(signature, execution.MoeFfnExecutionSignature)
         workspace = torch.empty(
@@ -760,9 +762,9 @@ def test_ungated_tp_loading_slices_input_bias_and_owns_output_bias_once(tmp_path
     assert projections.up.bias_key is not None and projections.down.bias_key is not None
     tensors = {
         projections.up.values_key: tensor_values((32, 16), 0),
-        projections.up.bias_key: tensor_values((32,), 0),
+        projections.up.bias_key: torch.linspace(-1, 1, 32),
         projections.down.values_key: tensor_values((16, 32), 0),
-        projections.down.bias_key: tensor_values((16,), 0),
+        projections.down.bias_key: torch.linspace(-1, 1, 16),
     }
     model_path = tmp_path / "model"
     write_checkpoint(model_path, (tensors,))
@@ -777,7 +779,9 @@ def test_ungated_tp_loading_slices_input_bias_and_owns_output_bias_once(tmp_path
         assert loaded.i_proj.bias is not None and loaded.o_proj.bias is not None
         interval = slice(rank * 16, (rank + 1) * 16)
         torch.testing.assert_close(loaded.i_proj.values.cpu(), tensors[projections.up.values_key][interval].half())
-        torch.testing.assert_close(loaded.i_proj.bias.cpu(), tensors[projections.up.bias_key][interval].half())
+        torch.testing.assert_close(
+            loaded.i_proj.bias.cpu(), tensors[projections.up.bias_key][interval].half().float(), rtol=0, atol=0
+        )
         torch.testing.assert_close(loaded.o_proj.values.cpu(), tensors[projections.down.values_key][:, interval].half())
-        expected_bias = tensors[projections.down.bias_key].half() if rank == 0 else torch.zeros(16, dtype=torch.float16)
-        torch.testing.assert_close(loaded.o_proj.bias.cpu(), expected_bias)
+        expected_bias = tensors[projections.down.bias_key].half().float() if rank == 0 else torch.zeros(16)
+        torch.testing.assert_close(loaded.o_proj.bias.cpu(), expected_bias, rtol=0, atol=0)

@@ -85,7 +85,7 @@ def test_prepare_owns_record_files_and_reuses_replay_source(tmp_path: Path) -> N
         assert path.read_bytes() == b""
         assert launch.environment[DETERMINISTIC_MODE.name] == "record"
         assert launch.environment["SGLANG_PLUGINS"] == "xpool,xkit_deterministic"
-    record = SamplingRecord(case.models[0], "sample", {"text": "input", "sampling_params": {}}, 1, (2,), {}, None)
+    record = SamplingRecord(case.models[0], "sample", {"text": "input", "sampling_params": {}}, 1, (2,))
     original = TypeAdapter(SamplingRecord).dump_json(record) + b"\n"
     source.write_bytes(original)
 

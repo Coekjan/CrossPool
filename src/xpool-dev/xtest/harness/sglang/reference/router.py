@@ -77,7 +77,7 @@ def run_router_reference(
     workdir: Path,
     timeout_seconds: float,
 ) -> dict[str, FfnRouterComparison]:
-    """Run one A100 Router batch and require child retirement before returning.
+    """Run one Router batch and require child retirement before returning.
 
     The fresh process contains CrossPool's process-global GEMM constraints;
     the later original-SGLang reference never imports those prepared operators.
@@ -168,11 +168,12 @@ def evaluate_router_case(
     assert isinstance(layout, preparation.MoeFfnLayerLayout) and layout.router is not None
     if layer.router.scales_key is not None:
         raise ValueError("Router reference requires the supported unquantized projection")
+    bias_round_dtype = layer.router_projection_precision.bias_round_dtype(payload_dtype=case.hidden_states.dtype)
     projection = weights.ProjectionWeights(
         values=source[layer.router.values_key].to(device="cuda", dtype=layout.router.values.dtype),
         scales=None,
         bias=(
-            source[layer.router.bias_key].to(device="cuda", dtype=layout.router.bias.dtype)
+            source[layer.router.bias_key].to(dtype=bias_round_dtype).to(device="cuda", dtype=layout.router.bias.dtype)
             if layer.router.bias_key is not None and layout.router.bias is not None
             else None
         ),

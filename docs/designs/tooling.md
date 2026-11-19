@@ -465,12 +465,12 @@ as `XKIT_DETERMINISTIC_MODE` and `XKIT_DETERMINISTIC_PATH`.
 Tooling diagnostics recognize these names as internal environment metadata.
 Owned benchmark launches clear the two variables.
 
-Tokenizer processes append one complete request per locked JSONL write,
-including Model ID, RID, public input and generation parameters, delivered
-IDs and requested logprob fields. Incomplete or duplicate records fail
-loading. Replay reads the source unchanged and requires matching public
-requests and complete recorded output. Startup and engine health requests
-pass through separately from workload records.
+Tokenizer processes append one completed request per locked JSONL write.
+Each record identifies the model and request and contains the public input,
+sampling parameters, prompt token count and delivered token IDs. Incomplete
+or duplicate records fail loading. Replay reads the source unchanged and
+requires matching public requests and complete recorded output. Startup and
+engine health requests pass through separately from workload records.
 
 Replay identifies each live sampler row by Model ID, RID and actual token-prefix
 length on every participating TP rank. It replaces the selected ID after the
@@ -508,6 +508,9 @@ Snapshotting preserves other caller-supplied environment inputs. Native FFN
 qualification uses the same configuration operation with its own environment.
 Native FFN and serving qualification preserve allocator and compute settings
 used for Profile matching and omit selected cuBLAS, NCCL and NVSHMEM diagnostics.
+The independent original-SGLang FFN reference applies the same environment
+filter before importing SGLang or spawning TP ranks and selects an empty
+plugin set.
 Invocation working directory and resolved model/calibration paths preserve their
 meaning. Each owned worker installs its frozen global configuration once.
 

@@ -79,12 +79,12 @@ def test_ungated_dense_bias_and_graph_replay(payload_dtype: torch.dtype) -> None
         i_proj=weights.ProjectionWeights(
             values=torch.randn((LOCAL_INTERMEDIATE_SIZE, HIDDEN_SIZE), device="cuda", dtype=payload_dtype),
             scales=None,
-            bias=torch.randn((LOCAL_INTERMEDIATE_SIZE,), device="cuda", dtype=payload_dtype),
+            bias=torch.randn((LOCAL_INTERMEDIATE_SIZE,), device="cuda", dtype=payload_dtype).float(),
         ),
         o_proj=weights.ProjectionWeights(
             values=torch.randn((HIDDEN_SIZE, LOCAL_INTERMEDIATE_SIZE), device="cuda", dtype=payload_dtype),
             scales=None,
-            bias=torch.randn((HIDDEN_SIZE,), device="cuda", dtype=payload_dtype),
+            bias=torch.randn((HIDDEN_SIZE,), device="cuda", dtype=payload_dtype).float(),
         ),
     )
     activation = Activation(function=ffn.ReluActivation(), gate=None)
@@ -102,7 +102,8 @@ def test_ungated_dense_bias_and_graph_replay(payload_dtype: torch.dtype) -> None
     first = projection.i_proj
     second = projection.o_proj
     assert first.bias is not None and second.bias is not None
-    expected = torch.addmm(second.bias, torch.addmm(first.bias, hidden, first.values.t()).relu(), second.values.t())
+    activated = torch.addmm(first.bias.to(payload_dtype), hidden, first.values.t()).relu()
+    expected = torch.addmm(second.bias.to(payload_dtype), activated, second.values.t())
     torch.testing.assert_close(output, expected, rtol=0.02, atol=0.1)
 
 

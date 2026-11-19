@@ -227,7 +227,7 @@ def prepare_ffn_layer(
                 gate_up_order=ffn.GateUpOrder.INTERLEAVED if gate is not None else None,
                 values=i_proj.values,
                 scales=i_proj.scales,
-                bias=TensorLayout((projected_width,), payload_dtype, 0)
+                bias=TensorLayout((projected_width,), torch.float32, 0)
                 if any(projection.bias_key is not None for projection in i_proj_sources)
                 else None,
             ),
@@ -236,7 +236,7 @@ def prepare_ffn_layer(
                 gate_up_order=None,
                 values=o_proj.values,
                 scales=o_proj.scales,
-                bias=TensorLayout((hidden_size,), payload_dtype, 0) if projections.down.bias_key is not None else None,
+                bias=TensorLayout((hidden_size,), torch.float32, 0) if projections.down.bias_key is not None else None,
             ),
         )
 
@@ -322,13 +322,7 @@ def prepare_ffn_layer(
             gate_up_order=None,
             values=encoded_router.values,
             scales=encoded_router.scales,
-            bias=TensorLayout(
-                (layer.routed_expert_count,),
-                payload_dtype
-                if layer.router_projection_precision is ffn.RouterProjectionPrecision.PAYLOAD
-                else torch.float32,
-                0,
-            )
+            bias=TensorLayout((layer.routed_expert_count,), torch.float32, 0)
             if layer.router.bias_key is not None
             else None,
         )

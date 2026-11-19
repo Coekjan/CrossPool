@@ -87,8 +87,6 @@ class GemmPlan:
         regions = []
         if tile_shape is not None and tile_shape[0] != 1:
             regions.append((torch.float32, (split_k, rows, projected_width)))
-        elif tile_shape is None and weight_layout.bias is not None and weight_layout.bias.dtype is not torch.float32:
-            regions.append((torch.float32, weight_layout.bias.shape))
         return cls(
             input_layout=input_layout,
             weight_layout=weight_layout,
@@ -113,8 +111,7 @@ class Gemm:
             raise ValueError("GEMM scratch must reside on its execution device")
         views = plan.workspace.views(workspace)
         self.plan = plan
-        self.bias = views[0] if views and plan.tile_shape is None else None
-        self.partials = views[0] if views and plan.tile_shape is not None else None
+        self.partials = views[0] if views else None
         self.flags: opt_flags.OptFlags | None = None
 
     def prepare_launch(
@@ -153,13 +150,36 @@ class Gemm:
         if metadata is None and lhs.dtype.bitwidth == rhs.dtype.bitwidth == 16:
             # Bound column work per CTA while exposing enough tiles to the device.
             width = self.plan.weight_layout.values.shape[-2]
+            rows, hidden = inputs.shape[-2:]
             block_m = min(flags.block_m, 32) if width <= 128 else flags.block_m
-            tiles = triton.cdiv(inputs.shape[-2], block_m)
-            multiprocessors = torch.cuda.get_device_properties(inputs.device).multi_processor_count
-            block_n = min(flags.block_n, max(16, triton.next_power_of_2(triton.cdiv(width * tiles, multiprocessors))))
-            if self.plan.output_layout.dtype is torch.float32 and inputs.shape[-2] > 256:
+            tiles = triton.cdiv(rows, block_m)
+            properties = torch.cuda.get_device_properties(inputs.device)
+            block_n = min(
+                flags.block_n,
+                max(16, triton.next_power_of_2(triton.cdiv(width * tiles, properties.multi_processor_count))),
+            )
+            if self.plan.output_layout.dtype is torch.float32 and rows > 256:
                 block_m, block_n = 64, 64
             flags = replace(flags, block_m=block_m, block_n=block_n, num_warps=max(flags.num_warps, 4))
+            if (
+                properties.major == 9
+                and rhs.ndim == 2
+                and lhs.dtype == rhs.dtype == tensor.BF16
+                and self.plan.output_layout.dtype is torch.bfloat16
+            ):
+                # Measured Hopper tiles for the narrow and small Dense shapes.
+                match (rows, width, hidden):
+                    case (4096, 32, 2880):
+                        tile = (64, 32, 128)
+                    case (512, 6144, 1024):
+                        tile = (64, 128, 64)
+                    case (512, 1024, 3072):
+                        tile = (64, 64, 128)
+                    case _:
+                        tile = None
+                if tile is not None:
+                    block_m, block_n, block_k = tile
+                    flags = replace(flags, block_m=block_m, block_n=block_n, block_k=block_k, num_warps=4, num_stages=3)
         elif metadata is not None and lhs.dtype.bitwidth == 16 and rhs.dtype.bitwidth in (4, 16):
             # The bundled one-warp ragged selection regresses measured floating and MXFP4 execution.
             flags = replace(flags, num_warps=max(flags.num_warps, 4))
@@ -275,23 +295,11 @@ class Gemm:
         if self.flags is None:
             self.prepare_launch(inputs, projection, metadata=metadata, gather=gather, scatter=scatter)
         rhs, precision = self.operands(projection)
-        bias = projection.bias
-        if bias is not None and self.bias is not None:
-            # The bundled non-persistent GEMM merges bias loads with an FP32 zero branch.
-            copy_tensor_kernel.run(
-                bias,
-                self.bias,
-                bias.numel(),
-                BLOCK=256,
-                grid=(triton.cdiv(bias.numel(), 256),),
-                warmup=False,
-            )
-            bias = self.bias
         with self.configuration():
             matmul.matmul(
                 inputs,
                 rhs,
-                bias,
+                projection.bias,
                 a_ragged_metadata=metadata,
                 gather_indx=gather,
                 scatter_indx=scatter,

@@ -43,6 +43,11 @@ to simplify TP execution. The checkpoint Tensor dtype is source evidence,
 whereas the model profile's payload dtype is the effective BF16 or FP16
 execution dtype. Conversion occurs only for the selected local shard.
 
+Additive projection biases use FP32 storage. During Host staging, Dense and
+`PAYLOAD` Router bias values first round to the payload dtype and then widen to
+FP32. Expert and other Router biases use FP32 source conversion. Placement and
+Control Probes account for the same physical layout as the loaded weights.
+
 Checkpoint Gate/Up order describes source rows; the selected operation declares
 its required execution order. The loader normalizes either concatenated or
 interleaved sources into that order with matched row selections for values,
@@ -147,11 +152,12 @@ and the pinned upstream ragged metadata, executes both matrices and reduces the
 weighted routes. Projection temporaries and route outputs reuse storage after
 their last consumer. Metadata covers the pinned matrix library's encoded block
 sizes, including its schedule-index limit. Matrix warmup selects public launch
-flags from actual geometry and device properties. Bundled execution disables
-persistent execution and Split-K; floating and MXFP4 ragged matrices use at least
-four warps for the measured launch selection. Local FP32 Split-K partials are
-declared in the root plan and reduced before bias and activation. Temporary
-library configuration is restored on success and failure. Runtime
+flags from actual geometry and device properties, with measured tile overrides
+for selected ordinary BF16 shapes on Hopper. Bundled matrices use single-split,
+non-persistent launches. Floating and MXFP4 ragged matrices use at least four
+warps. The root plan accounts for local FP32 Split-K partials. The final
+reduction combines those partials before bias and activation. Temporary library
+configuration is restored on success and failure. Runtime
 objects borrow current layer tensors and own no checkpoint weights.
 
 [Execution geometry](../../src/xpool/runtime/ffnagent/execution.py) defines
@@ -176,9 +182,8 @@ and write caller-owned outputs. Pure preparation fixes local geometry and
 scratch before allocation; warmup fixes bundled launch flags without changing
 that scratch. Primary and Control use the same selection, and replay performs
 no Python operation selection. Each invocation supplies current weight, scale
-and bias addresses. Local projections read bias directly; bundled GEMM converts
-payload bias into its prepared FP32 view. Runtime module loading and compilation
-finish before capture; pure preparation does not initialize a device context.
+and FP32 bias addresses directly. Runtime module loading and compilation
+finish before capture. Pure preparation runs without a device context.
 
 Both algorithms use one local Triton TopK kernel. The Router uses its prepared workspace to construct projection logits and
 launches that kernel directly.
@@ -198,10 +203,8 @@ preceding projection regenerates logits on every execution. Independent
 numerical and Graph qualification establishes the admitted implementation.
 
 The `FP32` policy converts Router inputs into caller-owned workspace before its
-matrix multiplication. A local Triton copy kernel also serves projection-bias
-conversion. Native parameter checks remain in force. Input conversion and logits
-share the accounted Router workspace; payload and Expert arithmetic retain
-their admitted precision.
+matrix multiplication. Input conversion and logits share the accounted Router
+workspace. Payload and Expert arithmetic retain their admitted precision.
 
 The Router Owner finalizes Routing Metadata in Lane storage, appending Shared
 Expert routes and invalidating Capacity tails. A successor Kernel

@@ -44,8 +44,8 @@ vocabulary for an exact token prefix. Measured finite-precision approximations
 also depend on the arithmetic and execution path used to evaluate it.
 
 **Sampling Record**:
-A completed request's token continuation and any requested logprobs, retained
-with its input and generation conditions for later replay.
+A completed request's public generation inputs, prompt token count, and output
+token IDs retained for replay.
 
 **Sampler Replay**:
 Generation that computes its own prediction distributions while choosing the

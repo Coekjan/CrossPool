@@ -83,7 +83,7 @@ def test_preparation_keeps_source_coverage_separate_from_padded_execution_width(
         assert layout.o_proj.bias.dtype is torch.float32
         if rank == 0:
             assert layout.router is not None and layout.router.bias is not None
-            assert layout.router.bias.dtype is torch.bfloat16
+            assert layout.router.bias.dtype is torch.float32
         else:
             assert layout.router is None
         intervals.append((layout.source_start, layout.source_length))
@@ -115,7 +115,7 @@ def test_dense_preparation_retains_floating_layout_and_declared_bias() -> None:
     assert isinstance(layout, preparation.DenseFfnLayerLayout)
     assert layout.activation == Activation(function=ffn.SiluActivation(), gate=ffn.GateTransform())
     assert (layout.source_start, layout.source_length, layout.local_intermediate_size) == (16, 16, 16)
-    assert layout.i_proj.allocation_bytes() == (1024, 64)
+    assert layout.i_proj.allocation_bytes() == (1024, 128)
     assert layout.o_proj.allocation_bytes() == (512,)
     layer = model.layers[0]
     assert isinstance(layer, ffn.DenseFfnSpec) and isinstance(layer.projections, ffn.GatedProjectionSpec)
@@ -257,7 +257,7 @@ def test_estimator_counts_encoded_padded_storages_and_router_owner(packed_model:
         prepared = preparation.prepare_ffn_layer(
             packed_model, layer_ordinal=0, payload_dtype=profile.payload_dtype, tp_size=4, tp_rank=rank
         )
-        expected = (*expert_requests, 2 * 32 * 2880, 2 * 32) if rank == 0 else expert_requests
+        expected = (*expert_requests, 2 * 32 * 2880, 4 * 32) if rank == 0 else expert_requests
         assert prepared.weight_allocation_bytes() == expected
         point = estimator.allocation_ledger_for_model_plans(model_plans=plans, ffnagent_index=rank)[0]
         assert point.exact_resource_ledger_bytes == sum(expected)
@@ -271,7 +271,7 @@ def test_estimator_counts_encoded_padded_storages_and_router_owner(packed_model:
 
         assert signature.router is not None
         assert signature.router.weight_rounding is ffn.TopKWeightRounding.LOGITS_DTYPE
-        assert execution.control_capture_probe_storage_bytes(signature) == (*expert_requests, 2 * 32 * 2880, 2 * 32)
+        assert execution.control_capture_probe_storage_bytes(signature) == (*expert_requests, 2 * 32 * 2880, 4 * 32)
         prepared_plan = preparation.MoeExecutionPlan.prepare(signature)
         assert prepared_plan.router is not None
         backing = torch.empty(prepared_plan.workspace.nbytes, dtype=torch.uint8)

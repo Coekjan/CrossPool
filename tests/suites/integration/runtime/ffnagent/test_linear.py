@@ -43,7 +43,7 @@ def test_projection_replays_current_bias_and_activation_without_allocation(
         gate_up_order=ffn.GateUpOrder.INTERLEAVED if gated else None,
         values=TensorLayout((projected_width, hidden), dtype, 0),
         scales=None,
-        bias=TensorLayout((projected_width,), dtype, 0),
+        bias=TensorLayout((projected_width,), torch.float32, 0),
     )
     plan = linear.GemmPlan.prepare(
         input_layout=TensorLayout((rows, hidden), dtype, 0),

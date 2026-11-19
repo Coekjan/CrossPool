@@ -16,6 +16,7 @@ def test_qualification_preserves_effective_compute_environment(
         "TRITON_CACHE_DIR": "/tmp/test-triton-cache",
         "LD_LIBRARY_PATH": "/test/lib",
         "CUDA_VISIBLE_DEVICES": "GPU-a,GPU-b",
+        "CUDA_MPS_PIPE_DIRECTORY": "/tmp/test-mps",
         "PYTORCH_ALLOC_CONF": "max_split_size_mb:128",
         "PYTORCH_CUDA_ALLOC_CONF": "",
         "PYTORCH_NO_CUDA_MEMORY_CACHING": "1",
@@ -44,6 +45,8 @@ def test_qualification_preserves_effective_compute_environment(
         "NVSHMEM_INFO",
         "PYTHONPATH",
         "LD_PRELOAD",
+        "SGLANG_EXPERIMENTAL_LORA_OPTI",
+        "SGLANG_PLUGINS",
         "XPOOL_UNDECLARED_POLICY",
     }
     for name in excluded:

@@ -42,6 +42,7 @@ class TensorReadDescriptor:
     view_shape: tuple[int, ...]
     selection: TensorSlice | None
     destination: torch.Tensor
+    round_dtype: torch.dtype | None = None
 
     @classmethod
     def from_key_view(
@@ -53,6 +54,7 @@ class TensorReadDescriptor:
         view_shape: tuple[int, ...] | None = None,
         selection: TensorSlice | None,
         destination: torch.Tensor,
+        round_dtype: torch.dtype | None = None,
     ) -> TensorReadDescriptor:
         """Resolve one selected key to a stable preallocated destination."""
 
@@ -66,6 +68,7 @@ class TensorReadDescriptor:
             view_shape=source_shape if view_shape is None else view_shape,
             selection=selection,
             destination=destination,
+            round_dtype=round_dtype,
         )
 
     def slot_view(self, slot: torch.Tensor) -> torch.Tensor:
@@ -427,6 +430,7 @@ def prepare_layer_weight_request(
                 scales=router.projection.scales,
                 bias=router.projection.bias,
                 read_bias=True,
+                bias_round_dtype=layer.router_projection_precision.bias_round_dtype(payload_dtype=layout.payload_dtype),
             )
         )
         if layer.router_correction_bias_key is not None:
@@ -478,6 +482,7 @@ def ffn_projection_descriptors(
     else:
         sources = (projections.up,)
         target_rows = (slice(None),)
+    bias_round_dtype = layout.payload_dtype if isinstance(layout, preparation.DenseFfnLayerLayout) else None
     descriptors = []
     for source, rows in zip(sources, target_rows, strict=True):
         descriptors.extend(
@@ -491,6 +496,7 @@ def ffn_projection_descriptors(
                 scales=None if i_proj_scales is None else i_proj_scales[rows],
                 bias=None if i_proj_bias is None else i_proj_bias[rows],
                 read_bias=True,
+                bias_round_dtype=bias_round_dtype,
             )
         )
     descriptors.extend(
@@ -504,6 +510,7 @@ def ffn_projection_descriptors(
             scales=o_proj.scales if expert_id is None or o_proj.scales is None else o_proj.scales[expert_id],
             bias=o_proj.bias if expert_id is None or o_proj.bias is None else o_proj.bias[expert_id],
             read_bias=read_o_proj_bias,
+            bias_round_dtype=bias_round_dtype,
         )
     )
     return tuple(descriptors)
@@ -520,6 +527,7 @@ def projection_descriptors(
     scales: torch.Tensor | None,
     bias: torch.Tensor | None,
     read_bias: bool,
+    bias_round_dtype: torch.dtype | None = None,
 ) -> tuple[TensorReadDescriptor, ...]:
     """Translate a scheme's source geometry into bounded, encoding-preserving reads."""
 
@@ -576,6 +584,7 @@ def projection_descriptors(
                     source_shape=logical_shape[:-1],
                     selection=bias_slice,
                     destination=bias if bias_slice is None else bias.narrow(bias_slice.axis, 0, bias_slice.length),
+                    round_dtype=bias_round_dtype,
                 )
             )
     return tuple(descriptors)
@@ -664,6 +673,8 @@ def stage_shard(
                         projected = projected[descriptor.selection.indices()]
                     if projected.shape != descriptor.destination.shape:
                         raise ValueError(f"checkpoint tensor {descriptor.weight_key!r} local TP shape is invalid")
+                    if descriptor.round_dtype is not None:
+                        projected = projected.to(descriptor.round_dtype)
                     descriptor.slot_view(slot).copy_(projected)
                 except Exception:
                     slots.put(slot)

@@ -70,7 +70,7 @@ def test_gemm_plan_materializes_nonadjacent_gate_rows() -> None:
         (32, 65, torch.float32, False, 0),
         (257, 65, torch.float32, False, 8 * 257 * 65 * 4),
         (257, 130, torch.float32, True, 4 * 257 * 260 * 4),
-        (257, 65, torch.bfloat16, False, 65 * 4),
+        (257, 65, torch.bfloat16, False, 0),
     ),
 )
 def test_gemm_plan_accounts_for_projection_scratch_before_activation(
@@ -84,7 +84,7 @@ def test_gemm_plan_accounts_for_projection_scratch_before_activation(
             gate_up_order=ffn.GateUpOrder.INTERLEAVED if gated else None,
             values=TensorLayout((projected_width, 2053), dtype, 0),
             scales=None,
-            bias=TensorLayout((projected_width,), dtype, 0),
+            bias=TensorLayout((projected_width,), torch.float32, 0),
         ),
         result_layout=TensorLayout((rows, width), dtype, 0),
         activation=Activation(function=ffn.SiluActivation(), gate=ffn.GateTransform()) if gated else None,
