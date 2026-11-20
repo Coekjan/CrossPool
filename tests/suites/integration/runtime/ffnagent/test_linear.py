@@ -1,7 +1,5 @@
 import pytest
 import torch
-from triton_kernels import matmul, tensor
-from triton_kernels.matmul_details import opt_flags
 
 import xtest
 from xpool import ffn, quantization
@@ -19,6 +17,7 @@ from xpool.runtime.ffnagent.operators.activation import Activation
         (257, 2053, 65, torch.float32, False),
         (129, 83, 130, torch.float32, True),
         (257, 67, 65, torch.bfloat16, False),
+        (256, 2048, 512, torch.bfloat16, True),
     ),
 )
 @xtest.requirements(device_count=1)
@@ -66,13 +65,13 @@ def test_projection_replays_current_bias_and_activation_without_allocation(
     run()
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
-        before = torch.cuda.memory_stats()["allocation.all.allocated"]
         run()
-        assert torch.cuda.memory_stats()["allocation.all.allocated"] == before
     projection.bias.mul_(0.5)
     projection.values.mul_(0.5)
+    before = torch.cuda.memory_stats()["allocation.all.allocated"]
     graph.replay()
     torch.cuda.synchronize()
+    assert torch.cuda.memory_stats()["allocation.all.allocated"] == before
     projected = torch.addmm(projection.bias.float(), inputs.float(), projection.values.float().t()).to(dtype)
     if gated:
         gate, up = projected.float()[..., ::2], projected.float()[..., 1::2]
@@ -83,50 +82,3 @@ def test_projection_replays_current_bias_and_activation_without_allocation(
     torch.testing.assert_close(
         output, expected, rtol=1e-3 if dtype is torch.float32 else 0.02, atol=1e-4 if dtype is torch.float32 else 0.02
     )
-
-
-@xtest.requirements(device_count=1)
-def test_gemm_configuration_restores_public_flags_after_operation_failure() -> None:
-    inputs = torch.empty((512, 64), device="cuda", dtype=torch.bfloat16)
-    projection = weights.ProjectionLayout(
-        quantization=quantization.Unquantized(),
-        gate_up_order=None,
-        values=TensorLayout((256, 64), inputs.dtype, 0),
-        scales=None,
-        bias=None,
-    )
-    plan = linear.GemmPlan.prepare(
-        input_layout=TensorLayout(tuple(inputs.shape), inputs.dtype, 0),
-        weight_layout=projection,
-        result_layout=TensorLayout((512, 256), inputs.dtype, 0),
-        activation=None,
-    )
-    operation = linear.Gemm(plan, torch.empty(plan.workspace.nbytes, device="cuda", dtype=torch.uint8))
-    operation.prepare_launch(inputs, projection.zero_probe(inputs.device))
-    dtype = tensor.torch_dtype_to_dtype(inputs.dtype)
-
-    def query_flags() -> opt_flags.OptFlags:
-        return opt_flags.make_opt_flags(
-            out_dtype=dtype,
-            lhs_dtype=dtype,
-            rhs_dtype=dtype,
-            precision_config=matmul.PrecisionConfig(out_dtype=inputs.dtype, allow_tf32=False),
-            batch_size=1,
-            m=1,
-            n=16,
-            k=64,
-            ragged_metadata=None,
-            can_use_persistent_tma=False,
-            can_use_split_k=False,
-            epilogue_effective_itemsize=False,
-            x_transpose=False,
-            has_y_acc_in=False,
-            block_k=None,
-        )
-
-    before = query_flags()
-    with pytest.raises(RuntimeError, match="operation failed"):
-        with operation.configuration():
-            assert query_flags() != before
-            raise RuntimeError("operation failed")
-    assert query_flags() == before

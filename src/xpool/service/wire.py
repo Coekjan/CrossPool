@@ -17,7 +17,7 @@ from xpool.fabric import (
     FabricRole,
     InstanceFfnProfile,
 )
-from xpool.memory import MemoryCalibrationEnvironment
+from xpool.memory import GemmDeviceProperties, MemoryCalibrationEnvironment
 from xpool.model import ModelId
 from xpool.native.ffn import ResultCode
 from xpool.runtime.transport import InstanceRankTransportProfile
@@ -271,6 +271,7 @@ class FfnAgentView(ProcessRef):
 class FfnAgentRegistration(FfnAgentView):
     """FfnAgent registration with execution resources and optional Profile facts."""
 
+    device_properties: GemmDeviceProperties = Field(description="Device properties for bundled GEMM scratch budgeting.")
     calibration_environment: MemoryCalibrationEnvironment | None = Field(
         description="Observed participant compatibility facts when Profile matching is requested."
     )

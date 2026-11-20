@@ -14,7 +14,7 @@ import xpool.config
 from xkit.case import CaseId
 from xkit.config import ToolConfigRecord, XpoolDevConfig
 from xpool.config import XpoolConfig
-from xpool.memory import FabricMemoryContext, MemoryCalibrationEnvironment
+from xpool.memory import FabricMemoryContext, GemmDeviceProperties, MemoryCalibrationEnvironment
 from xpool.model import ModelId
 from xpool.native import ABI_VERSION
 from xtest.harness.runner.pytest_plugin import resolved_config_key
@@ -22,6 +22,7 @@ from xtest.harness.runner.requirements import ResolvedConfig
 
 TEST_MODEL_ID = ModelId("test/test-model")
 TEST_CASE_ID = CaseId("550e8400-e29b-41d4-a716-446655440000")
+TEST_GEMM_DEVICE_PROPERTIES = GemmDeviceProperties(compute_capability=(8, 0), sm_count=108)
 TEST_CALIBRATION_ENVIRONMENT = MemoryCalibrationEnvironment(
     name="test-device",
     compute_capability=(8, 0),

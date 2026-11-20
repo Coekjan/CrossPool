@@ -104,13 +104,16 @@ def test_published_correction_survives_profile_removal(tmp_path: Path, base_byte
     plan = FabricDeploymentPlan.model_validate_json(response.content)
     path.unlink()
     assert request(app, "GET", "/fabric/plan").json() == response.json()
+    registration = FfnAgentRegistration.model_validate(ffnagent)
     estimator = DeviceMemoryEstimator(
-        model_specs=FfnAgentRegistration.model_validate(ffnagent).model_specs,
+        model_specs=registration.model_specs,
         instance_profiles=tuple(instance.ffn_profile for instance in plan.instance_plans),
         coefficients=coefficients,
     )
     assert plan.ffn_memory_estimates == (
-        estimator.estimate_model_plans(model_plans=plan.model_plans, ffnagent_index=0),
+        estimator.estimate_model_plans(
+            model_plans=plan.model_plans, ffnagent_index=0, device_properties=registration.device_properties
+        ),
     )
 
 

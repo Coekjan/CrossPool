@@ -13,9 +13,9 @@ def test_native_preflight_accepts_matching_version() -> None:
 
 
 def test_native_preflight_rejects_abi_version_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Python refuses an extension built for another ABI revision."""
+    """Python refuses an extension built for the previous ABI revision."""
 
-    monkeypatch.setattr(xpool.cext.xpool.native, "ABI_VERSION", ABI_VERSION + 1)
+    monkeypatch.setattr(xpool.cext.xpool.native, "ABI_VERSION", ABI_VERSION - 1)
 
     with pytest.raises(NativeLoadError, match="does not match"):
         ensure_native_loaded()

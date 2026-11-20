@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 import xpool.memory
 from xpool.memory import FfnMemoryCalibration, FfnMemoryCalibrationCoefficients, XpoolMemoryCalibrationProfile
+from xpool.native import ABI_VERSION
 from xtest.harness.support.config import TEST_CALIBRATION_ENVIRONMENT, synthetic_memory_context
 
 
@@ -99,6 +100,7 @@ def test_writer_serializes_profile_to_explicit_path(tmp_path: Path) -> None:
     ("field", "value"),
     (
         ("name", "different-device"),
+        ("native_abi_version", ABI_VERSION - 1),
         ("torch_version", "different-version"),
         ("configuration_inputs", (("environment.NVSHMEM_DISABLE_NCCL", "1"),)),
         ("configuration_inputs", (("environment.CUDA_MODULE_LOADING", "EAGER"),)),
@@ -111,9 +113,11 @@ def test_profile_reuse_requires_matching_participant_facts(field: str, value: ob
     assert context.participants is not None
     recorded.require_compatible(context=context, executor_lane_count=1)
     changed = TEST_CALIBRATION_ENVIRONMENT.model_copy(update={field: value})
-    context = context.model_copy(update={"participants": (changed, *context.participants[1:])})
+    incompatible = recorded.model_copy(
+        update={"memory_context": context.model_copy(update={"participants": (changed, *context.participants[1:])})}
+    )
     with pytest.raises(RuntimeError, match="incompatible with the current Fabric memory context"):
-        recorded.require_compatible(context=context, executor_lane_count=1)
+        incompatible.require_compatible(context=context, executor_lane_count=1)
 
 
 def test_profile_requires_complete_participant_observations() -> None:

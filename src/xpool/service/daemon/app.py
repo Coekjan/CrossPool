@@ -419,6 +419,7 @@ def create_daemon() -> FastAPI:
                 device=request.device,
                 calibration_environment=request.calibration_environment,
                 device_free_memory_bytes=request.device_free_memory_bytes,
+                device_properties=request.device_properties,
                 device_total_memory_bytes=request.device_total_memory_bytes,
                 abi_version=request.abi_version,
                 pid=request.pid,

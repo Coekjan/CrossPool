@@ -16,6 +16,7 @@ from xpool.runtime.ffnagent.registry import FfnExecutionRegistry
 from xpool.utils.procs import ProcUniqId
 from xtest.harness.support.config import (
     TEST_CALIBRATION_ENVIRONMENT,
+    TEST_GEMM_DEVICE_PROPERTIES,
     install_test_config,
     reset_global_config,
     synthetic_config,
@@ -26,6 +27,9 @@ pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
 @pytest.fixture(autouse=True)
 def execution_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        xpool.runtime.ffnagent.agent, "observe_gemm_device_properties", lambda device: TEST_GEMM_DEVICE_PROPERTIES
+    )
     monkeypatch.setattr(
         xpool.runtime.ffnagent.agent.memory_calibration,
         "observe_environment",
@@ -74,6 +78,7 @@ def test_ffnagent_records_baseline_after_loading_and_cache_trim(monkeypatch: pyt
     agent = FfnAgent(device=1)
 
     assert agent.registration.calibration_environment is None
+    assert agent.registration.device_properties == TEST_GEMM_DEVICE_PROPERTIES
     assert events == ["bootstrap", "trim", "baseline"]
 
 
@@ -119,6 +124,7 @@ def test_ffnagent_retains_registry_through_materialization(monkeypatch: pytest.M
     )
     agent.registration = SimpleNamespace(
         model_specs=("spec",),
+        device_properties=TEST_GEMM_DEVICE_PROPERTIES,
         calibration_environment=TEST_CALIBRATION_ENVIRONMENT,
     )
     agent.runtime_role = RuntimeRole.FFNAGENT

@@ -17,6 +17,7 @@ from xpool.memory import (
     DeviceMemoryEstimate,
     DeviceMemoryFeatures,
     FfnMemoryCalibrationCoefficients,
+    GemmDeviceProperties,
 )
 from xpool.runtime.ffnagent import execution, preparation
 from xpool.runtime.ffnagent.operators import dense
@@ -127,10 +128,54 @@ def graph_capture_allocator_allowance_bytes(signature: execution.ExecutionSignat
     return result
 
 
-def capture_pool_reservation_bytes(plans: tuple[dense.DenseExecutionPlan | preparation.MoeExecutionPlan, ...]) -> int:
-    """Reserve each Signature's root separately within one Lane pool."""
+def observe_gemm_device_properties(device: int) -> GemmDeviceProperties:
+    """Observe the execution target and the bundled selector's device-zero SM count."""
 
-    return sum(allocator_reservation_bytes((plan.workspace.nbytes,)) for plan in plans)
+    return GemmDeviceProperties(
+        compute_capability=torch.cuda.get_device_capability(device),
+        sm_count=torch.cuda.get_device_properties(0).multi_processor_count,
+    )
+
+
+def split_k_reservation_bytes(plan: dense.DenseExecutionPlan | preparation.MoeExecutionPlan, *, sm_count: int) -> int:
+    """Bound the bundled Split-K allocations for one captured Signature."""
+
+    if isinstance(plan, dense.DenseExecutionPlan):
+        requests = (plan.i_proj.split_k_workspace_bytes(sm_count), plan.o_proj.split_k_workspace_bytes(sm_count))
+    else:
+        requests = (
+            plan.experts.i_proj.split_k_workspace_bytes(sm_count, expert_count=plan.experts.signature.expert_count),
+            plan.router.projection.split_k_workspace_bytes(sm_count) if plan.router is not None else 0,
+        )
+    return sum(allocator_reservation_bytes((size,)) for size in requests if size)
+
+
+def descriptor_reservation_bytes(device_properties: GemmDeviceProperties) -> int:
+    """Bound the stream-cached output descriptor scratch of an active Lane."""
+
+    if device_properties.compute_capability < (9, 0):
+        return 0
+    # Persistent launches use at most one CTA per selector SM and a 128-byte slot per CTA.
+    return allocator_reservation_bytes((128 * device_properties.sm_count,))
+
+
+def capture_pool_charge(
+    plans: tuple[dense.DenseExecutionPlan | preparation.MoeExecutionPlan, ...],
+    *,
+    executor_lane_count: int,
+    device_properties: GemmDeviceProperties,
+) -> DeviceMemoryCharge:
+    """Price the shared root and bundled scratch per active Lane."""
+
+    root_bytes = max((plan.workspace.nbytes for plan in plans), default=0)
+    reserved_bytes = allocator_reservation_bytes((root_bytes,) if root_bytes else ()) + sum(
+        split_k_reservation_bytes(plan, sm_count=device_properties.sm_count) for plan in plans
+    )
+    if plans:
+        reserved_bytes += descriptor_reservation_bytes(device_properties)
+    return DeviceMemoryCharge(
+        "capture.private_pools", executor_lane_count * root_bytes, executor_lane_count * reserved_bytes
+    )
 
 
 class DeviceMemoryEstimator:
@@ -246,6 +291,7 @@ class DeviceMemoryEstimator:
         *,
         model_plans: tuple[FfnModelPlan, ...],
         ffnagent_index: int,
+        device_properties: GemmDeviceProperties,
     ) -> tuple[DeviceMemoryPoint, ...]:
         """Compose ledgers from Model Plans before their Fabric Plan is installed."""
 
@@ -298,9 +344,11 @@ class DeviceMemoryEstimator:
             graph_capture_allocator_allowance_bytes(signature) for signature in signatures
         ) * executor_lane_count + sum(allocator_reservation_bytes(group) - sum(group) for group in probe_groups)
         compute_plans = preparation.prepare_execution_plans(tuple(signatures))
-        private_pool_reservation = executor_lane_count * capture_pool_reservation_bytes(compute_plans)
-        workspace_bytes = executor_lane_count * sum(plan.workspace.nbytes for plan in compute_plans)
-        workspace_allocations = executor_lane_count * sum(plan.workspace.nbytes > 0 for plan in compute_plans)
+        capture_private_charge = capture_pool_charge(
+            compute_plans, executor_lane_count=executor_lane_count, device_properties=device_properties
+        )
+        workspace_bytes = capture_private_charge.exact_logical_bytes
+        workspace_allocations = executor_lane_count if workspace_bytes else 0
         packed_weight_bytes = sum(packed_weight_storage_bytes)
         packed_weight_allocations = len(packed_weight_storage_bytes)
         dense_signature_count = sum(
@@ -340,11 +388,6 @@ class DeviceMemoryEstimator:
             native_storage_bytes,
             native_storage_bytes,
             ("native.physical_allocations", "native.binding_storage"),
-        )
-        capture_private_charge = DeviceMemoryCharge(
-            "capture.private_pools",
-            workspace_bytes,
-            private_pool_reservation,
         )
         infrastructure_charge = DeviceMemoryCharge("capture.infrastructure", 0, 0, ("capture.infrastructure",))
         construction_charge = DeviceMemoryCharge(
@@ -430,12 +473,14 @@ class DeviceMemoryEstimator:
         *,
         model_plans: tuple[FfnModelPlan, ...],
         ffnagent_index: int,
+        device_properties: GemmDeviceProperties,
     ) -> DeviceMemoryEstimate:
         """Estimate a solved Placement before its Fabric Plan is installed."""
 
         points = self.allocation_ledger_for_model_plans(
             model_plans=model_plans,
             ffnagent_index=ffnagent_index,
+            device_properties=device_properties,
         )
         return self.estimate_points(points)
 

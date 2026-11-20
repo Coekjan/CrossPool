@@ -40,6 +40,7 @@ from xpool.service.client import XpoolClient, XpoolClientError
 from xpool.service.wire import ElasticContextStateControlChannelRef, FabricParticipantReport
 from xtest.harness.support.config import (
     TEST_CALIBRATION_ENVIRONMENT,
+    TEST_GEMM_DEVICE_PROPERTIES,
     TEST_MODEL_ID,
     install_test_config,
     reset_global_config,
@@ -133,6 +134,9 @@ def test_agent_construction_initializes_role_and_devkit(
         lambda **kwargs: FfnModelSpec.model_validate(ffn_model_spec()),
     )
     if agent_type is FfnAgent:
+        monkeypatch.setattr(
+            xpool.runtime.ffnagent.agent, "observe_gemm_device_properties", lambda device: TEST_GEMM_DEVICE_PROPERTIES
+        )
         monkeypatch.setattr(
             xpool.runtime.ffnagent.agent.memory_calibration,
             "observe_environment",

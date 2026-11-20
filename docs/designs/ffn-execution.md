@@ -140,25 +140,17 @@ combinations use the same scalar expressions as standalone activation. Matrix
 plans account for materialized intermediate storage whenever fusion is absent.
 
 `DenseExecutionPlan`, `RouterExecutionPlan` and `ExpertExecutionPlan` compose
-matrix plans and stored workspace views. `MoeExecutionPlan` places Expert and
-optional Router backing in one root. Preparation retains concrete compute plans
-by Signature index for budgeting, allocation and capture. `WorkspaceLayout`
-stores aligned offsets and creates views without recomputing byte formulas.
-Each root receives its own allocator-reservation estimate, multiplied by the
-Lane count. Mutable backing remains independent per Lane.
+matrix plans and workspace layouts. `MoeExecutionPlan` places Expert and
+optional Router views within the same Signature span. Preparation retains
+compute plans by Signature index for budgeting, allocation and capture.
+`WorkspaceLayout` defines the aligned offsets within each span.
 
 The common Expert pipeline constructs route histograms, gather/scatter indices
 and the pinned upstream ragged metadata, executes both matrices and reduces the
 weighted routes. Projection temporaries and route outputs reuse storage after
 their last consumer. Metadata covers the pinned matrix library's encoded block
-sizes, including its schedule-index limit. Matrix warmup selects public launch
-flags from actual geometry and device properties, with measured tile overrides
-for selected ordinary BF16 shapes on Hopper. Bundled matrices use single-split,
-non-persistent launches. Floating and MXFP4 ragged matrices use at least four
-warps. The root plan accounts for local FP32 Split-K partials. The final
-reduction combines those partials before bias and activation. Temporary library
-configuration is restored on success and failure. Runtime
-objects borrow current layer tensors and own no checkpoint weights.
+sizes, including its schedule-index limit. Runtime objects borrow the current
+layer's checkpoint tensors.
 
 [Execution geometry](../../src/xpool/runtime/ffnagent/execution.py) defines
 Signatures and capture placeholder layouts. [Preparation](../../src/xpool/runtime/ffnagent/preparation.py)
@@ -178,12 +170,15 @@ validates these combinations and normalization; execution consumes the admitted
 semantics directly.
 
 Dense, Router and Expert projections share the [linear entry](../../src/xpool/runtime/ffnagent/operators/linear.py)
-and write caller-owned outputs. Pure preparation fixes local geometry and
-scratch before allocation; warmup fixes bundled launch flags without changing
-that scratch. Primary and Control use the same selection, and replay performs
-no Python operation selection. Each invocation supplies current weight, scale
-and FP32 bias addresses directly. Runtime module loading and compilation
-finish before capture. Pure preparation runs without a device context.
+and write caller-owned outputs. Pure preparation fixes the local layout,
+including the partials for local FP32 Split-K. Bundled `triton_kernels` selects
+the launch from the actual operands and device. The plan supplies measured
+constraints for small grouped and selected ordinary tiles before selection,
+and the call clears them on exit. Warmup compiles kernels before capture.
+Primary and Control use matching launches with their respective weight, scale
+and FP32 bias addresses. Replay executes the installed Graph.
+[Memory admission](control-plane.md#memory-admission)
+accounts for the library's scratch requests as well as the caller-owned layout.
 
 Both algorithms use one local Triton TopK kernel. The Router uses its prepared workspace to construct projection logits and
 launches that kernel directly.
@@ -248,14 +243,16 @@ through confirmed native retirement. Concrete Signature plans determine that
 backing before capture.
 
 Each active capture Lane owns an exclusive stream and a private Torch memory
-pool with `use_on_oom=False`. Compute workspace stays at
-their Primary addresses. IO, routing and live-row placeholders use the
-default allocator. The Signature's placeholder layout supplies the allocation
-shapes and request sizes; budgeting separately counts temporary initialization
-and Torch's per-graph RNG state. The Registry retains initialized tensors
-while construction can still reuse their subblocks.
+pool with `use_on_oom=False`. It allocates one workspace root sized for its
+largest Signature. Each capture uses the precise prefix described by its
+`WorkspaceLayout`. A Lane executes one Signature at a time, and each replay
+initializes the workspace it reads. The root stays live after the source
+Graphs and capture placeholders are released. IO, routing and live-row
+placeholders use the default allocator. Budgeting includes their shapes,
+temporary initialization and Torch's per-graph RNG state. The bundled
+descriptor allocator keeps stream-cached requests until FfnAgent exit.
 
-The Lane owner captures Primary and Control against one root workspace.
+The Lane owner captures Primary and Control against the same Signature prefix.
 A recursive scalar Graph query checks whether each graph references that range
 and validates typed access bounds throughout the graph. Both captures must
 agree on usage. A used range must have complete retained pool coverage; address

@@ -6,12 +6,17 @@ import xpool.service.daemon.ffn_placement
 from xpool.config import XpoolConfig
 from xpool.fabric import FabricInstancePlan, InstanceFfnProfile, InstanceRankTopology
 from xpool.ffn import FfnModelSpec
-from xpool.memory import FfnMemoryCalibrationCoefficients
+from xpool.memory import MIB, FfnMemoryCalibrationCoefficients
 from xpool.model import ModelId
 from xpool.runtime.ffnagent import device_memory
 from xpool.service.daemon.ffn_placement import place_ffn_models
 from xpool.service.errors import XpoolDaemonError
-from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
+from xtest.harness.support.config import (
+    TEST_GEMM_DEVICE_PROPERTIES,
+    TEST_MODEL_ID,
+    install_test_config,
+    reset_global_config,
+)
 from xtest.harness.support.native.sizing import install_native_allocation_sizing
 from xtest.harness.support.service.daemon import ffn_model_spec, ffn_profile
 
@@ -71,6 +76,7 @@ def test_placement_publishes_calibrated_budgets_for_idle_ffnagents() -> None:
         model_specs=(spec,),
         instance_plans=(instance_plan(),),
         ffnagent_free_memory_bytes=(1 << 30, 1 << 30),
+        ffnagent_device_properties=(TEST_GEMM_DEVICE_PROPERTIES,) * 2,
     )
 
     assert plans.model_plans[0].tp_size == tp_size
@@ -82,8 +88,40 @@ def test_placement_publishes_calibrated_budgets_for_idle_ffnagents() -> None:
         instance_profiles=(instance_plan().ffn_profile,),
     )
     assert plans.memory_estimates == tuple(
-        estimator.estimate_model_plans(model_plans=plans.model_plans, ffnagent_index=index) for index in range(2)
+        estimator.estimate_model_plans(
+            model_plans=plans.model_plans, ffnagent_index=index, device_properties=TEST_GEMM_DEVICE_PROPERTIES
+        )
+        for index in range(2)
     )
+
+
+def test_placement_charges_segment_for_largest_workspace() -> None:
+    install_test_config(config())
+    spec = FfnModelSpec.model_validate(ffn_model_spec())
+    layer = spec.layers[0].model_copy(update={"intermediate_size": 4096})
+    spec = spec.model_copy(update={"layers": (layer,)})
+    instance = instance_plan()
+    profile = InstanceFfnProfile.model_validate(ffn_profile() | {"prefill_payload_row_capacity": 4096})
+    instance = instance.model_copy(update={"ffn_profile": profile})
+    estimator = device_memory.DeviceMemoryEstimator(
+        model_specs=(spec,), instance_profiles=(profile,), coefficients=None
+    )
+
+    result = place_ffn_models(
+        coefficients=None,
+        model_specs=(spec,),
+        instance_plans=(instance,),
+        ffnagent_free_memory_bytes=(1 << 30, 1 << 30),
+        ffnagent_device_properties=(TEST_GEMM_DEVICE_PROPERTIES,) * 2,
+    )
+
+    retained = estimator.allocation_ledger_for_model_plans(
+        model_plans=result.model_plans, ffnagent_index=0, device_properties=TEST_GEMM_DEVICE_PROPERTIES
+    )[-1]
+    workspace = next(charge for charge in retained.charges if charge.domain == "capture.private_pools")
+    # The 8 MiB Signature reserves a 20 MiB segment by itself. The shared 16 MiB root reserves 16 MiB.
+    # Two bundled output projections also reserve one 2 MiB Split-K segment each.
+    assert (workspace.exact_logical_bytes, workspace.estimated_physical_bytes) == (16 * MIB, 20 * MIB)
 
 
 def test_equal_optimum_placement_uses_lowest_index_groups() -> None:
@@ -107,6 +145,7 @@ def test_equal_optimum_placement_uses_lowest_index_groups() -> None:
         ),
         instance_plans=(instance_plan(ModelId("test/wide")), instance_plan(ModelId("test/narrow"))),
         ffnagent_free_memory_bytes=(1 << 40,) * 4,
+        ffnagent_device_properties=(TEST_GEMM_DEVICE_PROPERTIES,) * 4,
     )
 
     assert tuple(frozenset(plan.layers[0].ffnagent_indices) for plan in plans.model_plans) == (
@@ -125,6 +164,7 @@ def test_structural_placement_rejects_tp_wider_than_fleet() -> None:
             model_specs=(spec,),
             instance_plans=(instance_plan(),),
             ffnagent_free_memory_bytes=(1 << 30, 1 << 30),
+            ffnagent_device_properties=(TEST_GEMM_DEVICE_PROPERTIES,) * 2,
         )
 
 
@@ -138,6 +178,7 @@ def test_placement_rejects_insufficient_memory_without_fallback() -> None:
             model_specs=(spec,),
             instance_plans=(instance_plan(),),
             ffnagent_free_memory_bytes=(1, 1),
+            ffnagent_device_properties=(TEST_GEMM_DEVICE_PROPERTIES,) * 2,
         )
 
 
@@ -152,6 +193,7 @@ def test_placement_accounts_for_fabric_observer_memory(monkeypatch: pytest.Monke
             model_specs=(spec,),
             instance_plans=(instance_plan(),),
             ffnagent_free_memory_bytes=(1 << 30, 1 << 30),
+            ffnagent_device_properties=(TEST_GEMM_DEVICE_PROPERTIES,) * 2,
         )
 
 
@@ -167,4 +209,5 @@ def test_placement_uses_one_deadline_before_solver_work(monkeypatch: pytest.Monk
             model_specs=(spec,),
             instance_plans=(instance_plan(),),
             ffnagent_free_memory_bytes=(1 << 30, 1 << 30),
+            ffnagent_device_properties=(TEST_GEMM_DEVICE_PROPERTIES,) * 2,
         )

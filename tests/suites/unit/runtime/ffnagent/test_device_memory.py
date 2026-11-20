@@ -26,7 +26,13 @@ from xpool.memory import MIB, DeviceMemoryFeatures, FfnMemoryCalibrationCoeffici
 from xpool.runtime.ffnagent import device_memory, execution, preparation
 from xpool.runtime.ffnagent.memory_profile import corpus
 from xpool.utils.integer import SINT64_MAX
-from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config, synthetic_config
+from xtest.harness.support.config import (
+    TEST_GEMM_DEVICE_PROPERTIES,
+    TEST_MODEL_ID,
+    install_test_config,
+    reset_global_config,
+    synthetic_config,
+)
 from xtest.harness.support.native.sizing import install_native_allocation_sizing
 from xtest.harness.support.service.daemon import ffn_model_spec, ffn_profile
 
@@ -122,7 +128,9 @@ def test_exact_dense_allocation_ledger_and_feature_rows() -> None:
     signature = layout.execution_signatures(profile=estimator.instance_profiles[0])[0]
     assert execution.control_capture_probe_storage_bytes(signature) == (64, 32)
     assert estimator.fabric_arena_bytes() == 3328
-    points = estimator.allocation_ledger_for_model_plans(model_plans=plan.model_plans, ffnagent_index=0)
+    points = estimator.allocation_ledger_for_model_plans(
+        model_plans=plan.model_plans, ffnagent_index=0, device_properties=TEST_GEMM_DEVICE_PROPERTIES
+    )
     with pytest.raises(ValueError, match="more than once"):
         replace(points[0], charges=points[0].charges + points[0].charges)
     assert tuple(point.point for point in points) == (
@@ -132,22 +140,22 @@ def test_exact_dense_allocation_ledger_and_feature_rows() -> None:
         "execution_installation",
         "retained",
     )
-    assert tuple(point.exact_resource_ledger_bytes for point in points) == (96, 3424, 4008, 4448, 3984)
+    assert tuple(point.exact_resource_ledger_bytes for point in points) == (96, 3424, 3952, 4392, 3928)
     for point in points:
         charges = {charge.domain: charge for charge in point.charges}
         assert charges["weights.default"].estimated_physical_bytes == 2 * MIB
         if point.point in ("graph_capture", "execution_installation", "retained"):
-            assert charges["capture.private_pools"].estimated_physical_bytes == 8 * MIB
+            assert charges["capture.private_pools"].estimated_physical_bytes == 2 * MIB
         if point.point in ("graph_capture", "execution_installation"):
             assert charges["capture.default"].estimated_physical_bytes == 10 * MIB
         if point.point == "retained":
             assert "capture.default" not in charges
-    assert points[2].features.tensor_storage_bytes == 680
-    assert points[2].features.tensor_storage_allocation_count == 32
+    assert points[2].features.tensor_storage_bytes == 624
+    assert points[2].features.tensor_storage_allocation_count == 29
     assert points[2].features.dense_graph_capture_count == 4
     assert points[3].features.executor_lane_count == 1
     assert points[3].features.compute_branch_count == 4
-    assert points[4].features.tensor_storage_bytes == 216
+    assert points[4].features.tensor_storage_bytes == 160
     assert points[4].features.dense_graph_capture_count == 0
     assert "cuda.graph_driver" in points[3].unmodeled_costs
     assert "capture.infrastructure" in points[4].unmodeled_costs
@@ -171,7 +179,9 @@ def test_unmodeled_overhead_allows_analytic_or_calibrated_estimation(calibration
             moe_implementation_bytes=0,
             joined_ffnagent_bytes=0,
         )
-    points = estimator.allocation_ledger_for_model_plans(model_plans=plan.model_plans, ffnagent_index=0)
+    points = estimator.allocation_ledger_for_model_plans(
+        model_plans=plan.model_plans, ffnagent_index=0, device_properties=TEST_GEMM_DEVICE_PROPERTIES
+    )
     estimate = estimator.estimate_points(points)
     assert estimator.estimate_points(tuple(reversed(points))) == estimate
     correction = calibration_base or 0
@@ -182,9 +192,13 @@ def test_unmodeled_overhead_allows_analytic_or_calibrated_estimation(calibration
 
 def test_fabric_observer_allocation_begins_at_fabric_join(monkeypatch: pytest.MonkeyPatch) -> None:
     estimator, plan = estimator_and_plan()
-    baseline = estimator.allocation_ledger_for_model_plans(model_plans=plan.model_plans, ffnagent_index=0)
+    baseline = estimator.allocation_ledger_for_model_plans(
+        model_plans=plan.model_plans, ffnagent_index=0, device_properties=TEST_GEMM_DEVICE_PROPERTIES
+    )
     install_native_allocation_sizing(monkeypatch, fabric_observer_bytes=128)
-    observed = estimator.allocation_ledger_for_model_plans(model_plans=plan.model_plans, ffnagent_index=0)
+    observed = estimator.allocation_ledger_for_model_plans(
+        model_plans=plan.model_plans, ffnagent_index=0, device_properties=TEST_GEMM_DEVICE_PROPERTIES
+    )
 
     assert tuple(
         after.exact_resource_ledger_bytes - before.exact_resource_ledger_bytes

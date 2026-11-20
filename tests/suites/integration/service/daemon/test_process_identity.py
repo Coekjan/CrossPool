@@ -185,16 +185,20 @@ def test_daemon_rejects_dead_registration_pid(participant: str) -> None:
     assert response.json()["detail"] == {"kind": "conflict", "message": "registering pid 999999999 is not live"}
 
 
-@pytest.mark.parametrize("participant", ["atnagent", "instance"])
+@pytest.mark.parametrize("participant", ["atnagent", "ffnagent", "instance"])
 def test_daemon_rejects_registration_abi_mismatch(participant: str) -> None:
     config = synthetic_config()
     app = create_app(config)
+    abi_version = ABI_VERSION - 1
     if participant == "atnagent":
         path = "/atnagent/register"
-        registration = atnagent_registration(device=0, abi_version=ABI_VERSION + 1)
+        registration = atnagent_registration(device=0, abi_version=abi_version)
+    elif participant == "ffnagent":
+        path = "/ffnagent/register"
+        registration = ffnagent_registration(abi_version=abi_version)
     else:
         path = "/instance/register"
-        registration = instance_registration(abi_version=ABI_VERSION + 1)
+        registration = instance_registration(abi_version=abi_version)
 
     response = register(app, path, registration)
 

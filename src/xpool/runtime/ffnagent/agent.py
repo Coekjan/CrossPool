@@ -14,6 +14,7 @@ from xpool.native import ABI_VERSION, RuntimeRole
 from xpool.runtime import memory_calibration
 from xpool.runtime.agent import Agent, AgentError, AgentHeartbeat
 from xpool.runtime.ffnagent.architecture import load
+from xpool.runtime.ffnagent.device_memory import observe_gemm_device_properties
 from xpool.runtime.ffnagent.loader import materialize_layer_weights
 from xpool.runtime.ffnagent.registry import FfnExecutionRegistry
 from xpool.runtime.ffnagent.weights import FfnLayerWeights
@@ -51,11 +52,13 @@ class FfnAgent(Agent):
         model_specs = tuple(
             load(model_id=model.id, model_path=config.model_path_of(model.id)) for model in config.models
         )
+        device_properties = observe_gemm_device_properties(self.device)
         torch.cuda.synchronize(self.device)
         torch.cuda.empty_cache()
         device_free_memory_bytes, device_total_memory_bytes = torch.cuda.mem_get_info(self.device)
         self.registration = FfnAgentRegistration(
             device=device,
+            device_properties=device_properties,
             calibration_environment=calibration_environment,
             device_free_memory_bytes=device_free_memory_bytes,
             device_total_memory_bytes=device_total_memory_bytes,
@@ -161,6 +164,7 @@ class FfnAgent(Agent):
             fabric_plan=self.fabric_plan,
             model_specs=self.registration.model_specs,
             ffnagent_index=self.fabric_pe() - atnagent_count,
+            device_properties=self.registration.device_properties,
         )
 
     def poll_fabric_health(self) -> None:

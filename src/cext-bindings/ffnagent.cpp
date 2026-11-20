@@ -42,10 +42,10 @@ void bind_ffnagent(py::module_ &module) {
   auto ffnagent = module.def_submodule("ffnagent", "Native FfnAgent execution lifecycle functions.");
 
   py::class_<xpool::ffnagent::CaptureWorkspaceView>(ffnagent, "CaptureWorkspaceView",
-                                                    "Borrowed Lane workspace retained through native retirement.")
+                                                    "Borrowed Signature prefix of the retained Lane workspace.")
       .def(py::init<std::uintptr_t, std::size_t>(), py::arg("address"), py::arg("bytes"))
       .def_readonly("address", &xpool::ffnagent::CaptureWorkspaceView::address, "Retained device base address.")
-      .def_readonly("bytes", &xpool::ffnagent::CaptureWorkspaceView::bytes, "Logical extent of the root workspace.");
+      .def_readonly("bytes", &xpool::ffnagent::CaptureWorkspaceView::bytes, "Byte extent of this Signature's prefix.");
 
   py::class_<xpool::ffnagent::ProjectionBindingView>(ffnagent, "ProjectionBindingView",
                                                      "Non-owning projection addresses and Tensor byte extents.")

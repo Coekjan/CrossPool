@@ -13,6 +13,7 @@ from xpool.fabric import FabricPlan
 from xpool.native import RuntimeRole
 from xpool.native.ffn import LayerKind
 from xpool.runtime.agent import project_fabric_arena
+from xpool.runtime.ffnagent.device_memory import observe_gemm_device_properties
 from xpool.runtime.ffnagent.registry import FfnExecutionRegistry
 from xpool.runtime.ffnagent.weights import FfnLayerWeights
 from xpool.utils.device import visible_uuids
@@ -97,6 +98,7 @@ def run_fabric_participant(connection: Connection, spec: FabricParticipantSpec) 
                 fabric_plan=fabric_plan,
                 model_specs=model_specs,
                 ffnagent_index=ffnagent_index,
+                device_properties=observe_gemm_device_properties(spec.device),
             )
         arenas: list[str] = []
         if spec.role is RuntimeRole.FFNAGENT:

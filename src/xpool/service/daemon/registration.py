@@ -10,7 +10,7 @@ import psutil
 
 from xpool import ffn
 from xpool.fabric import FabricRole, InstanceFfnProfile
-from xpool.memory import MemoryCalibrationEnvironment
+from xpool.memory import GemmDeviceProperties, MemoryCalibrationEnvironment
 from xpool.model import ModelId
 from xpool.runtime.transport import InstanceRankTransportProfile
 from xpool.service.errors import XpoolDaemonError
@@ -210,6 +210,7 @@ class FfnAgentRegistrationState(CommonRegistration):
         "calibration_environment",
         "device",
         "device_free_memory_bytes",
+        "device_properties",
         "device_total_memory_bytes",
     )
 
@@ -217,6 +218,7 @@ class FfnAgentRegistrationState(CommonRegistration):
     device: int
     calibration_environment: MemoryCalibrationEnvironment | None
     device_free_memory_bytes: int
+    device_properties: GemmDeviceProperties
     device_total_memory_bytes: int
 
     def __init__(
@@ -225,6 +227,7 @@ class FfnAgentRegistrationState(CommonRegistration):
         device: int,
         calibration_environment: MemoryCalibrationEnvironment | None,
         device_free_memory_bytes: int,
+        device_properties: GemmDeviceProperties,
         device_total_memory_bytes: int,
         abi_version: int,
         pid: int,
@@ -237,6 +240,7 @@ class FfnAgentRegistrationState(CommonRegistration):
         self.device = device
         self.calibration_environment = calibration_environment
         self.device_free_memory_bytes = device_free_memory_bytes
+        self.device_properties = device_properties
         self.device_total_memory_bytes = device_total_memory_bytes
 
     def key(self) -> int:
@@ -255,6 +259,7 @@ class FfnAgentRegistrationState(CommonRegistration):
             or self.abi_version != candidate.abi_version
             or self.calibration_environment != candidate.calibration_environment
             or self.device_free_memory_bytes != candidate.device_free_memory_bytes
+            or self.device_properties != candidate.device_properties
             or self.device_total_memory_bytes != candidate.device_total_memory_bytes
         )
 

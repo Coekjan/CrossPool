@@ -107,6 +107,15 @@ class FfnMemoryCalibrationCoefficients:
         return result
 
 
+class GemmDeviceProperties(BaseModel):
+    """Device inputs to bundled GEMM workspace estimation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    compute_capability: tuple[int, int] = Field(strict=False, description="FFN execution device capability.")
+    sm_count: int = Field(ge=1, description="Multiprocessor count read by the bundled GEMM selector.")
+
+
 class MemoryCalibrationEnvironment(BaseModel):
     """One PE's address-free device, software and observed configuration inputs.
 

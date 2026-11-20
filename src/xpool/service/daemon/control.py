@@ -733,6 +733,7 @@ class ControlPlane:
                 model_specs=membership.model_specs,
                 instance_plans=membership.instance_plans,
                 ffnagent_free_memory_bytes=membership.ffnagent_free_memory_bytes,
+                ffnagent_device_properties=membership.ffnagent_device_properties,
                 coefficients=coefficients,
             )
             if not all(owner.is_alive() for owner in membership.owners()):

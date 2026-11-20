@@ -44,6 +44,7 @@ from xpool.runtime.ffnagent.device_memory import (
     DeviceMemoryEstimator,
     DeviceMemoryPoint,
     StartupPoint,
+    observe_gemm_device_properties,
 )
 from xpool.runtime.ffnagent.memory_profile.corpus import (
     calibration_experiments,
@@ -358,6 +359,7 @@ def participant_child(
         if role is RuntimeRole.FFNAGENT:
             atnagent_count = sum(item.role is FabricRole.ATNAGENT for item in fabric_plan.pe_placements)
             ffnagent_index = pe - atnagent_count
+            device_properties = observe_gemm_device_properties(device)
             if fabric_plan.executor_lane_count != config.scheduler.ffn_concurrency:
                 raise RuntimeError("Fabric Plan executor Lane count disagrees with the process configuration")
             estimator = DeviceMemoryEstimator(
@@ -366,7 +368,9 @@ def participant_child(
                 coefficients=None,
             )
             ledger = estimator.allocation_ledger_for_model_plans(
-                model_plans=fabric_plan.model_plans, ffnagent_index=ffnagent_index
+                model_plans=fabric_plan.model_plans,
+                ffnagent_index=ffnagent_index,
+                device_properties=device_properties,
             )
             recorder = PhaseRecorder(device=device, baseline_free_bytes=baseline_free_bytes)
             with recorder.phase("weight_materialization"):
@@ -402,6 +406,7 @@ def participant_child(
                         fabric_plan=fabric_plan,
                         model_specs=model_specs,
                         ffnagent_index=ffnagent_index,
+                        device_properties=device_properties,
                     )
                 recorder.close()
                 observations = tuple(

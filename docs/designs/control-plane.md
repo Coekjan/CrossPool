@@ -292,18 +292,21 @@ only.
 ## Memory admission
 
 Each FfnAgent trims releasable cache before measuring free memory and registers
-that baseline. The daemon derives concrete compute plans from admitted model
-specifications, profiles and candidate placements. The FfnAgent retains loaded
-weights and private Lane backing under
-[FFN execution](ffn-execution.md#graphtemplate-and-executor-lanes).
+that baseline together with the execution device's compute capability and the
+SM count used by the bundled GEMM selector. The bundled selector reads the SM
+count from the process-visible device at ordinal zero. The daemon derives
+concrete compute plans from admitted model specifications, profiles and
+candidate placements. The FfnAgent retains loaded weights and private Lane
+backing under [FFN execution](ffn-execution.md#graphtemplate-and-executor-lanes).
 
-For each candidate placement, the solver charges each installed Signature's
-root workspace once per Lane. Control Probes retain their separate sharing
-relations. Each Lane has its own private backing.
-The estimate distinguishes exact logical requests from physical reservation:
-known consecutive Torch requests can share a segment, while independent groups
-receive no assumed cache reuse. Library and driver overhead can exceed the
-analytic estimate.
+For each candidate placement, the solver takes the largest logical workspace
+size among the selected Signatures and applies the allocator's segment
+reservation to that single root per Lane. The segment fee can decrease at a
+size boundary. The solver and numeric ledger separately charge library-owned
+Split-K requests per Signature and stream-cached TMA scratch once per eligible
+active Lane. Control Probes retain their separate sharing relations. Known
+consecutive Torch requests can share a segment. Independent groups are priced
+as fresh requests. Library and driver overhead can exceed the analytic estimate.
 
 Admission compares five stages: weights, Fabric join, Graph Capture, execution
 installation and retained service. The last stage starts after Registry
@@ -323,8 +326,8 @@ Without `ffn.device_memory_calibration`, placement uses the analytic estimate.
 A startup OOM must prevent readiness and preserve borrowed resources until
 retirement. An explicitly configured Profile must load and match before the
 daemon publishes the Plan. Matching uses the Lane count, PE-ordered device and
-software observations, the complete FFN participant count including idle ones,
-and allocation and compute settings.
+software observations including the native ABI, the complete FFN participant
+count including idle ones, and allocation and compute settings.
 The runtime reads relevant configuration-file contents, including the selected
 NCCL topology. An inspection error prevents reuse; ordinary unprofiled startup
 skips this inspection. Kernel, allocation or estimation changes that affect

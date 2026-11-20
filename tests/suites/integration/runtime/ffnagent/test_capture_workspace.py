@@ -13,6 +13,7 @@ import xtest
 from xpool.fabric import FABRIC_UID_HEX_LENGTH
 from xpool.native.ffn import LayerKind
 from xpool.runtime.ffnagent import preparation
+from xpool.runtime.ffnagent.device_memory import observe_gemm_device_properties
 from xpool.runtime.ffnagent.registry import FfnExecutionRegistry
 from xtest.harness.native.case import run_native_case
 from xtest.harness.native.ffn.qualification import (
@@ -25,6 +26,7 @@ from xtest.harness.native.ffn.qualification import (
 
 def isolated_registry_install_failure_retains_captures(execution_kind: LayerKind, tp_rank: int) -> None:
     torch.cuda.set_device(0)
+    device_properties = observe_gemm_device_properties(0)
     tp_size = 1 if execution_kind is LayerKind.DENSE else 2
     plan = execution_fabric_plan(
         uid="a" * FABRIC_UID_HEX_LENGTH,
@@ -46,6 +48,9 @@ def isolated_registry_install_failure_retains_captures(execution_kind: LayerKind
         model_specs[0], layer_ordinal=0, payload_dtype=profile.payload_dtype, tp_size=tp_size, tp_rank=tp_rank
     )
     signatures = layout.execution_signatures(profile=profile)
+    expected_workspace = max(
+        compute_plan.workspace.nbytes for compute_plan in preparation.prepare_execution_plans(signatures)
+    )
     expected_default_storage = Counter(
         value for signature in signatures for value in signature.capture_placeholder_layout().allocation_bytes()
     )
@@ -53,6 +58,7 @@ def isolated_registry_install_failure_retains_captures(execution_kind: LayerKind
     installation = FfnExecutionRegistry(layer_weights=((weight,),))
     del weight
     probe_refs: list[weakref.ReferenceType[torch.Tensor]] = []
+    workspace_refs: list[weakref.ReferenceType[torch.Tensor]] = []
 
     def fail_install(descriptor: xpool.native.ffnagent.ExecutionInstallDescriptor) -> None:
         assert isinstance(descriptor, xpool.native.ffnagent.ExecutionInstallDescriptor)
@@ -61,38 +67,37 @@ def isolated_registry_install_failure_retains_captures(execution_kind: LayerKind
             lane.capture_graphs and lane.pool is not None and not lane.sealed for lane in installation.capture_lanes
         )
         probe_refs.extend(weakref.ref(probe.i_proj.values) for _, probe in installation.capture_weight_pairs.values())
+        workspace_addresses = set()
         for lane in installation.capture_lanes:
-            assert lane.pool is not None
-            segments = lane.pool.snapshot()
-            roots = {
-                tensor.untyped_storage().data_ptr(): tensor.untyped_storage().nbytes()
-                for tensor in lane.capture_tensors
-            }
-            actual_default_storage = Counter(
-                nbytes
-                for address, nbytes in roots.items()
-                if not any(
-                    segment["address"] <= address and address + nbytes <= segment["address"] + segment["total_size"]
-                    for segment in segments
-                )
-            )
+            workspace = lane.workspace
+            assert workspace is not None and workspace.nbytes == expected_workspace
+            workspace_refs.append(weakref.ref(workspace))
+            workspace_addresses.add(workspace.data_ptr())
+            actual_default_storage = Counter(tensor.untyped_storage().nbytes() for tensor in lane.capture_tensors)
             assert actual_default_storage == expected_default_storage
+        assert len(workspace_addresses) == 2
         raise RuntimeError("native install failed with retained captures")
 
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(xpool.native.ffnagent, "install_execution", fail_install)
         with pytest.raises(RuntimeError, match="native install failed with retained captures"):
-            installation.materialize(fabric_plan=plan, model_specs=model_specs, ffnagent_index=tp_rank)
+            installation.materialize(
+                fabric_plan=plan, model_specs=model_specs, ffnagent_index=tp_rank, device_properties=device_properties
+            )
     assert weight_ref() is not None
     assert probe_refs and all(reference() is not None for reference in probe_refs)
+    assert workspace_refs and all(reference() is not None for reference in workspace_refs)
     assert all(lane.capture_graphs and not lane.sealed for lane in installation.capture_lanes)
     with pytest.raises(RuntimeError, match="cannot be retried"):
-        installation.materialize(fabric_plan=plan, model_specs=model_specs, ffnagent_index=tp_rank)
+        installation.materialize(
+            fabric_plan=plan, model_specs=model_specs, ffnagent_index=tp_rank, device_properties=device_properties
+        )
     # The install substitute acquired no native handles, so capture owners can retire.
     installation.close()
     gc.collect()
     assert weight_ref() is None
     assert all(reference() is None for reference in probe_refs)
+    assert all(reference() is None for reference in workspace_refs)
 
 
 @xtest.requirements(device_count=1)

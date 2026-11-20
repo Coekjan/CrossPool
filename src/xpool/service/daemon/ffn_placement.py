@@ -20,14 +20,16 @@ from xpool.memory import (
     DeviceMemoryEstimate,
     DeviceMemoryFeatures,
     FfnMemoryCalibrationCoefficients,
+    GemmDeviceProperties,
 )
 from xpool.runtime.ffnagent import execution, preparation
 from xpool.runtime.ffnagent.device_memory import (
     TORCH_GRAPH_CAPTURE_STATE_REQUEST_BYTES,
     DeviceMemoryEstimator,
     allocator_reservation_bytes,
-    capture_pool_reservation_bytes,
+    descriptor_reservation_bytes,
     graph_capture_allocator_allowance_bytes,
+    split_k_reservation_bytes,
 )
 from xpool.service.errors import XpoolDaemonError
 from xpool.utils import align_up
@@ -151,6 +153,7 @@ def place_ffn_models(
     model_specs: tuple[ffn.FfnModelSpec, ...],
     instance_plans: tuple[FabricInstancePlan, ...],
     ffnagent_free_memory_bytes: tuple[int, ...],
+    ffnagent_device_properties: tuple[GemmDeviceProperties, ...],
     coefficients: FfnMemoryCalibrationCoefficients | None,
 ) -> FfnPlacementResult:
     """Validate one Placement request and solve it before the shared deadline."""
@@ -165,10 +168,10 @@ def place_ffn_models(
         raise XpoolDaemonError("conflict", str(error)) from error
     config = get_global_config()
     ffnagent_count = len(config.ffn.devices)
-    if len(ffnagent_free_memory_bytes) != ffnagent_count:
+    if len(ffnagent_free_memory_bytes) != ffnagent_count or len(ffnagent_device_properties) != ffnagent_count:
         raise XpoolDaemonError(
             "conflict",
-            "FfnAgent free-memory observations do not match configured count",
+            "FfnAgent device observations do not match configured count",
         )
     try:
         ensure_sint64_nonnegative(*ffnagent_free_memory_bytes)
@@ -180,6 +183,7 @@ def place_ffn_models(
 
     return solve_placement(
         ffnagent_free_memory_bytes=ffnagent_free_memory_bytes,
+        ffnagent_device_properties=ffnagent_device_properties,
         estimator=estimator,
         deadline=monotonic() + config.ffn.placement.timeout_seconds,
     )
@@ -188,6 +192,7 @@ def place_ffn_models(
 def solve_placement(
     *,
     ffnagent_free_memory_bytes: tuple[int, ...],
+    ffnagent_device_properties: tuple[GemmDeviceProperties, ...],
     estimator: DeviceMemoryEstimator,
     deadline: float,
 ) -> FfnPlacementResult:
@@ -255,6 +260,16 @@ def solve_placement(
     )
     signature_index = {signature: index for index, signature in enumerate(all_signatures)}
     compute_plans = preparation.prepare_execution_plans(all_signatures)
+    root_sizes = sorted({0, *(plan.workspace.nbytes for plan in compute_plans)})
+    root_charges = tuple(
+        (size, allocator_reservation_bytes((size,) if size else ()), int(size > 0)) for size in root_sizes
+    )
+    maximum_root_reservation = max(row[1] for row in root_charges)
+    split_k_reservations = tuple(
+        tuple(split_k_reservation_bytes(plan, sm_count=properties.sm_count) for plan in compute_plans)
+        for properties in ffnagent_device_properties
+    )
+    descriptor_reservations = tuple(map(descriptor_reservation_bytes, ffnagent_device_properties))
     capture_weight_pair_keys = tuple(dict.fromkeys(execution.capture_weight_pair_key(item) for item in all_signatures))
     signature_storage_bytes = {}
     signature_allocator_allowance_bytes = {}
@@ -305,11 +320,15 @@ def solve_placement(
     maximum_graph_capture_allowance = config.scheduler.ffn_concurrency * sum(
         signature_allocator_allowance_bytes.values()
     ) + sum(capture_weight_pair_allocator_allowance_bytes.values())
-    maximum_pool_bytes = config.scheduler.ffn_concurrency * capture_pool_reservation_bytes(compute_plans)
-    maximum_resource_bytes = config.scheduler.ffn_concurrency * sum(plan.workspace.nbytes for plan in compute_plans)
-    maximum_resource_allocations = config.scheduler.ffn_concurrency * sum(
-        plan.workspace.nbytes > 0 for plan in compute_plans
+    maximum_pool_bytes = config.scheduler.ffn_concurrency * (
+        maximum_root_reservation
+        + max(
+            sum(splits) + descriptors
+            for splits, descriptors in zip(split_k_reservations, descriptor_reservations, strict=True)
+        )
     )
+    maximum_resource_bytes = config.scheduler.ffn_concurrency * root_sizes[-1]
+    maximum_resource_allocations = config.scheduler.ffn_concurrency if maximum_resource_bytes else 0
     maximum_runtime_bytes = estimator.execution_runtime_bytes(
         local_layer_count=sum(len(item) for item in class_layer_indices),
         local_layer_capacity_count=maximum_layer_capacity_count,
@@ -507,14 +526,28 @@ def solve_placement(
             graph_capture_allocations += len(capture_weight_pair_storage_bytes[key]) * present
             graph_capture_allowance += capture_weight_pair_allocator_allowance_bytes[key] * present
 
-        private_pool_bytes: cp_model.LinearExpr | int = 0
-        resource_storage_bytes: cp_model.LinearExpr | int = 0
-        resource_allocations: cp_model.LinearExpr | int = 0
-        for signature_index_value, plan in enumerate(compute_plans):
-            present = signature_present[ffnagent_index, signature_index_value]
-            private_pool_bytes += lanes * allocator_reservation_bytes((plan.workspace.nbytes,)) * present
-            resource_storage_bytes += lanes * plan.workspace.nbytes * present
-            resource_allocations += lanes * int(plan.workspace.nbytes > 0) * present
+        root_bytes = model.new_int_var_from_domain(
+            cp_model.Domain.from_values(root_sizes), f"root_bytes_a{ffnagent_index}"
+        )
+        root_reserved = model.new_int_var(0, maximum_root_reservation, f"root_reserved_a{ffnagent_index}")
+        root_allocations = model.new_bool_var(f"root_allocated_a{ffnagent_index}")
+        model.add_max_equality(
+            root_bytes,
+            [
+                0,
+                *(plan.workspace.nbytes * signature_present[ffnagent_index, i] for i, plan in enumerate(compute_plans)),
+            ],
+        )
+        # The allocator's segment reservation is not monotone in request size.
+        model.add_allowed_assignments((root_bytes, root_reserved, root_allocations), root_charges)
+        split_k_reserved = sum(
+            reserved * signature_present[ffnagent_index, i]
+            for i, reserved in enumerate(split_k_reservations[ffnagent_index])
+            if reserved
+        )
+        private_pool_bytes = lanes * (root_reserved + split_k_reserved)
+        resource_storage_bytes = lanes * root_bytes
+        resource_allocations = lanes * root_allocations
         dense_present = model.new_bool_var(f"dense_present_a{ffnagent_index}")
         moe_present = model.new_bool_var(f"moe_present_a{ffnagent_index}")
         if dense_signatures:
@@ -525,6 +558,11 @@ def solve_placement(
             model.add_max_equality(moe_present, moe_signatures)
         else:
             model.add(moe_present == 0)
+        descriptor_reservation = descriptor_reservations[ffnagent_index]
+        if descriptor_reservation:
+            active = model.new_bool_var(f"workspace_active_a{ffnagent_index}")
+            model.add_max_equality(active, [dense_present, moe_present])
+            private_pool_bytes += lanes * descriptor_reservation * active
         dense_graph_capture_count = lanes * sum(dense_signatures)
         moe_graph_capture_count = lanes * sum(moe_signatures)
         compute_branch_count = lanes * local_signature_count
@@ -856,6 +894,7 @@ def solve_placement(
             estimate = estimator.estimate_model_plans(
                 model_plans=model_plans,
                 ffnagent_index=ffnagent_index,
+                device_properties=ffnagent_device_properties[ffnagent_index],
             )
         except ValueError as error:
             raise XpoolDaemonError("not_ready", str(error)) from error

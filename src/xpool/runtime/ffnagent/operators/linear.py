@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
-from collections.abc import Generator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import cast
 
 import torch
@@ -97,13 +95,47 @@ class GemmPlan:
             split_k=split_k,
         )
 
+    def launch_constraints(self, *, expert_count: int | None = None) -> dict[str, int]:
+        """Apply measured tile and warp constraints before the library selects a launch."""
+
+        if expert_count is not None:
+            # Small grouped tiles otherwise use one or two warps, which regresses Expert replay.
+            return {"num_warps": 4} if self.output_layout.shape[0] // expert_count <= 16 else {}
+        rows, width = self.input_layout.shape[0], self.weight_layout.values.shape[-2]
+        if width <= 128 and rows > 256:
+            return {"block_m": 32, "num_warps": 4}
+        if width > 128 and rows == 32:
+            return {"block_m": 16, "num_warps": 4}
+        return {}
+
+    def split_k_workspace_bytes(self, sm_count: int, *, expert_count: int | None = None) -> int:
+        """Size the bundled FP32 partials for ordinary or gather execution."""
+
+        if self.tile_shape is not None or self.weight_layout.scales is not None:
+            return 0
+        width, reduction = self.weight_layout.values.shape[-2:]
+        if expert_count is None:
+            rows = self.input_layout.shape[0]
+            block_m = self.launch_constraints().get("block_m", 128)
+        else:
+            rows = self.output_layout.shape[0]
+            rows_per_expert = max(1, rows // expert_count)
+            block_m = (
+                min(64, triton.next_power_of_2(2 * rows_per_expert))
+                if rows_per_expert <= 64
+                else min(128, triton.next_power_of_2(rows_per_expert))
+            )
+            block_m = max(16, block_m)
+        tiles = triton.cdiv(rows, block_m) * triton.cdiv(width, 256)
+        splits = min(sm_count // tiles, triton.cdiv(reduction, 64) // 4)
+        return splits * rows * width * torch.float32.itemsize if splits > 1 else 0
+
 
 class Gemm:
     """Capture-time matrix operation borrowing its plan and scratch.
 
-    Registry validation establishes layer layouts before capture. Warmup binds
-    launch flags; each invocation supplies current layer values, scales and
-    bias without retaining their addresses.
+    Each launch supplies the current layer's values, scales and bias over
+    the prepared layouts.
     """
 
     def __init__(self, plan: GemmPlan, workspace: torch.Tensor) -> None:
@@ -112,78 +144,6 @@ class Gemm:
         views = plan.workspace.views(workspace)
         self.plan = plan
         self.partials = views[0] if views else None
-        self.flags: opt_flags.OptFlags | None = None
-
-    def prepare_launch(
-        self,
-        inputs: torch.Tensor,
-        projection: weights.ProjectionWeights,
-        *,
-        metadata: ragged_tensor.RaggedTensorMetadata | None = None,
-        gather: torch.Tensor | None = None,
-        scatter: torch.Tensor | None = None,
-    ) -> None:
-        """Bind flags during uncaptured warmup from the actual operand geometry."""
-
-        rhs, precision = self.operands(projection)
-        lhs = tensor.wrap_torch_tensor(inputs)
-        opt_flags.reset_opt_flags()
-        opt_flags.reset_opt_flags_constraints()
-        opt_flags.update_opt_flags_constraints({"is_persistent": False, "split_k": 1})
-        flags = opt_flags.make_opt_flags(
-            out_dtype=tensor.torch_dtype_to_dtype(self.plan.output_layout.dtype),
-            lhs_dtype=lhs.dtype,
-            rhs_dtype=rhs.dtype,
-            precision_config=precision,
-            batch_size=self.plan.weight_layout.values.shape[0] if metadata is None and rhs.ndim == 3 else 1,
-            m=gather.shape[0] if gather is not None else inputs.shape[-2],
-            n=self.plan.weight_layout.values.shape[-2],
-            k=inputs.shape[-1],
-            ragged_metadata=metadata,
-            can_use_persistent_tma=False,
-            can_use_split_k=scatter is None and precision.b_mx_scale is None,
-            epilogue_effective_itemsize=False,
-            x_transpose=inputs.stride(-1) != 1,
-            has_y_acc_in=False,
-            block_k=None,
-        )
-        if metadata is None and lhs.dtype.bitwidth == rhs.dtype.bitwidth == 16:
-            # Bound column work per CTA while exposing enough tiles to the device.
-            width = self.plan.weight_layout.values.shape[-2]
-            rows, hidden = inputs.shape[-2:]
-            block_m = min(flags.block_m, 32) if width <= 128 else flags.block_m
-            tiles = triton.cdiv(rows, block_m)
-            properties = torch.cuda.get_device_properties(inputs.device)
-            block_n = min(
-                flags.block_n,
-                max(16, triton.next_power_of_2(triton.cdiv(width * tiles, properties.multi_processor_count))),
-            )
-            if self.plan.output_layout.dtype is torch.float32 and rows > 256:
-                block_m, block_n = 64, 64
-            flags = replace(flags, block_m=block_m, block_n=block_n, num_warps=max(flags.num_warps, 4))
-            if (
-                properties.major == 9
-                and rhs.ndim == 2
-                and lhs.dtype == rhs.dtype == tensor.BF16
-                and self.plan.output_layout.dtype is torch.bfloat16
-            ):
-                # Measured Hopper tiles for the narrow and small Dense shapes.
-                match (rows, width, hidden):
-                    case (4096, 32, 2880):
-                        tile = (64, 32, 128)
-                    case (512, 6144, 1024):
-                        tile = (64, 128, 64)
-                    case (512, 1024, 3072):
-                        tile = (64, 64, 128)
-                    case _:
-                        tile = None
-                if tile is not None:
-                    block_m, block_n, block_k = tile
-                    flags = replace(flags, block_m=block_m, block_n=block_n, block_k=block_k, num_warps=4, num_stages=3)
-        elif metadata is not None and lhs.dtype.bitwidth == 16 and rhs.dtype.bitwidth in (4, 16):
-            # The bundled one-warp ragged selection regresses measured floating and MXFP4 execution.
-            flags = replace(flags, num_warps=max(flags.num_warps, 4))
-        self.flags = flags
 
     def operands(self, projection: weights.ProjectionWeights) -> tuple[tensor.Tensor, matmul.PrecisionConfig]:
         """Borrow the current layer's logical weight view and precision settings."""
@@ -199,22 +159,6 @@ class Gemm:
                     raise ValueError("MXFP4 projection requires its declared scales")
                 precision.b_mx_scale = scales.transpose(-1, -2)
         return rhs, precision
-
-    @contextlib.contextmanager
-    def configuration(self) -> Generator[None, None, None]:
-        """Install this GEMM's flags within the serial FFN capture scope."""
-
-        if self.flags is None:
-            raise RuntimeError("GEMM launch configuration requires uncaptured warmup")
-        opt_flags.reset_opt_flags_constraints()
-        opt_flags.reset_opt_flags()
-        try:
-            opt_flags.set_opt_flags(self.flags)
-            yield
-        finally:
-            opt_flags.reset_opt_flags()
-            opt_flags.reset_opt_flags_constraints()
-            opt_flags.update_opt_flags_constraints({"is_persistent": False, "split_k": 1})
 
     def run_into(
         self,
@@ -292,10 +236,11 @@ class Gemm:
                     warmup=False,
                 )
             return
-        if self.flags is None:
-            self.prepare_launch(inputs, projection, metadata=metadata, gather=gather, scatter=scatter)
         rhs, precision = self.operands(projection)
-        with self.configuration():
+        constraints = self.plan.launch_constraints(expert_count=None if metadata is None else metadata.n_slices)
+        if constraints:
+            opt_flags.update_opt_flags_constraints(constraints)
+        try:
             matmul.matmul(
                 inputs,
                 rhs,
@@ -308,3 +253,6 @@ class Gemm:
                 fused_activation=self.plan.fused_activation,
                 c=output,
             )
+        finally:
+            if constraints:
+                opt_flags.reset_opt_flags_constraints()

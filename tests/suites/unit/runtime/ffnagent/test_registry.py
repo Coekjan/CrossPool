@@ -13,7 +13,7 @@ import xpool.native
 from xpool.fabric import FABRIC_UID_HEX_LENGTH
 from xpool.runtime.ffnagent import registry, weights
 from xpool.runtime.ffnagent.memory_profile import corpus
-from xtest.harness.support.config import synthetic_config
+from xtest.harness.support.config import TEST_GEMM_DEVICE_PROPERTIES, synthetic_config
 
 
 @dataclass
@@ -203,6 +203,7 @@ def test_registry_completion_releases_locals_and_retains_service_backing(
         fabric_plan=plan,
         model_specs=experiment.model_specs,
         ffnagent_index=0,
+        device_properties=TEST_GEMM_DEVICE_PROPERTIES,
     )
     if failure_site is None:
         materialize()
@@ -273,6 +274,7 @@ def test_empty_participant_installs_once_and_seals_before_completion(monkeypatch
         fabric_plan=plan,
         model_specs=experiment.model_specs,
         ffnagent_index=1,
+        device_properties=TEST_GEMM_DEVICE_PROPERTIES,
     )
     assert events == ["install", "synchronize", "trim", "synchronize"]
 

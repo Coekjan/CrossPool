@@ -13,11 +13,11 @@
 
 namespace xpool::ffnagent {
 
-/// Borrowed Lane-private workspace shared by Primary and Control capture.
+/// Borrowed prefix of the Lane workspace shared by a Signature's Primary and Control.
 struct CaptureWorkspaceView {
   /// Nonzero device base retained by the Lane owner through retirement.
   std::uintptr_t address;
-  /// Positive logical extent of the prepared root workspace.
+  /// Positive byte extent of this Signature's workspace prefix.
   std::size_t bytes;
 
   bool operator==(const CaptureWorkspaceView &) const = default;

@@ -10,7 +10,13 @@ from xpool.quantization import Mxfp4, TensorLayout, Unquantized
 from xpool.runtime.ffnagent import device_memory, execution, preparation, weights
 from xpool.runtime.ffnagent.operators import moe
 from xpool.runtime.ffnagent.operators.activation import Activation
-from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config, synthetic_config
+from xtest.harness.support.config import (
+    TEST_GEMM_DEVICE_PROPERTIES,
+    TEST_MODEL_ID,
+    install_test_config,
+    reset_global_config,
+    synthetic_config,
+)
 
 
 @pytest.fixture
@@ -259,7 +265,9 @@ def test_estimator_counts_encoded_padded_storages_and_router_owner(packed_model:
         )
         expected = (*expert_requests, 2 * 32 * 2880, 4 * 32) if rank == 0 else expert_requests
         assert prepared.weight_allocation_bytes() == expected
-        point = estimator.allocation_ledger_for_model_plans(model_plans=plans, ffnagent_index=rank)[0]
+        point = estimator.allocation_ledger_for_model_plans(
+            model_plans=plans, ffnagent_index=rank, device_properties=TEST_GEMM_DEVICE_PROPERTIES
+        )[0]
         assert point.exact_resource_ledger_bytes == sum(expected)
         assert point.features.tensor_storage_allocation_count == len(expected)
         assert point.charges[0].estimated_physical_bytes == device_memory.allocator_reservation_bytes(expected)

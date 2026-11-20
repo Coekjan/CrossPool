@@ -18,7 +18,7 @@ from xpool.fabric import (
     FabricRole,
     InstanceRankTopology,
 )
-from xpool.memory import FabricMemoryContext
+from xpool.memory import FabricMemoryContext, GemmDeviceProperties
 from xpool.service.daemon.registration import InstanceRankId, RegistrationBook
 from xpool.service.errors import XpoolDaemonError
 from xpool.service.wire import (
@@ -48,6 +48,7 @@ class FabricMembership:
     model_specs: tuple[ffn.FfnModelSpec, ...]
     instance_plans: tuple[FabricInstancePlan, ...]
     ffnagent_free_memory_bytes: tuple[int, ...]
+    ffnagent_device_properties: tuple[GemmDeviceProperties, ...]
     memory_context: FabricMemoryContext
     pe_placements: tuple[FabricPePlacement, ...]
     agent_owners: tuple[tuple[int, ProcUniqId], ...]
@@ -142,6 +143,9 @@ class FabricMembership:
             instance_plans=tuple(instance_plans),
             ffnagent_free_memory_bytes=tuple(
                 ffnagent_by_device[device].device_free_memory_bytes for device in config.ffn.devices
+            ),
+            ffnagent_device_properties=tuple(
+                ffnagent_by_device[device].device_properties for device in config.ffn.devices
             ),
             memory_context=FabricMemoryContext(
                 participants=participants if participants else None,

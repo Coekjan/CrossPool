@@ -85,7 +85,9 @@ def test_daemon_registration_flow() -> None:
     assert response.content == b""
 
     for endpoint, payload in (("/atnagents", atnagent0), ("/ffnagents", ffnagent0)):
-        expected = {key: value for key, value in payload.items() if key not in {"calibration_environment"}}
+        expected = {
+            key: value for key, value in payload.items() if key not in {"calibration_environment", "device_properties"}
+        }
         assert request(app, "GET", endpoint).json() == [expected]
 
     registration = instance_registration()

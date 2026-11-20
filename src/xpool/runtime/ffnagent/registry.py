@@ -13,9 +13,10 @@ import torch
 import xpool.native
 from xpool import ffn
 from xpool.fabric import FabricPlan, FabricRole
+from xpool.memory import GemmDeviceProperties
 from xpool.quantization import TensorLayout
 from xpool.runtime.ffnagent import execution, preparation, weights
-from xpool.runtime.ffnagent.device_memory import capture_pool_reservation_bytes
+from xpool.runtime.ffnagent.device_memory import capture_pool_charge
 from xpool.runtime.ffnagent.operators import dense, moe, routing
 
 logger = logging.getLogger(__name__)
@@ -28,11 +29,12 @@ class LaneCaptureResources:
         self.pool: torch.cuda.MemPool | None = None
         self.stream_owner: xpool.native.cuda.OwnedCudaStream | None = None
         self.stream: torch.cuda.ExternalStream | None = None
+        self.workspace: torch.Tensor | None = None
         self.capture_graphs: list[torch.cuda.CUDAGraph] = []
         self.capture_tensors: list[torch.Tensor] = []
         self.sealed = False
 
-    def initialize(self) -> None:
+    def initialize(self, *, workspace_bytes: int) -> torch.Tensor:
         """Acquire owners incrementally after the Registry has retained this Lane."""
 
         if self.stream_owner is not None or self.sealed:
@@ -40,6 +42,10 @@ class LaneCaptureResources:
         self.stream_owner = xpool.native.cuda.OwnedCudaStream.create()
         self.stream = torch.cuda.ExternalStream(self.stream_owner.address)
         self.pool = torch.cuda.MemPool(use_on_oom=False)
+        with torch.cuda.use_mem_pool(self.pool), torch.cuda.stream(self.stream):
+            workspace = torch.empty(workspace_bytes, dtype=torch.uint8, device="cuda")
+        self.workspace = workspace
+        return workspace
 
     def capture_graph(self, launch: Callable[[], None]) -> torch.cuda.CUDAGraph:
         """Retain a Graph before capture; capture_pair establishes the live domain."""
@@ -65,7 +71,7 @@ class LaneCaptureResources:
         control_launch: Callable[[], None],
         workspace: torch.Tensor,
     ) -> tuple[torch.cuda.CUDAGraph, torch.cuda.CUDAGraph, xpool.native.ffnagent.CaptureWorkspaceView | None]:
-        """Capture P/C using one retained root and verify its private backing.
+        """Capture P/C using the Signature's prefix and verify its private backing.
 
         Each launch runs for warmup and capture. Failures keep the acquired
         Graphs and backing for confirmed native retirement.
@@ -122,6 +128,7 @@ class LaneCaptureResources:
         """Release backing after native graph retirement has been confirmed."""
 
         self.release_capture_resources()
+        self.workspace = None
         self.pool = None
         self.stream = None
         if self.stream_owner is not None:
@@ -185,6 +192,7 @@ def capture_dense_signature(
     control_probe: weights.DenseFfnWeights,
     *,
     owner: LaneCaptureResources,
+    workspace: torch.Tensor,
 ) -> xpool.native.ffnagent.DenseCaptureDescriptor:
     """Capture primary/control Dense bodies from one retained preparation."""
 
@@ -198,12 +206,6 @@ def capture_dense_signature(
     owner.capture_tensors.append(hidden_states)
     partial = torch.empty(placeholder_layout.partial.shape, dtype=placeholder_layout.partial.dtype, device="cuda")
     owner.capture_tensors.append(partial)
-    if owner.pool is None:
-        raise AssertionError("Dense capture requires its retained Lane pool")
-    stream = cast(torch.cuda.ExternalStream, owner.stream)
-    with torch.cuda.use_mem_pool(owner.pool), torch.cuda.stream(stream):
-        workspace = torch.empty(plan.workspace.nbytes, dtype=torch.uint8, device="cuda")
-    owner.capture_tensors.append(workspace)
 
     operation = dense.Dense(plan, workspace)
 
@@ -243,6 +245,7 @@ def capture_moe_signature(
     control_probe: weights.MoeFfnWeights,
     *,
     owner: LaneCaptureResources,
+    workspace: torch.Tensor,
 ) -> xpool.native.ffnagent.MoeCaptureDescriptor:
     """Capture primary/control MoE bodies from one retained preparation."""
 
@@ -284,12 +287,6 @@ def capture_moe_signature(
         .expand_as(topk_ids)
     )
     topk_weights.fill_(1.0 / signature.effective_topk)
-    if owner.pool is None:
-        raise AssertionError("MoE capture requires its retained Lane pool")
-    stream = cast(torch.cuda.ExternalStream, owner.stream)
-    with torch.cuda.use_mem_pool(owner.pool), torch.cuda.stream(stream):
-        workspace = torch.empty(plan.workspace.nbytes, dtype=torch.uint8, device="cuda")
-    owner.capture_tensors.append(workspace)
     views = plan.workspace.views(workspace)
     operation = moe.Experts(plan.experts, views[0])
     router = routing.Router(plan.router, views[1]) if plan.router is not None else None
@@ -392,6 +389,7 @@ class FfnExecutionRegistry:
         fabric_plan: FabricPlan,
         model_specs: tuple[ffn.FfnModelSpec, ...],
         ffnagent_index: int,
+        device_properties: GemmDeviceProperties,
     ) -> None:
         """Complete local construction and retained cleanup before readiness.
 
@@ -407,6 +405,7 @@ class FfnExecutionRegistry:
             fabric_plan=fabric_plan,
             model_specs=model_specs,
             ffnagent_index=ffnagent_index,
+            device_properties=device_properties,
         )
         # Construction locals have exited; trim only releasable default-domain cache.
         torch.cuda.synchronize(device)
@@ -419,6 +418,7 @@ class FfnExecutionRegistry:
         fabric_plan: FabricPlan,
         model_specs: tuple[ffn.FfnModelSpec, ...],
         ffnagent_index: int,
+        device_properties: GemmDeviceProperties,
     ) -> None:
         """Own the construction-local frame for materialize's consumed attempt."""
 
@@ -486,16 +486,18 @@ class FfnExecutionRegistry:
         compute_plans = preparation.prepare_execution_plans(tuple(signatures))
         capture_started_at = monotonic()
         lane_descriptors = []
-        estimated_pool_bytes = capture_pool_reservation_bytes(compute_plans)
+        pool_charge = capture_pool_charge(compute_plans, executor_lane_count=1, device_properties=device_properties)
         capture_weight_pair_keys = tuple(execution.capture_weight_pair_key(signature) for signature in signatures)
         for _ in range(fabric_plan.executor_lane_count):
             lane = LaneCaptureResources()
             self.capture_lanes.append(lane)
+            if not signatures:
+                lane_descriptors.append(xpool.native.ffnagent.LaneCaptureDescriptor(signatures=()))
+                continue
+            root = lane.initialize(workspace_bytes=pool_charge.exact_logical_bytes)
             captures: list[
                 xpool.native.ffnagent.DenseCaptureDescriptor | xpool.native.ffnagent.MoeCaptureDescriptor
             ] = []
-            if signatures:
-                lane.initialize()
             for signature, compute_plan, representative, key in zip(
                 signatures,
                 compute_plans,
@@ -523,6 +525,7 @@ class FfnExecutionRegistry:
                     )
                     capture_weight_pair = (representative, probe)
                     self.capture_weight_pairs[key] = capture_weight_pair
+                workspace = root[: compute_plan.workspace.nbytes]
                 # Admission and the signature-keyed cache preserve the weight kind.
                 if isinstance(compute_plan, dense.DenseExecutionPlan):
                     dense_weights, dense_probe = cast(
@@ -534,6 +537,7 @@ class FfnExecutionRegistry:
                             dense_weights,
                             dense_probe,
                             owner=lane,
+                            workspace=workspace,
                         )
                     )
                 else:
@@ -546,10 +550,10 @@ class FfnExecutionRegistry:
                             moe_weights,
                             moe_probe,
                             owner=lane,
+                            workspace=workspace,
                         )
                     )
-            if signatures:
-                lane.report_reservation(estimated_pool_bytes)
+            lane.report_reservation(pool_charge.estimated_physical_bytes)
             lane_descriptors.append(xpool.native.ffnagent.LaneCaptureDescriptor(signatures=tuple(captures)))
         logger.info(
             "graph templates captured device=%s signature_count=%s dense_count=%s moe_count=%s "

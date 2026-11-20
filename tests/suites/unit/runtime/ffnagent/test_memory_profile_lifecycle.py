@@ -16,7 +16,7 @@ from xpool.fabric import FABRIC_UID_HEX_LENGTH
 from xpool.runtime.ffnagent.device_memory import StartupPoint
 from xpool.runtime.ffnagent.memory_profile import corpus, runner
 from xpool.utils.cuda import CudaRuntimeError, is_terminal_device_error
-from xtest.harness.support.config import TEST_CALIBRATION_ENVIRONMENT, synthetic_config
+from xtest.harness.support.config import TEST_CALIBRATION_ENVIRONMENT, TEST_GEMM_DEVICE_PROPERTIES, synthetic_config
 
 
 @pytest.fixture
@@ -45,6 +45,7 @@ def participant(
     initial = getattr(request, "param", "plan")
     parent.send(plan if initial == "plan" else initial)
     monkeypatch.setattr(runner.memory_calibration, "observe_environment", lambda device: TEST_CALIBRATION_ENVIRONMENT)
+    monkeypatch.setattr(runner, "observe_gemm_device_properties", lambda device: TEST_GEMM_DEVICE_PROPERTIES)
     monkeypatch.setattr(runner, "initialize_child_signals", lambda mask: None)
     monkeypatch.setattr(runner, "init_global_config", lambda **kwargs: synthetic_config())
     monkeypatch.setattr(runner.bootstrap, "init", lambda device, role: None)
