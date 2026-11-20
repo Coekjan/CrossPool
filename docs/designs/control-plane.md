@@ -505,6 +505,10 @@ they also retain CPU-only startup and helper processes through retirement.
 While a retained scheduler or cache owner remains alive, the serving owner
 refreshes current membership within its original retirement deadline. Confirmed
 context termination precedes destructive host exit for an attached client.
+After a context termination request error, the serving owner rechecks the
+target's exact process identity. The serving owner continues after confirmed
+exit. If the target is still alive, it propagates the original error and
+retains ownership.
 Controller/server domain retirement remains the scope's responsibility.
 
 An Instance rank's exit retires its Generation rather than leaving it reusable.

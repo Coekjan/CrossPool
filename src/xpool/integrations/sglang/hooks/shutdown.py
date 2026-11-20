@@ -32,6 +32,7 @@ from xpool.integrations.sglang import worker
 from xpool.integrations.sglang.hooks.registry import SglangHook, SglangHookSet
 from xpool.native import ABI_VERSION
 from xpool.service.client import XpoolClient
+from xpool.service.errors import XpoolClientError, XpoolDaemonError
 from xpool.service.wire import MpsClientTermination
 from xpool.utils.device import visible_uuids
 from xpool.utils.mps import MPS_CLEANUP_TIMEOUT_S, MPS_TERMINATION_TIMEOUT_S, MpsEndpoint
@@ -490,14 +491,18 @@ class ShutdownHookSet(SglangHookSet):
                             if remaining <= 0:
                                 raise TimeoutError("serving context termination deadline expired")
                             client = XpoolClient(timeout_s=min(5.0, remaining))
-                        client.terminate_serving_client(
-                            MpsClientTermination(
-                                pid=target.pid,
-                                create_time=target.create_time,
-                                abi_version=ABI_VERSION,
-                                deadline=deadline,
-                            )
+                        request = MpsClientTermination(
+                            pid=target.pid,
+                            create_time=target.create_time,
+                            abi_version=ABI_VERSION,
+                            deadline=deadline,
                         )
+                        try:
+                            client.terminate_serving_client(request)
+                        except (XpoolClientError, XpoolDaemonError):
+                            if target.is_alive():
+                                raise
+                            break
                         self.terminated_clients.add(target)
                         break
                     if target not in self.schedulers and target.pid not in cache_pids:

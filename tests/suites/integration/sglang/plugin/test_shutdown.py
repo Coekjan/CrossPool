@@ -27,6 +27,7 @@ from sglang.srt.server_args import PortArgs, ServerArgs
 from xpool.integrations.sglang import worker
 from xpool.integrations.sglang.hooks import shutdown
 from xpool.service.client import XpoolClient
+from xpool.service.errors import XpoolClientError, XpoolDaemonError
 from xpool.service.wire import MpsClientTermination
 from xpool.utils.mps import MpsEndpoint
 from xpool.utils.procs import ProcUniqId
@@ -316,9 +317,9 @@ def test_router_notification_timeout_preserves_independent_retirement_checks(
     assert checked == [([ProcUniqId(os.getpid())], 1000.0)]
 
 
-@pytest.mark.parametrize("confirmed", [True, False])
+@pytest.mark.parametrize("outcome", ["confirmed", "unconfirmed", "exited"])
 def test_destructive_exit_confirms_all_affected_clients_before_any_host_signal(
-    confirmed: bool,
+    outcome: str,
     monkeypatch: pytest.MonkeyPatch,
     serving_tree: tuple[subprocess.Popen[str], tuple[ProcUniqId, ...]],
 ) -> None:
@@ -328,10 +329,10 @@ def test_destructive_exit_confirms_all_affected_clients_before_any_host_signal(
     owner.deadline = time.monotonic() + shutdown.MPS_CLEANUP_TIMEOUT_S
     owner.failed = True
     owner.schedulers = children
-    terminated: list[int] = []
+    requests: list[int] = []
 
     def wait(seconds: float) -> None:
-        assert terminated, "failed-generation retirement must not consume ordinary cooperative drain"
+        assert requests, "failed-generation retirement must not consume ordinary cooperative drain"
         time.sleep(seconds)
 
     monkeypatch.setattr(shutdown, "time", SimpleNamespace(monotonic=time.monotonic, sleep=wait))
@@ -342,10 +343,19 @@ def test_destructive_exit_confirms_all_affected_clients_before_any_host_signal(
     class Client:
         def terminate_serving_client(self, request: MpsClientTermination) -> None:
             assert request.deadline == owner.deadline
-            assert all(child.is_alive() for child in children)
-            terminated.append(request.pid)
-            if not confirmed and len(terminated) == 2:
-                raise RuntimeError("context termination unconfirmed")
+            alive = children[1:] if outcome == "exited" and requests else children
+            assert all(child.is_alive() for child in alive)
+            requests.append(request.pid)
+            if outcome == "exited" and len(requests) == 1:
+                child = children[0]
+                child.send_signal(signal.SIGTERM)
+                exit_deadline = time.monotonic() + 3
+                while child.is_alive():
+                    assert time.monotonic() < exit_deadline
+                    time.sleep(0.01)
+                raise XpoolDaemonError("conflict", "MPS termination target is absent")
+            if outcome == "unconfirmed" and len(requests) == 2:
+                raise XpoolClientError("transport", "context termination unconfirmed")
 
         def close(self) -> None:
             pass
@@ -360,7 +370,7 @@ def test_destructive_exit_confirms_all_affected_clients_before_any_host_signal(
     monkeypatch.setattr(MpsEndpoint, "run_control", management)
     monkeypatch.setattr(shutdown, "XpoolClient", lambda **kwargs: cast(XpoolClient, Client()))
     monkeypatch.setattr(owner, "retain_owner", retain)
-    if confirmed:
+    if outcome != "unconfirmed":
         owner.around_kill_process_tree(None, root.pid, include_parent=False, wait_timeout=3)
         assert not any(child.is_alive() for child in children)
     else:
@@ -368,7 +378,7 @@ def test_destructive_exit_confirms_all_affected_clients_before_any_host_signal(
             owner.around_kill_process_tree(None, root.pid, include_parent=False, wait_timeout=3)
         assert len(retention_errors) == 1
         assert str(retention_errors[0]) == "context termination unconfirmed"
-    assert terminated == [child.pid for child in children]
+    assert requests == [child.pid for child in children]
     assert root.poll() is None
 
 
