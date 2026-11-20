@@ -106,10 +106,11 @@ identical token prefixes, then normalizes and reduces in CPU FP64. Limits are
 inclusive, and any failing position fails the case. `numerical.json` reports
 the configured Decode policy and server-reported Attention backends per model
 and Graph setting. It separates stage verdicts from Eager-to-candidate
-end-to-end diagnostics, retaining their discrepancies and limits. Graph evidence
-is selected by Model ID before applying each measured request window. Each
-enabled Graph phase requires that model's capture events from its complete event
-stream and actual Prefill execution or Decode replay within its request window.
+end-to-end diagnostics, retaining their discrepancies and limits. Graph checks
+select events by Model ID before applying the host-monotonic request window
+returned by the serving probe. Each enabled Graph phase requires that model's
+capture events from its complete event stream and actual Prefill execution or
+Decode replay within its request window.
 Full Decode requires one process to replay at least as many steps as the
 returned prediction count minus one. Sampler evidence separately covers
 every participating TP rank's token prefixes.

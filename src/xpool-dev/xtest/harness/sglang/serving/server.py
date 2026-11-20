@@ -26,6 +26,7 @@ HTTP_TIMEOUT_SECONDS = 5 * 60.0
 class SglangServerResult:
     """One request and CPU FP32 logprobs ordered by vocabulary ID.
 
+    The host-monotonic window brackets the generation POST in nanoseconds.
     Row i conditions on ``(input_ids + output_ids)[:prefix_lengths[i]]``.
     Non-numerical requests have no prediction rows or logprob file.
     """
@@ -36,7 +37,8 @@ class SglangServerResult:
     input_ids: tuple[int, ...]
     output_ids: tuple[int, ...]
     cached_tokens: int | None
-    inference_path: Path
+    started_ns: int
+    finished_ns: int
     logprobs_path: Path | None
     reported_prefill_attention_backend: str | None = None
     reported_decode_attention_backend: str | None = None
@@ -179,7 +181,8 @@ class SglangProbeServer:
             input_ids=input_ids,
             output_ids=output_ids,
             cached_tokens=cached_tokens,
-            inference_path=record_path,
+            started_ns=started_ns,
+            finished_ns=finished_ns,
             logprobs_path=logprobs_path,
             reported_prefill_attention_backend=backend_name.validate_python(
                 info.get("prefill_attention_backend") or attention_backend, strict=True

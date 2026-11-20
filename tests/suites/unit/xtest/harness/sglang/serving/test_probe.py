@@ -140,8 +140,9 @@ def test_probe_adapter_uses_shared_system_and_always_closes(
                 (1,),
                 tuple(range(8)),
                 None,
-                tmp_path / "inference.json",
-                None,
+                started_ns=100,
+                finished_ns=200,
+                logprobs_path=None,
             ),
         )
 

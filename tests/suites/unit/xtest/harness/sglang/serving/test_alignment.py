@@ -25,7 +25,8 @@ def result(tmp_path: Path, name: str, logprobs: torch.Tensor) -> SglangServerRes
         input_ids=(1, 2),
         output_ids=tuple(range(logprobs.shape[0])),
         cached_tokens=0,
-        inference_path=tmp_path / f"{name}.json",
+        started_ns=100,
+        finished_ns=200,
         logprobs_path=path,
     )
 

@@ -81,6 +81,7 @@ def test_generation_retains_conditioning_and_full_vocabulary_rows(
     record = TypeAdapter(SglangInferenceRecord).validate_json(path.read_bytes())
     assert record.request == request and record.response == response
     assert record.started_ns <= record.finished_ns
+    assert (result.started_ns, result.finished_ns) == (record.started_ns, record.finished_ns)
 
 
 @pytest.mark.parametrize(

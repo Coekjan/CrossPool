@@ -6,7 +6,7 @@ from xkit.serving.sglang.graph import SglangGraphMode
 from xpool.integrations.sglang.devkit import SglangGraphEvent
 from xpool.model import ModelId
 from xtest.harness.sglang.serving.attempt import ProbeRun
-from xtest.harness.sglang.serving.server import SglangInferenceRecord, SglangServerResult
+from xtest.harness.sglang.serving.server import SglangServerResult
 from xtest.harness.support.config import TEST_MODEL_ID
 from xtest.harness.support.sglang.graph import assert_run_graph_evidence
 
@@ -35,11 +35,19 @@ def test_graph_proof_belongs_to_each_model_and_measured_request(
     results = []
     events: list[SglangGraphEvent] = []
     for pid, model_id in enumerate(model_ids, start=1):
-        path = tmp_path / f"inference-{pid}.json"
-        SglangInferenceRecord(model_id, "http://localhost/generate", {}, 200, "application/json", {}, 100, 200).write(
-            path
+        results.append(
+            SglangServerResult(
+                model_id,
+                settings,
+                "generation",
+                (1,),
+                tuple(range(8)),
+                0,
+                started_ns=100,
+                finished_ns=200,
+                logprobs_path=None,
+            )
         )
-        results.append(SglangServerResult(model_id, settings, "generation", (1,), tuple(range(8)), 0, path, None))
         operations = ("capture", "execute") if pid == 1 else second_model_operations
         if "capture" in operations:
             events.extend(

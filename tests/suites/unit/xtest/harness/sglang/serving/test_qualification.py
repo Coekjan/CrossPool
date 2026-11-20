@@ -111,8 +111,9 @@ def test_model_case_replays_same_phase_and_enforces_kl_without_runner_artifacts(
             input_ids,
             output_ids,
             0,
-            record_path,
-            path,
+            started_ns=100,
+            finished_ns=200,
+            logprobs_path=path,
             reported_prefill_attention_backend="fa3",
             reported_decode_attention_backend="fa3",
         )
