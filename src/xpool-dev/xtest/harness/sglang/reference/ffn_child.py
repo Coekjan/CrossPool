@@ -62,8 +62,8 @@ def replace_routing_output(
     router_logits: torch.Tensor,
     topk_ids: torch.Tensor,
     topk_weights: torch.Tensor,
-) -> object:
-    """Rebuild the actual upstream carrier and verify its prescribed consumption."""
+) -> tuple[object, tuple[torch.Tensor, torch.Tensor]]:
+    """Return the rebuilt SGLang carrier and its verified CPU IDs and weights."""
 
     from sglang.srt.layers.moe.topk import StandardTopKOutput, TritonKernelTopKOutput, routing
 
@@ -81,7 +81,7 @@ def replace_routing_output(
         consumed_weights, expected_weights.cpu().float()
     ):
         raise RuntimeError("FFN reference carrier did not preserve prescribed IDs and weights")
-    return result
+    return result, (consumed_ids, consumed_weights)
 
 
 def run_ffn_reference_child(
@@ -324,9 +324,11 @@ def execute_ffn_reference_case(
                 raise ValueError("FFN reference prescribed routes disagree with the loaded model")
             if persist_result:
                 natural_routing = read_routing_output(output)
-            result = replace_routing_output(output, router_logits=inputs[1], topk_ids=ids, topk_weights=coefficients)
+            result, consumed_routing = replace_routing_output(
+                output, router_logits=inputs[1], topk_ids=ids, topk_weights=coefficients
+            )
             if persist_result:
-                prescribed_routing = read_routing_output(result)
+                prescribed_routing = consumed_routing
             topk_calls += 1
             return result
 

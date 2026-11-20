@@ -52,13 +52,16 @@ def test_reference_carrier_consumes_prescribed_ids_and_weights(expert_major: boo
     ids = torch.tensor(((1, 7), (8, 3), (15, 0)), device="cuda", dtype=torch.int32)
     weights = torch.tensor(((0.2, 0.8), (0.6, 0.4), (0.1, 0.9)), device="cuda", dtype=torch.float32)
 
-    replaced = replace_routing_output(carrier, router_logits=logits, topk_ids=ids, topk_weights=weights)
+    replaced, verified_routing = replace_routing_output(
+        carrier, router_logits=logits, topk_ids=ids, topk_weights=weights
+    )
     consumed_ids, consumed_weights = read_routing_output(replaced)
 
+    torch.testing.assert_close(verified_routing, (consumed_ids, consumed_weights), rtol=0, atol=0)
     assert torch.equal(consumed_ids, ids.cpu())
     assert torch.equal(consumed_weights, weights.cpu())
     self_ids, self_weights = read_routing_output(carrier)
-    self_replaced = replace_routing_output(
+    self_replaced, _ = replace_routing_output(
         carrier, router_logits=logits, topk_ids=self_ids.cuda(), topk_weights=self_weights.cuda()
     )
     restored_ids, restored_weights = read_routing_output(self_replaced)
