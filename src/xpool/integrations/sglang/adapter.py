@@ -30,11 +30,16 @@ from xpool.runtime.instance import InstanceRankRuntime
 DECODER_FFN_WEIGHT_PATTERN = re.compile(r"^model\.layers\.\d+\.mlp(?:\.|$)")
 
 
-def filter_decoder_ffn_weights[W](weights: Iterable[tuple[str, W]]) -> Iterator[tuple[str, W]]:
-    """Yield checkpoint tensors outside canonical decoder FFN subtrees."""
+def filter_decoder_ffn_weights[W](
+    weights: Iterable[tuple[str, W]], *, pattern: re.Pattern[str] = DECODER_FFN_WEIGHT_PATTERN
+) -> Iterator[tuple[str, W]]:
+    """Yield checkpoint tensors after excluding keys matched by `pattern`.
+
+    The default pattern selects `model.layers.<layer>.mlp` subtrees.
+    """
 
     for name, tensor in weights:
-        if DECODER_FFN_WEIGHT_PATTERN.match(name) is None:
+        if pattern.match(name) is None:
             yield name, tensor
 
 

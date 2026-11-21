@@ -12,11 +12,13 @@ from xpool.ffn import (
     GateTransform,
     GateUpOrder,
     MoeFfnSpec,
+    ReluActivation,
     RouterAlgorithm,
     RouterProjectionPrecision,
     SiluActivation,
     StackedExpertSource,
     TopKWeightRounding,
+    UngatedProjectionSpec,
     ValuesSourceLayout,
 )
 from xpool.quantization import Mxfp4, Unquantized
@@ -114,6 +116,75 @@ def test_load_compiles_llama_dense_layers(
         assert layer.layer_id == layer_id
         assert layer.intermediate_size == intermediate_size
         assert layer.tensor_keys() == dense_keys(layer_id)
+
+
+@pytest.mark.parametrize(
+    ("prefix", "bias", "activation"),
+    (
+        ("model.decoder.layers", True, "relu"),
+        ("model.decoder.layers", False, "relu"),
+        ("decoder.layers", True, "relu"),
+        ("decoder.layers", False, None),
+    ),
+)
+def test_load_compiles_opt_checkpoint_sources(tmp_path: Path, prefix: str, bias: bool, activation: str | None) -> None:
+    config = {
+        "architectures": ["OPTForCausalLM"],
+        "model_type": "opt",
+        "torch_dtype": "float16",
+        "hidden_size": 16,
+        "ffn_dim": 32,
+        "num_hidden_layers": 2,
+        "enable_bias": bias,
+    }
+    if activation is not None:
+        config["activation_function"] = activation
+    keys = tuple(
+        f"{prefix}.{layer}.{projection}.{suffix}"
+        for layer in range(2)
+        for projection in ("fc1", "fc2")
+        for suffix in (("weight", "bias") if bias else ("weight",))
+    )
+    model_path = tmp_path / "model"
+    attention_prefix = "decoder.layers" if prefix.startswith("model.") else "model.decoder.layers"
+    write_indexed_model(model_path, config, (*keys, f"{attention_prefix}.0.self_attn.weight"))
+
+    spec = architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
+
+    assert spec.activation == ReluActivation()
+    assert tuple(key for layer in spec.layers for key in layer.tensor_keys()) == keys
+    assert all(
+        isinstance(layer, DenseFfnSpec) and isinstance(layer.projections, UngatedProjectionSpec)
+        for layer in spec.layers
+    )
+    assert FfnModelSpec.model_validate(spec.model_dump(mode="json")) == spec
+
+
+@pytest.mark.parametrize("defect", ("missing", "extra", "ambiguous"))
+def test_opt_checkpoint_namespace_requires_exact_coverage(tmp_path: Path, defect: str) -> None:
+    config = {
+        "architectures": ["OPTForCausalLM"],
+        "model_type": "opt",
+        "activation_function": "relu",
+        "hidden_size": 16,
+        "ffn_dim": 32,
+        "num_hidden_layers": 1,
+    }
+    keys = [
+        f"model.decoder.layers.0.{projection}.{suffix}"
+        for projection in ("fc1", "fc2")
+        for suffix in ("weight", "bias")
+    ]
+    if defect == "missing":
+        keys.remove("model.decoder.layers.0.fc1.bias")
+    elif defect == "extra":
+        keys.append("model.decoder.layers.0.fc2.unexpected")
+    else:
+        keys.append("decoder.layers.0.fc1.weight")
+    model_path = tmp_path / "model"
+    write_indexed_model(model_path, config, tuple(keys))
+    with pytest.raises(RuntimeError, match=r"namespace|missing|extra"):
+        architecture.load(model_id=TEST_MODEL_ID, model_path=model_path)
 
 
 @pytest.mark.parametrize("dtype_field", ("dtype", "torch_dtype"))

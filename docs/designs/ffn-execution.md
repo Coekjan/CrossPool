@@ -22,14 +22,17 @@ additive projection bias and selection-only Router correction bias have separate
 declarations. A representable declaration does not establish operator support
 or qualify a concrete model.
 
-Family adapters check the model type and declared activation. Where the adapter
-names a source dtype field, the checkpoint must declare BF16 or FP16. Original
-GPT-OSS configs omit that field. `InstanceFfnProfile` independently requires
-BF16 or FP16 payloads. See [checkpoint qualification](qualification.md#numerical-and-graph-evidence).
+Family adapters check the model type and activation semantics. OPT uses ReLU
+when `activation_function` is absent. A source dtype field selected by the
+adapter must declare BF16 or FP16. OPT accepts an omitted source dtype
+declaration, and original GPT-OSS configs omit it. `InstanceFfnProfile`
+independently requires BF16 or FP16 payloads. See
+[checkpoint qualification](qualification.md#numerical-and-graph-evidence).
 
 Compilation validates exact FFN key coverage for each Spec-declared layer
-within family-owned checkpoint prefixes. Before materializing weight tensors,
-the loader checks Model/Instance identity
+within family-owned checkpoint prefixes. OPT selects its decoder prefix from
+FFN keys independently of attention and normalization keys. Before materializing
+weight tensors, the loader checks Model/Instance identity
 and ordered layer geometry. Weights are read from explicit safetensors keys.
 The bounded reader verifies each original source shape, forms its declared
 canonical view, then applies the selected TP slice. Matrix and scale-blocked

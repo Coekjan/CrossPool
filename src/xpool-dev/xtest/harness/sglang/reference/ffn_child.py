@@ -19,6 +19,7 @@ SUPPORTED_MODEL_CLASSES = frozenset(
         "Glm4MoeLiteForCausalLM",
         "GptOssForCausalLM",
         "LlamaForCausalLM",
+        "OPTForCausalLM",
         "Qwen2ForCausalLM",
         "Qwen3ForCausalLM",
         "Qwen3MoeForCausalLM",
@@ -229,17 +230,20 @@ def run_ffn_reference_rank(
         model.eval()
         # The pinned loader returns unrelated concrete model classes.
         typed_model = typing.cast(typing.Any, model)
+        layers = (
+            typed_model.model.decoder.layers if type(model).__name__ == "OPTForCausalLM" else typed_model.model.layers
+        )
 
         for case in job.cases:
-            if case.layer_id >= len(typed_model.model.layers):
+            if case.layer_id >= len(layers):
                 raise RuntimeError(f"FFN reference layer {case.layer_id} is outside the model layer range")
-            layer = typed_model.model.layers[case.layer_id]
+            layer = layers[case.layer_id]
             if isinstance(layer, sglang.srt.layers.utils.PPMissingLayer):
                 raise RuntimeError(f"FFN reference TP rank {tensor_parallel_rank} does not own layer {case.layer_id}")
             execute_ffn_reference_case(
                 hidden_size=model_config.hidden_size,
                 model_dtype=model_config.dtype,
-                mlp=layer.mlp,
+                mlp=layer if type(model).__name__ == "OPTForCausalLM" else layer.mlp,
                 case=case,
                 persist_result=tensor_parallel_rank == 0,
             )
@@ -275,6 +279,7 @@ def execute_ffn_reference_case(
 
     import safetensors.torch
     import sglang.srt.layers.dp_attention
+    import sglang.srt.models.opt
     import torch
 
     tensors = safetensors.torch.load_file(case.input_path, device="cpu")
@@ -336,7 +341,11 @@ def execute_ffn_reference_case(
 
     try:
         with torch.inference_mode():
-            output = mlp(hidden_states.to(device="cuda"))
+            if isinstance(mlp, sglang.srt.models.opt.OPTDecoderLayer):
+                projected, _ = mlp.fc1(hidden_states.to(device="cuda"))
+                output, _ = mlp.fc2(mlp.activation_fn(projected))
+            else:
+                output = mlp(hidden_states.to(device="cuda"))
         if not isinstance(output, torch.Tensor):
             raise RuntimeError(f"FFN reference MLP returned {type(output).__name__}, expected Tensor")
         output = output.detach().to(device="cpu").contiguous()
