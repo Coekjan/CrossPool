@@ -9,7 +9,7 @@ __pycache__/
 src/xpool/native/
 
 .mypy_cache/
-.pytest_cache/
+.pytest_cache
 .ruff_cache/
 .ty/
 .coverage
