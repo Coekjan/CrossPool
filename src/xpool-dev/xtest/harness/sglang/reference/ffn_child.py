@@ -13,11 +13,13 @@ from xtest.harness.sglang.reference import ffn_protocol
 from xtest.harness.support.environment import qualification_environment
 
 SGLANG_PLUGIN_SENTINEL = "__xpool_sglang_ffn_reference_no_plugins__"
+GEMMA4_MODEL_CLASSES = {"Gemma4ForConditionalGeneration", "Gemma4UnifiedForConditionalGeneration"}
 SUPPORTED_MODEL_CLASSES = frozenset(
     {
         "DeepseekV2ForCausalLM",
         "Glm4MoeLiteForCausalLM",
         "GptOssForCausalLM",
+        *GEMMA4_MODEL_CLASSES,
         "LlamaForCausalLM",
         "OPTForCausalLM",
         "Qwen2ForCausalLM",
@@ -225,14 +227,18 @@ def run_ffn_reference_rank(
         )
         sglang.srt.distributed.parallel_state.monkey_patch_vllm_parallel_state(reverse=True)
         vllm_parallel_state_patched = False
-        if type(model).__name__ not in SUPPORTED_MODEL_CLASSES:
-            raise RuntimeError(f"unsupported FFN reference model class: {type(model).__name__}")
+        model_class = type(model).__name__
+        if model_class not in SUPPORTED_MODEL_CLASSES:
+            raise RuntimeError(f"unsupported FFN reference model class: {model_class}")
         model.eval()
         # The pinned loader returns unrelated concrete model classes.
         typed_model = typing.cast(typing.Any, model)
-        layers = (
-            typed_model.model.decoder.layers if type(model).__name__ == "OPTForCausalLM" else typed_model.model.layers
-        )
+        if model_class in GEMMA4_MODEL_CLASSES:
+            layers = typed_model.language_model.layers
+        elif model_class == "OPTForCausalLM":
+            layers = typed_model.model.decoder.layers
+        else:
+            layers = typed_model.model.layers
 
         for case in job.cases:
             if case.layer_id >= len(layers):
@@ -243,7 +249,7 @@ def run_ffn_reference_rank(
             execute_ffn_reference_case(
                 hidden_size=model_config.hidden_size,
                 model_dtype=model_config.dtype,
-                mlp=layer if type(model).__name__ == "OPTForCausalLM" else layer.mlp,
+                mlp=layer if model_class == "OPTForCausalLM" else layer.mlp,
                 case=case,
                 persist_result=tensor_parallel_rank == 0,
             )

@@ -14,6 +14,7 @@ def test_ffn_model_adapter_discovery_is_stable_and_module_owned() -> None:
 
     assert tuple(module.name for module in modules) == (
         "xpool.runtime.ffnagent.models.deepseek_v2",
+        "xpool.runtime.ffnagent.models.gemma4",
         "xpool.runtime.ffnagent.models.glm4_moe_lite",
         "xpool.runtime.ffnagent.models.gpt_oss",
         "xpool.runtime.ffnagent.models.llama",
@@ -22,5 +23,9 @@ def test_ffn_model_adapter_discovery_is_stable_and_module_owned() -> None:
         "xpool.runtime.ffnagent.models.qwen3",
         "xpool.runtime.ffnagent.models.qwen3_moe",
     )
-    assert tuple(adapter.__module__ for adapter in adapters) == tuple(module.name for module in modules)
+    assert tuple(dict.fromkeys(adapter.__module__ for adapter in adapters)) == tuple(module.name for module in modules)
+    assert {adapter.architecture_name for adapter in adapters if adapter.__module__.endswith(".gemma4")} == {
+        "Gemma4ForConditionalGeneration",
+        "Gemma4UnifiedForConditionalGeneration",
+    }
     assert all(adapter.__module__ != FfnModelAdapter.__module__ for adapter in adapters)

@@ -38,6 +38,8 @@ def prepare(
         SglangLaunchModel(
             model_id=model_id,
             graph_settings=graph_settings,
+            attention_backend=case.attention_backend,
+            chunked_prefill_size=case.chunked_prefill_size,
         )
         for model_id in case.models
     )

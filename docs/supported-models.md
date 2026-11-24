@@ -32,11 +32,11 @@ wrappers. Model ID links point to the checkpoint configuration.
 | [Qwen/Qwen3.5-27B](https://huggingface.co/Qwen/Qwen3.5-27B/blob/main/config.json) | `Qwen3_5ForConditionalGeneration` | ❌ Not supported |
 | [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b/blob/main/config.json) | `GptOssForCausalLM` | ✅ Supported |
 | [openai/gpt-oss-120b](https://huggingface.co/openai/gpt-oss-120b/blob/main/config.json) | `GptOssForCausalLM` | ✅ Supported |
-| [google/gemma-4-E2B-it](https://huggingface.co/google/gemma-4-E2B-it/blob/main/config.json) | `Gemma4ForConditionalGeneration` | ❌ Not supported |
+| [google/gemma-4-E2B-it](https://huggingface.co/google/gemma-4-E2B-it/blob/main/config.json) | `Gemma4ForConditionalGeneration` | ✅ Supported |
 | [google/gemma-4-E4B-it](https://huggingface.co/google/gemma-4-E4B-it/blob/main/config.json) | `Gemma4ForConditionalGeneration` | ❌ Not supported |
 | [google/gemma-4-26B-A4B-it](https://huggingface.co/google/gemma-4-26B-A4B-it/blob/main/config.json) | `Gemma4ForConditionalGeneration` | ❌ Not supported |
 | [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it/blob/main/config.json) | `Gemma4ForConditionalGeneration` | ❌ Not supported |
-| [google/gemma-4-12B-it](https://huggingface.co/google/gemma-4-12B-it/blob/main/config.json) | `Gemma4UnifiedForConditionalGeneration` | ❌ Not supported |
+| [google/gemma-4-12B-it](https://huggingface.co/google/gemma-4-12B-it/blob/main/config.json) | `Gemma4UnifiedForConditionalGeneration` | ✅ Supported |
 | [huggyllama/llama-7b](https://huggingface.co/huggyllama/llama-7b/blob/main/config.json) | `LlamaForCausalLM` | ✅ Supported |
 | [huggyllama/llama-13b](https://huggingface.co/huggyllama/llama-13b/blob/main/config.json) | `LlamaForCausalLM` | ✅ Supported |
 | [huggyllama/llama-30b](https://huggingface.co/huggyllama/llama-30b/blob/main/config.json) | `LlamaForCausalLM` | ✅ Supported |
@@ -67,6 +67,11 @@ wrappers. Model ID links point to the checkpoint configuration.
 GPT-OSS uses the original MXFP4 checkpoints with BF16 payloads and Hybrid
 Full/SWA storage. Coverage follows the
 [qualification boundary](designs/overview.md#supported-boundary).
+
+Gemma 4 E2B and 12B use their original BF16 multimodal wrappers with attention
+DP 1. Set `--cuda-graph-backend-prefill disabled` and choose `disabled` or
+`full` for `--cuda-graph-backend-decode`. Use `--attention-backend triton`
+and `--chunked-prefill-size -1` for the qualified image input path.
 
 Run the relevant `xtest run --suite <model-id> --strict-requirements` suite
 when changes invalidate that model's qualification evidence. The complete

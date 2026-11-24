@@ -15,7 +15,7 @@ from xkit import ResourceRequirements
 from xkit.config import assemble_config
 from xkit.network import TcpEndpointReservation, TcpPortSpace
 from xpool.fabric import FabricGenerationId, InstanceFfnLayerProfile, InstanceFfnProfile
-from xpool.ffn import FfnLayerSpec, MoeFfnSpec
+from xpool.ffn import DenseFfnSpec, FfnLayerSpec, MoeFfnSpec
 from xpool.native.ffn import DpRowLayout, ForwardMode, OutputRequirement
 from xpool.runtime.ffnagent import architecture
 from xpool.runtime.transport import InstanceRankTransportProfile
@@ -316,12 +316,20 @@ def read_execution_capacities(directory: Path, generation: FabricGenerationId) -
 
 
 def representative_layer_ids(layers: tuple[FfnLayerSpec, ...]) -> tuple[int, ...]:
-    """Return the accepted first, kind-transition, and final Layer IDs."""
+    """Cover decoder endpoints, layer-kind transitions, and Dense width transitions."""
 
     if not layers:
         raise ValueError("FFN representative coverage requires typed nonempty layers")
     selected = [layers[0].layer_id]
-    selected.extend(layer.layer_id for previous, layer in pairwise(layers) if layer.kind != previous.kind)
+    for previous, layer in pairwise(layers):
+        if layer.kind != previous.kind:
+            selected.append(layer.layer_id)
+        elif (
+            isinstance(previous, DenseFfnSpec)
+            and isinstance(layer, DenseFfnSpec)
+            and previous.intermediate_size != layer.intermediate_size
+        ):
+            selected.extend((previous.layer_id, layer.layer_id))
     selected.append(layers[-1].layer_id)
     return tuple(dict.fromkeys(selected))
 

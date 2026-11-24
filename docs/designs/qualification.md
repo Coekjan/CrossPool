@@ -122,7 +122,12 @@ generation, completion, observed Graph execution and verified cleanup.
 
 Routine serving E2E proves installed HTTP completion, graph-mode startup and
 observed Graph structure, and Transport and Fabric behavior at attention TP1
-and TP2 under the combined graph mode.
+and TP2 under the combined graph mode. Gemma 4 uses Eager Prefill with Eager
+and Full Decode at attention TP1 and structural Full Decode at attention TP2.
+The Gemma 4 suites compare native image, audio, and video generation against
+the pinned SGLang wrappers. They retain replay evidence in each measured media
+request window. Gemma 4 prefix reclamation uses Eager Prefill and Full Decode
+in the shared model fleet.
 Explicit per-model suites own independent FFN numerical reference and serving
 graph comparisons, including qualified MoE models. Model suites own their
 explicit qualification whenever an adapter or numerical
