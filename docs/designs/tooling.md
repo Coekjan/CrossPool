@@ -386,21 +386,22 @@ blocks within lease-local ordinals `0..N-1`. Physical UUID mapping and logical
 role placement are retained separately. Nested benchmark E2E execution stays
 within its outer test lease; inner cleanup does not replace the outer supervisor's proof.
 
-`xkit.network` reserves listeners through `bind -> listen -> local connect ->
-accept` qualification using IPv4 literals. Owned serving hosts are IPv4 loopback
-addresses. Reservation acquisition canonicalizes `localhost` to `127.0.0.1`;
-the stored address flows through reacquisition, runtime snapshots, engine
-arguments and client URLs. Wildcard reservations use `0.0.0.0` and qualify a
-connection through `127.0.0.1`. Unsupported address families fail before
-acquisition. Dependency-owned listeners retain their engine-selected families.
+`xkit.network` locks each candidate port in the Linux network namespace before
+binding TCP. The lock covers that port number across bind addresses. The
+reservation qualifies its IPv4 listener with a local connection and releases
+the lock if qualification fails. Owned serving uses IPv4 loopback addresses.
+The allocator resolves `localhost` to `127.0.0.1` and passes that address to
+reacquisition, runtime snapshots, engine arguments and client URLs. Wildcard
+reservations bind `0.0.0.0` and probe through `127.0.0.1`. Dependency-owned
+listeners retain their engine-selected address families.
 `xkit.serving.sglang.endpoints` groups SGLang HTTP, NCCL,
 gRPC, handshake and derived ZMQ endpoints into one owned family.
 NCCL/TCPStore reservations match its wildcard bind scope; HTTP, gRPC and the DP
 handshake retain their declared host. Fixed DP ZMQ reservations cover upstream
-wildcard availability checks. Cooperating namespace locks are keyed by port,
-and reacquisition uses each reservation's original address. Releasing listeners
-for spawn still permits an external bind race; upstream random worker ports
-remain engine-owned.
+wildcard availability checks. The reservation keeps its lock from TCP release
+for spawn through cleanup and any reacquisition of the original bind address.
+An external process can still bind during the handoff. Upstream random worker
+ports remain engine-owned.
 A bindable but unreachable endpoint rejects the family;
 during startup, only a post-cleanup `EADDRINUSE` is a retryable conflict.
 Serving startup passes one absolute monotonic deadline through daemon and every

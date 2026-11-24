@@ -12,6 +12,19 @@ from pathlib import Path
 from typing import Self
 
 
+def reserve_namespace_lock(port: int) -> socket.socket:
+    """Reserve a port across bind addresses within the Linux network namespace."""
+
+    lock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    try:
+        lock.set_inheritable(False)
+        lock.bind(f"\0xpool-test-endpoint-{port}")
+    except BaseException:
+        lock.close()
+        raise
+    return lock
+
+
 class TcpEndpointConflict(RuntimeError):
     """Confirmed post-cleanup occupation of owned TCP endpoint addresses."""
 
@@ -136,10 +149,11 @@ class TcpPortSpace:
 
 @dataclass(slots=True)
 class TcpEndpointReservation:
-    """Own one bound TCP listener until immediately before process spawn."""
+    """Own one port across process startup and cleanup."""
 
     address: tuple[str, int]
     listener: socket.socket | None
+    namespace_lock: socket.socket
 
     @classmethod
     def reserve(cls, host: str, *, port_space: TcpPortSpace, deadline: float | None = None) -> Self:
@@ -175,7 +189,13 @@ class TcpEndpointReservation:
             raise ValueError(f"TCP endpoint port must be in 1..65535, got {port}")
         host = "127.0.0.1" if host == "localhost" else host
         address = (host, port)
-        return cls(address=address, listener=create_qualified_tcp_listener(address, deadline=deadline))
+        lock = reserve_namespace_lock(port)
+        try:
+            listener = create_qualified_tcp_listener(address, deadline=deadline)
+        except BaseException:
+            lock.close()
+            raise
+        return cls(address=address, listener=listener, namespace_lock=lock)
 
     @property
     def host(self) -> str:
@@ -190,7 +210,7 @@ class TcpEndpointReservation:
         return self.address[1]
 
     def release_for_spawn(self) -> None:
-        """Release the listener exactly once immediately before process spawn."""
+        """Release the listener for process spawn while retaining the port lock."""
 
         if self.listener is None:
             raise RuntimeError(f"TCP endpoint {self.host}:{self.port} was already released")
@@ -205,11 +225,12 @@ class TcpEndpointReservation:
         self.listener = create_qualified_tcp_listener(self.address)
 
     def close(self) -> None:
-        """Release an unconsumed listener idempotently."""
+        """Release any listener and the port lock idempotently."""
 
         if self.listener is not None:
             self.listener.close()
             self.listener = None
+        self.namespace_lock.close()
 
 
 def create_tcp_listener(address: tuple[str, int]) -> socket.socket:

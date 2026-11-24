@@ -16,7 +16,7 @@ from xkit.network import (
 )
 
 
-def test_endpoint_reservation_holds_port_until_spawn_release() -> None:
+def test_endpoint_port_lock_excludes_competitors_during_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     port_space = TcpPortSpace.local()
     reservation = TcpEndpointReservation.reserve("127.0.0.1", port_space=port_space)
     competing = TcpEndpointReservation.reserve("127.0.0.1", port_space=port_space)
@@ -29,6 +29,15 @@ def test_endpoint_reservation_holds_port_until_spawn_release() -> None:
             with pytest.raises(OSError):
                 listener.bind((reservation.host, reservation.port))
         reservation.release_for_spawn()
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                xkit.network,
+                "create_qualified_tcp_listener",
+                lambda *args, **kwargs: pytest.fail("contender probed an already reserved port"),
+            )
+            with pytest.raises(OSError) as error:
+                TcpEndpointReservation.reserve_exact("127.0.0.2", reservation.port)
+            assert error.value.errno == errno.EADDRINUSE
         with pytest.raises(RuntimeError, match="already released"):
             reservation.release_for_spawn()
     finally:

@@ -10,8 +10,8 @@ from unittest.mock import patch
 import pytest
 from sglang.srt.server_args import DP_ATTENTION_HANDSHAKE_PORT_DELTA, ZMQ_TCP_PORT_DELTA, PortArgs
 
-from xkit.network import TcpEndpointReservation, TcpPortSpace
-from xkit.serving.sglang.endpoints import SglangEndpointFamilyLease, reserve_namespace_lock
+from xkit.network import TcpEndpointReservation, TcpPortSpace, reserve_namespace_lock
+from xkit.serving.sglang.endpoints import SglangEndpointFamilyLease
 from xtest.harness.support.sglang.fakes import ServerArgs
 
 

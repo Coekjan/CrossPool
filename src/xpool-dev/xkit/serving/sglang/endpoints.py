@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import errno
-import socket
 import time
 from dataclasses import dataclass
 from typing import Self
@@ -53,11 +52,10 @@ class SglangEndpointFamily:
 
 @dataclass(slots=True)
 class SglangEndpointFamilyLease:
-    """Own real listeners and namespace locks for one complete endpoint family."""
+    """Own the reservations for one complete endpoint family."""
 
     family: SglangEndpointFamily
     tcp_reservations: tuple[TcpEndpointReservation, ...]
-    lock_sockets: tuple[socket.socket, ...]
     tcp_released: bool = False
     closed: bool = False
 
@@ -73,7 +71,6 @@ class SglangEndpointFamilyLease:
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError("SGLang endpoint allocation exceeded the startup deadline")
             reservations: list[TcpEndpointReservation] = []
-            locks: list[socket.socket] = []
             try:
                 http = TcpEndpointReservation.reserve_exact(host, http_port, deadline=deadline)
                 reservations.append(http)
@@ -94,32 +91,23 @@ class SglangEndpointFamilyLease:
                         )
                         reservations.append(TcpEndpointReservation.reserve_exact(bind_host, port, deadline=deadline))
                         reserved_ports.add(port)
-                locks.extend(reserve_namespace_lock(port) for port in family.ports)
-                return cls(family, tuple(reservations), tuple(locks))
+                return cls(family, tuple(reservations))
             except OSError as error:
                 for reservation in reservations:
                     reservation.close()
-                for lock in locks:
-                    lock.close()
                 if error.errno != errno.EADDRINUSE:
                     raise
                 last_collision = error
             except TcpEndpointUnreachable as error:
                 for reservation in reservations:
                     reservation.close()
-                for lock in locks:
-                    lock.close()
                 last_collision = error.__cause__ if isinstance(error.__cause__, OSError) else None
             except ValueError:
                 for reservation in reservations:
                     reservation.close()
-                for lock in locks:
-                    lock.close()
             except BaseException:
                 for reservation in reservations:
                     reservation.close()
-                for lock in locks:
-                    lock.close()
                 raise
         raise RuntimeError("no eligible SGLang endpoint family is available") from last_collision
 
@@ -155,18 +143,3 @@ class SglangEndpointFamilyLease:
         self.closed = True
         for reservation in self.tcp_reservations:
             reservation.close()
-        for lock in self.lock_sockets:
-            lock.close()
-
-
-def reserve_namespace_lock(port: int) -> socket.socket:
-    """Reserve a port across bind addresses within the Linux network namespace."""
-
-    lock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-    try:
-        lock.set_inheritable(False)
-        lock.bind(f"\0xpool-test-endpoint-{port}")
-    except BaseException:
-        lock.close()
-        raise
-    return lock

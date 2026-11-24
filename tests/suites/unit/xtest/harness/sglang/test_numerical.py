@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import safetensors.torch
@@ -83,7 +84,7 @@ def test_numerical_case_compares_and_retains_every_rank(
         timeout_seconds=180,
     )
     generation = FabricGenerationId(high=1, low=1)
-    endpoint = TcpEndpointReservation(address=("127.0.0.1", 32199), listener=None)
+    endpoint = SimpleNamespace(address=("127.0.0.1", 32199))
     routing: dict[tuple[int, int, int], tuple[torch.Tensor, torch.Tensor]] = {}
     events: list[str] = []
 

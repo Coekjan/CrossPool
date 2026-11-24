@@ -7,8 +7,8 @@ from pathlib import Path
 from tests import TEST_CATALOG_PATH
 
 from xkit.child import PythonChildProcess
-from xkit.network import TcpPortSpace
-from xkit.serving.sglang.endpoints import SglangEndpointFamilyLease, reserve_namespace_lock
+from xkit.network import TcpPortSpace, reserve_namespace_lock
+from xkit.serving.sglang.endpoints import SglangEndpointFamilyLease
 from xkit.supervisor import prepare_task_supervision
 
 
