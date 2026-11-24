@@ -85,6 +85,38 @@ prefix_tokens = 32000
 pressure_model_id = "Qwen/Qwen3-0.6B"
 atn_device_memory_budget_bytes = 11274289152
 
+[serving_cases.333fa7ef-629c-42eb-89d8-0b6da1d22d61]
+description = "Cross-model prefix reclamation for google/gemma-4-E2B-it with Eager prefill."
+module = "e2e.sglang.test_e2e_elastic_kv"
+deployment = "atn1-ffn1-lanes2"
+models = ["google/gemma-4-E2B-it", "Qwen/Qwen3-0.6B"]
+attention_backend = "triton"
+estimated_duration_seconds = 900
+timeout_seconds = 3600
+
+[serving_cases.333fa7ef-629c-42eb-89d8-0b6da1d22d61.elastic_kv]
+prefix_model_id = "google/gemma-4-E2B-it"
+prefix_tokens = 4096
+pressure_model_id = "Qwen/Qwen3-0.6B"
+atn_device_memory_budget_bytes = 17179869184
+prefill_backend = "disabled"
+
+[serving_cases.82eaf879-095e-4870-8c12-fa359ee1582e]
+description = "Cross-model prefix reclamation for google/gemma-4-12B-it with Eager prefill."
+module = "e2e.sglang.test_e2e_elastic_kv"
+deployment = "atn1-ffn1-lanes2"
+models = ["google/gemma-4-12B-it", "Qwen/Qwen3-0.6B"]
+attention_backend = "triton"
+estimated_duration_seconds = 900
+timeout_seconds = 3600
+
+[serving_cases.82eaf879-095e-4870-8c12-fa359ee1582e.elastic_kv]
+prefix_model_id = "google/gemma-4-12B-it"
+prefix_tokens = 2048
+pressure_model_id = "Qwen/Qwen3-0.6B"
+atn_device_memory_budget_bytes = 17179869184
+prefill_backend = "disabled"
+
 [topology_cases.aa7a86cf-b92b-4c03-9d79-36e340785add]
 description = "Single-rank FFN delivery for complete and rank-summed outputs."
 module = "e2e.sglang.test_e2e_ffn_topology"

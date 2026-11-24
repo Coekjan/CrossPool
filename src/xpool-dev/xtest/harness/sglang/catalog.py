@@ -29,6 +29,7 @@ class E2eElasticKvWorkload(BaseModel):
     prefix_tokens: int = Field(gt=0)
     pressure_model_id: ModelId
     atn_device_memory_budget_bytes: int = Field(gt=0)
+    prefill_backend: Literal["breakable", "disabled"] = "breakable"
 
 
 class E2eServingCase(BaseModel):
@@ -50,6 +51,8 @@ class E2eServingCase(BaseModel):
     estimated_duration_seconds: float = Field(gt=0)
     timeout_seconds: float = Field(gt=0)
     elastic_kv: E2eElasticKvWorkload | None = None
+    attention_backend: Literal["triton"] | None = None
+    chunked_prefill_size: Literal[-1] | None = None
 
     @model_validator(mode="after")
     def validate_case(self) -> Self:

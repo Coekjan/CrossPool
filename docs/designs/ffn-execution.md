@@ -31,7 +31,10 @@ independently requires BF16 or FP16 payloads. See
 
 Compilation validates exact FFN key coverage for each Spec-declared layer
 within family-owned checkpoint prefixes. OPT selects its decoder prefix from
-FFN keys independently of attention and normalization keys. Before materializing
+FFN keys independently of attention and normalization keys. The Gemma 4
+adapters own `model.language_model.layers.<layer_id>.mlp` and compile gated
+tanh GELU using the existing Dense projection layouts. E2B doubles the
+intermediate width from layer 15 through the shared-KV suffix. Before materializing
 weight tensors, the loader checks Model/Instance identity
 and ordered layer geometry. Weights are read from explicit safetensors keys.
 The bounded reader verifies each original source shape, forms its declared

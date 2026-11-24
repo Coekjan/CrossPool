@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from xkit.serving.sglang.graph import SglangGraphSettings
 from xpool.config import XpoolConfig
@@ -19,6 +20,8 @@ class SglangLaunchModel:
 
     model_id: ModelId
     graph_settings: SglangGraphSettings
+    attention_backend: Literal["triton"] | None = None
+    chunked_prefill_size: Literal[-1] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.model_id, ModelId):

@@ -207,6 +207,10 @@ def server_command(
     ]
     if model_config.atn_dp_size > 1:
         command.append("--enable-dp-attention")
+    if model.attention_backend is not None:
+        command.extend(("--attention-backend", model.attention_backend))
+    if model.chunked_prefill_size is not None:
+        command.extend(("--chunked-prefill-size", str(model.chunked_prefill_size)))
     command.extend(
         (
             "--cuda-graph-backend-decode",

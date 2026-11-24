@@ -212,7 +212,7 @@ def test_e2e_elastic_kv(
     run = run_probe(
         case,
         base_config=e2e_base_config,
-        graph_settings=SglangGraphSettings(decode_backend="full", prefill_backend="breakable"),
+        graph_settings=SglangGraphSettings(decode_backend="full", prefill_backend=workload.prefill_backend),
         workdir=tmp_path,
         workload=requests,
     )
