@@ -1,42 +1,178 @@
-"""Reusable serving warmup and environment observations for benchmark programs."""
+"""Warm up and measure one benchmark workload, starting and stopping managed servers."""
 
 from __future__ import annotations
 
 import asyncio
-import importlib.metadata
+import os
+import platform
+import signal
 import sys
 import time
+import traceback
 from collections.abc import Callable, Mapping
+from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Literal
 
 import httpx
 from pydantic import JsonValue
 
-from xbench.harness.serving.api import create_api_adapter
-from xbench.harness.serving.case import BenchCase, ServingDevice, ServingDeviceLink, ServingMetadata
-from xbench.harness.serving.client import MeasurementRecorder, RequestState, observe_system, send_request
+from xbench.harness.serving.api import OpenaiAdapter
+from xbench.harness.serving.case import BenchCase, ClientBenchCase, OwnedBenchCase, ServingEndpoint
+from xbench.harness.serving.client import (
+    MeasurementRecorder,
+    RequestState,
+    observe_system,
+    run_measurement,
+    send_request,
+)
+from xbench.harness.serving.environment import (
+    ENVIRONMENT_KEYS,
+    package_versions,
+    write_environment,
+)
+from xbench.harness.serving.hosted import HostedServingAdapter
+from xbench.harness.serving.measure import BenchCaseManifest, RepetitionManifest, RequestRecord
 from xbench.harness.serving.workload import PreparedWorkload
-from xkit.device import query_physical_device_details, query_physical_device_topology
 from xkit.results import write_json
+from xkit.task import TaskCancelled, get_task_root
 from xpool.model import ModelId
 
-ENVIRONMENT_KEYS = (
-    "CUDA_VISIBLE_DEVICES",
-    "CUDA_MPS_PIPE_DIRECTORY",
-    "CUDA_MPS_LOG_DIRECTORY",
-    "CUDA_MPS_ACTIVE_THREAD_PERCENTAGE",
-    "LD_LIBRARY_PATH",
-    "SGLANG_PLUGINS",
-    "HF_HUB_OFFLINE",
-    "TRANSFORMERS_OFFLINE",
-)
+
+async def run_serving(case_manifest: BenchCaseManifest, directory: Path) -> None:
+    case = case_manifest.case
+    workload = case_manifest.load_workload(directory.parent)
+    task = asyncio.current_task()
+    if task is None:
+        raise RuntimeError("benchmark worker requires a running task")
+    loop = asyncio.get_running_loop()
+    root = get_task_root()
+    handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
+    recorder = MeasurementRecorder(directory)
+    cancelled_signal = None
+    infrastructure_error = None
+    failure: Exception | None = None
+
+    def cancel(signum: int) -> None:
+        nonlocal cancelled_signal
+        if cancelled_signal is not None or (root is not None and not root.consume_cancellation()):
+            return
+        cancelled_signal = signum
+        task.cancel()
+
+    try:
+        for signum in handlers:
+            loop.add_signal_handler(signum, cancel, signum)
+        capture_errors: list[str] = []
+        environment: dict[str, JsonValue] = {
+            "mode": case.mode,
+            "tool_software": {
+                "source": "local_distribution_metadata",
+                "python": platform.python_version(),
+                "packages": package_versions(("xpool-dev", "xpool", "httpx"), capture_errors),
+            },
+            "environment": {name: os.environ[name] for name in ENVIRONMENT_KEYS if name in os.environ},
+            "capture_errors": capture_errors,
+            "cache_policy": {
+                "controller": "external" if isinstance(case, ClientBenchCase) else case.mode,
+                "flush_performed": False,
+                "serving_state_reset": False,
+                "warmup_requests_per_target": case.warmup_requests_per_target,
+            },
+        }
+        write_environment(directory, environment)
+        write_json(directory / "warmup.json", {"requests": [], "phase": "not_started"})
+        try:
+            if workload.requests:
+                async with AsyncExitStack() as stack:
+                    check_alive = None
+                    if isinstance(case, ClientBenchCase):
+                        endpoints = {
+                            target.model_id: ServingEndpoint(
+                                base_url=target.base_url,
+                                served_model_name=target.served_model_name or str(target.model_id),
+                            )
+                            for target in case.targets
+                        }
+                    else:
+                        if isinstance(case, OwnedBenchCase):
+                            if case_manifest.deployment is None:
+                                raise ValueError("owned workload lacks its resolved configuration")
+                            from xbench.harness.serving.owned import OwnedServingAdapter
+
+                            serving = OwnedServingAdapter(case, case_manifest.deployment, capture_errors)
+                        else:
+                            if case_manifest.hosted_launch is None:
+                                raise ValueError("hosted workload lacks its launch declaration")
+                            serving = HostedServingAdapter(case, case_manifest.hosted_launch, capture_errors)
+                        print("xbench phase=startup", file=sys.stderr)
+                        ready = await stack.enter_async_context(
+                            serving.start(workdir=directory, startup_timeout_seconds=case.startup_timeout_seconds)
+                        )
+                        endpoints = ready.endpoints
+                        environment["serving"] = ready.model_dump(mode="json")
+                        environment["cache_policy"] = {
+                            "controller": case.mode,
+                            "flush_performed": False,
+                            "serving_state_reset": True,
+                            "warmup_requests_per_target": case.warmup_requests_per_target,
+                        }
+                        write_environment(directory, environment)
+                        print("xbench phase=request-limits", file=sys.stderr)
+                        await serving.validate_workload(workload)
+                        check_alive = serving.check_alive
+                    print("xbench phase=warmup", file=sys.stderr)
+                    await warmup(case, workload, endpoints, directory, check_alive=check_alive)
+                    await run_measurement(case, workload, endpoints, recorder, check_alive=check_alive)
+                    if check_alive is not None:
+                        check_alive()
+        except TaskCancelled:
+            if root is not None:
+                root.consume_cancellation()
+            cancelled_signal = cancelled_signal or signal.SIGINT
+            infrastructure_error = "benchmark repetition cancelled"
+        except asyncio.CancelledError:
+            infrastructure_error = "benchmark repetition cancelled"
+        except Exception as error:
+            failure = error
+            infrastructure_error = f"{type(error).__name__}: {error}"
+            traceback.print_exception(error)
+        finally:
+            measured = (directory / "measurement.json").is_file()
+            if not recorder.failed:
+                for request in workload.requests:
+                    if request.request_id not in recorder.request_ids:
+                        recorder.request(
+                            RequestRecord(
+                                **request.model_dump(),
+                                outcome="failed" if measured else "not_sent",
+                                error_kind="evidence_missing" if measured else "before_measurement",
+                                error_message="terminal evidence unavailable"
+                                if measured
+                                else "measurement did not start",
+                            )
+                        )
+            try:
+                recorder.close()
+            except OSError as error:
+                infrastructure_error = infrastructure_error or f"recording failed: {type(error).__name__}"
+            checkpoint = RepetitionManifest.model_validate_json(
+                (directory / "repetition.json").read_bytes()
+            ).model_copy(update={"infrastructure_error": infrastructure_error})
+            write_json(directory / "repetition.json", checkpoint.model_dump(mode="json"))
+        if cancelled_signal is not None:
+            raise SystemExit(128 + cancelled_signal) from failure
+        if infrastructure_error is not None or recorder.failed:
+            raise RuntimeError(infrastructure_error or "benchmark recording failed") from failure
+    finally:
+        for signum, handler in handlers.items():
+            loop.remove_signal_handler(signum)
+            signal.signal(signum, handler)
 
 
 async def warmup(
     case: BenchCase,
     workload: PreparedWorkload,
-    endpoints: Mapping[ModelId, str],
+    endpoints: Mapping[ModelId, ServingEndpoint],
     directory: Path,
     *,
     check_alive: Callable[[], None] | None,
@@ -49,19 +185,19 @@ async def warmup(
     origin = time.perf_counter()
     stopped = asyncio.Event()
     try:
-        async with httpx.AsyncClient(timeout=None, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=None, follow_redirects=False, trust_env=case.mode == "client") as client:
 
             async def dispatch() -> None:
                 for request in workload.warmup:
                     now = time.perf_counter() - origin
                     target = targets[request.model_id]
-                    adapter = create_api_adapter(target.api)
-                    state = RequestState(request, recorder, adapter, enqueued_at=now)
+                    endpoint = endpoints[request.model_id]
+                    state = RequestState(request, recorder, enqueued_at=now)
                     state.event("enqueue", now)
                     record = await send_request(
                         client,
-                        endpoints[request.model_id],
-                        adapter.payload(request, prompts[request.model_id, request.prompt_id], target),
+                        endpoint.base_url,
+                        OpenaiAdapter.payload(request, prompts[request.model_id, request.prompt_id], target, endpoint),
                         state,
                         origin=origin,
                         timeout_seconds=case.request_timeout_seconds,
@@ -81,78 +217,3 @@ async def warmup(
                 directory / "warmup.json",
                 {"requests": [record.model_dump(mode="json") for record in recorder.requests]},
             )
-
-
-def package_versions(names: tuple[str, ...], errors: list[str]) -> dict[str, str]:
-    versions = {}
-    for name in names:
-        try:
-            versions[name] = importlib.metadata.version(name)
-        except (importlib.metadata.PackageNotFoundError, OSError, ValueError) as error:
-            errors.append(f"package version unavailable: {name}: {error}")
-    return versions
-
-
-def capture_owned_metadata(
-    uuids: tuple[str, ...],
-    *,
-    target_device_uuids: dict[ModelId, tuple[str, ...]],
-    role_device_uuids: dict[Literal["atn", "ffn"], tuple[str, ...]],
-    errors: list[str],
-) -> ServingMetadata:
-    """Observe once before timing and project host facts onto a validated lease.
-
-    Observation failures preserve known placement with unknown device fields and
-    append diagnostics; this snapshot never starts CUDA or changes visibility.
-    """
-
-    devices = {uuid: ServingDevice(uuid=uuid) for uuid in uuids}
-    links = None
-    driver_version = None
-    try:
-        inventory = query_physical_device_details()
-    except (OSError, RuntimeError, ValueError) as error:
-        errors.append(str(error))
-    else:
-        selected = [device for device in inventory if device.uuid in devices]
-        for device in selected:
-            devices[device.uuid] = ServingDevice(
-                uuid=device.uuid,
-                name=device.name,
-                total_memory_bytes=device.total_memory_bytes,
-                pci_bus_id=device.pci_bus_id,
-            )
-        if len(selected) != len(uuids):
-            errors.append("device details unavailable for part of the assigned lease")
-        drivers = {device.driver_version for device in selected}
-        driver_version = next(iter(drivers)) if len(drivers) == 1 else None
-        try:
-            topology = query_physical_device_topology({device.index: device.uuid for device in inventory})
-        except (OSError, RuntimeError, ValueError) as error:
-            errors.append(str(error))
-        else:
-            for uuid in uuids:
-                cpu, numa = topology.affinities.get(uuid, (None, None))
-                devices[uuid] = devices[uuid].model_copy(update={"cpu_affinity": cpu, "numa_affinity": numa})
-            links = tuple(
-                ServingDeviceLink(source_uuid=source, destination_uuid=destination, link=link)
-                for (source, destination), link in topology.links.items()
-                if source in devices and destination in devices
-            )
-    # Use available distribution metadata; do not infer CUDA builds from package suffixes.
-    return ServingMetadata(
-        devices=tuple(devices[uuid] for uuid in uuids),
-        links=links,
-        target_device_uuids=target_device_uuids,
-        role_device_uuids=role_device_uuids,
-        driver_version=driver_version,
-        packages=package_versions(("sglang", "torch"), errors),
-    )
-
-
-def write_environment(directory: Path, environment: dict[str, JsonValue]) -> None:
-    try:
-        write_json(directory / "environment.json", environment)
-    except OSError as error:
-        # Measurement evidence remains authoritative if the diagnostic disk write fails.
-        print(f"xbench environment snapshot unavailable: {error}", file=sys.stderr)

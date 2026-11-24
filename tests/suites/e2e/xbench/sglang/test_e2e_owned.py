@@ -9,12 +9,18 @@ from pathlib import Path
 
 import pytest
 import tomli_w
-from benches.suites.serving.multi_model import requirements_of
 
 import xtest
-from xbench.harness.serving.case import BenchCatalog, JsonlPrompts, NativeSampling, OwnedBenchCase, TraceArrivals
+from xbench.harness.serving.case import (
+    BenchCatalog,
+    JsonlPrompts,
+    OwnedBenchCase,
+    Sampling,
+    TraceArrivals,
+    owned_requirements,
+)
 from xbench.harness.serving.measure import BenchRunManifest
-from xbench.harness.serving.report import load_series
+from xbench.harness.serving.report import load_series, retained_repetitions
 from xbench.harness.serving.workload import ScheduledRequest
 from xkit.case import CaseId
 from xkit.deployment import resolve_deployment_path
@@ -33,7 +39,7 @@ assert isinstance(CASE, OwnedBenchCase)
 
 
 @pytest.mark.usefixtures(e2e_base_config.__name__)
-@xtest.requirements(partial(requirements_of, case=CASE))
+@xtest.requirements(partial(owned_requirements, case=CASE))
 @pytest.mark.estimated_duration(seconds=90)
 @pytest.mark.timeout(4200)
 def test_e2e_owned_benchmark_measures_both_targets_with_assigned_devices(
@@ -66,7 +72,7 @@ def test_e2e_owned_benchmark_measures_both_targets_with_assigned_devices(
                 target.model_copy(
                     update={
                         "prompts": JsonlPrompts(kind="jsonl", path=prompts),
-                        "sampling": NativeSampling(ignore_eos=True),
+                        "sampling": Sampling(ignore_eos=True),
                         "output_tokens": None,
                     }
                 )
@@ -76,9 +82,6 @@ def test_e2e_owned_benchmark_measures_both_targets_with_assigned_devices(
     )
     catalog = workdir / "benches" / "benches.toml"
     catalog.parent.mkdir()
-    source = catalog.parent / "suites/serving/multi_model.py"
-    source.parent.mkdir(parents=True)
-    shutil.copyfile(REPOSITORY_ROOT / "benches/suites/serving/multi_model.py", source)
     deployment = resolve_deployment_path(
         catalog, tuple(target.model_id for target in case.targets), case.deployment.stem
     )
@@ -149,18 +152,17 @@ def test_e2e_owned_benchmark_measures_both_targets_with_assigned_devices(
     run = Path(output_text.strip())
     manifest = BenchRunManifest.model_validate_json((run / "run.json").read_bytes())
     assert manifest.finished and manifest.result_code == 0
-    repetition = run / "cases" / str(case.id) / "repetition-0001"
-    series = load_series(repetition, "owned")
+    attempts, _, complete = retained_repetitions(run, manifest)
+    assert complete and len(attempts) == 1
+    series = load_series(attempts[0], "owned")
     assert series.workload.requests == requests
     assert series.summary.cleanup_verified
     assert series.summary.execution_complete and series.summary.evidence_complete
     assert series.summary.outcomes["success"] == 2
     for target in case.targets:
         assert series.summary.targets[str(target.model_id)].output_tokens == 16
-    inventory = series.environment["local_device_inventory"]
-    assert isinstance(inventory, list) and len(inventory) == 2
-    assert set(inventory) <= set(assigned)
-    serving = series.environment["serving_metadata"]
+    serving = series.environment["serving"]
     assert isinstance(serving, dict) and isinstance(serving["devices"], list)
-    assert {device["uuid"] for device in serving["devices"] if isinstance(device, dict)} == set(inventory)
+    inventory = [device["uuid"] for device in serving["devices"] if isinstance(device, dict)]
+    assert len(inventory) == 2 and set(inventory) <= set(assigned)
     assert serving["role_device_uuids"] == {"atn": [inventory[0]], "ffn": [inventory[1]]}

@@ -2,31 +2,28 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import signal
 import sys
 import time
-import tomllib
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import FrameType
-from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import TypeAdapter
 
-from xbench.harness.collection import CollectedProgram, collect_programs
-from xbench.harness.serving.api import create_api_adapter
 from xbench.harness.serving.case import (
     BenchCase,
-    BenchCatalog,
     BenchValue,
-    ClientBenchCase,
+    HostedBenchCase,
+    HostedLaunchDeclaration,
     OwnedBenchCase,
     ResolvedDeployment,
     resolve_deployment,
 )
+from xbench.harness.serving.hosted import collect_hosted_launches
 from xbench.harness.serving.measure import (
     REPETITION_DIRECTORY_PATTERN,
     BenchCaseManifest,
@@ -39,14 +36,14 @@ from xbench.harness.serving.measure import (
     retained_file,
     validate_measurement,
 )
-from xbench.harness.serving.workload import PreparedWorkload, ScheduledRequest, file_digest, prepare_workload
+from xbench.harness.serving.workload import PreparedWorkload, ScheduledRequest, content_digest, prepare_workload
 from xkit.case import CaseId
-from xkit.config import DeploymentConfig, XpoolDevConfig, get_global_config, init_global_config, resolve_model_weights
+from xkit.config import XpoolDevConfig, get_global_config, init_global_config, resolve_model_weights
 from xkit.device import DevicePool
-from xkit.results import RunEntry, RunStore, write_json, write_jsonl
+from xkit.results import RunEntry, RunStore, file_sha256, iter_jsonl, write_json, write_jsonl
 from xkit.scheduler import ActiveTask, TaskScheduler
 from xkit.supervisor import TaskCompletion, TaskCompletionKind, TaskScopeFailure, TaskStartFailure
-from xpool.config import ConfigSourceRecord, MissingRequiredConfig, XpoolConfig
+from xpool.config import ConfigSourceRecord, XpoolConfig
 
 
 def recover_records[V: BenchValue](path: Path, value_type: type[V]) -> tuple[tuple[V, ...], bool]:
@@ -55,12 +52,10 @@ def recover_records[V: BenchValue](path: Path, value_type: type[V]) -> tuple[tup
     values = []
     complete = path.is_file()
     if complete:
-        with path.open(encoding="utf-8") as source:
-            try:
-                for line in source:
-                    values.append(value_type.model_validate_json(line))
-            except (UnicodeError, ValueError):
-                complete = False
+        try:
+            values.extend(iter_jsonl(path, value_type))
+        except ValueError:
+            complete = False
     if not complete:
         if path.exists():
             path.rename(path.with_name(path.name + ".partial"))
@@ -145,7 +140,7 @@ def finalize_repetition(
             if last is not None:
                 window = last
                 window_kind = "observed_prefix"
-    validate_measurement(workload, requests, events, window_end_seconds=window, window_kind=window_kind)
+    evidence = validate_measurement(workload, requests, events, window_end_seconds=window, window_kind=window_kind)
     if workload.requests and window_kind != "complete":
         infrastructure_error = infrastructure_error or "benchmark measurement did not complete"
     code = (
@@ -162,14 +157,12 @@ def finalize_repetition(
             "finished": True,
             "result_code": code,
             "cleanup_verified": cleanup_verified,
-            "raw_evidence_complete": requests_valid
-            and events_valid
-            and not any(request.error_kind == "evidence_missing" for request in requests),
+            "raw_evidence_complete": requests_valid and events_valid and evidence.evidence_complete,
             "window_end_seconds": window,
             "window_kind": window_kind,
             "infrastructure_error": infrastructure_error,
             "artifact_sha256": {
-                name: file_digest(directory / name)
+                name: file_sha256(directory / name)
                 for name in ("requests.jsonl", "events.jsonl", "measurement.json")
                 if name != "measurement.json" or measured
             },
@@ -184,9 +177,9 @@ class BenchmarkRepetition:
     """One scheduled repetition referencing its case's prepared replay authority."""
 
     case: BenchCase
-    program: CollectedProgram
     workload: PreparedWorkload
     case_directory: Path
+    device_count: int
     number: int = 1
     attempt: int = 1
     following: tuple[int, ...] = ()
@@ -195,40 +188,24 @@ class BenchmarkRepetition:
     def directory(self) -> Path:
         return self.case_directory / f"repetition-{self.number:04d}.attempt-{self.attempt:04d}"
 
-    @property
-    def device_count(self) -> int:
-        return self.program.requirements.device_count if self.workload.requests else 0
-
 
 class BenchmarkRunner:
     """Own case preparation, repetition progression, manifests and measurement verdicts."""
 
     def __init__(
         self,
-        cases: tuple[BenchCase, ...],
-        programs: tuple[CollectedProgram, ...],
+        entry: RunEntry,
+        manifest: BenchRunManifest,
         *,
-        root: Path,
-        entry: RunEntry | None = None,
         fast_fail: bool = False,
     ) -> None:
-        self.cases = cases
-        self.programs = programs
-        self.tool_config = get_global_config().record()
-        run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{time.monotonic_ns()}"
-        self.run_entry = RunStore(root.expanduser()).start(run_id) if entry is None else entry
-        self.manifest = BenchRunManifest(
-            run_id=self.run_entry.directory.name,
-            tool_config=self.tool_config,
-            selected_cases=tuple(case.id for case in cases),
-        )
+        self.run_entry = entry
+        self.manifest = manifest
         self.scheduler = TaskScheduler[BenchmarkRepetition](device_pool=None, on_complete=self.complete_repetition)
         self.result = 0
         self.fast_fail = fast_fail
         self.infrastructure_error: str | None = None
         self.cancelled_signal: int | None = None
-        self.prepared: tuple[BenchmarkRepetition, ...] | None = None
-        self.skipped: set[tuple[CaseId, int]] = set()
         self.preflighted: set[CaseId] = set()
 
     def request_cancel(self, signum: int, frame: FrameType | None) -> None:
@@ -236,10 +213,14 @@ class BenchmarkRunner:
             self.cancelled_signal = signum
             self.scheduler.request_cancel()
 
-    def prepare_case(self, case: BenchCase, program: CollectedProgram) -> BenchmarkRepetition:
+    def prepare_case(self, case: BenchCase, hosted_launch: HostedLaunchDeclaration | None) -> BenchmarkRepetition:
         config = resolve_deployment(case) if isinstance(case, OwnedBenchCase) else None
-        serving_metadata = case.load_serving_metadata() if isinstance(case, ClientBenchCase) else None
         workload = prepare_workload(case, config=config)
+        device_count = 0
+        if config is not None:
+            device_count = len(config.atn.devices) + len(config.ffn.devices)
+        elif hosted_launch is not None:
+            device_count = hosted_launch.requirements.device_count
         directory = self.run_entry.directory / "cases" / str(case.id)
         directory.mkdir(parents=True)
         write_json(
@@ -254,9 +235,9 @@ class BenchmarkRunner:
         write_jsonl(directory / "warmup.jsonl", (request.model_dump(mode="json") for request in workload.warmup))
         manifest = BenchCaseManifest(
             case=case,
-            prompt_sha256=workload.prompt_sha256,
-            trace_sha256=workload.trace_sha256,
-            warmup_sha256=workload.warmup_sha256,
+            prompt_sha256=content_digest(workload.prompts),
+            trace_sha256=content_digest(workload.requests),
+            warmup_sha256=content_digest(workload.warmup),
             deployment=ResolvedDeployment(
                 runtime_config=case.runtime_config,
                 cwd=Path.cwd().resolve(),
@@ -265,7 +246,7 @@ class BenchmarkRunner:
             )
             if isinstance(case, OwnedBenchCase) and config is not None
             else None,
-            serving_metadata=serving_metadata,
+            hosted_launch=hosted_launch,
             repetitions=(),
         )
         write_json(directory / "case.json", manifest.model_dump(mode="json"))
@@ -278,8 +259,7 @@ class BenchmarkRunner:
             }
         )
         write_json(self.run_entry.directory / "run.json", self.manifest.model_dump(mode="json"))
-        task = BenchmarkRepetition(case, program, workload, directory)
-        return task
+        return BenchmarkRepetition(case, workload, directory, device_count if workload.requests else 0)
 
     def queue_repetition(self, task: BenchmarkRepetition, numbers: tuple[int, ...]) -> None:
         """Queue the next needed logical repetition at a fresh physical attempt path."""
@@ -289,8 +269,8 @@ class BenchmarkRunner:
         attempts = []
         for path in task.case_directory.iterdir():
             match = REPETITION_DIRECTORY_PATTERN.fullmatch(path.name)
-            if match is not None and int(match[1]) == number:
-                attempts.append(1 if match[2] is None else int(match[2]))
+            if match is not None and match[2] is not None and int(match[1]) == number:
+                attempts.append(int(match[2]))
         task = replace(task, number=number, attempt=max(attempts, default=0) + 1, following=numbers[1:])
         if task.device_count and self.scheduler.device_pool is None:
             self.scheduler.device_pool = DevicePool.from_environment()
@@ -316,19 +296,14 @@ class BenchmarkRunner:
             link.unlink(missing_ok=True)
             link.symlink_to(directory.name, target_is_directory=True)
         env = dict(os.environ)
-        program = task.program
         startup_error: str | None = None
-        if task.case.id not in self.preflighted and task.workload.requests and program.requirements.requires_config:
+        if isinstance(task.case, OwnedBenchCase) and task.workload.requests and task.case.id not in self.preflighted:
             try:
-                if manifest.deployment is not None:
-                    config = XpoolConfig.model_validate_json(json.dumps(manifest.deployment.effective))
-                else:
-                    configured_path = os.environ.get("XPOOL_CONFIG")
-                    if not configured_path:
-                        raise MissingRequiredConfig("set XPOOL_CONFIG to an xpool TOML file")
-                    config = XpoolConfig.from_file(Path(configured_path).expanduser())
-                for model_id in program.requirements.model_ids:
-                    resolve_model_weights(config, model_id)
+                if manifest.deployment is None:
+                    raise ValueError("owned workload lacks its resolved configuration")
+                config = XpoolConfig.model_validate(manifest.deployment.effective)
+                for model in config.models:
+                    resolve_model_weights(config, model.id)
                 self.preflighted.add(task.case.id)
             except (OSError, RuntimeError, ValueError) as error:
                 startup_error = str(error)
@@ -338,16 +313,7 @@ class BenchmarkRunner:
                     task,
                     name=f"xbench:{task.case.id}:{task.number}",
                     device_count=task.device_count,
-                    command=[
-                        sys.executable,
-                        "-m",
-                        "xbench.harness.serving.worker",
-                        str(directory),
-                        f"--module={program.module}",
-                        f"--source-path={program.source_path}",
-                        f"--entrypoint={program.entrypoint}",
-                        *(f"--import-root={path}" for path in program.import_roots),
-                    ],
+                    command=[sys.executable, "-m", "xbench.harness.serving.worker", str(directory)],
                     cwd=Path.cwd(),
                     env=env,
                     log_path=directory / "logs/worker.log",
@@ -365,6 +331,10 @@ class BenchmarkRunner:
             )
             self.result = max(self.result, code)
             self.infrastructure_error = self.infrastructure_error or startup_error
+            print(
+                f"xbench case={task.case.id} repetition={task.number} code={code} error={startup_error}",
+                file=sys.stderr,
+            )
             if self.fast_fail:
                 self.scheduler.stop_admission()
             elif task.following:
@@ -399,7 +369,15 @@ class BenchmarkRunner:
         elif task.following:
             self.queue_repetition(task, task.following)
 
-    def run(self) -> int:
+    def run(
+        self,
+        pending: Iterator[tuple[BenchmarkRepetition, tuple[int, ...]]],
+        *,
+        retained_result: int = 0,
+        retained_error: str | None = None,
+    ) -> int:
+        self.result = retained_result
+        self.infrastructure_error = retained_error
         handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
         for signum in handlers:
             signal.signal(signum, self.request_cancel)
@@ -407,16 +385,11 @@ class BenchmarkRunner:
             write_json(self.run_entry.directory / "run.json", self.manifest.model_dump(mode="json"))
             print(self.run_entry.directory, flush=True)
             try:
-                for index, (case, program) in enumerate(zip(self.cases, self.programs, strict=True)):
-                    if not self.scheduler.admission_open:
+                while self.scheduler.admission_open:
+                    work = next(pending, None)
+                    if work is None:
                         break
-                    task = self.prepare_case(case, program) if self.prepared is None else self.prepared[index]
-                    numbers = tuple(
-                        number
-                        for number in range(1, self.tool_config.settings.xbench.repetitions + 1)
-                        if (case.id, number) not in self.skipped
-                    )
-                    self.queue_repetition(task, numbers)
+                    self.queue_repetition(*work)
             except TaskScopeFailure:
                 raise
             except (OSError, RuntimeError, ValueError) as error:
@@ -471,95 +444,72 @@ def continue_benchmarks(directory: Path, *, rerun_failure: bool = False, fast_fa
         ):
             raise ValueError("benchmark retained run identity or selection is invalid")
         config = init_global_config(resolved=XpoolDevConfig.from_record(manifest.tool_config))
-        catalog = BenchCatalog.from_file(config.xbench.catalog)
-        current_cases = catalog.select(tuple(str(identity) for identity in manifest.selected_cases))
-        retained = []
-        workloads = []
-        reusable: set[tuple[CaseId, int]] = set()
-        skipped: set[tuple[CaseId, int]] = set()
+        pending: list[tuple[BenchmarkRepetition, tuple[int, ...]]] = []
+        pending_hosted: list[tuple[HostedBenchCase, HostedLaunchDeclaration]] = []
+        repetitions = range(1, config.xbench.repetitions + 1)
+        reused = 0
+        retained_unsuccessful = 0
         result = 0
         infrastructure_error: str | None = None
-        for current in current_cases:
-            case_directory = entry.directory / "cases" / str(current.id)
+        for case_id in manifest.selected_cases:
+            case_directory = entry.directory / "cases" / str(case_id)
             if case_directory.resolve().parent != entry.directory / "cases":
                 raise ValueError("benchmark case directory escapes its invocation")
             case_manifest = BenchCaseManifest.model_validate_json(
                 retained_file(case_directory, "case.json").read_bytes()
             )
-            if case_manifest.case.id != current.id:
+            case = case_manifest.case
+            if case.id != case_id:
                 raise ValueError("retained case identity disagrees with its directory")
-            conditions = []
-            for case in (case_manifest.case, current):
-                declaration = case.model_dump(
-                    mode="json",
-                    exclude={"description", "module", "deployment", "runtime_config", "serving_metadata_path"},
-                )
-                if isinstance(case, ClientBenchCase):
-                    declaration["targets"] = [
-                        target.model_copy(
-                            update={
-                                "base_url": urlunsplit(
-                                    urlsplit(target.base_url)._replace(
-                                        netloc=urlsplit(target.base_url).netloc.rsplit("@", 1)[-1]
-                                    )
-                                )
-                            }
-                        ).model_dump(mode="json", exclude={"model_metadata_path"})
-                        for target in case.targets
-                    ]
-                conditions.append(declaration)
-            if conditions[0] != conditions[1]:
-                raise ValueError(f"{current.id}: catalogue experiment conditions changed")
-            if isinstance(current, OwnedBenchCase):
+            device_count = 0
+            if isinstance(case, OwnedBenchCase):
                 if case_manifest.deployment is None:
-                    raise ValueError(f"{current.id}: owned case lacks its original deployment")
-                saved = XpoolConfig.model_validate_json(json.dumps(case_manifest.deployment.effective))
-                portable = DeploymentConfig.from_file(
-                    current.deployment, model_ids=tuple(target.model_id for target in current.targets)
-                )
-                with current.deployment.open("rb") as source:
-                    portable_fields = tomllib.load(source)
-                model_fields = {"id", "atn_tp_size", "atn_dp_size", "ffn_tp_size", "slo"}
-                if (
-                    portable.atn.devices != saved.atn.devices
-                    or (
-                        "device_memory_utilization" in portable_fields["atn"]
-                        and portable.atn.device_memory_utilization != saved.atn.device_memory_utilization
-                    )
-                    or portable.ffn.devices != saved.ffn.devices
-                    or portable.ffn_concurrency != saved.scheduler.ffn_concurrency
-                    or portable.slo != saved.scheduler.slo
-                    or {model.id: model.model_dump(include=model_fields) for model in portable.models}
-                    != {model.id: model.model_dump(include=model_fields) for model in saved.models}
-                ):
-                    raise ValueError(f"{current.id}: catalogue deployment conditions changed")
+                    raise ValueError(f"{case_id}: owned case lacks its original deployment")
+                saved = XpoolConfig.model_validate(case_manifest.deployment.effective)
+                device_count = len(saved.atn.devices) + len(saved.ffn.devices)
             workload = case_manifest.load_workload(case_directory)
             attempts = case_manifest.effective_attempts(case_directory)
             if any(number > config.xbench.repetitions for number in attempts):
                 raise ValueError("retained repetition exceeds the original configured count")
+            skipped: set[int] = set()
             for number, attempt in attempts.items():
                 try:
-                    checkpoint, measurement = load_measurement(attempt, workload)
+                    checkpoint = RepetitionManifest.from_directory(attempt)
+                    measurement = load_measurement(attempt, workload, checkpoint=checkpoint)
                 except (OSError, ValueError) as error:
                     code = 2
-                    retained_error = f"retained {current.id} repetition {number}: {error}"
+                    retained_error = f"retained {case_id} repetition {number}: {error}"
                 else:
-                    if checkpoint.sealed and checkpoint.result_code == 0 and measurement.evidence_complete:
-                        reusable.add((current.id, number))
-                        skipped.add((current.id, number))
+                    if checkpoint.result_code == 0 and measurement.evidence_complete:
+                        reused += 1
+                        skipped.add(number)
                         continue
                     code = checkpoint.result_code or 2
-                    if not checkpoint.sealed or not measurement.evidence_complete:
+                    if not measurement.evidence_complete:
                         code = max(code, 2)
                     retained_error = checkpoint.infrastructure_error
                 if not rerun_failure:
-                    skipped.add((current.id, number))
+                    skipped.add(number)
+                    retained_unsuccessful += 1
                     result = max(result, code)
                     infrastructure_error = infrastructure_error or retained_error
-            retained.append(case_manifest)
-            workloads.append(workload)
+            numbers = tuple(number for number in repetitions if number not in skipped)
+            if isinstance(case, HostedBenchCase):
+                launch = case_manifest.hosted_launch
+                if launch is None:
+                    raise ValueError(f"{case_id}: hosted case lacks its original launch declaration")
+                device_count = launch.requirements.device_count
+                if numbers:
+                    pending_hosted.append((case, launch))
+            if numbers:
+                pending.append(
+                    (
+                        BenchmarkRepetition(case, workload, case_directory, device_count if workload.requests else 0),
+                        numbers,
+                    )
+                )
         if (
-            len(reusable) == len(current_cases) * config.xbench.repetitions
+            reused == len(manifest.selected_cases) * config.xbench.repetitions
             and manifest.finished
             and manifest.result_code == 0
             and (entry.directory / ".completed").is_file()
@@ -567,34 +517,21 @@ def continue_benchmarks(directory: Path, *, rerun_failure: bool = False, fast_fa
             print(entry.directory, flush=True)
             print(f"benchmark already complete; uv run xbench report {manifest.run_id}", file=sys.stderr)
             return 0
-        cases = tuple(
-            case.case.model_copy(update={"module": current.module})
-            for case, current in zip(retained, current_cases, strict=True)
-        )
-        programs = collect_programs(catalog.path, cases, deployments=tuple(case.deployment for case in retained))
-        for case in cases:
-            for target in case.targets:
-                create_api_adapter(target.api)
-        runner = BenchmarkRunner(cases, programs, root=directory.parent, entry=entry, fast_fail=fast_fail)
-        runner.manifest = manifest.model_copy(
+        hosted_launches = collect_hosted_launches(case for case, _ in pending_hosted)
+        for case, saved_launch in pending_hosted:
+            if hosted_launches[case.id] != saved_launch:
+                raise ValueError(f"{case.id}: hosted script content or requirements changed")
+        reopened_manifest = manifest.model_copy(
             update={
                 "finished": False,
                 "result_code": None,
                 "infrastructure_error": None,
-                "case_directories": tuple(f"cases/{case.id}" for case in cases),
+                "case_directories": tuple(f"cases/{case_id}" for case_id in manifest.selected_cases),
             }
         )
-        runner.prepared = tuple(
-            BenchmarkRepetition(case, program, workload, entry.directory / "cases" / str(case.id))
-            for case, program, workload in zip(cases, programs, workloads, strict=True)
-        )
-        runner.skipped = skipped
-        runner.result = result
-        runner.infrastructure_error = infrastructure_error
         print(
-            f"xbench continuation reused={len(reusable)} "
-            f"retained_unsuccessful={len(skipped) - len(reusable)} "
-            f"pending={len(cases) * config.xbench.repetitions - len(skipped)}",
+            f"xbench continuation reused={reused} retained_unsuccessful={retained_unsuccessful} "
+            f"pending={sum(len(numbers) for _, numbers in pending)}",
             file=sys.stderr,
         )
         index = 1
@@ -602,14 +539,24 @@ def continue_benchmarks(directory: Path, *, rerun_failure: bool = False, fast_fa
             index += 1
         shutil.copyfile(entry.directory / "run.json", entry.directory / f"run.previous-{index:04d}.json")
         entry.reopen()
-        result = runner.run()
+        runner = BenchmarkRunner(entry, reopened_manifest, fast_fail=fast_fail)
+        result = runner.run(iter(pending), retained_result=result, retained_error=infrastructure_error)
         print(f"uv run xbench report {manifest.run_id}", file=sys.stderr)
         return result
 
 
-def run_benchmarks(cases: tuple[BenchCase, ...], *, root: Path, catalogue_path: Path, fast_fail: bool = False) -> int:
-    programs = collect_programs(catalogue_path, cases)
-    for case in cases:
-        for target in case.targets:
-            create_api_adapter(target.api)
-    return BenchmarkRunner(cases, programs, root=root, fast_fail=fast_fail).run()
+def run_benchmarks(cases: tuple[BenchCase, ...], *, root: Path, fast_fail: bool = False) -> int:
+    hosted_launches = collect_hosted_launches(case for case in cases if isinstance(case, HostedBenchCase))
+    tool_config = get_global_config().record()
+    run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{time.monotonic_ns()}"
+    entry = RunStore(root.expanduser()).start(run_id)
+    manifest = BenchRunManifest(
+        run_id=entry.directory.name, tool_config=tool_config, selected_cases=tuple(case.id for case in cases)
+    )
+    runner = BenchmarkRunner(entry, manifest, fast_fail=fast_fail)
+    numbers = tuple(range(1, tool_config.settings.xbench.repetitions + 1))
+    pending = (
+        (runner.prepare_case(case, hosted_launches[case.id] if isinstance(case, HostedBenchCase) else None), numbers)
+        for case in cases
+    )
+    return runner.run(pending)

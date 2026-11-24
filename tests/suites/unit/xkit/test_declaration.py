@@ -1,17 +1,14 @@
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
-import xbench
 import xtest
 from xkit import ResourceRequirements
 from xkit.source import resolve_source_path
 from xtest.harness.support.config import TEST_MODEL_ID
 
 
-@pytest.mark.parametrize("tool", [xtest, xbench])
-def test_declarations_preserve_the_callable_and_defer_dynamic_resources(tool: ModuleType) -> None:
+def test_declarations_preserve_the_callable_and_defer_dynamic_resources() -> None:
     resources = ResourceRequirements(1, True, (TEST_MODEL_ID,))
     observed: list[int] = []
 
@@ -23,10 +20,7 @@ def test_declarations_preserve_the_callable_and_defer_dynamic_resources(tool: Mo
     def program(size: int) -> int:
         return size
 
-    # The tools export the same shared declarations, retaining the original function.
-    parameterize = xtest.parameterize if tool is xtest else xbench.parameterize
-    requirements = xtest.requirements if tool is xtest else xbench.requirements
-    assert parameterize("size", (16, 32))(requirements(required_resources)(program)) is program
+    assert xtest.parameterize("size", (16, 32))(xtest.requirements(required_resources)(program)) is program
     assert program(32) == 32
     assert observed == []
 
@@ -44,9 +38,6 @@ def test_resource_record_rejects_noninteger_device_count() -> None:
 def test_source_reference_uses_the_catalogues_sibling_suites_tree(tmp_path: Path) -> None:
     assert resolve_source_path(tmp_path / "tests/tests.toml", "e2e.sglang.test_serving") == (
         tmp_path / "tests/suites/e2e/sglang/test_serving.py"
-    )
-    assert resolve_source_path(tmp_path / "benches/benches.toml", "serving.multi_model") == (
-        tmp_path / "benches/suites/serving/multi_model.py"
     )
     with pytest.raises(ValueError, match="dotted Python module"):
         resolve_source_path(tmp_path / "tests/tests.toml", "../outside")

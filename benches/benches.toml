@@ -2,7 +2,6 @@
 
 [serving_cases.61eb95ab-d842-4202-9eb6-8fb5ee88303c]
 description = "Small-pair mixed serving with interval-relative log-normal lengths at 0.1 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -26,7 +25,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.1ff5ddb5-92a0-462e-893b-3482ebb748b9]
 description = "Small-pair mixed serving with interval-relative log-normal lengths at 0.2 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -50,7 +48,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.a0ee7837-fa61-4f98-bf91-6750e5433629]
 description = "Small-pair mixed serving with interval-relative log-normal lengths at 0.5 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -74,7 +71,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.1e135e83-4846-4461-8573-2fc7c4e6f668]
 description = "Small-pair mixed serving with interval-relative log-normal lengths at 1 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -98,7 +94,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.566dfb01-d535-4a5b-b782-0e6850daf17b]
 description = "Small-pair mixed serving with interval-relative log-normal lengths at 2 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -122,7 +117,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.58fcaacc-d3bc-4a7f-af68-a3eb1dbd79c1]
 description = "Small-pair mixed serving with interval-relative log-normal lengths at 4 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -146,7 +140,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.206484a1-ab7f-4168-8098-16e2b17b123a]
 description = "Medium-pair mixed serving with interval-relative log-normal lengths at 0.1 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -170,7 +163,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.de6248f3-2680-4f20-8f2c-3ac8e2d22d6d]
 description = "Medium-pair mixed serving with interval-relative log-normal lengths at 0.2 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -194,7 +186,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.07c451e0-fd68-4506-bda0-449b180a9592]
 description = "Medium-pair mixed serving with interval-relative log-normal lengths at 0.5 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -217,7 +208,6 @@ output_tokens = { kind = "lognormal", median_fraction = 0.03125, sigma = 1.0, ma
 prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fraction = 0.125, sigma = 1.0 } }
 [serving_cases.f026b2aa-3af0-45e6-b0fd-cf649b7c2c70]
 description = "Medium-pair mixed serving with interval-relative log-normal lengths at 1 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -241,7 +231,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.d3a63ac7-63d2-44ff-b1b6-fcdad934c84d]
 description = "Medium-pair mixed serving with interval-relative log-normal lengths at 2 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -265,7 +254,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.00dc170c-76da-4416-86c5-900ef3e63677]
 description = "Medium-pair mixed serving with interval-relative log-normal lengths at 4 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -289,7 +277,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.a70c7355-22b7-4121-b197-19dd46e459cb]
 description = "Large-pair mixed serving with interval-relative log-normal lengths at 0.1 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -313,7 +300,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.aa725225-6363-4b4b-b560-67a0188dc450]
 description = "Large-pair mixed serving with interval-relative log-normal lengths at 0.2 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -337,7 +323,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.38f99168-e28b-44b4-82e5-b242f4af26e8]
 description = "Large-pair mixed serving with interval-relative log-normal lengths at 0.5 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -361,7 +346,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.05eb5a11-e7f4-4d4c-8459-ef6af81ef444]
 description = "Large-pair mixed serving with interval-relative log-normal lengths at 1 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -385,7 +369,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.e15aca7f-2f48-478c-9aec-7fdc93e44e9a]
 description = "Large-pair mixed serving with interval-relative log-normal lengths at 2 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -409,7 +392,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.f52073e4-0b80-4bdf-ba50-f5a625a06ebc]
 description = "Large-pair mixed serving with interval-relative log-normal lengths at 4 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -435,7 +417,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.52934f1f-b39c-4856-8a01-8abfb4819718]
 description = "Isolated Qwen/Qwen2.5-0.5B at 0.1 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -453,7 +434,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.f0bb341f-7c11-4c47-b58d-e4b9f34de002]
 description = "Isolated Qwen/Qwen2.5-0.5B at 0.2 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -471,7 +451,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.99d38317-eba7-4360-a41a-e5c556ba27cb]
 description = "Isolated Qwen/Qwen2.5-0.5B at 0.5 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -489,7 +468,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.03d3a8ba-bf28-447c-911f-b50080b059b6]
 description = "Isolated Qwen/Qwen2.5-0.5B at 1 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -507,7 +485,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.ad814edd-cf5e-4c8d-928f-c1d48142c58a]
 description = "Isolated Qwen/Qwen2.5-0.5B at 2 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -525,7 +502,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.d21d2b24-eb1e-44e1-9c74-f7fbb0106709]
 description = "Isolated Qwen/Qwen2.5-0.5B at 4 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -543,7 +519,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.a2d7e15f-707c-444f-adad-62671d4ffe67]
 description = "Isolated Qwen/Qwen3-0.6B at 0.1 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -561,7 +536,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.e637e52d-7f23-4c59-9d64-e6b588dab1c7]
 description = "Isolated Qwen/Qwen3-0.6B at 0.2 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -579,7 +553,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.72e70291-b150-4682-a075-57a5bfb22ae2]
 description = "Isolated Qwen/Qwen3-0.6B at 0.5 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -597,7 +570,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.7f6715fa-0b13-4a93-81de-8d73f7c22b2f]
 description = "Isolated Qwen/Qwen3-0.6B at 1 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -615,7 +587,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.253026ed-bf3e-42ac-9769-efc216390c2c]
 description = "Isolated Qwen/Qwen3-0.6B at 2 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -633,7 +604,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.c3666060-455d-4f8d-9f48-88ddf54c5108]
 description = "Isolated Qwen/Qwen3-0.6B at 4 RPS, retaining the small mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes2"
 seed = 0
@@ -651,7 +621,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.fd51cc77-a718-4dca-92dc-e2be3b67c73d]
 description = "Isolated Qwen/Qwen3-14B at 0.1 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -669,7 +638,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.4a51a55d-5617-40ed-ac28-37d7d502b70b]
 description = "Isolated Qwen/Qwen3-14B at 0.2 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -687,7 +655,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.915e575d-377d-48e0-9b30-6b8fc0b039db]
 description = "Isolated Qwen/Qwen3-14B at 0.5 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -705,7 +672,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.f032c014-e5f1-49ff-ac00-be868cc400d3]
 description = "Isolated Qwen/Qwen3-14B at 1 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -723,7 +689,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.4878c596-a7b8-4128-b6bc-3877e2a49273]
 description = "Isolated Qwen/Qwen3-14B at 2 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -741,7 +706,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.ed659b73-22f1-4637-9aa3-204a82bf0f0d]
 description = "Isolated Qwen/Qwen3-14B at 4 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -759,7 +723,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.fc0b2d65-34d1-4636-afcb-1d19694948d4]
 description = "Isolated deepseek-ai/DeepSeek-V2-Lite-Chat at 0.1 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -777,7 +740,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.eb2b550c-bd77-4a95-9880-b975fff7b60d]
 description = "Isolated deepseek-ai/DeepSeek-V2-Lite-Chat at 0.2 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -795,7 +757,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.0beadc94-ab63-4e03-8f6a-d9756ff130e2]
 description = "Isolated deepseek-ai/DeepSeek-V2-Lite-Chat at 0.5 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -813,7 +774,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.4ad44ca3-a29a-4fc8-8753-a0f6655f6238]
 description = "Isolated deepseek-ai/DeepSeek-V2-Lite-Chat at 1 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -831,7 +791,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.1dea5bf3-64db-45b2-9aad-f5328a84d4dd]
 description = "Isolated deepseek-ai/DeepSeek-V2-Lite-Chat at 2 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -849,7 +808,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.32750ae6-a562-489e-b16c-bdd4419b2092]
 description = "Isolated deepseek-ai/DeepSeek-V2-Lite-Chat at 4 RPS, retaining the medium mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -867,7 +825,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.404afe2a-2317-44a0-baa5-28b4688b2af2]
 description = "Isolated Qwen/Qwen3-30B-A3B at 0.1 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -885,7 +842,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.f75b9247-e24d-4415-9ba7-face3079d20e]
 description = "Isolated Qwen/Qwen3-30B-A3B at 0.2 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -903,7 +859,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.034e5dc7-021b-4a0d-aeb6-cf7ff0f276e0]
 description = "Isolated Qwen/Qwen3-30B-A3B at 0.5 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -921,7 +876,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.43a79e9e-73ee-42f5-9559-6739c76d6174]
 description = "Isolated Qwen/Qwen3-30B-A3B at 1 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -939,7 +893,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.098fe71b-1456-4120-8daf-1f152588a526]
 description = "Isolated Qwen/Qwen3-30B-A3B at 2 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -957,7 +910,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.8253e12a-8a7c-4c37-85ac-842350542996]
 description = "Isolated Qwen/Qwen3-30B-A3B at 4 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -975,7 +927,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.d1d44945-c2c4-4dc8-ae79-6dc4a6c80a7e]
 description = "Isolated zai-org/GLM-4.7-Flash at 0.1 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -993,7 +944,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.298721af-97c2-46fe-9659-896c3f0d125a]
 description = "Isolated zai-org/GLM-4.7-Flash at 0.2 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -1011,7 +961,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.fd6a9362-51cd-4ffe-8e89-d358adbeb160]
 description = "Isolated zai-org/GLM-4.7-Flash at 0.5 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -1029,7 +978,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.415a8a90-89cd-400d-8f12-f559d6674014]
 description = "Isolated zai-org/GLM-4.7-Flash at 1 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -1047,7 +995,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.1842615c-5c29-492c-821b-c984b4c6b6f4]
 description = "Isolated zai-org/GLM-4.7-Flash at 2 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -1065,7 +1012,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.05fbca29-3a1b-4e8d-9cba-f7284a917199]
 description = "Isolated zai-org/GLM-4.7-Flash at 4 RPS, retaining the large mixed baseline's fleet, geometry and length policies."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -1085,7 +1031,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.a0788212-f547-4e17-a4cc-f8b93e1ad0c8]
 description = "Medium-pair traffic asymmetry at 0.8/0.2 RPS against the balanced 0.5/0.5 baseline."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -1109,7 +1054,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.6f540c88-baff-4e37-9e84-9f354f27b963]
 description = "Medium-pair traffic asymmetry at 0.2/0.8 RPS against the balanced 0.5/0.5 baseline."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -1133,7 +1077,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.60068998-ea3c-4002-9139-cb492797e483]
 description = "Large-pair input-heavy serving with input median fraction 0.25 and output median fraction 0.03125 within their legal intervals."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -1157,7 +1100,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.204b58ef-6cc1-4ddb-ae58-eca7b23b4be3]
 description = "Large-pair output-heavy serving with input median fraction 0.125 and output median fraction 0.0625 within their legal intervals."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-lanes2"
 seed = 0
@@ -1181,7 +1123,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.085f0137-e7ff-411f-a36d-3d29fa8b9fce]
 description = "Small-pair one-Lane comparison against two Lanes on the same device fleet at 4 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn1-lanes1"
 seed = 0
@@ -1205,7 +1146,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.118215d8-1afb-49e2-aa73-d84f4d135f38]
 description = "Small-pair attention TP2/DP1 comparison with two attention devices and one FFN device at 4 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn2-ffn1-lanes2"
 seed = 0
@@ -1229,7 +1169,6 @@ prompts = { kind = "random", input_tokens = { kind = "lognormal", median_fractio
 
 [serving_cases.8d4af85e-eac0-44d5-b2c3-2636d85d4b8f]
 description = "Medium-pair FFN TP1 comparison against the TP2 baseline on the same two-device FFN fleet at 0.5 RPS per model."
-module = "serving.multi_model"
 mode = "owned"
 deployment = "atn1-ffn2-tp1-lanes2"
 seed = 0

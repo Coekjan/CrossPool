@@ -14,10 +14,10 @@ import numpy
 import pytest
 from matplotlib.figure import Figure
 from pydantic import JsonValue, TypeAdapter
+from tests.suites.integration.xbench.support import load_retained_series
 
 import xbench.cli
 import xbench.harness.serving.runner
-from xbench.harness.serving.api import create_api_adapter
 from xbench.harness.serving.case import BenchCase
 from xbench.harness.serving.client import MeasurementRecorder, RequestState
 from xbench.harness.serving.measure import (
@@ -28,7 +28,6 @@ from xbench.harness.serving.measure import (
 )
 from xbench.harness.serving.report import (
     list_bench_artifacts,
-    load_series,
     render_report,
     report_bench_runs,
 )
@@ -37,11 +36,9 @@ from xbench.harness.serving.workload import (
     ResolvedPrompt,
     ScheduledRequest,
     content_digest,
-    file_digest,
-    read_jsonl,
 )
 from xkit.config import XpoolDevConfig, get_global_config
-from xkit.results import RunEntry, RunStore, write_json, write_jsonl
+from xkit.results import RunEntry, RunStore, file_sha256, iter_jsonl, write_json, write_jsonl
 from xtest.harness.support.config import (
     TEST_CASE_ID,
     TEST_MODEL_ID,
@@ -67,7 +64,9 @@ def captured_figures(monkeypatch: pytest.MonkeyPatch) -> dict[str, Figure]:
 def test_report_exports_all_formats_with_embedded_fonts(tmp_path: Path) -> None:
     run, repetition = retained_run(tmp_path)
     run.complete()
-    output = render_report(load_series(repetition, "the retained run"), config=get_global_config().xbench.report)
+    output = render_report(
+        load_retained_series(repetition, "the retained run"), config=get_global_config().xbench.report
+    )
     for name in ("ttft-cdf", "itl-cdf", "throughput"):
         assert (output / f"{name}.pdf").read_bytes().startswith(b"%PDF-")
         assert b"/FontFile2" in (output / f"{name}.pdf").read_bytes()
@@ -78,7 +77,7 @@ def test_report_exports_all_formats_with_embedded_fonts(tmp_path: Path) -> None:
 def test_report_regeneration_applies_presentation_without_changing_evidence(tmp_path: Path) -> None:
     run, repetition = retained_run(tmp_path)
     run.complete()
-    series = load_series(repetition, "the retained run")
+    series = load_retained_series(repetition, "the retained run")
     output = repetition / "report"
     output.mkdir()
     for plot in ("ttft-cdf", "itl-cdf", "throughput"):
@@ -117,7 +116,7 @@ def test_report_renders_labeled_units_weights_and_layout(
 ) -> None:
     run, repetition = retained_run(tmp_path)
     run.complete()
-    series = load_series(repetition, "the retained run")
+    series = load_retained_series(repetition, "the retained run")
     series = replace(
         series,
         summary=series.summary.model_copy(
@@ -188,6 +187,17 @@ def test_retained_outcomes_reject_negative_codes(
         record_type.model_validate_json(path.read_bytes())
 
 
+def test_report_requires_a_physical_attempt_reference(tmp_path: Path) -> None:
+    run, repetition = retained_run(tmp_path)
+    run.complete()
+    case_path = repetition.parent / "case.json"
+    manifest = BenchCaseManifest.model_validate_json(case_path.read_bytes())
+    write_json(case_path, manifest.model_copy(update={"repetitions": ("repetition-0001",)}).model_dump(mode="json"))
+
+    with pytest.raises(ValueError, match="not a physical attempt"):
+        report_bench_runs((run.directory,))
+
+
 def test_report_expands_repetitions_and_preserves_failed_source(
     tmp_path: Path, captured_figures: dict[str, Figure], capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -199,7 +209,7 @@ def test_report_expands_repetitions_and_preserves_failed_source(
     assert list_bench_artifacts(run.directory.parent) == (run.directory.name,)
     (repetition / "environment.json").unlink()
     (repetition / "warmup.json").unlink()
-    second = repetition.with_name("repetition-0002")
+    second = repetition.with_name("repetition-0002.attempt-0001")
     shutil.copytree(repetition, second)
     checkpoint = RepetitionManifest.model_validate_json((second / "repetition.json").read_bytes())
     write_json(second / "repetition.json", checkpoint.model_copy(update={"repetition": 2}).model_dump(mode="json"))
@@ -292,7 +302,7 @@ def test_report_output_failure_preserves_original_verdict_and_measurement(
         for path in run.directory.rglob("*")
         if path.is_file() and not path.is_relative_to(output)
     }
-    assert load_series(repetition, "original").summary.execution_complete
+    assert load_retained_series(repetition, "original").summary.execution_complete
     assert json.loads((run.directory / "run.json").read_bytes())["result_code"] == 0
 
 
@@ -303,15 +313,15 @@ def test_report_rejects_corrupt_hashes_and_resealed_success_without_raw_evidence
     manifest = RepetitionManifest.model_validate_json(manifest_path.read_bytes())
     (repetition / "requests.jsonl").write_text("\n", encoding="utf-8")
     with pytest.raises(ValueError, match="digest mismatch"):
-        load_series(repetition, "input")
+        load_retained_series(repetition, "input")
     (repetition / "requests.jsonl").write_text("", encoding="utf-8")
     (repetition / "events.jsonl").write_text("", encoding="utf-8")
     digests = dict(manifest.artifact_sha256)
     for name in ("requests.jsonl", "events.jsonl"):
-        digests[name] = file_digest(repetition / name)
+        digests[name] = file_sha256(repetition / name)
     write_json(manifest_path, manifest.model_copy(update={"artifact_sha256": digests}).model_dump(mode="json"))
     with pytest.raises(ValueError, match="successful benchmark checkpoint"):
-        load_series(repetition, "input")
+        load_retained_series(repetition, "input")
 
 
 @pytest.mark.parametrize("name", ["events.jsonl", "measurement.json"])
@@ -324,7 +334,7 @@ def test_report_requires_digests_for_its_raw_evidence(name: str, tmp_path: Path)
     del digests[name]
     write_json(path, manifest.model_copy(update={"artifact_sha256": digests}).model_dump(mode="json"))
     with pytest.raises(ValueError, match=r"required.*digest"):
-        load_series(repetition, "incomplete seal")
+        load_retained_series(repetition, "incomplete seal")
 
 
 def test_report_marks_an_unavailable_final_checkpoint_incomplete(tmp_path: Path) -> None:
@@ -334,7 +344,7 @@ def test_report_marks_an_unavailable_final_checkpoint_incomplete(tmp_path: Path)
     manifest = json.loads(path.read_bytes())
     del manifest["raw_evidence_complete"]
     write_json(path, manifest)
-    series = load_series(repetition, "missing checkpoint")
+    series = load_retained_series(repetition, "missing checkpoint")
     assert series.repetition_manifest.result_code == 0
     assert series.summary.outcomes["success"] == 1 and not series.summary.evidence_complete
 
@@ -348,7 +358,7 @@ def test_report_rejects_replay_content_that_disagrees_with_prepared_workload(nam
     value["text" if name == "prompts.jsonl" else "max_new_tokens"] = "changed prompt" if name == "prompts.jsonl" else 7
     path.write_text(json.dumps(value) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="content digest"):
-        load_series(repetition, "changed replay")
+        load_retained_series(repetition, "changed replay")
 
 
 def test_report_rejects_success_checkpoint_without_cleanup_proof(tmp_path: Path) -> None:
@@ -358,12 +368,19 @@ def test_report_rejects_success_checkpoint_without_cleanup_proof(tmp_path: Path)
     manifest = RepetitionManifest.model_validate_json(path.read_bytes())
     write_json(path, manifest.model_copy(update={"cleanup_verified": False}).model_dump(mode="json"))
     with pytest.raises(ValueError, match=r"successful.*checkpoint"):
-        load_series(repetition, "contradictory success")
+        load_retained_series(repetition, "contradictory success")
 
 
-@pytest.mark.parametrize("changed", [{"completion_tokens": 5}, {"first_token_at_seconds": 0.11}])
-def test_report_rejects_resealed_request_claims_that_disagree_with_events(
-    changed: dict[str, int | float], tmp_path: Path
+@pytest.mark.parametrize(
+    ("changed", "message"),
+    [
+        ({"completion_tokens": 5}, "differ from accepted stream evidence"),
+        ({"first_token_at_seconds": 0.11}, "differ from accepted stream evidence"),
+        ({"unexpected": True}, "Extra inputs are not permitted"),
+    ],
+)
+def test_report_rejects_resealed_requests_without_valid_raw_evidence(
+    changed: dict[str, JsonValue], message: str, tmp_path: Path
 ) -> None:
     run, repetition = retained_run(tmp_path)
     run.complete()
@@ -373,10 +390,10 @@ def test_report_rejects_resealed_request_claims_that_disagree_with_events(
     requests_path.write_text(json.dumps(value) + "\n", encoding="utf-8")
     path = repetition / "repetition.json"
     manifest = RepetitionManifest.model_validate_json(path.read_bytes())
-    digests = {**manifest.artifact_sha256, "requests.jsonl": file_digest(requests_path)}
+    digests = {**manifest.artifact_sha256, "requests.jsonl": file_sha256(requests_path)}
     write_json(path, manifest.model_copy(update={"artifact_sha256": digests}).model_dump(mode="json"))
-    with pytest.raises(ValueError, match="differ from accepted stream evidence"):
-        load_series(repetition, "resealed contradiction")
+    with pytest.raises(ValueError, match=message):
+        load_retained_series(repetition, "resealed contradiction")
 
 
 def test_finalization_reports_abnormal_worker_exit_with_successful_requests(tmp_path: Path) -> None:
@@ -391,7 +408,7 @@ def test_finalization_reports_abnormal_worker_exit_with_successful_requests(tmp_
         == 2
     )
     run.complete()
-    series = load_series(repetition, "worker failed")
+    series = load_retained_series(repetition, "worker failed")
     assert series.summary.outcomes["success"] == 1
     assert series.summary.infrastructure_error == "benchmark worker exited with code 1"
     assert (repetition / "requests.jsonl").read_bytes() == raw
@@ -411,7 +428,7 @@ def test_owner_loss_reports_only_retained_observation_prefix(
         == 2
     )
     run.complete()
-    series = load_series(repetition, "recovered prefix")
+    series = load_retained_series(repetition, "recovered prefix")
     assert series.summary.window_kind == "observed_prefix"
     assert series.summary.window_end_seconds == 0.18
     assert not series.summary.execution_complete
@@ -435,7 +452,7 @@ def test_finalization_preserves_raw_evidence_and_reports_recording_failure(tmp_p
         == 2
     )
     run.complete()
-    series = load_series(repetition, "failure")
+    series = load_retained_series(repetition, "failure")
     assert series.summary.cleanup_verified and series.summary.infrastructure_error is not None
     assert (repetition / "requests.jsonl").read_bytes() == raw
     manifest = RepetitionManifest.model_validate_json((repetition / "repetition.json").read_bytes())
@@ -458,7 +475,7 @@ def test_finalization_does_not_claim_success_after_terminal_events_are_lost(tmp_
         == 2
     )
     run.complete()
-    series = load_series(repetition, "lost terminal evidence")
+    series = load_retained_series(repetition, "lost terminal evidence")
     assert not series.summary.execution_complete and not series.summary.evidence_complete
     assert not series.summary.measurement_available
     assert series.summary.outcomes["failed"] == 1
@@ -491,12 +508,12 @@ def test_owner_loss_after_origin_remains_reportable_without_a_measurement_window
     )
     run.complete()
 
-    requests = read_jsonl(repetition / "requests.jsonl", RequestRecord)
+    requests = tuple(iter_jsonl(repetition / "requests.jsonl", RequestRecord))
     assert len(requests) == 1 and requests[0].error_kind == "evidence_missing"
     assert (
         requests[0].enqueued_at_seconds is requests[0].http_started_at_seconds is requests[0].ended_at_seconds is None
     )
-    series = load_series(repetition, "owner lost")
+    series = load_retained_series(repetition, "owner lost")
     assert series.repetition_manifest.finished and series.repetition_manifest.result_code == worker_code
     assert series.summary.cleanup_verified == cleanup_verified
     assert series.summary.infrastructure_error is not None
@@ -512,21 +529,21 @@ def test_owner_loss_after_origin_remains_reportable_without_a_measurement_window
     assert origin.read_bytes() == original_origin
     origin.write_text("{}", encoding="utf-8")
     with pytest.raises(ValueError, match=r"digest mismatch: measurement\.json"):
-        load_series(repetition, "changed origin")
-    digests = {**series.repetition_manifest.artifact_sha256, "measurement.json": file_digest(origin)}
+        load_retained_series(repetition, "changed origin")
+    digests = {**series.repetition_manifest.artifact_sha256, "measurement.json": file_sha256(origin)}
     write_json(
         repetition / "repetition.json",
         series.repetition_manifest.model_copy(update={"artifact_sha256": digests}).model_dump(mode="json"),
     )
     with pytest.raises(ValueError, match="monotonic_origin_seconds"):
-        load_series(repetition, "invalid origin")
+        load_retained_series(repetition, "invalid origin")
 
 
 def retained_run(tmp_path: Path, *, failed: bool = False, horizon: float = 0.1) -> tuple[RunEntry, Path]:
     store = RunStore(tmp_path / ".xpool-cache/bench-runs")
     run = store.start("20260927-180000-123-456")
     case_directory = run.directory / "cases" / str(TEST_CASE_ID)
-    repetition = case_directory / "repetition-0001"
+    repetition = case_directory / "repetition-0001.attempt-0001"
     repetition.mkdir(parents=True)
     prompts = (ResolvedPrompt(prompt_id="p", model_id=TEST_MODEL_ID, text="offline replay data"),)
     scheduled = ScheduledRequest(
@@ -541,24 +558,21 @@ def retained_run(tmp_path: Path, *, failed: bool = False, horizon: float = 0.1) 
         warmup=(scheduled,),
         arrival_horizon_seconds=horizon,
         bucket_seconds=0.1,
-        seeds={},
-        prompt_sha256=content_digest(prompts),
-        trace_sha256=content_digest((scheduled,)),
-        warmup_sha256=content_digest((scheduled,)),
     )
     recorder = MeasurementRecorder(repetition)
-    state = RequestState(scheduled, recorder, create_api_adapter("sglang"), enqueued_at=0.0, started_at=0.0, status=200)
+    state = RequestState(scheduled, recorder, enqueued_at=0.0, started_at=0.0, status=200)
     state.event("enqueue", 0.0)
     state.event("http_start", 0.0)
-    state.consume(b'{"meta_info":{"completion_tokens":3,"prompt_tokens":5}}', 0.1)
-    state.consume(b'{"meta_info":{"completion_tokens":6,"prompt_tokens":5,"finish_reason":{"type":"length"}}}', 0.16)
+    state.consume(b'{"choices":[{}],"usage":{"completion_tokens":3,"prompt_tokens":5}}', 0.1)
+    state.consume(b'{"choices":[{"finish_reason":"length"}],"usage":{"completion_tokens":6,"prompt_tokens":5}}', 0.16)
+    state.consume(b'{"choices":[],"usage":{"completion_tokens":6,"prompt_tokens":5}}', 0.17)
     if not failed:
         state.consume(b"[DONE]", 0.18)
     else:
         state.event("error", 0.18, error_kind="protocol", error_message="EOF without DONE")
     recorder.request(state.terminal("failed" if failed else "success", 0.18))
     recorder.close()
-    write_json(repetition / "environment.json", {"mode": "client", "local_device_inventory": None})
+    write_json(repetition / "environment.json", {"mode": "client"})
     write_json(
         repetition / "measurement.json",
         {"monotonic_origin_seconds": 1000.0, "wall_clock_origin_seconds": 1000000000.0},
@@ -579,7 +593,6 @@ def retained_run(tmp_path: Path, *, failed: bool = False, horizon: float = 0.1) 
             {
                 "id": str(TEST_CASE_ID),
                 "description": "Render retained serving measurements without executing the workload.",
-                "module": "serving.multi_model",
                 "mode": "client",
                 "arrivals": {"kind": "jsonl", "path": "trace.jsonl", "duration_seconds": horizon},
                 "bucket_seconds": 0.1,
@@ -595,9 +608,9 @@ def retained_run(tmp_path: Path, *, failed: bool = False, horizon: float = 0.1) 
     )
     case_manifest = BenchCaseManifest(
         case=case,
-        prompt_sha256=workload.prompt_sha256,
-        trace_sha256=workload.trace_sha256,
-        warmup_sha256=workload.warmup_sha256,
+        prompt_sha256=content_digest(workload.prompts),
+        trace_sha256=content_digest(workload.requests),
+        warmup_sha256=content_digest(workload.warmup),
         repetitions=(repetition.name,),
     )
     write_json(case_directory / "case.json", case_manifest.model_dump(mode="json"))
@@ -610,7 +623,7 @@ def retained_run(tmp_path: Path, *, failed: bool = False, horizon: float = 0.1) 
         window_end_seconds=0.18,
         window_kind="complete",
         artifact_sha256={
-            name: file_digest(repetition / name) for name in ("requests.jsonl", "events.jsonl", "measurement.json")
+            name: file_sha256(repetition / name) for name in ("requests.jsonl", "events.jsonl", "measurement.json")
         },
     )
     write_json(repetition / "repetition.json", manifest.model_dump(mode="json"))

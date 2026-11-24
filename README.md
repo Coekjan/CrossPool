@@ -137,13 +137,13 @@ to the [Quick Start sync command](docs/tutorials/quick-start.md#install).
 
 ## Serving Benchmarks
 
-`xbench` measures multi-model serving through native SGLang streaming, either
-against external endpoints or by starting a declared CrossPool deployment.
-Each case fixes models, topology and workload; `run` retains measurements and
-`report` generates offline latency distributions and throughput plots. See the
-[benchmark design](docs/designs/benchmark.md) for measurement and evidence
-contracts, and the [tooling tutorial](docs/tutorials/tooling.md) for discovery,
-execution, continuation and reports.
+`xbench` measures multi-model serving through OpenAI Completions with
+cumulative output counts and final usage. It connects to compatible endpoints,
+runs an external launcher, or starts a declared CrossPool deployment.
+`xbench run` records measurements, and `xbench report` turns them into latency
+distributions and throughput plots. Try a two-model workload in all three modes
+with the [xbench tutorial](docs/tutorials/xbench.md), or see how measurements
+are recorded in the [benchmark design](docs/designs/benchmark.md).
 
 ## Repository Guide
 
@@ -162,7 +162,7 @@ execution, continuation and reports.
   separate owners.
 - [`tests/`](tests/) contains the native, Unit, Integration and E2E validation
   suites and their source-owned catalogue.
-- [`benches/`](benches/) owns the benchmark catalogue, suite programs and inputs;
+- [`benches/`](benches/) owns the benchmark catalogue and workload inputs.
   [`configs/deployments/`](configs/deployments/) contains portable runtime scenes
   shared by the test and benchmark catalogues.
 - [`docs/code-style.md`](docs/code-style.md) defines repository-wide coding

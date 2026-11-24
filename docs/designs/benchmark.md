@@ -1,133 +1,178 @@
 # Serving Benchmarks
 
-`xbench` measures multi-model serving through native SGLang streaming, either
-against external endpoints or by starting a declared CrossPool deployment.
-This document owns workload, measurement, continuation and report contracts.
-Shared configuration, catalogue authoring, scheduling and process ownership
-belong to [Test and Benchmark Tooling](tooling.md); the
-[tooling tutorial](../tutorials/tooling.md) owns command usage. Performance values
-are report-only under [Qualification](qualification.md). The
-[glossary](../../CONTEXT.md) distinguishes cases, repetitions, attempts,
-Measurements and Reports.
+`xbench` measures multi-model serving through streaming OpenAI Completions.
+Run a two-model example in all three modes with the
+[xbench tutorial](../tutorials/xbench.md). See
+[Test and Benchmark Tooling](tooling.md) for configuration, catalogue
+authoring and scheduling. The [qualification rules](qualification.md)
+treat benchmark performance as report-only.
 
 ## Benchmark cases and workload execution
 
-[`case.py`](../../src/xpool-dev/xbench/harness/serving/case.py) owns strict, immutable catalogue
-declarations. Owned cases reference a portable deployment plus Instance/graph
-launch settings and an optional explicit runtime base. Client cases name
-externally owned endpoints and take no serving, device or MPS ownership.
-Their workload and metric definitions are the same. The checked-in
-[catalogue](../../benches/benches.toml) compares mixed deployments with matched
-isolated references across offered loads, then varies traffic asymmetry,
-request-length policies, Executor Lanes or TP geometry independently. Exact
-models, rates, layouts and length policies belong to those fixed declarations.
-Listing validates declarations without establishing deployment feasibility or
-performance.
+Enter serving experiments under `serving_cases`. The three modes share the
+same workload preparation, measurement and reporting code. Their case schemas
+are in [`case.py`](../../src/xpool-dev/xbench/harness/serving/case.py).
 
-Prompt and arrival inputs are independent. Prompt JSONL supplies target-scoped
-sample IDs with exactly one of text or token IDs; trace JSONL supplies unique
-request IDs, targets, planned arrivals, prompt references and output caps.
-Random prompts and per-target Poisson arrivals also work without external
-datasets, in all generated/file-backed combinations. New formats normalize to
-the existing `PreparedWorkload` rather than changing the executor.
+| Mode | How servers start | Case inputs |
+| --- | --- | --- |
+| `client` | The caller runs the servers. | An unauthenticated HTTP(S) root per target, with `served_model_name` if the endpoint uses an alias. |
+| `hosted` | xbench assigns devices and ports, then runs a script supplied by the caller. | The executable script and optional script-defined `launch_settings`. |
+| `owned` | xbench starts CrossPool through the SGLang integration. | The portable deployment, per-target Graph settings and optional runtime configuration. |
 
-Preparation is offline and precedes timing. Every file prompt is checked against
-available local model metadata before selection; newly generated prompts are
-validated at creation. Random token IDs come from matching local tokenizer/model
-metadata, excluding special and out-of-vocabulary IDs.
-Random prompt length belongs to the target's prompt declaration. Poisson output
-caps belong to the target's `output_tokens`; arrival declarations own only
-duration and per-target rates. Trace rows supply their own authoritative
-`max_new_tokens`. Lengths and generated output caps use fixed values, inclusive
-uniform ranges or truncated log-normal distributions. The serving integration
-resolves model context and request reserves; generic workload code owns seeded
-sampling within the legal inclusive interval `[L, U]`. Both log-normal policies
-locate their untruncated median at `L + (U - L) * median_fraction`; truncation can
-shift the sampled median. The catalogue owns each policy's fraction and log
-standard deviation.
+Client URLs accept an HTTP(S) scheme and host, with an optional port and
+trailing slash. Reports identify the target by its Model ID even when a
+client endpoint uses an alias. Hosted and owned servers use the Model ID
+as the API model name. The [checked-in catalogue](../../benches/benches.toml)
+compares mixed deployments with matched isolated references, then varies
+request rates, token lengths, traffic balance, Executor Lanes or TP geometry.
 
-Joint conditioning samples input first, reserving the minimum legal output,
-then samples output within the remaining request budget. An optional positive
-`max_output_input_ratio` belongs only to output log-normal policies. For input
-length `I` and ratio `R`, its ceiling is
-`min(floor(R * I), limits.output_budget(I))`; the input interval must also admit
-the output minimum under that ratio.
-Empty intervals fail preparation. Fixed counts and file-backed values remain
-authoritative rather than being clipped or resampled. Measured and warmup requests
-use the same bounds. Retained workloads record resolved model context and actual
-prepared prompt lengths, which the startup check reuses. File prompts establish
-their input length before any generated output budget. Model/purpose-separated
-random streams preserve the remaining target's replay in isolated comparisons.
-Poisson arrivals use exponential first/interarrival gaps within `[0, T)` and a
-stable merge; traces preserve source-row order for ties. Resolved prompt content,
-schedule and horizon, rather than seeds alone, are the replay authority.
+### Preparing a workload
 
-Owned execution checks prepared requests against the actual static service
-limits after startup and before warmup. The integration interprets `/server_info`;
-Elastic Context State's immutable Capacity Group ceiling is distinct from its currently
-mapped prefix. A mismatch retains the offending request and fails the case,
-without resizing or resampling. Client endpoints acquire no arbitrary metadata
-query requirement. Model context, request acceptance and immediate physical
-backing remain separate facts.
+A case can generate random prompts or read them from JSONL. Each file prompt
+has an ID unique within its target and supplies either text or token IDs.
+Choose arrivals separately. Generate a Poisson sequence for each target or
+read a JSONL trace with unique request IDs, targets, planned arrivals,
+prompt IDs and output caps. xbench converts both kinds of input to
+`PreparedWorkload` before starting measurement.
 
-The workload is prepared once and reused across repetitions. Execution settings
-own a positive repetition count, default one, rather than the catalogue. Every
-target completes separately prepared warmup before the common measurement origin.
-Owned attempts start fresh systems; client attempts leave external state
-under external control. Caches are not flushed implicitly. An empty schedule
-retains a no-data result and skips allocation, serving, warmup and timing.
+Preparation runs offline. Owned cases load the local model configuration and
+tokenizer. Client and hosted cases also load them for random prompts or
+log-normal output lengths, using paths from the
+[runtime configuration](../configuration.md#development-tools-and-shared-cache).
+Random prompts sample from the tokenizer vocabulary and skip special tokens.
+Preparation validates file prompts when it has local model metadata. With
+file prompts and fixed or explicitly ranged output caps, client and hosted
+need only the workload files. Choose those caps to fit the server.
 
-The client dispatches absolute planned arrivals through FIFO admission and a
-global active-request limit, default 128. Capacity queues requests rather than
-rejecting or dropping them. Actual enqueue, HTTP start and termination remain
-separate observations. Warmup and measured requests wait for protocol completion
-by default. An explicit positive `request_timeout_seconds` sets an absolute
-deadline from HTTP start, including engine queueing, prefill and decode while
-excluding client queue wait. Stream progress does not renew this deadline.
-Complete owned startup defaults to 1,800 seconds. Normal drain has no total
-deadline. Individual request failures are not retried and do not stop later
-arrivals; owned-process or recording failures
-interrupt execution. Cancellation accounts for every planned request and leaves
-external servers running.
+For generated prompts, set the input length in the prompt declaration. With
+Poisson arrivals, set each target's rate in `arrivals` and its output length
+policy in `output_tokens`. File trace rows set their own `max_new_tokens`.
+Generated lengths can be fixed, uniform over an inclusive range, or truncated
+log-normal. In that distribution, `median_fraction` places the untruncated
+median at `L + (U - L) * median_fraction` for the legal interval `[L, U]`,
+and `sigma` sets the standard deviation in log space. Truncation can shift the
+median.
 
-Warmup and measured requests flush their terminal records before closing the
-HTTP response. A response-close failure is an infrastructure error; a completed
-successful request retains its sample and latency while the attempt fails.
-Recording failures remain infrastructure failures.
+To sample a request, xbench reserves the minimum output length before drawing
+the input length, then draws the output length from the remaining budget.
+Owned cases account for SGLang's request reserves. External cases account for
+the remaining context when they know both the context and input length.
+An optional positive `max_output_input_ratio` applies only to log-normal
+output lengths. With input length `I` and ratio `R`, the output cap is
+`min(floor(R * I), limits.output_budget(I))`, and the input range must admit
+the minimum output under that ratio. An empty range or an out-of-bounds fixed
+value fails preparation. Warmup uses the same limits.
 
-Each target selects `sglang` or `openai` through
-[`ApiAdapter`](../../src/xpool-dev/xbench/harness/serving/api.py). The factory creates fresh
-request-local state for every warmup and measured request. `SglangAdapter`
-implements native `/generate` construction and response validation;
-`OpenaiAdapter` raises `NotImplementedError` during protocol preflight, before
-run allocation or HTTP execution. The client owns transport, timestamps and
-event history. A malformed frame raises `ResponseProtocolError`, retaining its
-rejected observation when available.
+xbench draws exponential gaps for Poisson arrivals within `[0, T)` and merges
+them stably. Traces preserve file order for simultaneous arrivals. Separate
+random streams per model and purpose let a model keep its traffic when a peer
+is removed. Token lengths also depend on the available request bounds, which
+can vary across modes with the same seed. For a controlled comparison, keep
+the prompt and trace JSONL fixed. Set `sampling.ignore_eos` explicitly when
+exporting generated traffic for replay because it defaults to true for
+random prompts and false for file prompts.
+
+### Running requests
+
+After startup, hosted cases check known prompt lengths and output caps
+against any `max_model_len` the servers report. Owned cases read
+`/server_info` and check the static Capacity Group ceiling, which can exceed
+the currently mapped capacity. The workload stores the model context when
+available. Token IDs give an exact input length, while text prompts have a
+known length when preparation loads the tokenizer. If a check fails, xbench
+saves the startup details and identifies the request before warmup. Client
+mode sends requests directly to the configured endpoint.
+
+xbench prepares each workload once for all repetitions. The repetition count
+comes from the execution settings and defaults to one. Each managed attempt
+starts fresh servers, while the client-mode caller controls the initial
+cache state. Warmup ends before the common measurement clock starts, and
+server caches carry over into measurement. With an empty arrival schedule,
+xbench records a no-data result and skips device allocation and serving.
+
+The client uses the arrival schedule to feed a FIFO queue and starts up to
+128 HTTP requests at once by default. Requests wait for protocol completion
+unless a positive `request_timeout_seconds` sets a fixed limit from HTTP
+start. That limit covers the engine queue, prefill and decode. Client
+queueing happens before this clock starts. Managed startup has a default
+limit of 1,800 seconds, and normal queue drain can run until all requests end.
+xbench makes at most one HTTP attempt per request and continues with later
+arrivals after an individual request fails. A managed process or recording
+failure interrupts the attempt. On cancellation, xbench accounts for every
+planned request and leaves client-mode servers running.
+
+The client writes each request's result before closing its HTTP response.
+If closing fails, the attempt reports an infrastructure error and preserves
+any completed latency sample.
+
+[`OpenaiAdapter`](../../src/xpool-dev/xbench/harness/serving/api.py) prepares
+`POST /v1/completions` with text or token IDs and an explicit `max_tokens`.
+Every warmup and measured request sends `stream = true` and requests both
+`include_usage` and `continuous_usage_stats` in `stream_options`. Requests
+advertise `Accept-Encoding: identity` so the SSE reader can consume the response
+bytes directly. External endpoints must return cumulative output counts on
+generation frames and a final usage frame. The client timestamps and records
+the events. `StreamEvent` validates the extracted fields. If a malformed
+frame yields a rejected event, the client records it with the protocol error.
 The client counts the current SSE wire frame incrementally, including field
 prefixes and line delimiters, and bounds unfinished lines. Blank-line frame
 boundaries reset the budget. Empty `data:` lines consume it; a transport batch
 containing several individually valid frames does not combine their budgets.
 
+### Hosted launch protocol
+
+Set `script` relative to the catalogue. xbench runs it directly, and the
+script selects the Python environment, engine options and checkpoints.
+
+| Command | Contract |
+| --- | --- |
+| `SCRIPT requirements` | From the script directory, emit one JSON object to stdout with a nonnegative integer `device_count` and nonempty `listeners`. Write diagnostics to stderr. xbench validates the declaration and retires the probe's process group before leasing devices. |
+| `SCRIPT start --model MODEL_ID@URL [--model MODEL_ID@URL ...]` | In the attempt directory, start services in the foreground inside the supervised process group. Use the assigned URLs and ordered `CUDA_VISIBLE_DEVICES`. Exit with failure if any required service exits unexpectedly. |
+
+`listeners` groups the Model IDs by shared listening address. For example,
+`[["team/first", "team/second"], ["team/third"]]` requests two addresses.
+The groups must cover the case's targets exactly once. xbench supplies an
+absolute `--settings PATH` JSON file to both commands when the case declares
+`launch_settings`. Zero devices declares a CPU-only launcher.
+
+xbench uses the [shared TCP reservation](tooling.md#devices-and-endpoints) for
+each loopback address. It checks for cancellation and releases the TCP listeners
+just before starting the script. It holds the port locks until cleanup succeeds.
+To confirm readiness, xbench checks that the launcher's process group owns each
+listener and that `GET /v1/models` advertises each Model ID at its assigned
+address only. One startup deadline covers all listeners and model-list requests.
+Probes and benchmark requests use direct local connections. The task supervisor
+returns the devices once the processes have stopped.
+
+To include startup details in the report, write `launch/commands.json` before
+starting the servers. For each command, record its arguments and selected
+environment variables, with optional Python and package details. When the
+file is missing or invalid, xbench records a diagnostic and continues.
+Generate the JSON Schemas with `model_json_schema()` on
+[`HostedRequirements`](../../src/xpool-dev/xbench/harness/serving/case.py) and
+[`HostedLaunchRecord`](../../src/xpool-dev/xbench/harness/serving/environment.py).
+
 ## Measurement definitions
 
-Native `/generate` streaming uses one client monotonic origin per attempt.
-Raw times are seconds; wall time identifies the execution, not latency. Events
-are timestamped before decoding/serialization, and cumulative generated text is
-not repeated in every record. HTTP start is a client observation, not a claimed
-server-receipt timestamp. Startup, warmup and shutdown are outside the window.
+The client measures time in seconds on a monotonic clock and records the wall
+time at the start of measurement. It timestamps events before decoding and
+records when it starts each HTTP request. Startup, warmup and shutdown
+fall outside the measurement window.
 
 - HTTP TTFT is first positive-token observation minus HTTP start.
 - Arrival TTFT is first positive-token observation minus actual enqueue.
-- Queue wait is HTTP start minus enqueue; arrival lateness is enqueue minus
+- Queue wait is HTTP start minus enqueue. Arrival lateness is enqueue minus
   planned arrival.
-- Completion is valid `[DONE]` receipt, or establishment of failure/cancellation;
-  subsequent transport close does not extend latency.
+- Completion is the receipt of `[DONE]` or the time when the client records a
+  failure or cancellation. The later HTTP close happens outside that latency.
 
 Token-count progress, including empty-text chunks, establishes first-token
-timing. HTTP 200 alone is insufficient: success requires monotonic valid counts,
-normal final usage/finish reason and `[DONE]`. Failed requests retain their valid
-prefix and offending observations separately. No-token requests have unavailable
-TTFT/ITL, not zero-valued samples.
+timing. A successful stream provides nondecreasing cumulative output counts on
+generation frames, a normal finish reason, a final `choices = []` usage frame,
+and `[DONE]` in that order. Final usage must match the last observed output
+count. It supplies totals and any reported cache counts, with zero timing or
+throughput samples. Failed requests retain their valid prefix and offending
+observations. TTFT and ITL are unavailable when the stream has no token progress.
 
 A single-token increment after first progress supplies an observed ITL; a
 multi-token increment of `k` supplies a token-estimated gap divided by `k`, with
@@ -186,15 +231,18 @@ the client's monotonic clock. Offline measurement validation checks retained
 chronology, token progress and terminal claims before statistical calculation.
 Private interval, distribution and attribution helpers rely on those established
 invariants.
-`RequestState.terminal` calculates request metrics during execution. The recorder
-persists them in `requests.jsonl`. Reporting consumes these saved values for
-request-level distributions. Individual ITL samples and time-resolved throughput
-use retained events, whose token increments and observation times cannot be
-represented by request-level means and totals alone.
+`requests.jsonl` retains terminal timestamps, token counts, and outcomes.
+`events.jsonl` retains timestamped stream observations. Live recording and
+offline validation use the same stream progress rules. Reporting derives
+request metrics, ITL distributions and time-resolved throughput from the
+validated records. Each request's token intervals supply both its ITL metrics
+and the pooled distribution.
 
 ## Measurement evidence and reports
 
-One locked benchmark invocation owns its measurements and derived reports:
+### Saved files
+
+Each run saves the prepared workload and the results of every attempt.
 
 ```text
 run.json
@@ -211,154 +259,117 @@ cases/<case-id>/
       ttft-cdf.*, itl-cdf.*, throughput.*
 ```
 
-Tool-owned result records follow their current declarations and contain no
-schema, format, metric-revision or rendering-version tags. Catalogues are
-field-driven declarations without a schema version. External serving metadata
-retains its own input schema field. Actual software/build versions describe the
-environment.
-`run.json` retains required `tool_config`, selected case IDs, case references and
-the current invocation outcome separately from report generation. Retained
-execution settings supply the expected repetition count; current configuration
-does not reinterpret a previous run.
-`case.json` owns the case declaration, deployment provenance and repetition
-references selecting one physical attempt per logical repetition. Attempts and
-runtime/report projections obtain their case label from that parent declaration.
-`workload.json` retains lightweight timing, seed
-and digest metadata plus references to the normalized prompt, trace and warmup
-JSONL files. Local model metadata is preparation input. Lightweight repetition
-checkpoints retain timing, execution/error facts, core digests and nullable
-cleanup/evidence flags. The worker cannot seal its own cleanup proof. `run`
-retains JSONL and checkpoints; it neither persists an aggregate summary nor
-invokes CSV export or Matplotlib.
+`run.json` saves `tool_config`, the selected case IDs, their paths and the
+current run result. Each `case.json` describes the case and its effective
+deployment or hosted launch declaration. It stores the prepared prompt, trace
+and warmup digests and points to the effective attempts. `workload.json` names
+the replay files and records their timing settings and known model contexts.
+`repetition.json` records the attempt's timing, outcome, digests
+and whether measurements and cleanup were verified. The supervisor verifies
+cleanup before xbench can mark the attempt complete. Reports and continuation
+read the current schemas for these files.
 
-`xbench run --all --continue DIR` resumes the original selection, repetition
-count, effective deployment and prepared replay in the same run directory.
-It installs the saved development configuration before ordinary bootstrap and
-rejects explicit case, config, catalogue, repetition-count and cache overrides.
-Current catalogue declarations locate executable modules and must retain the
-original experiment conditions; description, provenance and authentication
-secrets do not redefine an experiment. Device leases are newly acquired from
-the actual execution environment. Continuation validates all selected original
-prepared inputs before reopening; missing declarations, deployment snapshots or
-replay fail without changing the artifact. Default continuation executes only
-logical repetitions with no prior attempt; a startup failure remains attempted
-even when measurement never began. Failed, interrupted or unverifiable effective
-attempts remain unchanged unless `--rerun-failure` selects them for one complete
-new attempt each. Missing measurement output with intact prepared replay follows
-the same selection rule, not request-offset recovery or resampling. Both
-`--rerun-failure` and `--fast-fail` are invocation actions rather than retained
-configuration settings; the latter is also available on ordinary run.
+xbench validates the normalized replay records against the case's digests. Attempt
+digests cover request and event records, and the timing origin whenever one
+was saved. A timed report requires a valid origin. When recording stops
+unexpectedly, xbench preserves the recorded prefix and marks unknown outcomes
+as `evidence_missing`. It leaves their timing unknown. Reports label the
+remaining samples as incomplete. Startup details, logs, warmup diagnostics and
+reports are kept outside the required measurement digests.
 
-A successful sealed attempt is reusable only after raw evidence validation and
-its own verified cleanup, independently of the interrupted parent's seal.
-Selected unsuccessful repetitions execute the complete saved workload at fresh
-`repetition-NNNN.attempt-NNNN` paths. The runner preserves prior run manifests,
-attempts and reports, and replaces only effective references and current run
-state. The run verdict aggregates effective attempts rather than historical
-failures. Skipped unsuccessful effective attempts keep the current run nonzero;
-failures superseded by a new attempt contribute only to history. A fully
-verified successful sealed run is a read-only no-op.
-Continuation does not reclaim an unresolved runtime domain or establish that
-the cause of an earlier failure has been fixed.
+`environment.json` records the load generator's software and selected
+environment variables. Once managed servers are ready, xbench adds their
+endpoints, assigned devices and available launch details under `serving`.
+Device details include UUID, name, memory, PCI identity, topology and CPU/NUMA
+affinity when available. For owned cases it also records attention and FFN
+device assignments and the effective runtime configuration path. Client
+callers record their servers' configuration separately. If an environment
+query fails, xbench keeps what it collected and reports the error in
+`capture_errors`.
 
-Logical repetition links point to the latest started attempt and update under
-the existing exclusive run lock. Workers write physical paths. A link agrees
-with its case's effective reference and targets the same logical repetition
-within that case; it does not fall back to an older successful attempt.
-Existing real repetition directories remain in place. Reopening withdraws the
-parent completion marker; safe finalization restores it. Run prints the offline
-report command after continuation but neither deletes nor regenerates reports.
+### Continuing a run
 
-Preparation hashes normalized prompts, traces and warmup content once.
-Loading a saved `PreparedWorkload` verifies those digests.
-Repetition digests cover requests/events and the origin whenever it is retained,
-independently of window availability. A usable timed window requires an origin;
-reporting validates each retained origin's schema and digest. Recording loss
-preserves original bytes/valid prefix and represents unsupported outcomes as
-`evidence_missing`, with unknown timing rather than fabricated dispatch or engine
-claims. Valid partial samples remain reportable with incomplete labels.
+`xbench run --all --continue DIR` restores the saved configuration, case
+selection, repetition count, deployments and prepared workload from the run
+directory. The original catalogue, deployment TOML and datasets are inputs to
+fresh runs. A resumed run leases devices from the current environment, and
+xbench rejects overrides to its saved case or tool settings.
 
-`environment.json` labels its bounded environment whitelist with
-`environment_source`. Owned execution records `effective_serving_launch` from
-the actual `system.launch.environment`; before startup establishes that launch,
-the source is `unknown` with an empty mapping. Client execution records
-`local_client`, describing load-generator inputs rather than external serving
-conditions. Owned hardware observations capture
-the allocated devices' UUID/name, memory bytes, PCI identity, links, CPU/NUMA affinity
-and target/role placement once before timing, using bounded read-only queries.
-Client `serving_metadata_path` optionally supplies declared external hardware and
-package/build versions; absent values remain unknown. The tool does not substitute
-load-generator hardware or query external metadata endpoints. Software values
-identify their source; unavailable CUDA build information stays unknown rather
-than triggering library or installation audits. Metadata capture failures are
-diagnostics, not metric failures.
+Before changing the run directory, xbench validates the saved declarations,
+deployments and workload. For each hosted case that needs a new attempt,
+it runs the saved script's `requirements` command with the saved settings.
+The script digest and reported requirements must match, and xbench checks
+the digest again just before launch.
 
-Prompt content is intentional replay data, explicitly retained by `run`.
-Client `case.json` retains the complete endpoint URL, including plaintext
-username and password, for reproducible execution and continuation. Sharing
-raw artifacts shares those credentials. Report projections do not directly
-export endpoint URLs. Diagnostic environment capture remains bounded rather
-than dumping the complete environment. Logs, warmup diagnostics, metadata and
-generated reports are outside mandatory metric digests and do not veto valid offline
-aggregation.
+By default, continuation runs repetitions that have never started. Startup
+failure counts as an attempt. If owned weight preflight fails or startup
+fails with verified cleanup, xbench prints the case ID, repetition number, exit
+code and error to stderr and saves that error in the attempt. Use
+`--rerun-failure` to execute the complete saved workload once for each failed,
+interrupted or unverifiable effective attempt. `--fast-fail` also works on
+fresh runs and responds to new execution failures. Both flags apply to the
+current invocation.
 
-`report` validates retained replay, request accounting, chronology, core digests
-and final checkpoints, then aggregates saved request metrics and event samples.
-It reads no previous aggregate summary and preserves measurement files and
-original execution verdicts. A contradictory zero-result checkpoint is rejected,
-and incomplete recording cannot become a successful measurement through reporting.
+xbench reuses a successful sealed attempt if its measurements and cleanup
+validate, even when the parent run was interrupted. If a sealed run already
+has a reusable attempt for every required repetition, continuation returns
+the saved result. A new attempt gets its own directory and becomes the
+effective attempt. Earlier attempts and reports remain available.
+Failures that still belong to the effective attempts keep the run's exit
+code nonzero. Resolve incomplete cleanup before attempting to continue.
 
-Each physical attempt's fixed `report/` directory owns `summary.json`, `report.md`,
-`cdf.csv`, `throughput.csv`, `render.json` and the selected figure formats. Its
-summary contains that attempt's metrics, replay identities, environment,
-deployment and original verdict, plus the available invocation manifest.
-Matplotlib uses a local DejaVu Serif nine-point paper style, embedded/path fonts
-and colors plus line styles for grayscale differentiation. Width presets are
-3.3 inches (`single`), 6.8 inches (`double`) and 1.65 inches (`half`); explicit
-per-figure dimensions override presets. Subplot columns determine rows, with
-2.4 inches per row when height is unset. Legends fit inside the selected canvas
-and use retained Model IDs plus the aggregate series, without user label maps.
-Metric titles and horizontal axis labels wrap to each subplot's width, keeping
-their wording and units inside the canvas and clear of scientific-notation offsets.
-Captions appear in Markdown; the optional title is the report heading. Formats
-default to PDF, SVG and PNG, with 300 PPI for raster output. Effective rendering
-settings and dimensions accompany the report. Latency axes use milliseconds;
-throughput uses tokens per second. HTTP/arrival TTFT, observed/estimated/combined
-ITL and aligned input/output throughput remain explicit. Unavailable data is annotated; defaults
-do not smooth or clip tails. Rendering-library versions belong to report output.
+Under the run lock, xbench points each `repetition-NNNN` symlink at its latest
+started attempt, named `repetition-NNNN.attempt-NNNN`. The target must be a
+sealed attempt for that repetition in the same case to use the symlink for
+reporting. Reopening clears the run's completion marker. Finalization
+restores it when all cleanup checks pass.
 
-`xbench report` resolves exact artifact IDs below its configured run root:
-`RUN_ID` or
-`RUN_ID/cases/FULL_CASE_UUID/repetition-NNNN` or the corresponding physical
-`repetition-NNNN.attempt-NNNN` address. Benchmark run inputs expand to their
-effective attempts; physical addresses can select historical sealed attempts.
-Logical links select only the latest attempt, while existing real repetition
-directories retain their physical meaning. Multiple inputs select a deduplicated
-batch of independent
-reports. Each benchmark report shows the models and aggregate for exactly one
-attempt, and CLI stdout lists the generated directories. Exclusive run-store protection covers
-loading through publication, coordinating report writers, readers and cleanup.
+### Reports
 
-`report --list` discovers inactive sealed metadata without parsing all samples
-or recomputing digests. Required execution settings establish eligibility;
-unsupported or unsealed records are not reported. Failed or normally interrupted
-runs retain their original outcome. A partial benchmark invocation lists eligible
-repetition addresses rather than advertising the entire run. Generation protects
-the run and performs full evidence validation; discovery does not recover or seal it.
-Eligible historical attempts are also listed by physical address, with no
-duplicate logical-link entry. Both the parent and historical attempt must be
-sealed; a later parent completion does not seal old unfinished attempts.
+`xbench report` validates the saved workload, request and event records and
+attempt checkpoints before computing statistics. Continuation uses the same
+checks to decide which attempts to reuse. Reports are built from the raw records
+and preserve the saved measurements and execution result. If the checkpoint
+claims success despite missing or contradictory measurements, reporting fails.
 
-Reports default to their owning physical benchmark attempt. Optional
-`--output DIR` exports below
-`DIR/xbench/RUN_ID/cases/CASE_UUID/repetition-NNNN.attempt-NNNN/report/`, preserving attribution
-without relocating raw evidence. Current catalogue and deployment files are not
-report inputs.
+Each attempt's `report/` directory contains `summary.json`, `report.md`,
+`cdf.csv`, `throughput.csv`, `render.json` and the selected figures. The summary
+includes metrics, workload digests, environment, deployment and original
+result, plus the run manifest when available.
 
-Repeated reporting overwrites tool-generated files in the existing directory
-while preserving unrelated files. Rendering failure returns an error and leaves
-measurement bytes and saved verdicts unchanged. Publication may partially
-update a report; another invocation regenerates it without manual deletion.
+Figures use nine-point DejaVu Serif with line styles that distinguish series
+in grayscale. The default widths are 3.3 inches (`single`), 6.8 inches
+(`double`) and 1.65 inches (`half`). Set explicit dimensions to override
+the presets. The number of columns determines the number of rows, which
+are 2.4 inches high by default. Legends use the Model IDs and aggregate
+series. Titles and horizontal axis labels wrap within each subplot.
+Captions appear in Markdown, and an optional title becomes the report
+heading. Reports default to PDF, SVG and PNG with 300 PPI for raster output.
+The report records the rendering settings, dimensions and library versions.
+
+Latency axes use milliseconds and throughput uses tokens per second. Figures
+label HTTP and arrival TTFT, distinguish observed, estimated and combined ITL,
+and show input and output throughput on the same clock. The defaults plot
+the full distributions without smoothing and mark unavailable data.
+
+`xbench report` accepts a run ID or an address such as
+`RUN_ID/cases/FULL_CASE_UUID/repetition-NNNN`. A run ID selects the effective
+attempts, and a `.attempt-NNNN` suffix selects a particular attempt. The
+command generates each selected report once, with separate model and aggregate
+results, and prints the report directories. It holds the run lock through
+validation and writing so report generation and cleanup can coordinate.
+
+`report --list` reads metadata from inactive runs. It lists only sealed
+results with supported settings, including failed and interrupted runs with
+their saved outcomes. For a partial run, it lists the eligible attempts by
+address. A historical attempt needs its own seal as well as the run's seal.
+Listing leaves validation of the measurement files to report generation.
+
+Reports default to the attempt directory. Use `--output DIR` to write them
+under `DIR/xbench/RUN_ID/cases/CASE_UUID/repetition-NNNN.attempt-NNNN/report/`.
+Report generation reads the saved run files, so the original catalogue and
+deployment files can be moved. A rendering error can leave a partial report.
+Rerun the command to regenerate its files and keep unrelated files in place.
 
 Benchmark run code zero requires complete valid measurement, at least one
 successful sample per repetition and safe cleanup. Drained request failures or

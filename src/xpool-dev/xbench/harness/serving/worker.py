@@ -1,51 +1,34 @@
-"""Invoke one collected serving program inside its runner-owned supervision scope."""
+"""Execute one serving benchmark attempt under runner-owned supervision."""
 
 from __future__ import annotations
 
 import argparse
-import importlib
+import asyncio
 import sys
-from collections.abc import Callable
 from pathlib import Path
-from typing import cast
 
-from xbench.harness.serving.case import BenchCase
-from xbench.harness.serving.measure import BenchCaseManifest, BenchRunManifest
-from xkit.config import XpoolDevConfig, init_global_config
+from xbench.harness.serving.execution import run_serving
+from xbench.harness.serving.measure import BenchCaseManifest
 from xkit.task import TaskRoot
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
-    parser.add_argument("--module", required=True)
-    parser.add_argument("--source-path", required=True, type=Path)
-    parser.add_argument("--entrypoint", required=True)
-    parser.add_argument("--import-root", action="append", type=Path, default=[])
     options = parser.parse_args()
-    sys.path[:0] = [str(path) for path in options.import_root]
     root = TaskRoot.from_environment()
+    failure: Exception | None = None
     try:
-        try:
-            run_manifest = BenchRunManifest.model_validate_json(
-                (options.directory.parents[2] / "run.json").read_bytes()
-            )
-            init_global_config(resolved=XpoolDevConfig.from_record(run_manifest.tool_config))
-            module = importlib.import_module(options.module)
-            if module.__file__ is None or Path(module.__file__).resolve() != options.source_path:
-                raise ValueError("benchmark worker imported a different source module")
-            # Isolated collection validated this discovered entry and its invocation signature.
-            entry = cast(Callable[..., None], getattr(module, options.entrypoint))
-            manifest = BenchCaseManifest.model_validate_json((options.directory.parent / "case.json").read_bytes())
-            case: BenchCase = manifest.case
-            entry(case=case, workdir=options.directory)
-            return 0
-        except Exception as error:
-            print(f"xbench program failure: {type(error).__name__}: {error}", file=sys.stderr)
-            return 2
+        manifest = BenchCaseManifest.model_validate_json((options.directory.parent / "case.json").read_bytes())
+        asyncio.run(run_serving(manifest, options.directory))
+    except Exception as error:
+        failure = error
+        print(f"xbench attempt failure: {type(error).__name__}: {error}", file=sys.stderr)
     finally:
         if root is not None:
+            # Wait for cleanup confirmation even if the benchmark failed.
             root.finish()
+    return 0 if failure is None else 2
 
 
 if __name__ == "__main__":

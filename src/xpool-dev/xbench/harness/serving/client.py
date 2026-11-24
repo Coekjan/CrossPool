@@ -14,8 +14,8 @@ from typing import Literal
 import httpx
 from pydantic import JsonValue
 
-from xbench.harness.serving.api import ApiAdapter, ResponseProtocolError, create_api_adapter
-from xbench.harness.serving.case import BenchCase
+from xbench.harness.serving.api import OpenaiAdapter, ResponseProtocolError
+from xbench.harness.serving.case import BenchCase, ServingEndpoint
 from xbench.harness.serving.measure import MeasurementOrigin, RepetitionManifest, RequestRecord, StreamEvent
 from xbench.harness.serving.workload import PreparedWorkload, ScheduledRequest
 from xkit.results import write_json
@@ -31,7 +31,6 @@ class MeasurementRecorder:
     def __init__(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         self.directory = directory
-        self.events: list[StreamEvent] = []
         self.requests: list[RequestRecord] = []
         self.event_file = (directory / "events.jsonl").open("x", encoding="utf-8", buffering=64 * 1024)
         try:
@@ -64,7 +63,6 @@ class MeasurementRecorder:
         except (OSError, ValueError):
             self.failed = True
             raise
-        self.events.append(event)
         if self.window is not None and self.window.window_kind == "interrupted":
             self.seal_window(event.observed_at_seconds, "interrupted")
 
@@ -106,83 +104,50 @@ class MeasurementRecorder:
 
 @dataclass(slots=True)
 class RequestState:
-    """One request's accepted prefix, positive progress anchor and terminal evidence."""
+    """One request's dispatch and stream progress for terminal recording."""
 
     request: ScheduledRequest
     recorder: MeasurementRecorder
-    adapter: ApiAdapter
+    adapter: OpenaiAdapter = field(default_factory=OpenaiAdapter)
     enqueued_at: float | None = None
     started_at: float | None = None
-    first_token_at: float | None = None
-    last_token_at: float | None = None
-    first_count: int | None = None
-    completion_tokens: int | None = None
-    prompt_tokens: int | None = None
-    cached_tokens: int | None = None
-    finish_reason: str | None = None
     status: int | None = None
-    events: list[StreamEvent] = field(default_factory=list)
+    next_sequence: int = 0
+
+    def record_event(self, event: StreamEvent) -> None:
+        self.recorder.event(event)
+        self.next_sequence += 1
 
     def event(
         self,
-        kind: Literal["enqueue", "http_start", "data", "done", "error"],
+        kind: Literal["enqueue", "http_start", "error"],
         when: float,
         *,
-        completion_tokens: int | None = None,
-        prompt_tokens: int | None = None,
-        cached_tokens: int | None = None,
-        finish_reason: str | None = None,
-        accepted: bool = True,
-        reported_meta: JsonValue = None,
         error_kind: str | None = None,
         error_message: str | None = None,
     ) -> None:
         event = StreamEvent(
             request_id=self.request.request_id,
-            sequence=len(self.events),
+            sequence=self.next_sequence,
             observed_at_seconds=when,
             kind=kind,
-            completion_tokens=completion_tokens,
-            prompt_tokens=prompt_tokens,
-            cached_tokens=cached_tokens,
-            finish_reason=finish_reason,
-            accepted=accepted,
-            reported_meta=reported_meta,
             error_kind=error_kind,
             error_message=error_message,
         )
-        self.recorder.event(event)
-        self.events.append(event)
+        self.record_event(event)
 
     def consume(self, data: bytes, when: float) -> bool:
         """Consume one timestamped SSE data event, returning true only at valid DONE."""
 
         try:
             event = self.adapter.consume(
-                data, request_id=self.request.request_id, sequence=len(self.events), observed_at_seconds=when
+                data, request_id=self.request.request_id, sequence=self.next_sequence, observed_at_seconds=when
             )
         except ResponseProtocolError as error:
             if error.event is not None:
-                self.recorder.event(error.event)
-                self.events.append(error.event)
+                self.record_event(error.event)
             raise
-        self.recorder.event(event)
-        self.events.append(event)
-        completion = event.completion_tokens
-        if completion is not None:
-            previous = self.completion_tokens or 0
-            if completion > previous:
-                if self.first_token_at is None:
-                    self.first_token_at = when
-                    self.first_count = completion
-                self.last_token_at = when
-            self.completion_tokens = completion
-        if event.prompt_tokens is not None:
-            self.prompt_tokens = event.prompt_tokens
-        if event.cached_tokens is not None:
-            self.cached_tokens = event.cached_tokens
-        if event.finish_reason is not None:
-            self.finish_reason = event.finish_reason
+        self.record_event(event)
         return event.kind == "done"
 
     def terminal(
@@ -193,23 +158,24 @@ class RequestState:
         error_kind: str | None = None,
         error_message: str | None = None,
     ) -> RequestRecord:
+        progress = self.adapter.progress
         return RequestRecord(
             **self.request.model_dump(),
             outcome=outcome,
             enqueued_at_seconds=self.enqueued_at,
             http_started_at_seconds=self.started_at,
-            first_token_at_seconds=self.first_token_at,
-            last_token_at_seconds=self.last_token_at,
+            first_token_at_seconds=progress.first_token_at_seconds,
+            last_token_at_seconds=progress.last_token_at_seconds,
             ended_at_seconds=end,
-            first_completion_tokens=self.first_count,
-            completion_tokens=self.completion_tokens,
-            prompt_tokens=self.prompt_tokens,
-            cached_tokens=self.cached_tokens,
+            first_completion_tokens=progress.first_completion_tokens,
+            completion_tokens=progress.completion_tokens,
+            prompt_tokens=progress.prompt_tokens,
+            cached_tokens=progress.cached_tokens,
             http_status=self.status,
-            finish_reason=self.finish_reason,
+            finish_reason=progress.finish_reason,
             error_kind=error_kind,
             error_message=error_message,
-        ).measured(self.events)
+        )
 
 
 async def send_request(
@@ -229,7 +195,12 @@ async def send_request(
 
     response = None
     record = None
-    request = client.build_request("POST", state.adapter.endpoint(base_url), json=payload)
+    request = client.build_request(
+        "POST",
+        base_url.rstrip("/") + "/v1/completions",
+        headers={"Accept-Encoding": "identity"},
+        json=payload,
+    )
     state.started_at = time.perf_counter() - origin
     state.event("http_start", state.started_at)
     try:
@@ -276,7 +247,7 @@ async def send_request(
             if isinstance(error, ResponseProtocolError)
             else "transport"
         )
-        # HTTP diagnostics omit credential-bearing request URLs and response text.
+        # Keep request URLs and response bodies out of transport diagnostics.
         message = str(error) if isinstance(error, ResponseProtocolError) else type(error).__name__
         state.event("error", ended, error_kind=kind, error_message=message)
         record = state.terminal("failed", ended, error_kind=kind, error_message=message)
@@ -309,7 +280,7 @@ async def observe_system(check_alive: Callable[[], None] | None, stopped: asynci
 async def run_measurement(
     case: BenchCase,
     workload: PreparedWorkload,
-    endpoints: Mapping[ModelId, str],
+    endpoints: Mapping[ModelId, ServingEndpoint],
     recorder: MeasurementRecorder,
     *,
     check_alive: Callable[[], None] | None = None,
@@ -325,10 +296,12 @@ async def run_measurement(
 
     prompts = {(prompt.model_id, prompt.prompt_id): prompt for prompt in workload.prompts}
     targets = {target.model_id: target for target in case.targets}
-    adapters = {request.request_id: create_api_adapter(targets[request.model_id].api) for request in workload.requests}
     payloads = {
-        request.request_id: adapters[request.request_id].payload(
-            request, prompts[request.model_id, request.prompt_id], targets[request.model_id]
+        request.request_id: OpenaiAdapter.payload(
+            request,
+            prompts[request.model_id, request.prompt_id],
+            targets[request.model_id],
+            endpoints[request.model_id],
         )
         for request in workload.requests
     }
@@ -344,7 +317,9 @@ async def run_measurement(
         ),
     )
     limits = httpx.Limits(max_connections=case.max_inflight, max_keepalive_connections=case.max_inflight)
-    async with httpx.AsyncClient(timeout=None, limits=limits, follow_redirects=False) as client:
+    async with httpx.AsyncClient(
+        timeout=None, limits=limits, follow_redirects=False, trust_env=case.mode == "client"
+    ) as client:
 
         async def produce() -> None:
             nonlocal window_end
@@ -355,7 +330,7 @@ async def run_measurement(
                         await asyncio.sleep(delay)
                         delay = origin + request.arrival_seconds - time.perf_counter()
                     enqueued_at = time.perf_counter() - origin
-                    state = RequestState(request, recorder, adapters[request.request_id], enqueued_at=enqueued_at)
+                    state = RequestState(request, recorder, enqueued_at=enqueued_at)
                     states[request.request_id] = state
                     state.event("enqueue", enqueued_at)
                     queue.put_nowait(state)
@@ -383,7 +358,7 @@ async def run_measurement(
                 try:
                     record = await send_request(
                         client,
-                        endpoints[state.request.model_id],
+                        endpoints[state.request.model_id].base_url,
                         payloads[state.request.request_id],
                         state,
                         origin=origin,
@@ -399,7 +374,8 @@ async def run_measurement(
                 now = time.perf_counter() - origin
                 terminal = recorder.requests
                 started = sum(state.started_at is not None for state in states.values())
-                provisional_rate = sum(state.completion_tokens or 0 for state in states.values()) / max(now, 1e-9)
+                completion_tokens = sum(state.adapter.progress.completion_tokens or 0 for state in states.values())
+                provisional_rate = completion_tokens / max(now, 1e-9)
                 print(
                     f"xbench phase=measure elapsed={now:.1f}s planned={len(workload.requests)} enqueued={len(states)} "
                     f"queued={len(states) - started} in-flight={started - len(terminal)} completed={len(terminal)} "
@@ -427,7 +403,7 @@ async def run_measurement(
                     if request.request_id not in recorder.request_ids:
                         state = states.get(request.request_id)
                         if state is None:
-                            state = RequestState(request, recorder, adapters[request.request_id])
+                            state = RequestState(request, recorder)
                         if state.started_at is None:
                             record = state.terminal(
                                 "not_sent",

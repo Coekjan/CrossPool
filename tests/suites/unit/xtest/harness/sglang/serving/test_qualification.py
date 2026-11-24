@@ -20,7 +20,7 @@ from xkit.serving.sglang.graph import SglangGraphMode, SglangGraphSettings
 from xkit.serving.sglang.launch import SglangLaunchModel
 from xkit.serving.sglang.server import SglangServerProcess
 from xpool.config import XpoolConfig
-from xpool.integrations.sglang.devkit.requests import LocalModelMetadata, SglangRequestLimits
+from xpool.integrations.sglang.devkit.requests import LocalModelMetadata
 from xtest.harness.runner.requirements import ResolvedConfig
 from xtest.harness.sglang.catalog import E2eServingCase
 from xtest.harness.sglang.serving.attempt import ProbeRun
@@ -57,9 +57,7 @@ def test_model_case_replays_same_phase_and_enforces_kl_without_runner_artifacts(
         },
         env={},
     )
-    metadata = LocalModelMetadata(
-        vocab_size=2, limits=SglangRequestLimits.from_context(128), admissible_ids=(0, 1), text_lengths={}
-    )
+    metadata = LocalModelMetadata(vocab_size=2, context_length=128, admissible_ids=(0, 1), text_lengths={})
     monkeypatch.setattr(xtest.harness.sglang.serving.qualification, "resolve_model_weights", lambda *args: tmp_path)
     monkeypatch.setattr(LocalModelMetadata, "from_checkpoint", classmethod(lambda cls, *args, **kwargs: metadata))
     monkeypatch.setattr(xtest.harness.sglang.serving.qualification, "assert_serving_evidence", lambda *args: None)

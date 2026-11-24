@@ -49,6 +49,12 @@ the `xtest` tree owns catalogue, default suites and strict requirements; the
 topology and model paths remain in `configs/xpool.local.toml`, selected by
 `XPOOL_CONFIG`.
 
+Client and hosted benchmarks read `XPOOL_CONFIG` when workload generation
+needs a local tokenizer or model context. To find those files, xbench uses
+`models[].path` when the requested Model ID has an explicit path. Otherwise,
+it looks up the Model ID under `vendor.model_base_uri`. Duplicate declarations
+for the requested Model ID are an error.
+
 Allowed overrides retain CLI > environment > TOML > default precedence.
 Run selections (`--all`, `--case`, pytest inputs) and report export destinations
 are invocation actions. They are not stored as configured defaults. An explicitly

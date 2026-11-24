@@ -7,7 +7,7 @@ import re
 from bisect import bisect_right
 from collections import Counter, defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
 
@@ -16,12 +16,13 @@ from pydantic import Field, FiniteFloat, JsonValue
 from xbench.harness.serving.case import (
     BenchCase,
     BenchValue,
+    HostedLaunchDeclaration,
     ResolvedDeployment,
-    ServingMetadata,
 )
-from xbench.harness.serving.workload import PreparedWorkload, ScheduledRequest, file_digest, read_jsonl
+from xbench.harness.serving.workload import PreparedWorkload, ScheduledRequest, content_digest
 from xkit.case import CaseId
 from xkit.config import ToolConfigRecord
+from xkit.results import file_sha256, iter_jsonl
 
 REPETITION_DIRECTORY_PATTERN = re.compile(r"repetition-([0-9]{4,})(?:\.attempt-([0-9]{4,}))?")
 
@@ -56,7 +57,7 @@ class BenchCaseManifest(BenchValue):
     trace_sha256: str
     warmup_sha256: str
     deployment: ResolvedDeployment | None = None
-    serving_metadata: ServingMetadata | None = None
+    hosted_launch: HostedLaunchDeclaration | None = None
     repetitions: tuple[str, ...]
 
     def effective_attempts(self, directory: Path) -> dict[int, Path]:
@@ -68,7 +69,8 @@ class BenchCaseManifest(BenchValue):
             if (
                 match is None
                 or int(match[1]) < 1
-                or (match[2] is not None and int(match[2]) < 1)
+                or match[2] is None
+                or int(match[2]) < 1
                 or path.parent != directory.resolve()
                 or path.name != reference
             ):
@@ -82,12 +84,13 @@ class BenchCaseManifest(BenchValue):
     def load_workload(self, directory: Path) -> PreparedWorkload:
         """Read the original replay and check its case-owned identities and timing."""
         workload = PreparedWorkload.load(directory, case=self.case)
-        if (
-            workload.prompt_sha256 != self.prompt_sha256
-            or workload.trace_sha256 != self.trace_sha256
-            or workload.warmup_sha256 != self.warmup_sha256
+        for name, rows, expected in (
+            ("prompt", workload.prompts, self.prompt_sha256),
+            ("trace", workload.requests, self.trace_sha256),
+            ("warmup", workload.warmup, self.warmup_sha256),
         ):
-            raise ValueError("retained replay content identities disagree")
+            if content_digest(rows) != expected:
+                raise ValueError(f"retained {name} content digest does not match the case")
         if workload.bucket_seconds != self.case.bucket_seconds or (
             self.case.arrivals.duration_seconds is not None
             and workload.arrival_horizon_seconds != self.case.arrivals.duration_seconds
@@ -128,7 +131,7 @@ class RepetitionManifest(BenchValue):
     def from_directory(cls, directory: Path) -> RepetitionManifest:
         """Read an attempt checkpoint whose logical number matches its path."""
         match = REPETITION_DIRECTORY_PATTERN.fullmatch(directory.name)
-        if match is None or (match[2] is not None and int(match[2]) < 1):
+        if match is None or match[2] is None or int(match[2]) < 1:
             raise ValueError(f"invalid benchmark attempt directory: {directory.name}")
         manifest = cls.model_validate_json(retained_file(directory, "repetition.json").read_bytes())
         if manifest.repetition != int(match[1]):
@@ -137,68 +140,71 @@ class RepetitionManifest(BenchValue):
 
 
 class MeasurementOrigin(BenchValue):
-    """Common native-client T0; wall time identifies the run rather than latency."""
+    """Clock readings when measurement starts.
+
+    The monotonic clock measures elapsed time. The wall clock dates the run.
+    """
 
     monotonic_origin_seconds: FiniteFloat = Field(ge=0)
     wall_clock_origin_seconds: FiniteFloat = Field(ge=0)
 
 
-def load_measurement(directory: Path, workload: PreparedWorkload) -> tuple[RepetitionManifest, BenchSummary]:
+@dataclass(frozen=True, slots=True)
+class MeasurementEvidence:
+    """Validated terminal records, stream histories and attempt completeness."""
+
+    requests: Sequence[RequestRecord]
+    events_by_request: dict[str, list[StreamEvent]]
+    execution_complete: bool
+    evidence_complete: bool
+
+
+def load_measurement(
+    directory: Path, workload: PreparedWorkload, *, checkpoint: RepetitionManifest
+) -> MeasurementEvidence:
     """Validate saved attempt measurements independently of the parent run's seal.
 
     Continuation can reuse a successful sealed attempt in an interrupted parent.
     Reporting applies the parent publication boundary separately.
     """
-    manifest = RepetitionManifest.from_directory(directory)
     required = {"events.jsonl", "requests.jsonl"}
     if (
-        manifest.window_end_seconds is not None
-        or "measurement.json" in manifest.artifact_sha256
+        checkpoint.window_end_seconds is not None
+        or "measurement.json" in checkpoint.artifact_sha256
         or (directory / "measurement.json").is_file()
     ):
         required.add("measurement.json")
-    if not required <= manifest.artifact_sha256.keys():
+    if not required <= checkpoint.artifact_sha256.keys():
         raise ValueError("benchmark repetition lacks required evidence digests")
     for reference in required:
         artifact = retained_file(directory, reference)
-        if file_digest(artifact) != manifest.artifact_sha256[reference]:
+        if file_sha256(artifact) != checkpoint.artifact_sha256[reference]:
             raise ValueError(f"retained benchmark artifact digest mismatch: {reference}")
     if "measurement.json" in required:
         MeasurementOrigin.model_validate_json(retained_file(directory, "measurement.json").read_bytes())
-    requests = read_jsonl(directory / "requests.jsonl", RequestRecord)
-    events = read_jsonl(directory / "events.jsonl", StreamEvent)
-    if manifest.window_end_seconds is None and events:
-        raise ValueError("benchmark events require an available measurement window")
-    if (manifest.window_end_seconds is None) != (manifest.window_kind is None):
-        raise ValueError("measurement window end and kind must be available together")
-    summary = (
-        summarize(
-            workload,
-            requests,
-            events,
-            window_end_seconds=manifest.window_end_seconds,
-            window_kind=manifest.window_kind,
-        )
-        if manifest.window_end_seconds is not None and manifest.window_kind is not None
-        else unavailable_summary(workload, requests)
-    ).model_copy(
-        update={"cleanup_verified": manifest.cleanup_verified, "infrastructure_error": manifest.infrastructure_error}
+    requests = tuple(iter_jsonl(directory / "requests.jsonl", RequestRecord))
+    events = tuple(iter_jsonl(directory / "events.jsonl", StreamEvent))
+    evidence = validate_measurement(
+        workload,
+        requests,
+        events,
+        window_end_seconds=checkpoint.window_end_seconds,
+        window_kind=checkpoint.window_kind,
     )
-    if manifest.result_code == 0 and (
-        not summary.execution_complete
-        or not summary.measurement_available
-        or not summary.evidence_complete
-        or not summary.cleanup_verified
-        or manifest.raw_evidence_complete is False
-        or summary.infrastructure_error is not None
-        or any(summary.outcomes[kind] for kind in ("failed", "cancelled", "not_sent"))
+    if checkpoint.result_code == 0 and (
+        not evidence.execution_complete
+        or not requests
+        or any(request.outcome != "success" for request in requests)
+        or not checkpoint.cleanup_verified
+        or checkpoint.raw_evidence_complete is False
+        or checkpoint.infrastructure_error is not None
     ):
         raise ValueError("successful benchmark checkpoint contradicts its completeness or outcomes")
-    if not manifest.sealed or manifest.raw_evidence_complete is not True:
-        summary = summary.model_copy(update={"evidence_complete": False})
-    if manifest.raw_evidence_complete is False:
-        summary = summary.model_copy(update={"execution_complete": False})
-    return manifest, summary
+    return replace(
+        evidence,
+        execution_complete=evidence.execution_complete and checkpoint.raw_evidence_complete is not False,
+        evidence_complete=evidence.evidence_complete and checkpoint.sealed and checkpoint.raw_evidence_complete is True,
+    )
 
 
 class StreamEvent(BenchValue):
@@ -207,7 +213,7 @@ class StreamEvent(BenchValue):
     request_id: str
     sequence: int = Field(ge=0)
     observed_at_seconds: FiniteFloat = Field(ge=0)
-    kind: Literal["enqueue", "http_start", "data", "done", "error"]
+    kind: Literal["enqueue", "http_start", "data", "usage", "done", "error"]
     completion_tokens: int | None = Field(default=None, ge=0)
     prompt_tokens: int | None = Field(default=None, ge=0)
     cached_tokens: int | None = Field(default=None, ge=0)
@@ -216,6 +222,59 @@ class StreamEvent(BenchValue):
     reported_meta: JsonValue = None
     error_kind: str | None = None
     error_message: str | None = None
+
+
+@dataclass(slots=True)
+class StreamProgress:
+    """Validate the same Completions transitions live and during replay."""
+
+    completion_tokens: int | None = None
+    finish_reason: str | None = None
+    usage_received: bool = False
+    prompt_tokens: int | None = None
+    cached_tokens: int | None = None
+    first_token_at_seconds: float | None = None
+    last_token_at_seconds: float | None = None
+    first_completion_tokens: int | None = None
+
+    def accept(self, event: StreamEvent) -> None:
+        match event.kind:
+            case "data":
+                if self.finish_reason is not None:
+                    raise ValueError("generation frame after the finish reason")
+                if event.completion_tokens is None:
+                    raise ValueError("generation frame lacks cumulative completion tokens")
+                if event.completion_tokens < (self.completion_tokens or 0):
+                    raise ValueError("cumulative completion count regressed")
+                if event.finish_reason not in {None, "stop", "length"}:
+                    raise ValueError("completion finish reason must be stop or length")
+                if event.completion_tokens > (self.completion_tokens or 0):
+                    if self.first_token_at_seconds is None:
+                        self.first_token_at_seconds = event.observed_at_seconds
+                        self.first_completion_tokens = event.completion_tokens
+                    self.last_token_at_seconds = event.observed_at_seconds
+                self.completion_tokens = event.completion_tokens
+                self.finish_reason = event.finish_reason
+            case "usage":
+                if self.finish_reason is None or self.usage_received:
+                    raise ValueError("final usage must follow the finish reason exactly once")
+                if event.prompt_tokens is None or event.completion_tokens != self.completion_tokens:
+                    raise ValueError("final usage must match the last cumulative completion count")
+                if event.finish_reason is not None:
+                    raise ValueError("final usage frame includes a finish reason")
+                if event.cached_tokens is not None and event.cached_tokens > event.prompt_tokens:
+                    raise ValueError("cached tokens exceed logical prompt usage")
+                self.usage_received = True
+            case "done":
+                if not self.usage_received:
+                    raise ValueError("DONE requires final usage")
+                return
+            case _:
+                return
+        if event.prompt_tokens is not None:
+            self.prompt_tokens = event.prompt_tokens
+        if event.cached_tokens is not None:
+            self.cached_tokens = event.cached_tokens
 
 
 class RequestMetrics(BenchValue):
@@ -252,13 +311,12 @@ class RequestRecord(ScheduledRequest):
     cached_tokens: int | None = Field(default=None, ge=0)
     completion_tokens: int | None = Field(default=None, ge=0)
     first_completion_tokens: int | None = Field(default=None, gt=0)
-    metrics: RequestMetrics = Field(default_factory=RequestMetrics)
 
     def validate_evidence(self, events: Sequence[StreamEvent]) -> None:
-        """Reject terminal claims unsupported by the retained native event prefix.
+        """Check the request result against its recorded events.
 
-        Event order is checked by the summary boundary. Recovered owner-loss
-        records retain unknown timestamps rather than inferring dispatch state.
+        Measurement validation checks event order separately. Requests recovered
+        with missing evidence keep their timestamps unset.
         """
 
         timestamps = (
@@ -307,63 +365,32 @@ class RequestRecord(ScheduledRequest):
             raise ValueError("failed/cancelled request requires a terminal error observation")
         if self.outcome != "not_sent" and self.ended_at_seconds != events[-1].observed_at_seconds:
             raise ValueError("request termination time differs from its terminal event")
-        usage: dict[str, int | str | float | None] = dict.fromkeys(
-            (
-                "prompt_tokens",
-                "cached_tokens",
-                "completion_tokens",
-                "finish_reason",
-                "first_token_at_seconds",
-                "last_token_at_seconds",
-                "first_completion_tokens",
-            )
-        )
-        previous = 0
-        prompt: int | None = None
-        cached: int | None = None
+        progress = StreamProgress()
         for event in events:
-            if event.kind != "data" or not event.accepted:
-                continue
-            if event.completion_tokens is not None:
-                if event.completion_tokens < previous:
-                    raise ValueError("accepted completion counts must be monotonic")
-                if event.completion_tokens > previous:
-                    if usage["first_token_at_seconds"] is None:
-                        usage["first_token_at_seconds"] = event.observed_at_seconds
-                        usage["first_completion_tokens"] = event.completion_tokens
-                    usage["last_token_at_seconds"] = event.observed_at_seconds
-                previous = event.completion_tokens
-            if event.finish_reason is not None and (
-                event.finish_reason not in {"stop", "length"}
-                or event.prompt_tokens is None
-                or event.completion_tokens is None
-            ):
-                raise ValueError("accepted native finish requires normal reason and final usage")
-            for name in ("prompt_tokens", "cached_tokens", "completion_tokens", "finish_reason"):
-                value = getattr(event, name)
-                if value is not None:
-                    usage[name] = value
-            if event.prompt_tokens is not None:
-                prompt = event.prompt_tokens
-            if event.cached_tokens is not None:
-                cached = event.cached_tokens
-            if prompt is not None and cached is not None and cached > prompt:
-                raise ValueError("accepted cached tokens exceed logical prompt usage")
-        if any(getattr(self, name) != value for name, value in usage.items()):
+            if event.accepted:
+                progress.accept(event)
+        if (
+            self.prompt_tokens != progress.prompt_tokens
+            or self.cached_tokens != progress.cached_tokens
+            or self.completion_tokens != progress.completion_tokens
+            or self.finish_reason != progress.finish_reason
+            or self.first_token_at_seconds != progress.first_token_at_seconds
+            or self.last_token_at_seconds != progress.last_token_at_seconds
+            or self.first_completion_tokens != progress.first_completion_tokens
+        ):
             raise ValueError("request usage or token timestamps differ from accepted stream evidence")
 
-    def measured(self, events: Sequence[StreamEvent]) -> RequestRecord:
+    def compute_metrics(self, intervals: Sequence[TokenInterval]) -> RequestMetrics:
         """Project raw observations to nullable metrics, retaining partial evidence."""
 
         def difference(end: float | None, start: float | None) -> float | None:
             return None if end is None or start is None else end - start
 
-        intervals = token_intervals(events)
         count = sum(interval.weight for interval in intervals)
         first = self.first_token_at_seconds
         completed = self.completion_tokens
         first_count = self.first_completion_tokens
-        metrics = RequestMetrics(
+        return RequestMetrics(
             queue_wait_seconds=difference(self.http_started_at_seconds, self.enqueued_at_seconds),
             arrival_lateness_seconds=difference(self.enqueued_at_seconds, self.arrival_seconds),
             http_ttft_seconds=difference(first, self.http_started_at_seconds),
@@ -383,7 +410,6 @@ class RequestRecord(ScheduledRequest):
             observed_itl_sample_count=sum(interval.weight for interval in intervals if interval.kind == "observed"),
             estimated_itl_sample_count=sum(interval.weight for interval in intervals if interval.kind == "estimated"),
         )
-        return self.model_copy(update={"metrics": metrics})
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,7 +567,7 @@ def validate_measurement(
     *,
     window_end_seconds: float | None,
     window_kind: Literal["complete", "interrupted", "observed_prefix"] | None,
-) -> dict[str, list[StreamEvent]]:
+) -> MeasurementEvidence:
     """Validate replay and raw lifecycle evidence without building statistics.
 
     An unavailable window supports only not-sent or unknown owner-loss outcomes.
@@ -549,6 +575,9 @@ def validate_measurement(
     """
 
     expected = validate_request_identity(workload, requests)
+    evidence_complete = len(requests) == len(expected) and all(
+        request.error_kind != "evidence_missing" for request in requests
+    )
     if (window_end_seconds is None) != (window_kind is None):
         raise ValueError("measurement window end and kind must be available together")
     if window_end_seconds is None:
@@ -560,7 +589,7 @@ def validate_measurement(
             raise ValueError("unavailable measurement window cannot support dispatched observations")
         for request in requests:
             request.validate_evidence(())
-        return {}
+        return MeasurementEvidence(requests, {}, execution_complete=not expected, evidence_complete=evidence_complete)
     if not math.isfinite(window_end_seconds) or window_end_seconds <= 0:
         raise ValueError("timed measurement window must be positive and finite")
     by_request: dict[str, list[StreamEvent]] = defaultdict(list)
@@ -580,7 +609,7 @@ def validate_measurement(
                 (sequence == 0 and event.kind != "enqueue")
                 or (sequence == 1 and event.kind != "http_start")
                 or (sequence > 1 and event.kind in {"enqueue", "http_start"})
-                or (not event.accepted and event.kind not in {"data", "done"})
+                or (not event.accepted and event.kind not in {"data", "usage", "done"})
             ):
                 raise ValueError("stream event lifecycle must start with enqueue then HTTP dispatch")
             if sequence:
@@ -590,21 +619,24 @@ def validate_measurement(
                     or (previous.kind == "done" and previous.accepted)
                     or (not previous.accepted and event.kind != "error")
                 ):
-                    raise ValueError("stream event follows terminal or rejected native evidence")
+                    raise ValueError("stream event follows terminal or rejected Completions evidence")
     for request in requests:
         request.validate_evidence(by_request[request.request_id])
     if window_kind == "complete" and window_end_seconds < workload.arrival_horizon_seconds:
         raise ValueError("completed measurement window must cover the arrival horizon")
-    return by_request
+    execution_complete = (
+        window_kind == "complete"
+        and evidence_complete
+        and all(request.outcome in {"success", "failed"} for request in requests)
+    )
+    return MeasurementEvidence(requests, by_request, execution_complete, evidence_complete)
 
 
 def summarize(
     workload: PreparedWorkload,
-    requests: Sequence[RequestRecord],
-    events: Sequence[StreamEvent],
+    evidence: MeasurementEvidence,
     *,
-    window_end_seconds: float,
-    window_kind: Literal["complete", "interrupted", "observed_prefix"],
+    checkpoint: RepetitionManifest,
 ) -> BenchSummary:
     """Aggregate successful samples and separate failed partial output.
 
@@ -615,9 +647,26 @@ def summarize(
     Cleanup verification belongs to the outer runner.
     """
 
-    by_request = validate_measurement(
-        workload, requests, events, window_end_seconds=window_end_seconds, window_kind=window_kind
-    )
+    requests = evidence.requests
+    window_end_seconds = checkpoint.window_end_seconds
+    if window_end_seconds is None:
+        outcomes = Counter(request.outcome for request in requests)
+        return BenchSummary(
+            case_id=workload.case_id,
+            execution_complete=evidence.execution_complete,
+            measurement_available=False,
+            cleanup_verified=checkpoint.cleanup_verified,
+            evidence_complete=evidence.evidence_complete,
+            arrival_horizon_seconds=workload.arrival_horizon_seconds,
+            window_end_seconds=None,
+            window_kind=None,
+            provisional_requests=len(workload.requests) - len(requests),
+            outcomes={kind: outcomes[kind] for kind in ("success", "failed", "cancelled", "not_sent")},
+            targets={},
+            cdf=(),
+            throughput=(),
+            infrastructure_error=checkpoint.infrastructure_error,
+        )
     samples: dict[str, dict[str, list[tuple[float, int]]]] = defaultdict(lambda: defaultdict(list))
     cdf: list[CdfPoint] = []
     buckets: dict[str, list[list[int]]] = {
@@ -632,15 +681,17 @@ def summarize(
 
     for request in requests:
         target = str(request.model_id)
-        request_events = by_request[request.request_id]
+        request_events = evidence.events_by_request[request.request_id]
         success = request.outcome == "success"
         if success:
-            for name, value in request.metrics.model_dump().items():
+            intervals = token_intervals(request_events)
+            metrics = request.compute_metrics(intervals)
+            for name, value in metrics.model_dump().items():
                 if name.endswith("_seconds") or name == "itl_coverage":
                     if value is not None:
                         for key in (target, "aggregate"):
                             samples[key][name].append((value, 1))
-            for interval in token_intervals(request_events):
+            for interval in intervals:
                 for key in (target, "aggregate"):
                     samples[key][f"itl_{interval.kind}"].append((interval.value_seconds, interval.weight))
                     samples[key]["itl_combined"].append((interval.value_seconds, interval.weight))
@@ -707,48 +758,19 @@ def summarize(
             input_tokens_per_second=input_total / window_end_seconds,
             output_tokens_per_second=output_total / window_end_seconds,
         )
-    complete = (
-        window_kind == "complete"
-        and len(requests) == len(workload.requests)
-        and all(
-            request.outcome in {"success", "failed"} and request.error_kind != "evidence_missing"
-            for request in requests
-        )
-    )
     return BenchSummary(
         case_id=workload.case_id,
-        execution_complete=complete,
-        measurement_available=any(request.outcome == "success" for request in requests),
-        evidence_complete=len(requests) == len(workload.requests)
-        and all(request.error_kind != "evidence_missing" for request in requests),
+        execution_complete=evidence.execution_complete,
+        measurement_available=targets["aggregate"].outcomes["success"] > 0,
+        cleanup_verified=checkpoint.cleanup_verified,
+        evidence_complete=evidence.evidence_complete,
         arrival_horizon_seconds=workload.arrival_horizon_seconds,
         window_end_seconds=window_end_seconds,
-        window_kind=window_kind,
+        window_kind=checkpoint.window_kind,
         provisional_requests=len(workload.requests) - len(requests),
         outcomes=targets["aggregate"].outcomes,
         targets=targets,
         cdf=tuple(cdf),
         throughput=tuple(throughput),
-    )
-
-
-def unavailable_summary(workload: PreparedWorkload, requests: Sequence[RequestRecord]) -> BenchSummary:
-    """Retain unavailable-window/no-data outcomes without inventing elapsed time."""
-
-    validate_measurement(workload, requests, (), window_end_seconds=None, window_kind=None)
-    outcomes = Counter(request.outcome for request in requests)
-    return BenchSummary(
-        case_id=workload.case_id,
-        execution_complete=not workload.requests,
-        measurement_available=False,
-        evidence_complete=len(requests) == len(workload.requests)
-        and all(request.error_kind != "evidence_missing" for request in requests),
-        arrival_horizon_seconds=workload.arrival_horizon_seconds,
-        window_end_seconds=None,
-        window_kind=None,
-        provisional_requests=len(workload.requests) - len(requests),
-        outcomes={kind: outcomes[kind] for kind in ("success", "failed", "cancelled", "not_sent")},
-        targets={},
-        cdf=(),
-        throughput=(),
+        infrastructure_error=checkpoint.infrastructure_error,
     )

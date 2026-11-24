@@ -75,6 +75,30 @@ def test_explicit_model_path_overrides_vendor_model_base_uri() -> None:
     assert config.model_path_of(TEST_MODEL_ID) == Path("/custom/deepseek")
 
 
+def test_offline_model_paths_resolve_from_the_selected_file(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime.toml"
+    runtime.write_text(
+        f'[vendor]\nmodel_base_uri = "/models"\n[[models]]\nid = "{TEST_MODEL_ID}"\npath = "/custom/checkpoint"\n',
+        encoding="utf-8",
+    )
+    env = {"XPOOL_CONFIG": str(runtime)}
+
+    assert XpoolConfig.resolve_model_path(TEST_MODEL_ID, env=env) == Path("/custom/checkpoint")
+    assert XpoolConfig.resolve_model_path(ModelId("test/unlisted"), env=env) == Path("/models/test/unlisted")
+
+
+def test_offline_model_path_rejects_duplicate_target_declarations(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime.toml"
+    runtime.write_text(
+        f'[[models]]\nid = "{TEST_MODEL_ID}"\npath = "/custom/first"\n'
+        f'[[models]]\nid = "{TEST_MODEL_ID}"\npath = "/custom/second"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate model declaration for"):
+        XpoolConfig.resolve_model_path(TEST_MODEL_ID, env={"XPOOL_CONFIG": str(runtime)})
+
+
 def test_model_path_lookup_rejects_unknown_model_id() -> None:
     config = XpoolConfig.from_mapping(
         {

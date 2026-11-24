@@ -70,9 +70,9 @@ when they use a tool fixture.
 Each tool retains a minimal real CPU execution through the editable `xpool-dev`
 development entry from outside the checkout. Real SIGTERM cancellation and
 worker loss remain separate: cancellation has an observed outcome, while worker
-loss lacks complete execution evidence. Fresh-process collection retains its
-process boundary. Ordinary command wiring calls `xtest.cli.main` or
-`xbench.cli.main` directly; collection and worker boundaries remain real.
+loss lacks complete execution evidence. Ordinary command wiring calls
+`xtest.cli.main` or `xbench.cli.main` directly. xtest's fresh-process collection
+and both tools' execution worker boundaries remain real.
 Client execution, report projection
 and RunStore lifecycle checks own their behavior without repeating a complete
 list/run/report/clean cycle for each verdict. Private HTTP peers and case data
@@ -85,9 +85,10 @@ It proves the prepared workload, successful output from both models, actual
 worker inventory within its assigned UUID lease, attention/FFN placement,
 complete evidence and verified cleanup. Focused Integration tests own metadata
 field projections and offline report rendering and export.
-Its performance measurements are report-only. Source-owned benchmark programs
-and prompt/trace inputs belong under `benches/suites/<family>/`; these are
-measurement scenarios, distinct from pytest self-tests.
+Its performance measurements are report-only. CPU Integration tests exercise
+hosted script failures during inventory, listener ownership, continuation and
+process-group retirement. Serving experiments use catalogue declarations and
+optional prompt and trace inputs under `benches/suites/<family>/`.
 
 Keep common and subsystem-specific fixtures separate so each fixture owns one
 coherent reset boundary. Use pinned SGLang concrete types, such as `ServerArgs`,
@@ -158,7 +159,7 @@ keyword arguments, including those supplied by native `pytest.mark.parametrize`;
 fixtures remain ordinary pytest fixtures. Local checkpoint declarations use typed
 `ModelId` values with `requires_config=True`. Derive case-dependent resources from
 the case owner. The [owned benchmark E2E](suites/e2e/xbench/sglang/test_e2e_owned.py)
-binds its selected case to the benchmark suite's existing requirements producer.
+binds its selected case to the installed benchmark's `owned_requirements`.
 
 Tests without external-resource needs require no empty declaration. Module-level
 `pytestmark` owns shared fixture, timeout and other native pytest policy;

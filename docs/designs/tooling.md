@@ -27,7 +27,7 @@ tests/
   suites/                   Executable validation suites
 benches/
   benches.toml              Benchmark catalogue
-  suites/<family>/          Source-owned benchmark programs and inputs
+  suites/<family>/          Optional benchmark workload inputs
 configs/
   deployments/              Shared portable runtime scenes
 ```
@@ -58,12 +58,10 @@ and cleanup commands operate on retained evidence outside a checkout. `xbench`
 accepts an explicit external catalogue; the default `benches/benches.toml` is
 relative to the invocation directory, not discovered from installed modules.
 Catalogue-relative input paths belong to the declaring file.
-Source-owned benchmark programs and prompt/trace inputs belong under
-`benches/suites/<family>/`. Installed serving mechanisms live under
-`xbench.harness.serving`; the catalogue selects the source module that owns the
-scenario's execution.
-Random-prompt/Poisson cases declare their generators in the catalogue and need
-no dataset directory.
+The benchmark catalogue supplies experiment conditions to the installed
+executor in `xbench.harness.serving`. File-backed inputs can live under
+`benches/suites/<family>/`. Random-prompt and Poisson cases declare their
+generators in the catalogue.
 
 Both commands expose `list`, `run`, `report`, `clean`, `case-gen` and
 `config dump`. Exact CLI options and typed interfaces belong to their declarations in
@@ -93,17 +91,16 @@ name under the [configuration diagnostic contract](control-plane.md#configuratio
 
 ## Catalogue and source declarations
 
-Both catalogues use named case tables. The table key is a full, canonical
-lowercase UUIDv4 validated by [`xkit.case.CaseId`](../../src/xpool-dev/xkit/case.py);
-each case has an English description and a dotted source `module`. Serving
-experiments use `serving_cases`, while native FFN topology tests use `topology_cases`.
-`CaseFamily` owns these category and table names. Both concrete catalogues inherit
-`xkit.case.Catalog`, which owns source-file cloning and atomic publication;
-their loaders retain schema validation and tool-specific execution selection.
-[`xkit.source`](../../src/xpool-dev/xkit/source.py) resolves each module below the
-catalogue's sibling `suites/` directory without importing it. Models qualification
-keeps its workload and graph expectations as typed source constants and uses
-the same portable deployments.
+Catalogue cases use a full lowercase UUIDv4 as the table key and have an English
+description. `CaseFamily` maps serving experiments to `serving_cases` and
+native FFN topology tests to `topology_cases`. Both catalogue loaders validate
+their own schema and share the cloning and atomic write operations in
+[`xkit.case`](../../src/xpool-dev/xkit/case.py).
+
+Test cases name a Python `module` under the catalogue's sibling `suites/`
+directory. [`xkit.source`](../../src/xpool-dev/xkit/source.py) resolves the
+dotted name. Model qualification defines its workload and graph expectations
+in Python and uses the same portable deployments.
 
 Case identity is authored independently of experiment conditions and remains
 permanent. A distinct fixed experiment receives a new UUID; description,
@@ -115,8 +112,8 @@ and inclusive line range. Existing catalogue text and path origins remain intact
 Authoring assumes one writer. A loaded catalogue remains an immutable snapshot;
 a later load sees the appended declaration.
 
-`xtest` and `xbench` export the shared `requirements` and `parameterize`
-decorators from [`xkit.declaration`](../../src/xpool-dev/xkit/declaration.py).
+`xtest` exports the shared `requirements` and `parameterize` decorators from
+[`xkit.declaration`](../../src/xpool-dev/xkit/declaration.py).
 They retain metadata on the original function without wrapping execution.
 Omitted parameter values bind catalogue cases; explicit Python values support
 source-owned case expansion. Test row callbacks produce native pytest
@@ -135,8 +132,8 @@ receive neither fixtures nor workdirs.
 Repository-owned tests use function-level `xtest.requirements` for complete
 external-resource declarations. Module-level pytest policy owns fixtures,
 timeouts and other native marks. Case-dependent resources come from the owning
-case producer; the owned benchmark E2E binds its selected case to the serving
-suite's `requirements_of` with `functools.partial`.
+case producer; the owned benchmark E2E binds its selected case to
+`owned_requirements` with `functools.partial`.
 [Test Architecture](../../tests/README.md#requirements) owns authoring examples
 and resource policy.
 
@@ -158,21 +155,20 @@ native selectors; the function declaration owns resource policy. Initial
 collection and task recollection evaluate their own items independently.
 Tests without external-resource needs use ordinary pytest functions.
 
-`xbench list` and `run` share isolated source collection. Each selected module
-defines one synchronous catalogue-bound entry accepting `case` and `workdir`;
-its resource declaration is evaluated without running the entry or preparing
-inputs. The discovered function and caller-owned import roots accompany the
-supervised worker, which preserves the invocation directory. No function name
-or dispatch registry is declared in the catalogue.
+`xbench list` reads the device layout for owned cases and reports zero local
+devices for client cases. For hosted cases, `list` gives each `requirements`
+command 30 seconds, while `run` shares one 30-second deadline across the
+selected cases. If a script fails during listing, xbench shows `devices=-` for
+its case and prints the cause to stderr. Invalid catalogues or incomplete
+process cleanup stop the command.
 
-The runner prepares fixed workload inputs once per case and owns device admission,
-repetition supervision and final evidence sealing. The
-[`serving suite program`](../../benches/suites/serving/multi_model.py) owns actual
-startup, warmup, measurement and local shutdown, using installed serving and
-measurement mechanisms. A worker invokes that entry once per attempt.
-Offline reports depend only on retained evidence, not the catalogue or suite
-source. Repository pytest uses its normal root import path to exercise these
-source programs; suites remain outside installed wheel contents.
+xbench runs each `requirements` command in its own process group and confirms
+that the group has stopped before using the result or returning a cancellation.
+The runner uses the prepared deployment to count devices for owned cases. It
+saves one workload per case, starts the attempt workers and records their
+results after cleanup. Each worker reads the saved case and runs startup,
+warmup, measurement and shutdown. See the
+[serving execution design](benchmark.md#benchmark-cases-and-workload-execution).
 
 ## Shared deployment configuration
 
@@ -234,14 +230,11 @@ Both tools use `xkit.config.resolve_model_weights` to resolve a checkpoint throu
 the configuration owner and return its path after requiring its directory and
 `config.json`; preflight checks availability, not checkpoint loading or integrity.
 Pytest checks its resolved base and owns unavailable-resource and strict-requirement
-outcome translation. Before executing a nonempty benchmark workload, the runner
-enforces the source's declared local
-configuration and checkpoint requirements. Owned execution checks its assembled
-effective configuration, preserving explicit base precedence. Client execution
-loads local configuration only when declared; external endpoints alone imply no
-local configuration or checkpoint requirement. Missing or malformed required
-resources produce benchmark infrastructure result two. Inventory remains
-resource-free.
+outcome translation. For a nonempty owned benchmark workload, the runner checks
+checkpoint paths using the saved effective configuration. Client and hosted
+workloads resolve local model information during preparation when their prompt
+or token-count policies need it. Missing or malformed execution requirements
+produce benchmark infrastructure result two.
 
 Scenes are grouped as `<encoded-model-ids>/<layout>.toml`. The directory joins
 distinct full model IDs, sorted by canonical spelling and individually encoded
@@ -346,8 +339,8 @@ execution so input reads and replay writes cannot stall task-control polling.
 Admission closure is monotonic across stage changes and follow-up repetitions.
 Tests stop admission after safely retired infrastructure failures and retain
 their ordinary-failure stage gates. Benchmarks continue other cases and later
-logical repetitions after safely retired per-case preflight, startup, warmup,
-program and measurement failures by default. They retain the failed outcomes;
+logical repetitions after safely retired per-case preflight, startup, warmup
+and measurement failures by default. They retain the failed outcomes;
 later repetitions are distinct measurements, not retries of the failed one.
 The invocation-only `--fast-fail` flag stops new benchmark admission after a
 newly executed failure while active tasks finish naturally. Earlier retained
@@ -417,8 +410,8 @@ Agent cluster, bound configuration snapshots, serving endpoints and bounded
 readiness evidence. Its concrete
 [`sglang` owner](../../src/xpool-dev/xkit/serving/sglang/) groups graph policy,
 endpoint families, launch declarations, server processes and system lifecycle.
-Both tools use this engine implementation; client API adapters own the separate
-request/response protocol boundary.
+`xtest` and owned benchmarks use this engine implementation. The benchmark
+measurement client owns the OpenAI request and response protocol.
 
 `xkit.serving.sglang.launch` accepts a `ServingLaunch`
 containing effective configuration, environment, invocation working directory
@@ -513,7 +506,7 @@ The independent original-SGLang FFN reference applies the same environment
 filter before importing SGLang or spawning TP ranks and selects an empty
 plugin set.
 Invocation working directory and resolved model/calibration paths preserve their
-meaning. Each owned worker installs its frozen global configuration once.
+meaning. CrossPool runtime entry points install the frozen `XpoolConfig`.
 
 `xtest` supplies its case projection and observers, then evaluates
 qualification evidence. Test preparation supplies launch inputs; `ProbeRun`
@@ -639,7 +632,7 @@ are cleanup candidates.
 Shared lifecycle/resource checks are owned once under `xkit`; corresponding tool
 self-tests prove CLI wiring, retained outcomes and finalization under
 `tests/suites/<layer>/{xtest,xbench}/`. Symmetry matches responsibilities, not
-case counts. Real CPU CLI executions use small source tests or local native streaming
+case counts. Real CPU CLI executions use small source tests or local Completions
 servers through the editable `xpool-dev` development installation only where
 the installed entry or actual signal/process boundary is under test. Other
 command wiring invokes the tool's `cli.main`; collection and worker execution

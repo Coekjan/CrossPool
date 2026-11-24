@@ -13,7 +13,7 @@ from threading import Lock
 from types import MappingProxyType
 from typing import ClassVar, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, TypeAdapter, field_validator, model_validator
 
 import xpool.native
 from xpool.model import ModelId
@@ -879,6 +879,16 @@ class VendorConfig(BaseModel):
         self.model_base_uri = model_base_uri
         return self
 
+    def model_path(self, model: ModelConfig) -> Path:
+        """Resolve one model's explicit path or its location under the vendor root."""
+        if model.path is not None:
+            return model.path
+        if self.model_base_uri is None:
+            raise MissingRequiredConfig(
+                f"missing required model path for {model.id}: set models[].path or vendor.model_base_uri"
+            )
+        return self.model_base_uri / model.id.relative_path
+
 
 class XpoolConfig(ConfigModel):
     """Validated CrossPool TOML config plus derived runtime views."""
@@ -931,6 +941,23 @@ class XpoolConfig(ConfigModel):
             "value": value,
             "source": ConfigSource.UNSET if source is None else source,
         }
+
+    @classmethod
+    def resolve_model_path(cls, model_id: ModelId, *, env: Mapping[str, str] | None = None) -> Path:
+        """Locate a model from XPOOL_CONFIG for offline preparation, without building a deployment."""
+        environment = os.environ if env is None else env
+        setting = next(setting for setting in cls.registry if setting.name == "config_path")
+        value, source = setting.resolve({}, {}, environment)
+        if source is None:
+            raise MissingRequiredConfig(f"set XPOOL_CONFIG to locate local model files for {model_id}")
+        with Path(cast(str, value)).expanduser().open("rb") as config_file:
+            payload = tomllib.load(config_file)
+        models = TypeAdapter(list[ModelConfig]).validate_python(payload.get("models", []))
+        matches = [model for model in models if model.id == model_id]
+        if len(matches) > 1:
+            raise ValueError(f"duplicate model declaration for {model_id}")
+        model = matches[0] if matches else ModelConfig(id=model_id)
+        return VendorConfig.model_validate(payload.get("vendor", {})).model_path(model)
 
     @cached_property
     def devices(self) -> tuple[int, ...]:
@@ -1038,16 +1065,8 @@ class XpoolConfig(ConfigModel):
         """
 
         for model in self.models:
-            if model.id != model_id:
-                continue
-            model_path = model.path
-            if model_path is None:
-                if self.vendor.model_base_uri is None:
-                    raise MissingRequiredConfig(
-                        f"missing required model path for {model.id}: set models[].path or vendor.model_base_uri"
-                    )
-                model_path = self.vendor.model_base_uri / model.id.relative_path
-            return model_path
+            if model.id == model_id:
+                return self.vendor.model_path(model)
         raise MissingRequiredConfig(f"unknown configured model id: {model_id}")
 
     def model_id_of_path(self, model_path: str | Path) -> ModelId:

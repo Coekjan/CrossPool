@@ -102,7 +102,12 @@ FFN weight shards coexist on the FFN device. This smoke topology covers concurre
 two-model startup and inference on those two device roles. Dynamic KV-capacity
 borrowing is covered by the dedicated Elastic Context State qualification.
 
+## Stop the shared generation
+
 Finish or cancel startup, then stop both SGLang Instances and wait for their
 workers and helpers to exit before requesting daemon shutdown. Start no new
 clients during retirement. The daemon retires the shared Agents and Fabric before
 stopping its attention MPS scope.
+
+After shutdown, use the [xbench tutorial](xbench.md) to benchmark these two
+models with independent baselines and with a managed CrossPool deployment.

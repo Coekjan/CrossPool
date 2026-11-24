@@ -45,6 +45,5 @@ class BenchRunCommand(RunnableCliCommand[XpoolDevConfig]):
         return run_benchmarks(
             catalog.select(tuple(args.cases or ())),
             root=config.cache_root / "bench-runs",
-            catalogue_path=catalog.path,
             fast_fail=args.fast_fail,
         )

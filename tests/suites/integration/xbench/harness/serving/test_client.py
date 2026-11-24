@@ -7,44 +7,52 @@ import sys
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from types import TracebackType
+from types import SimpleNamespace, TracebackType
 
 import httpx
 import pytest
-from benches.suites.serving.multi_model import run_serving
-from tests.suites.integration.xbench.support import FakeServingServer, client_case
+from tests.suites.integration.xbench.support import FakeServingServer, client_case, completion_frames
 
 import xbench.harness.serving.client
-from xbench.harness.serving.api import create_api_adapter
-from xbench.harness.serving.case import BenchCase, ClientBenchCase
+import xbench.harness.serving.execution
+from xbench.harness.serving.case import BenchCase, ClientBenchCase, ServingEndpoint
 from xbench.harness.serving.client import MeasurementRecorder, RequestState, run_measurement, send_request
-from xbench.harness.serving.execution import warmup
-from xbench.harness.serving.measure import BenchCaseManifest, RepetitionManifest, RequestRecord, summarize
+from xbench.harness.serving.execution import run_serving, warmup
+from xbench.harness.serving.measure import (
+    BenchCaseManifest,
+    RepetitionManifest,
+    RequestRecord,
+    StreamEvent,
+    load_measurement,
+    summarize,
+    validate_measurement,
+)
 from xbench.harness.serving.runner import finalize_repetition
-from xbench.harness.serving.workload import PreparedWorkload, prepare_workload, read_jsonl
-from xkit.results import write_json, write_jsonl
+from xbench.harness.serving.workload import PreparedWorkload, content_digest, prepare_workload
+from xkit.results import iter_jsonl, write_json, write_jsonl
 from xkit.supervisor import SupervisedTaskScope, TaskCompletionKind, TaskScopeState
+from xkit.task import TaskCancelled
 from xtest.harness.support.config import TEST_MODEL_ID
 
 
-def test_native_http_stream_empty_text_usage_done_and_final_artifacts(tmp_path: Path) -> None:
+def test_completions_http_stream_empty_text_usage_done_and_final_artifacts(tmp_path: Path) -> None:
     with FakeServingServer() as server:
         case = client_case(tmp_path, server.url)
         workload = retain_workload(case, tmp_path / "result")
         recorder = MeasurementRecorder(tmp_path / "result")
         try:
-            end = asyncio.run(run_measurement(case, workload, {TEST_MODEL_ID: server.url}, recorder))
+            end = asyncio.run(run_measurement(case, workload, {TEST_MODEL_ID: server.endpoint}, recorder))
         finally:
             recorder.close()
-        summary = summarize(
-            workload, recorder.requests, recorder.events, window_end_seconds=end, window_kind="complete"
-        )
+        records = tuple(iter_jsonl(recorder.directory / "requests.jsonl", RequestRecord))
+        events = tuple(iter_jsonl(recorder.directory / "events.jsonl", StreamEvent))
+        evidence = validate_measurement(workload, records, events, window_end_seconds=end, window_kind="complete")
+        checkpoint = RepetitionManifest(repetition=1, window_end_seconds=end, window_kind="complete")
+        summary = summarize(workload, evidence, checkpoint=checkpoint)
         assert summary.execution_complete and summary.measurement_available
         assert server.received == ["first", "second", "third"]
-        assert all(
-            request.outcome == "success" and request.metrics.http_ttft_seconds is not None
-            for request in recorder.requests
-        )
+        assert summary.outcomes["success"] == 3
+        assert summary.targets["aggregate"].distributions["http_ttft_seconds"].sample_count == 3
         assert summary.targets["aggregate"].input_tokens == 15
         assert summary.targets["aggregate"].output_tokens == 9
         assert len((tmp_path / "result" / "requests.jsonl").read_text().splitlines()) == 3
@@ -56,11 +64,10 @@ def test_sse_limit_counts_wire_frames_across_chunks_not_transport_batches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oversized_frame: bool
 ) -> None:
     monkeypatch.setattr(xbench.harness.serving.client, "MAX_SSE_FRAME_BYTES", 512)
-    frame = (
-        b'data: {"text":"","meta_info":{"completion_tokens":3,"prompt_tokens":5,'
-        b'"cached_tokens":4,"finish_reason":{"type":"length"}}}\n\n'
-    )
-    chunks = [b"data:\n"] * 100 + [frame, b"data: [DONE]\n\n"] if oversized_frame else [frame * 5 + b"data: [DONE]\n\n"]
+    finish, usage = completion_frames()
+    progress = finish.replace(b'"length"', b"null")
+    stream = progress * 4 + finish + usage + b"data: [DONE]\n\n"
+    chunks = [b"data:\n"] * 100 + [stream] if oversized_frame else [stream]
 
     class Stream(httpx.AsyncByteStream):
         async def __aiter__(self) -> AsyncIterator[bytes]:
@@ -70,8 +77,8 @@ def test_sse_limit_counts_wire_frames_across_chunks_not_transport_batches(
     case = client_case(tmp_path, "http://127.0.0.1:1")
     workload = prepare_workload(case)
     recorder = MeasurementRecorder(tmp_path / "result")
-    adapter = create_api_adapter("sglang")
-    state = RequestState(workload.requests[0], recorder, adapter, enqueued_at=0.0)
+    endpoint = ServingEndpoint(base_url=case.targets[0].base_url, served_model_name=str(TEST_MODEL_ID))
+    state = RequestState(workload.requests[0], recorder, enqueued_at=0.0)
     state.event("enqueue", 0.0)
 
     async def execute() -> RequestRecord:
@@ -82,7 +89,7 @@ def test_sse_limit_counts_wire_frames_across_chunks_not_transport_batches(
             return await send_request(
                 client,
                 case.targets[0].base_url,
-                adapter.payload(state.request, workload.prompts[0], case.targets[0]),
+                state.adapter.payload(state.request, workload.prompts[0], case.targets[0], endpoint),
                 state,
                 origin=time.perf_counter(),
                 timeout_seconds=5.0,
@@ -104,7 +111,7 @@ def test_one_timeout_does_not_stop_fifo(tmp_path: Path) -> None:
         workload = retain_workload(case, tmp_path / "result")
         recorder = MeasurementRecorder(tmp_path / "result")
         try:
-            asyncio.run(run_measurement(case, workload, {TEST_MODEL_ID: server.url}, recorder))
+            asyncio.run(run_measurement(case, workload, {TEST_MODEL_ID: server.endpoint}, recorder))
         finally:
             recorder.close()
         assert server.received == ["first", "second", "third"]
@@ -118,12 +125,37 @@ def test_http_200_without_done_is_a_failed_request_not_an_infrastructure_stop(tm
         workload = retain_workload(case, tmp_path / "result")
         recorder = MeasurementRecorder(tmp_path / "result")
         try:
-            asyncio.run(run_measurement(case, workload, {TEST_MODEL_ID: server.url}, recorder))
+            asyncio.run(run_measurement(case, workload, {TEST_MODEL_ID: server.endpoint}, recorder))
         finally:
             recorder.close()
         assert len(recorder.requests) == 3
         assert all(record.outcome == "failed" and record.completion_tokens == 3 for record in recorder.requests)
         assert all(record.error_kind == "protocol" for record in recorder.requests)
+
+
+def test_invalid_completions_field_preserves_rejected_event_in_retained_measurement(tmp_path: Path) -> None:
+    repetition = tmp_path / "repetition-0001.attempt-0001"
+    data, _ = completion_frames()
+    with FakeServingServer() as server:
+        server.frames = (data.replace(b'"length"', b"null"), data.replace(b'"length"', b"7"))
+        workload = retain_workload(client_case(tmp_path, server.url), repetition)
+        manifest = BenchCaseManifest.model_validate_json((repetition.parent / "case.json").read_bytes())
+        asyncio.run(run_serving(manifest, repetition))
+
+    assert (
+        finalize_repetition(repetition, workload, cleanup_verified=True, worker_code=0, infrastructure_error=None) == 1
+    )
+    evidence = load_measurement(repetition, workload, checkpoint=RepetitionManifest.from_directory(repetition))
+    assert evidence.execution_complete and evidence.evidence_complete
+    record = evidence.requests[0]
+    progress, rejected, error = evidence.events_by_request[record.request_id][-3:]
+    assert record.outcome == "failed" and record.error_kind == "protocol"
+    assert record.completion_tokens == progress.completion_tokens == 3
+    assert rejected.kind == "data" and not rejected.accepted
+    assert rejected.reported_meta == {"usage": {"completion_tokens": 3, "prompt_tokens": 5}, "finish_reason": 7}
+    assert error.kind == "error" and error.sequence == rejected.sequence + 1
+    assert progress.observed_at_seconds <= rejected.observed_at_seconds <= error.observed_at_seconds
+    assert error.observed_at_seconds == record.ended_at_seconds
 
 
 @pytest.mark.parametrize("cleanup_phase", ["warmup", "response", "client"])
@@ -159,13 +191,16 @@ def test_http_cleanup_failure_preserves_completed_samples_and_fails_repetition(
 
             monkeypatch.setattr(httpx.Response, "aclose", close)
         with pytest.raises(RuntimeError):
-            asyncio.run(run_serving(case, repetition))
-        records = read_jsonl(
-            repetition / "warmup/requests.jsonl" if cleanup_phase == "warmup" else repetition / "requests.jsonl",
-            RequestRecord,
+            manifest = BenchCaseManifest.model_validate_json((repetition.parent / "case.json").read_bytes())
+            asyncio.run(run_serving(manifest, repetition))
+        records = tuple(
+            iter_jsonl(
+                repetition / "warmup/requests.jsonl" if cleanup_phase == "warmup" else repetition / "requests.jsonl",
+                RequestRecord,
+            )
         )
         assert records[0].outcome == "success"
-        assert records[0].metrics.http_ttft_seconds is not None
+        assert records[0].first_token_at_seconds is not None
         assert records[0].completion_tokens == 3
         checkpoint = RepetitionManifest.model_validate_json((repetition / "repetition.json").read_bytes())
         assert checkpoint.infrastructure_error is not None
@@ -193,12 +228,13 @@ def test_client_initialization_failure_after_origin_keeps_the_window_unavailable
 
     monkeypatch.setattr(httpx.AsyncClient, "__aenter__", start)
     with pytest.raises(RuntimeError, match="HTTP client initialization failed"):
-        asyncio.run(run_serving(case, repetition))
+        manifest = BenchCaseManifest.model_validate_json((repetition.parent / "case.json").read_bytes())
+        asyncio.run(run_serving(manifest, repetition))
     checkpoint = RepetitionManifest.model_validate_json((repetition / "repetition.json").read_bytes())
     assert checkpoint.window_end_seconds is None and checkpoint.cleanup_verified is None
     assert checkpoint.infrastructure_error is not None
     origin = (repetition / "measurement.json").read_bytes()
-    records = read_jsonl(repetition / "requests.jsonl", RequestRecord)
+    records = tuple(iter_jsonl(repetition / "requests.jsonl", RequestRecord))
     assert len(records) == len(workload.requests) == 3
     assert all(record.error_kind == "evidence_missing" and record.ended_at_seconds is None for record in records)
     assert (
@@ -225,7 +261,7 @@ def test_cancellation_or_process_failure_accounts_for_dispatched_queued_and_futu
 
         async def execute() -> None:
             task = asyncio.create_task(
-                run_measurement(case, workload, {TEST_MODEL_ID: server.url}, recorder, check_alive=check_alive)
+                run_measurement(case, workload, {TEST_MODEL_ID: server.endpoint}, recorder, check_alive=check_alive)
             )
             assert await asyncio.to_thread(server.first_started.wait, 5)
             if not infrastructure_failure:
@@ -258,7 +294,7 @@ def test_cancellation_after_requests_finish_does_not_claim_the_unelapsed_horizon
         recorder = MeasurementRecorder(tmp_path / "result")
 
         async def execute() -> None:
-            task = asyncio.create_task(run_measurement(case, workload, {TEST_MODEL_ID: server.url}, recorder))
+            task = asyncio.create_task(run_measurement(case, workload, {TEST_MODEL_ID: server.endpoint}, recorder))
             try:
                 async with asyncio.timeout(10):
                     while len(recorder.requests) != len(workload.requests):
@@ -276,14 +312,36 @@ def test_cancellation_after_requests_finish_does_not_claim_the_unelapsed_horizon
         checkpoint = RepetitionManifest.model_validate_json((recorder.directory / "repetition.json").read_bytes())
         assert checkpoint.window_kind == "interrupted"
         assert checkpoint.window_end_seconds is not None and checkpoint.window_end_seconds < 1000.0
-        summary = summarize(
+        events = tuple(iter_jsonl(recorder.directory / "events.jsonl", StreamEvent))
+        evidence = validate_measurement(
             workload,
             recorder.requests,
-            recorder.events,
+            events,
             window_end_seconds=checkpoint.window_end_seconds,
             window_kind="interrupted",
         )
-        assert summary.outcomes["success"] == 3 and not summary.execution_complete
+        assert sum(record.outcome == "success" for record in evidence.requests) == 3
+        assert not evidence.execution_complete
+
+
+def test_worker_records_task_root_cancellation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = client_case(tmp_path, "http://127.0.0.1:1")
+    repetition = tmp_path / "case/repetition-0001.attempt-0001"
+    retain_workload(case, repetition)
+    manifest = BenchCaseManifest.model_validate_json((repetition.parent / "case.json").read_bytes())
+    pending = [True]
+    root = SimpleNamespace(consume_cancellation=pending.pop)
+
+    def cancelled_before_await(*args: object, **kwargs: object) -> None:
+        raise TaskCancelled("task is retiring")
+
+    monkeypatch.setattr(xbench.harness.serving.execution, "get_task_root", lambda: root)
+    monkeypatch.setattr(xbench.harness.serving.execution, "warmup", cancelled_before_await)
+    with pytest.raises((SystemExit, TaskCancelled)) as error:
+        asyncio.run(run_serving(manifest, repetition))
+    assert isinstance(error.value, SystemExit) and error.value.code == 130
+    assert RepetitionManifest.from_directory(repetition).infrastructure_error == "benchmark repetition cancelled"
+    assert not pending
 
 
 def test_program_signal_adapter_keeps_async_cleanup_and_original_cancelled_verdict(tmp_path: Path) -> None:
@@ -292,12 +350,12 @@ import asyncio
 import sys
 from pathlib import Path
 import httpx
-from benches.suites.serving.multi_model import run_serving
+from xbench.harness.serving.execution import run_serving
 from xbench.harness.serving.measure import BenchCaseManifest
 from xkit.task import TaskRoot
 
 directory = Path(sys.argv[1])
-case = BenchCaseManifest.model_validate_json((directory.parent / "case.json").read_bytes()).case
+manifest = BenchCaseManifest.model_validate_json((directory.parent / "case.json").read_bytes())
 root = TaskRoot.from_environment()
 assert root is not None
 scope = root.register_scope()
@@ -316,7 +374,7 @@ async def close(client, exc_type, exc_value, traceback):
 
 httpx.AsyncClient.__aexit__ = close
 try:
-    asyncio.run(run_serving(case, directory))
+    asyncio.run(run_serving(manifest, directory))
 finally:
     if (directory / "client-cleaned").exists():
         scope.complete()
@@ -335,13 +393,12 @@ finally:
             timeout_seconds=30,
         )
         try:
-            observation_deadline = time.monotonic() + 10
-            while not server.first_started.is_set() and time.monotonic() < observation_deadline:
-                assert scope.poll() is None
+            while not server.first_started.is_set():
+                assert scope.poll() is None, (tmp_path / "task.log").read_text(encoding="utf-8")
                 time.sleep(0.01)
-            assert server.first_started.is_set(), (tmp_path / "task.log").read_text(encoding="utf-8")
             assert scope.root is not None
             os.kill(scope.root.pid, signal.SIGTERM)
+            observation_deadline = time.monotonic() + 10
             while not (repetition / "retiring").exists() and time.monotonic() < observation_deadline:
                 assert scope.poll() is None
                 time.sleep(0.01)
@@ -360,7 +417,7 @@ finally:
             assert completion.kind is TaskCompletionKind.EXITED and completion.returncode == 143
             assert not scope.is_protected
             assert (repetition / "client-cleaned").is_file()
-            records = read_jsonl(repetition / "requests.jsonl", RequestRecord)
+            records = tuple(iter_jsonl(repetition / "requests.jsonl", RequestRecord))
             assert records[0].outcome == "cancelled"
             assert all(record.outcome == "not_sent" for record in records[1:])
             assert server.thread.is_alive()
@@ -384,11 +441,13 @@ def test_warmup_observes_process_loss_while_a_response_is_pending(tmp_path: Path
 
         with pytest.raises(ExceptionGroup) as error:
             asyncio.run(
-                warmup(case, prepare_workload(case), {TEST_MODEL_ID: server.url}, tmp_path, check_alive=check_alive)
+                warmup(
+                    case, prepare_workload(case), {TEST_MODEL_ID: server.endpoint}, tmp_path, check_alive=check_alive
+                )
             )
 
         assert any(str(cause) == "serving process exited" for cause in error.value.exceptions)
-        records = read_jsonl(tmp_path / "warmup/requests.jsonl", RequestRecord)
+        records = tuple(iter_jsonl(tmp_path / "warmup/requests.jsonl", RequestRecord))
         assert len(records) == 1 and records[0].outcome == "cancelled"
 
 
@@ -399,9 +458,9 @@ def retain_workload(case: BenchCase, repetition: Path) -> PreparedWorkload:
         repetition.parent / "case.json",
         BenchCaseManifest(
             case=case,
-            prompt_sha256=workload.prompt_sha256,
-            trace_sha256=workload.trace_sha256,
-            warmup_sha256=workload.warmup_sha256,
+            prompt_sha256=content_digest(workload.prompts),
+            trace_sha256=content_digest(workload.requests),
+            warmup_sha256=content_digest(workload.warmup),
             repetitions=(repetition.name,),
         ).model_dump(mode="json"),
     )

@@ -3,24 +3,32 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
 import shutil
-from collections.abc import Generator, Iterable
+from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import BinaryIO
 
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
-__all__ = ["RunCleanup", "RunEntry", "RunStore", "write_json", "write_jsonl"]
+__all__ = ["RunCleanup", "RunEntry", "RunStore", "file_sha256", "iter_jsonl", "write_json", "write_jsonl"]
 
 RUN_ID_PATTERN = re.compile(r"[0-9]{8}-[0-9]{6}-[0-9]+-[0-9]+")
 RUN_LOCK_NAME = ".run.lock"
 CLEANUP_LOCK_NAME = ".cleanup.lock"
+
+
+def file_sha256(path: Path) -> str:
+    """Return the SHA-256 digest of the file bytes."""
+
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
 
 
 def write_json(path: Path, value: JsonValue) -> None:
@@ -36,6 +44,17 @@ def write_json(path: Path, value: JsonValue) -> None:
             os.replace(temporary_path, path)
         finally:
             temporary_path.unlink(missing_ok=True)
+
+
+def iter_jsonl[V: BaseModel](path: Path, value_type: type[V]) -> Iterator[V]:
+    """Read validated UTF-8 JSONL rows with file and line diagnostics."""
+
+    with path.open(encoding="utf-8") as source:
+        for number, line in enumerate(source, 1):
+            try:
+                yield value_type.model_validate_json(line)
+            except ValueError as error:
+                raise ValueError(f"invalid {value_type.__name__} at {path}:{number}: {error}") from error
 
 
 def write_jsonl(path: Path, values: Iterable[JsonValue]) -> None:

@@ -85,7 +85,7 @@ class SglangServerProcess:
                 evidence.record_error(error)
             raise error
         try:
-            response = httpx.get(f"{self.url()}/health", timeout=timeout_seconds)
+            response = httpx.get(f"{self.url()}/health", timeout=timeout_seconds, trust_env=False)
         except httpx.HTTPError as error:
             if evidence is not None:
                 evidence.record_error(error)
@@ -104,7 +104,7 @@ class SglangServerProcess:
         timeout = min(HTTP_TIMEOUT_SECONDS, deadline - monotonic())
         if timeout <= 0:
             raise TimeoutError("serving request-limit query exceeded the startup deadline")
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             response = await client.get(f"{self.url()}/server_info")
             response.raise_for_status()
         return SglangRequestLimits.from_server_info(response.content, context_length=context_length)
@@ -205,6 +205,8 @@ def server_command(
         "--log-level-http",
         "error",
     ]
+    if model.served_model_name is not None:
+        command.extend(("--served-model-name", model.served_model_name))
     if model_config.atn_dp_size > 1:
         command.append("--enable-dp-attention")
     command.extend(

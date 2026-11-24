@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 from pydantic import TypeAdapter
 
-from xbench.harness.serving.case import BenchCase, ClientBenchCase, LogNormalTokens, TokenRange
+from xbench.harness.serving.case import BenchCase, LogNormalTokens, TokenRange
 from xbench.harness.serving.workload import PreparedWorkload, prepare_workload, sample_tokens
-from xpool.integrations.sglang.devkit.requests import LocalModelMetadata, SglangRequestLimits
+from xpool.integrations.sglang.devkit.requests import LocalModelMetadata
 from xpool.model import ModelId
 from xtest.harness.support.config import TEST_CASE_ID
 
@@ -52,8 +52,7 @@ def test_prompt_changes_and_warmup_do_not_perturb_arrivals(tmp_path: Path, monke
     changed["warmup_requests_per_target"] = 4
     altered = prepare_workload(TypeAdapter(BenchCase).validate_json(json.dumps(changed)))
     assert baseline.requests == altered.requests
-    assert baseline.trace_sha256 == altered.trace_sha256
-    assert baseline.prompt_sha256 != altered.prompt_sha256
+    assert baseline.prompts != altered.prompts
     assert len(altered.warmup) == 8
 
 
@@ -69,9 +68,7 @@ def test_replay_rejects_duplicate_warmup_ids(tmp_path: Path, monkeypatch: pytest
 
 def test_model_metadata_owns_sampling_vocabulary_bounds() -> None:
     with pytest.raises(ValueError, match="admissible token IDs"):
-        LocalModelMetadata(
-            vocab_size=20, limits=SglangRequestLimits.from_context(128), admissible_ids=(20,), text_lengths={}
-        )
+        LocalModelMetadata(vocab_size=20, context_length=128, admissible_ids=(20,), text_lengths={})
 
 
 @pytest.mark.parametrize(("random_prompts", "ratio"), [(False, 2.0), (True, 2.0), (True, 0.25)])
@@ -96,8 +93,8 @@ def test_interval_relative_lengths_obey_joint_bounds_and_keep_isolated_model_str
     prompts = {(prompt.model_id, prompt.prompt_id): prompt for prompt in workload.prompts}
     for request in (*workload.requests, *workload.warmup):
         length = prompts[request.model_id, request.prompt_id].input_tokens
-        assert length is not None and math.ceil(1 / ratio) <= length <= 121
-        assert 1 <= request.max_new_tokens <= min(math.floor(ratio * length), 126 - length)
+        assert length is not None and math.ceil(1 / ratio) <= length <= 127
+        assert 1 <= request.max_new_tokens <= min(math.floor(ratio * length), 128 - length)
         if not random_prompts:
             assert length == 3
     remaining = case.targets[0].model_id
@@ -122,32 +119,25 @@ def test_token_sampling_conditions_intervals_without_rewriting_fixed_counts() ->
         sample_tokens(6, random.Random(0), minimum=7, maximum=9)
 
 
-def test_declared_serving_metadata_validates_external_conditions(tmp_path: Path) -> None:
-    case = workload_case(tmp_path, random_prompts=False, poisson_arrivals=False)
-    path = tmp_path / "serving.json"
-    raw = case.model_dump(mode="json")
-    raw["serving_metadata_path"] = str(path)
+def test_external_output_range_uses_only_the_supplied_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("XPOOL_CONFIG", raising=False)
+    case = workload_case(tmp_path, random_prompts=False, poisson_arrivals=True)
+    workload = prepare_workload(case)
+    assert workload.requests and not workload.model_contexts
+    assert all(2 <= request.max_new_tokens <= 4 for request in (*workload.requests, *workload.warmup))
+
+
+def test_generated_external_traffic_uses_the_model_context_without_owned_reserves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub_metadata(monkeypatch, tmp_path)
+    raw = workload_case(tmp_path, random_prompts=True, poisson_arrivals=True).model_dump(mode="json")
     for target in raw["targets"]:
-        target["model_metadata_path"] = None
-    declared_case = TypeAdapter(BenchCase).validate_json(json.dumps(raw))
-    assert isinstance(declared_case, ClientBenchCase)
-    declaration = {
-        "schema_version": 1,
-        "devices": [{"uuid": "GPU-remote", "total_memory_bytes": 81920 * 1024 * 1024}],
-        "target_device_uuids": {"test/one": ["GPU-remote"]},
-    }
-    path.write_text(json.dumps(declaration), encoding="utf-8")
-    metadata = declared_case.load_serving_metadata()
-    assert metadata is not None and metadata.packages is None
-    assert metadata.target_device_uuids == {ModelId("test/one"): ("GPU-remote",)}
-    declaration["target_device_uuids"] = {"test/unknown": ["GPU-remote"]}
-    path.write_text(json.dumps(declaration), encoding="utf-8")
-    with pytest.raises(ValueError, match="unknown benchmark target"):
-        declared_case.load_serving_metadata()
-    declaration["devices"][0]["total_memory_bytes"] = True
-    path.write_text(json.dumps(declaration), encoding="utf-8")
-    with pytest.raises(ValueError, match="total_memory_bytes"):
-        declared_case.load_serving_metadata()
+        target["prompts"]["input_tokens"] = 126
+        target["output_tokens"] = 2
+    workload = prepare_workload(TypeAdapter(BenchCase).validate_json(json.dumps(raw)))
+    assert workload.requests
+    assert {prompt.input_tokens for prompt in workload.prompts} == {126}
 
 
 def test_poisson_trace_replay_preserves_idle_horizon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,7 +153,7 @@ def test_poisson_trace_replay_preserves_idle_horizon(tmp_path: Path, monkeypatch
     replayed = prepare_workload(TypeAdapter(BenchCase).validate_json(json.dumps(raw)))
     assert replayed.requests == workload.requests
     assert replayed.arrival_horizon_seconds == workload.arrival_horizon_seconds
-    assert replayed.prompt_sha256 == workload.prompt_sha256
+    assert replayed.prompts == workload.prompts
 
 
 def test_empty_poisson_is_preserved_and_rate_is_sane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -217,11 +207,12 @@ def test_prompt_metadata_rejects_unselected_file_values_and_generated_input_over
     random_prompts: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     stub_metadata(monkeypatch, tmp_path)
-    case = workload_case(tmp_path, random_prompts=random_prompts, poisson_arrivals=False)
+    case = workload_case(tmp_path, random_prompts=random_prompts, poisson_arrivals=not random_prompts)
     raw = case.model_dump(mode="json")
     if random_prompts:
         raw["targets"][0]["prompts"]["input_tokens"] = 129
     else:
+        raw["targets"][0]["output_tokens"] = {"kind": "lognormal", "median_fraction": 0.5, "sigma": 1.0}
         with (tmp_path / "prompts.jsonl").open("a", encoding="utf-8") as output:
             output.write('{"prompt_id":"unselected","input_ids":[20]}\n')
     with pytest.raises(ValueError, match=r"legal request interval|local model vocabulary"):
@@ -267,7 +258,6 @@ def workload_case(tmp_path: Path, *, random_prompts: bool, poisson_arrivals: boo
             {
                 "id": str(TEST_CASE_ID),
                 "description": "Replay deterministic per-model traffic from declared input sources.",
-                "module": "serving.multi_model",
                 "mode": "client",
                 "seed": 23,
                 "arrivals": arrivals,
@@ -275,7 +265,6 @@ def workload_case(tmp_path: Path, *, random_prompts: bool, poisson_arrivals: boo
                     {
                         "model_id": id,
                         "base_url": "http://localhost:8000",
-                        "model_metadata_path": str(tmp_path),
                         "prompts": prompts,
                         "output_tokens": ({"min": 2, "max": 4} if id == "test/one" else 3)
                         if poisson_arrivals
@@ -289,7 +278,8 @@ def workload_case(tmp_path: Path, *, random_prompts: bool, poisson_arrivals: boo
 
 
 def stub_metadata(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
-    metadata = LocalModelMetadata(
-        vocab_size=20, limits=SglangRequestLimits.from_context(128), admissible_ids=(1, 3, 5), text_lengths={}
-    )
+    runtime = path / "runtime.toml"
+    runtime.write_text(f"[vendor]\nmodel_base_uri = {json.dumps(str(path))}\n", encoding="utf-8")
+    monkeypatch.setenv("XPOOL_CONFIG", str(runtime))
+    metadata = LocalModelMetadata(vocab_size=20, context_length=128, admissible_ids=(1, 3, 5), text_lengths={})
     monkeypatch.setattr(LocalModelMetadata, "from_checkpoint", lambda path, *, text_prompts: metadata)

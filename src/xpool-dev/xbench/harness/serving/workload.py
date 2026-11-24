@@ -17,7 +17,6 @@ from xbench.harness.serving.case import (
     BenchCase,
     BenchTarget,
     BenchValue,
-    ClientTarget,
     JsonlPrompts,
     LogNormalOutputTokens,
     OutputTokenCount,
@@ -28,8 +27,9 @@ from xbench.harness.serving.case import (
     TokenRange,
 )
 from xkit.case import CaseId
+from xkit.results import iter_jsonl
 from xpool.config import XpoolConfig
-from xpool.integrations.sglang.devkit.requests import LocalModelMetadata
+from xpool.integrations.sglang.devkit.requests import LocalModelMetadata, SglangRequestLimits
 from xpool.model import ModelId
 
 
@@ -68,12 +68,7 @@ class ScheduledRequest(BenchValue):
 
 
 class PreparedWorkload(BenchValue):
-    """Finite replay authority reused unchanged across case repetitions.
-
-    Content and arrival hashes cover normalized records, not a seed alone.
-    Warmup has separate requests/RNGs and does not consume measured traffic.
-    Configuration and local metadata belong to preparation, not replay content.
-    """
+    """Resolved prompts, request schedule and warmup reused across case repetitions."""
 
     case_id: CaseId
     model_ids: tuple[ModelId, ...]
@@ -83,10 +78,6 @@ class PreparedWorkload(BenchValue):
     warmup: tuple[ScheduledRequest, ...]
     arrival_horizon_seconds: FiniteFloat = Field(ge=0)
     bucket_seconds: FiniteFloat = Field(gt=0)
-    seeds: dict[str, int]
-    prompt_sha256: str
-    trace_sha256: str
-    warmup_sha256: str
 
     @classmethod
     def load(cls, directory: Path, *, case: BenchCase) -> PreparedWorkload:
@@ -106,16 +97,9 @@ class PreparedWorkload(BenchValue):
             path = (directory / inputs[field]).resolve()
             if not path.is_relative_to(directory.resolve()):
                 raise ValueError(f"workload input escapes its case: {inputs[field]}")
-            metadata[field] = read_jsonl(path, value_type)
+            metadata[field] = tuple(iter_jsonl(path, value_type))
         metadata.update(case_id=case.id, model_ids=tuple(target.model_id for target in case.targets))
-        prepared = cls.model_validate(metadata)
-        if prepared.prompt_sha256 != content_digest(prepared.prompts):
-            raise ValueError("prepared prompt content digest does not match")
-        if prepared.trace_sha256 != content_digest(prepared.requests):
-            raise ValueError("prepared trace content digest does not match")
-        if prepared.warmup_sha256 != content_digest(prepared.warmup):
-            raise ValueError("prepared warmup content digest does not match")
-        return prepared
+        return cls.model_validate(metadata)
 
     @model_validator(mode="after")
     def validate_replay(self) -> Self:
@@ -138,25 +122,11 @@ class PreparedWorkload(BenchValue):
         return self
 
 
-def file_digest(path: Path) -> str:
-    with path.open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
-
-
 def content_digest(values: Sequence[BenchValue]) -> str:
+    """Hash ordered, normalized replay records."""
+
     raw = [value.model_dump(mode="json", exclude_none=True) for value in values]
     return hashlib.sha256(json.dumps(raw, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
-
-
-def read_jsonl[V: BenchValue](path: Path, value_type: type[V]) -> tuple[V, ...]:
-    values = []
-    with path.open(encoding="utf-8") as source:
-        for number, line in enumerate(source, 1):
-            try:
-                values.append(value_type.model_validate_json(line))
-            except ValueError as error:
-                raise ValueError(f"invalid {value_type.__name__} at {path}:{number}: {error}") from error
-    return tuple(values)
 
 
 def sample_tokens(
@@ -205,20 +175,17 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
     if isinstance(case, OwnedBenchCase) and config is None:
         raise ValueError("owned workload preparation requires its effective configuration")
 
-    seeds: dict[str, int] = {}
-
     def rng(model_id: ModelId, purpose: str) -> random.Random:
-        key = f"{model_id}:{purpose}"
         seed = int.from_bytes(hashlib.sha256(json.dumps([case.seed, str(model_id), purpose]).encode()).digest(), "big")
-        seeds[key] = seed
         return random.Random(seed)
 
     metadata: dict[ModelId, LocalModelMetadata] = {}
+    owned_limits: dict[ModelId, SglangRequestLimits] = {}
     sources: dict[ModelId, tuple[PromptValue, ...]] = {}
     prompt_index: dict[ModelId, dict[str, PromptValue]] = {}
     for target in case.targets:
         if isinstance(target.prompts, JsonlPrompts):
-            values = read_jsonl(target.prompts.path, PromptValue)
+            values = tuple(iter_jsonl(target.prompts.path, PromptValue))
             ids = [value.prompt_id for value in values]
             if len(ids) != len(set(ids)):
                 raise ValueError(f"{target.model_id}: prompt IDs must be unique within the target")
@@ -226,26 +193,25 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
                 raise ValueError(f"{target.model_id}: prompt source is empty")
             sources[target.model_id] = values
             prompt_index[target.model_id] = {value.prompt_id: value for value in values}
-        metadata_path = (
-            target.model_metadata_path
-            if isinstance(target, ClientTarget)
-            else config.model_path_of(target.model_id)
-            if config is not None
-            else None
+        if config is not None:
+            metadata_path = config.model_path_of(target.model_id)
+        elif isinstance(target.prompts, RandomPrompts) or isinstance(target.output_tokens, LogNormalOutputTokens):
+            metadata_path = XpoolConfig.resolve_model_path(target.model_id)
+        else:
+            continue
+        local = LocalModelMetadata.from_checkpoint(
+            metadata_path,
+            text_prompts={
+                prompt.prompt_id: prompt.text for prompt in sources.get(target.model_id, ()) if prompt.text is not None
+            },
         )
-        if metadata_path is not None:
-            metadata[target.model_id] = LocalModelMetadata.from_checkpoint(
-                metadata_path,
-                text_prompts={
-                    prompt.prompt_id: prompt.text
-                    for prompt in sources.get(target.model_id, ())
-                    if prompt.text is not None
-                },
-            )
-        if isinstance(target.prompts, RandomPrompts) and not metadata[target.model_id].admissible_ids:
+        metadata[target.model_id] = local
+        if isinstance(case, OwnedBenchCase):
+            owned_limits[target.model_id] = SglangRequestLimits.from_context(local.context_length)
+        if isinstance(target.prompts, RandomPrompts) and not local.admissible_ids:
             raise ValueError(f"{target.model_id}: random prompts require nonempty admissible local tokenizer IDs")
         for value in sources.get(target.model_id, ()):
-            validate_prompt(value, metadata.get(target.model_id))
+            validate_prompt(value, local)
 
     resolved: dict[tuple[ModelId, str], ResolvedPrompt] = {}
 
@@ -265,11 +231,13 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
             # Random targets have local metadata by declaration and acquisition.
             local = metadata[target.model_id]
             content_rng = rng(target.model_id, f"{'warmup' if warmup else 'content'}:{id}")
+            limits = owned_limits.get(target.model_id)
+            maximum = limits.input_budget(output_tokens) if limits is not None else local.context_length - output_tokens
             length = sample_tokens(
                 target.prompts.input_tokens,
                 content_rng,
                 minimum=minimum_input,
-                maximum=local.limits.input_budget(output_tokens),
+                maximum=maximum,
             )
             value = PromptValue(
                 prompt_id=id, input_ids=tuple(content_rng.choice(local.admissible_ids) for _ in range(length))
@@ -301,7 +269,7 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
         shared_output_bound: int = 0,
     ) -> int:
         local = metadata.get(target.model_id)
-        limits = local.limits if local is not None else None
+        limits = owned_limits.get(target.model_id)
         ratio = policy.max_output_input_ratio if isinstance(policy, LogNormalOutputTokens) else None
         if isinstance(target.prompts, RandomPrompts):
             minimum_output = policy if isinstance(policy, int) else policy.min if isinstance(policy, TokenRange) else 1
@@ -315,8 +283,12 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
         else:
             value = prompt(target, prompt_id, output_tokens=0, warmup=warmup)
         maximum = None
-        if limits is not None and value.input_tokens is not None:
-            maximum = limits.output_budget(value.input_tokens)
+        if local is not None and value.input_tokens is not None:
+            maximum = (
+                limits.output_budget(value.input_tokens)
+                if limits is not None
+                else local.context_length - value.input_tokens
+            )
             if ratio is not None:
                 maximum = math.floor(min(maximum, ratio * value.input_tokens))
         output = sample_tokens(policy, output_rng, maximum=maximum)
@@ -361,7 +333,7 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
             )
         horizon = case.arrivals.duration_seconds
     else:
-        requests = list(read_jsonl(case.arrivals.path, ScheduledRequest))
+        requests = list(iter_jsonl(case.arrivals.path, ScheduledRequest))
         ids = [request.request_id for request in requests]
         if len(ids) != len(set(ids)):
             raise ValueError("trace request IDs must be unique")
@@ -413,23 +385,19 @@ def prepare_workload(case: BenchCase, *, config: XpoolConfig | None = None) -> P
     return PreparedWorkload(
         case_id=case.id,
         model_ids=tuple(by_target),
-        model_contexts={model_id: local.limits.context_length for model_id, local in metadata.items()},
+        model_contexts={model_id: local.context_length for model_id, local in metadata.items()},
         prompts=prompts,
         requests=tuple(requests),
         warmup=tuple(warmup_requests),
         arrival_horizon_seconds=horizon,
         bucket_seconds=case.bucket_seconds,
-        seeds=seeds,
-        prompt_sha256=content_digest(prompts),
-        trace_sha256=content_digest(requests),
-        warmup_sha256=content_digest(warmup_requests),
     )
 
 
-def validate_prompt(prompt: PromptValue, metadata: LocalModelMetadata | None) -> None:
-    if metadata is None or prompt.input_ids is None:
+def validate_prompt(prompt: PromptValue, metadata: LocalModelMetadata) -> None:
+    if prompt.input_ids is None:
         return
     if any(id >= metadata.vocab_size for id in prompt.input_ids):
         raise ValueError(f"prompt {prompt.prompt_id!r} contains IDs outside the local model vocabulary")
-    if len(prompt.input_ids) >= metadata.limits.context_length:
+    if len(prompt.input_ids) >= metadata.context_length:
         raise ValueError(f"prompt {prompt.prompt_id!r} exceeds the known model input limit")

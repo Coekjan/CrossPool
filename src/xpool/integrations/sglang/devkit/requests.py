@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import Annotated, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, model_validator
-from sglang.srt.utils.hf_transformers_utils import get_context_length, get_hf_text_config, get_tokenizer
-from transformers import AutoConfig
 
 __all__ = ["LocalModelMetadata", "SglangRequestLimits"]
 
@@ -75,7 +73,7 @@ class LocalModelMetadata(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     vocab_size: int = Field(gt=0)
-    limits: SglangRequestLimits
+    context_length: int = Field(gt=0)
     admissible_ids: tuple[Annotated[int, Field(ge=0)], ...]
     text_lengths: dict[str, Annotated[int, Field(ge=0)]]
 
@@ -90,6 +88,10 @@ class LocalModelMetadata(BaseModel):
     @classmethod
     def from_checkpoint(cls, path: Path, *, text_prompts: Mapping[str, str]) -> Self:
         """Load local files only, using SGLang's context and tokenizer semantics."""
+
+        from sglang.srt.utils.hf_transformers_utils import get_context_length, get_hf_text_config, get_tokenizer
+        from transformers import AutoConfig
+
         config = AutoConfig.from_pretrained(str(path), local_files_only=True, trust_remote_code=True)
         tokenizer = get_tokenizer(str(path), local_files_only=True, trust_remote_code=True)
         text_config = get_hf_text_config(config)
@@ -107,7 +109,7 @@ class LocalModelMetadata(BaseModel):
             lengths[prompt_id] = len(tokens)
         return cls(
             vocab_size=vocab_size,
-            limits=SglangRequestLimits.from_context(context),
+            context_length=context,
             admissible_ids=ids,
             text_lengths=lengths,
         )

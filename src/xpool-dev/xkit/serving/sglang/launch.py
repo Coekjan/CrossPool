@@ -15,10 +15,15 @@ __all__ = ["ServingLaunch", "SglangLaunchModel"]
 
 @dataclass(frozen=True, slots=True)
 class SglangLaunchModel:
-    """One Instance's graph policy; runtime configuration owns geometry."""
+    """One Instance's Graph policy and optional public model name.
+
+    Runtime configuration owns geometry. SGLang chooses its default name when
+    the override is omitted.
+    """
 
     model_id: ModelId
     graph_settings: SglangGraphSettings
+    served_model_name: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.model_id, ModelId):

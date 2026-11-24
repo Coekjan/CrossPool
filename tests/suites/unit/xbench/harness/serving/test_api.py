@@ -3,64 +3,71 @@ from pathlib import Path
 
 import pytest
 
-from xbench.harness.serving.api import ResponseProtocolError, create_api_adapter
-from xbench.harness.serving.case import ClientTarget, JsonlPrompts
+from xbench.harness.serving.api import OpenaiAdapter, ResponseProtocolError
+from xbench.harness.serving.case import ClientTarget, JsonlPrompts, ServingEndpoint
 from xbench.harness.serving.workload import ResolvedPrompt, ScheduledRequest
 from xtest.harness.support.config import TEST_MODEL_ID
 
 
-def payload(count: int, *, finish: str | None = None) -> bytes:
-    return json.dumps(
-        {
-            "text": "",
-            "meta_info": {
-                "completion_tokens": count,
-                "prompt_tokens": 4,
-                "cached_tokens": 2,
-                "finish_reason": {"type": finish} if finish is not None else None,
-            },
-        }
-    ).encode()
+def frame(count: int, *, finish: str | None = None, final: bool = False) -> bytes:
+    usage: dict[str, object] = {"completion_tokens": count, "prompt_tokens": 4}
+    if final:
+        usage["prompt_tokens_details"] = {"cached_tokens": 2}
+    return json.dumps({"choices": [] if final else [{"text": "", "finish_reason": finish}], "usage": usage}).encode()
 
 
-def test_native_adapter_constructs_endpoint_and_prepared_token_payload() -> None:
+def test_openai_adapter_constructs_endpoint_and_prepared_token_payload() -> None:
     target = ClientTarget(
         model_id=TEST_MODEL_ID,
-        base_url="http://localhost:8000/base",
+        base_url="http://localhost:8000/",
+        served_model_name="baseline",
         prompts=JsonlPrompts(kind="jsonl", path=Path("p.jsonl")),
     )
+    endpoint = ServingEndpoint(base_url=target.base_url, served_model_name="baseline")
     request = ScheduledRequest(
         request_id="r", model_id=TEST_MODEL_ID, arrival_seconds=0.0, prompt_id="p", max_new_tokens=10
     )
     prompt = ResolvedPrompt(model_id=TEST_MODEL_ID, prompt_id="p", input_ids=(1, 2))
-    adapter = create_api_adapter(target.api)
-    assert adapter.endpoint(target.base_url) == "http://localhost:8000/base/generate"
-    assert adapter.payload(request, prompt, target) == {
-        "rid": "r",
+    assert OpenaiAdapter.payload(request, prompt, target, endpoint) == {
+        "model": "baseline",
+        "prompt": [1, 2],
+        "max_tokens": 10,
+        "temperature": 0.0,
+        "ignore_eos": False,
         "stream": True,
-        "input_ids": [1, 2],
-        "sampling_params": {"temperature": 0.0, "max_new_tokens": 10, "ignore_eos": False, "stream_interval": 1},
+        "stream_options": {"include_usage": True, "continuous_usage_stats": True},
     }
 
 
-def test_native_stream_accepts_empty_text_progress_and_valid_done() -> None:
-    adapter = create_api_adapter("sglang")
-    frames = (payload(3), payload(3), payload(6, finish="length"), b"[DONE]")
+def test_stream_accepts_empty_text_progress_and_separate_final_usage() -> None:
+    adapter = OpenaiAdapter()
+    frames = (frame(3), frame(3), frame(6, finish="length"), frame(6, final=True), b"[DONE]")
     events = [
-        adapter.consume(frame, request_id="r", sequence=index, observed_at_seconds=0.1 * index)
-        for index, frame in enumerate(frames)
+        adapter.consume(value, request_id="r", sequence=index, observed_at_seconds=0.1 * index)
+        for index, value in enumerate(frames)
     ]
-    assert [event.completion_tokens for event in events] == [3, 3, 6, None]
-    assert all(event.accepted for event in events)
-    assert events[-1].kind == "done"
+    assert [event.completion_tokens for event in events] == [3, 3, 6, 6, None]
+    assert [event.kind for event in events] == ["data", "data", "data", "usage", "done"]
+    assert events[-2].cached_tokens == 2
 
 
 @pytest.mark.parametrize(
-    "invalid", [payload(2), payload(True), payload(-1), payload(4, finish="abort"), b"null", b'{"error":{"code":400}}']
+    "invalid",
+    [
+        frame(2),
+        frame(True),
+        frame(-1),
+        frame(4, finish="abort"),
+        frame(3, final=True),
+        b"null",
+        b'{"error":{"code":400}}',
+        b'{"choices":[{"text":"answer"}]}',
+        b'{"choices":[{}],"usage":{"completion_tokens":4,"extra":NaN}}',
+    ],
 )
 def test_invalid_stream_carries_the_rejected_event(invalid: bytes) -> None:
-    adapter = create_api_adapter("sglang")
-    adapter.consume(payload(3), request_id="r", sequence=0, observed_at_seconds=0.1)
+    adapter = OpenaiAdapter()
+    adapter.consume(frame(3), request_id="r", sequence=0, observed_at_seconds=0.1)
     with pytest.raises(ResponseProtocolError) as caught:
         adapter.consume(invalid, request_id="r", sequence=1, observed_at_seconds=0.2)
     event = caught.value.event
@@ -69,10 +76,14 @@ def test_invalid_stream_carries_the_rejected_event(invalid: bytes) -> None:
     assert event.sequence == 1 and event.observed_at_seconds == 0.2
 
 
-def test_done_requires_normal_terminal_usage_and_accepts_zero_tokens() -> None:
-    adapter = create_api_adapter("sglang")
+@pytest.mark.parametrize("invalid", [b"[DONE]", frame(1, final=True)])
+def test_finish_requires_matching_final_usage_before_done(invalid: bytes) -> None:
+    adapter = OpenaiAdapter()
+    assert (
+        adapter.consume(frame(0, finish="stop"), request_id="r", sequence=0, observed_at_seconds=0.1).completion_tokens
+        == 0
+    )
     with pytest.raises(ResponseProtocolError, match="final usage"):
-        adapter.consume(b"[DONE]", request_id="r", sequence=0, observed_at_seconds=0.1)
-    event = adapter.consume(payload(0, finish="stop"), request_id="r", sequence=1, observed_at_seconds=0.2)
-    assert event.completion_tokens == 0
-    assert adapter.consume(b"[DONE]", request_id="r", sequence=2, observed_at_seconds=0.3).kind == "done"
+        adapter.consume(invalid, request_id="r", sequence=1, observed_at_seconds=0.2)
+    adapter.consume(frame(0, final=True), request_id="r", sequence=2, observed_at_seconds=0.3)
+    assert adapter.consume(b"[DONE]", request_id="r", sequence=3, observed_at_seconds=0.4).kind == "done"

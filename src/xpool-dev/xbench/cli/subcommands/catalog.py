@@ -1,9 +1,13 @@
 """Benchmark inventory and catalogue authoring."""
 
 import argparse
+import sys
+import time
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from xbench.harness.collection import collect_programs
-from xbench.harness.serving.case import BenchCatalog, OwnedBenchCase
+from xbench.harness.serving.case import BenchCatalog, HostedBenchCase, OwnedBenchCase
+from xbench.harness.serving.hosted import REQUIREMENTS_TIMEOUT_SECONDS, collect_hosted_launch
 from xkit.case import CaseFamily
 from xkit.config import DeploymentConfig, XpoolDevConfig
 from xpool.utils.cli import RunnableCliCommand
@@ -19,15 +23,30 @@ class BenchListCommand(RunnableCliCommand[XpoolDevConfig]):
 
     def run(self, args: argparse.Namespace, config: XpoolDevConfig) -> int:
         catalog = BenchCatalog.from_file(config.xbench.catalog)
-        programs = collect_programs(catalog.path, catalog.cases)
-        for case, program in zip(catalog.cases, programs, strict=True):
-            print(f"{case.id}\t{case.description}")
-            print(f"  mode={case.mode} devices={program.requirements.device_count} seed={case.seed}")
+        for case in catalog.cases:
             deployment = (
                 DeploymentConfig.from_file(case.deployment, model_ids=tuple(target.model_id for target in case.targets))
                 if isinstance(case, OwnedBenchCase)
                 else None
             )
+            devices: int | str = 0
+            if deployment is not None:
+                devices = len(deployment.atn.devices) + len(deployment.ffn.devices)
+            elif isinstance(case, HostedBenchCase):
+                with TemporaryDirectory(prefix="xpool-hosted-settings-") as temporary:
+                    try:
+                        launch = collect_hosted_launch(
+                            case,
+                            settings_path=Path(temporary) / "settings.json",
+                            deadline=time.monotonic() + REQUIREMENTS_TIMEOUT_SECONDS,
+                        )
+                    except (TimeoutError, ValueError) as error:
+                        print(f"{case.id}: {error}", file=sys.stderr)
+                        devices = "-"
+                    else:
+                        devices = launch.requirements.device_count
+            print(f"{case.id}\t{case.description}")
+            print(f"  mode={case.mode} devices={devices} seed={case.seed}")
             if deployment is not None:
                 print(
                     f"  attention={deployment.atn.devices} ffn={deployment.ffn.devices} "

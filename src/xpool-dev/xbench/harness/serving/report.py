@@ -24,10 +24,20 @@ from xbench.harness.serving.measure import (
     ThroughputBucket,
     load_measurement,
     retained_file,
+    summarize,
 )
 from xbench.harness.serving.workload import PreparedWorkload
 from xkit.config import FigureConfig, XbenchReportConfig, get_global_config
 from xkit.results import RunStore, write_json
+
+
+@dataclass(frozen=True, slots=True)
+class RetainedAttempt:
+    """A resolved attempt directory and its saved case and checkpoint, read under the run lock."""
+
+    directory: Path
+    case_manifest: BenchCaseManifest
+    checkpoint: RepetitionManifest
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,19 +70,17 @@ def write_metric_csv(summary: BenchSummary, directory: Path) -> None:
             writer.writerows(value.model_dump() for value in values)
 
 
-def load_series(directory: Path, label: str) -> ReportSeries:
-    """Aggregate retained request metrics and event samples under a run lock.
+def load_series(attempt: RetainedAttempt, label: str) -> ReportSeries:
+    """Validate and aggregate selected raw measurements under the run lock.
 
     Diagnostic metadata may be unavailable; replay, raw observations and the
     incomplete archive/cleanup evidence stays visible beside valid samples.
     """
 
-    case_directory = directory.parent
-    case_manifest = BenchCaseManifest.model_validate_json(retained_file(case_directory, "case.json").read_bytes())
-    workload = case_manifest.load_workload(case_directory)
-    manifest, summary = load_measurement(directory.resolve(), workload)
-    if not (directory.parents[2] / ".completed").is_file():
-        summary = summary.model_copy(update={"evidence_complete": False})
+    directory = attempt.directory
+    workload = attempt.case_manifest.load_workload(directory.parent)
+    measurement = load_measurement(directory, workload, checkpoint=attempt.checkpoint)
+    summary = summarize(workload, measurement, checkpoint=attempt.checkpoint)
     environment: dict[str, JsonValue]
     try:
         environment = TypeAdapter(dict[str, JsonValue]).validate_json(
@@ -80,12 +88,12 @@ def load_series(directory: Path, label: str) -> ReportSeries:
         )
     except (OSError, ValueError) as error:
         environment = {"unavailable": True, "capture_errors": [str(error)]}
-    return ReportSeries(label, directory, workload, summary, case_manifest, manifest, environment)
+    return ReportSeries(label, directory, workload, summary, attempt.case_manifest, attempt.checkpoint, environment)
 
 
 def retained_repetitions(
     directory: Path, manifest: BenchRunManifest
-) -> tuple[tuple[Path, ...], tuple[Path, ...], bool]:
+) -> tuple[tuple[RetainedAttempt, ...], tuple[RetainedAttempt, ...], bool]:
     """Inspect parent-declared repetition metadata, returning complete-run eligibility.
 
     This boundary checks sealing, addresses and required target declarations.
@@ -101,7 +109,7 @@ def retained_repetitions(
     seen_cases = set()
     for reference in manifest.case_directories:
         case_directory = (directory / reference).resolve()
-        if not case_directory.is_relative_to(directory / "cases") or case_directory.parent != directory / "cases":
+        if case_directory.parent != directory / "cases":
             raise ValueError("benchmark case reference escapes its invocation")
         case = BenchCaseManifest.model_validate_json((case_directory / "case.json").read_bytes())
         if (
@@ -118,12 +126,12 @@ def retained_repetitions(
         complete = complete and set(effective) == set(range(1, count + 1))
         for repetition_directory in effective.values():
             try:
-                repetition = RepetitionManifest.from_directory(repetition_directory)
+                checkpoint = RepetitionManifest.from_directory(repetition_directory)
             except (OSError, ValueError):
                 complete = False
                 continue
-            if repetition.sealed:
-                repetitions.append(repetition_directory)
+            if checkpoint.sealed:
+                repetitions.append(RetainedAttempt(repetition_directory, case, checkpoint))
             else:
                 complete = False
         for attempt in sorted(case_directory.iterdir()):
@@ -138,7 +146,7 @@ def retained_repetitions(
             except (OSError, ValueError):
                 continue
             if checkpoint.repetition <= count and checkpoint.sealed:
-                historical.append(attempt)
+                historical.append(RetainedAttempt(attempt, case, checkpoint))
     return tuple(repetitions), tuple(historical), complete and bool(repetitions)
 
 
@@ -154,8 +162,12 @@ def list_bench_artifacts(root: Path) -> tuple[str, ...]:
                 if complete:
                     artifacts.append(entry.name)
                 else:
-                    artifacts.extend(f"{entry.name}/{path.relative_to(directory).as_posix()}" for path in repetitions)
-                artifacts.extend(f"{entry.name}/{path.relative_to(directory).as_posix()}" for path in historical)
+                    artifacts.extend(
+                        f"{entry.name}/{attempt.directory.relative_to(directory).as_posix()}" for attempt in repetitions
+                    )
+                artifacts.extend(
+                    f"{entry.name}/{attempt.directory.relative_to(directory).as_posix()}" for attempt in historical
+                )
         except (ValueError, FileNotFoundError, BlockingIOError):
             continue
     return tuple(artifacts)
@@ -180,28 +192,27 @@ def report_bench_runs(inputs: Sequence[Path], *, output: Path | None = None) -> 
             manifest = BenchRunManifest.model_validate_json((protected / "run.json").read_bytes())
             repetitions, historical, complete = retained_repetitions(protected, manifest)
             if repetition_match is not None:
-                if directory not in (*repetitions, *historical) or (
-                    address.is_symlink() and directory not in repetitions
-                ):
+                is_link = address.is_symlink()
+                candidates = repetitions if is_link else (*repetitions, *historical)
+                attempt = next((item for item in candidates if item.directory == directory), None)
+                if attempt is None:
                     raise ValueError(f"benchmark repetition is unsealed or not declared by its parent: {directory}")
                 if directory.parent != address.parent.resolve() or (
-                    address.is_symlink()
-                    and (
-                        repetition_match[2] is not None
-                        or RepetitionManifest.from_directory(directory).repetition != int(repetition_match[1])
-                    )
+                    is_link
+                    and (repetition_match[2] is not None or attempt.checkpoint.repetition != int(repetition_match[1]))
                 ):
                     raise ValueError("benchmark repetition link does not identify its current same-case attempt")
-                selected = (directory,)
+                selected = (attempt,)
             else:
                 if not complete:
                     raise ValueError(f"benchmark run has no complete reportable repetition set: {directory.name}")
                 selected = repetitions
-            for repetition in selected:
+            for attempt in selected:
+                repetition = attempt.directory
                 if repetition in seen:
                     continue
                 seen.add(repetition)
-                item = load_series(repetition, f"{root.name}/{repetition.relative_to(protected).as_posix()}")
+                item = load_series(attempt, f"{root.name}/{repetition.relative_to(protected).as_posix()}")
                 destination = (
                     None
                     if output is None
@@ -465,15 +476,12 @@ def write_report_projection(
             "original_run": run.model_dump(mode="json") if run is not None else None,
             "label": item.label,
             "directory": str(item.directory),
-            "prompt_sha256": item.workload.prompt_sha256,
-            "trace_sha256": item.workload.trace_sha256,
+            "prompt_sha256": item.case_manifest.prompt_sha256,
+            "trace_sha256": item.case_manifest.trace_sha256,
             "environment": item.environment,
-            "warmup_sha256": item.workload.warmup_sha256,
+            "warmup_sha256": item.case_manifest.warmup_sha256,
             "deployment": item.case_manifest.deployment.model_dump(mode="json")
             if item.case_manifest.deployment is not None
-            else None,
-            "serving_metadata": item.case_manifest.serving_metadata.model_dump(mode="json")
-            if item.case_manifest.serving_metadata is not None
             else None,
             "original_result_code": item.repetition_manifest.result_code,
             "summary": item.summary.model_dump(mode="json"),
@@ -510,7 +518,7 @@ def write_report_projection(
             f"Outcomes: {summary.outcomes}. Arrival horizon: {summary.arrival_horizon_seconds}s; "
             f"window end: {summary.window_end_seconds}s; window kind: {summary.window_kind}.",
             "",
-            f"Prompt digest: {item.workload.prompt_sha256}; trace digest: {item.workload.trace_sha256}.",
+            f"Prompt digest: {item.case_manifest.prompt_sha256}; trace digest: {item.case_manifest.trace_sha256}.",
             "",
         ]
     )

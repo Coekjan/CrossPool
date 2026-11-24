@@ -1,25 +1,37 @@
 from __future__ import annotations
 
+import gzip
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import TracebackType
 
-from xbench.harness.serving.case import ClientBenchCase
+from xbench.harness.serving.case import ClientBenchCase, ServingEndpoint
+from xbench.harness.serving.measure import BenchCaseManifest, RepetitionManifest
+from xbench.harness.serving.report import ReportSeries, RetainedAttempt, load_series
 from xtest.harness.support.config import TEST_CASE_ID, TEST_MODEL_ID
 
 
+def load_retained_series(directory: Path, label: str) -> ReportSeries:
+    directory = directory.resolve()
+    case = BenchCaseManifest.model_validate_json((directory.parent / "case.json").read_bytes())
+    checkpoint = RepetitionManifest.from_directory(directory)
+    return load_series(RetainedAttempt(directory, case, checkpoint), label)
+
+
 class FakeServingServer:
-    """A real CPU HTTP/SSE peer with a bounded gate and native terminal usage."""
+    """A real CPU Completions peer with a bounded gate."""
 
     def __init__(self, *, block_first: bool = False, omit_done: bool = False) -> None:
         self.received: list[str] = []
+        self.models: list[str] = []
         self.first_started = threading.Event()
         self.gate = threading.Event()
         self.gate_released = False
         self.block_first = block_first
         self.omit_done = omit_done
+        self.frames: tuple[bytes, ...] = completion_frames()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -29,35 +41,30 @@ class FakeServingServer:
                 pass
 
             def do_POST(self) -> None:
+                if self.path != "/v1/completions":
+                    self.send_error(404)
+                    return
                 length = int(self.headers["content-length"])
                 payload = json.loads(self.rfile.read(length))
-                id = payload["rid"]
-                owner.received.append(id)
+                owner.received.append(payload["prompt"])
+                owner.models.append(payload["model"])
                 if len(owner.received) == 1:
                     owner.first_started.set()
                     if owner.block_first:
                         owner.gate_released = owner.gate.wait(30)
-                frames = [
-                    b"data: "
-                    + json.dumps(
-                        {
-                            "text": "",
-                            "meta_info": {
-                                "completion_tokens": 3,
-                                "prompt_tokens": 5,
-                                "cached_tokens": 4,
-                                "finish_reason": {"type": "length"},
-                            },
-                        }
-                    ).encode()
-                    + b"\r\n\r\n"
-                ]
+                frames = list(owner.frames)
                 if not owner.omit_done:
                     frames.append(b"data: [DONE]\n\n")
+                encodings = self.headers.get("accept-encoding", "").split(",")
+                use_gzip = any(encoding.strip() == "gzip" for encoding in encodings)
+                if use_gzip:
+                    frames = [gzip.compress(b"".join(frames))]
                 try:
                     self.send_response(200)
                     self.send_header("content-type", "text/event-stream")
                     self.send_header("transfer-encoding", "chunked")
+                    if use_gzip:
+                        self.send_header("content-encoding", "gzip")
                     self.end_headers()
                     for frame in frames:
                         self.wfile.write(f"{len(frame):x}\r\n".encode() + frame + b"\r\n")
@@ -76,6 +83,10 @@ class FakeServingServer:
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server.server_port}"
 
+    @property
+    def endpoint(self) -> ServingEndpoint:
+        return ServingEndpoint(base_url=self.url, served_model_name=str(TEST_MODEL_ID))
+
     def __enter__(self) -> FakeServingServer:
         return self
 
@@ -89,9 +100,19 @@ class FakeServingServer:
         assert not self.thread.is_alive()
 
 
+def completion_frames() -> tuple[bytes, bytes]:
+    return (
+        b'data: {"choices":[{"text":"","finish_reason":"length"}],'
+        b'"usage":{"completion_tokens":3,"prompt_tokens":5}}\r\n\r\n',
+        b'data: {"choices":[],"usage":{"completion_tokens":3,"prompt_tokens":5,'
+        b'"prompt_tokens_details":{"cached_tokens":4}}}\n\n',
+    )
+
+
 def client_case(tmp_path: Path, endpoint: str, *, future: bool = False) -> ClientBenchCase:
     prompts = tmp_path / "input-prompts.jsonl"
-    prompts.write_text('{"prompt_id":"p","text":"an explicit offline prompt"}\n', encoding="utf-8")
+    ids = ("first", "second", "third")
+    prompts.write_text("".join(json.dumps({"prompt_id": id, "text": id}) + "\n" for id in ids), encoding="utf-8")
     trace = tmp_path / "input-trace.jsonl"
     trace.write_text(
         "".join(
@@ -100,12 +121,12 @@ def client_case(tmp_path: Path, endpoint: str, *, future: bool = False) -> Clien
                     "request_id": id,
                     "model_id": str(TEST_MODEL_ID),
                     "arrival_seconds": 1000 if future and id == "third" else 0,
-                    "prompt_id": "p",
+                    "prompt_id": id,
                     "max_new_tokens": 3,
                 }
             )
             + "\n"
-            for id in ("first", "second", "third")
+            for id in ids
         ),
         encoding="utf-8",
     )
@@ -114,7 +135,6 @@ def client_case(tmp_path: Path, endpoint: str, *, future: bool = False) -> Clien
             {
                 "id": str(TEST_CASE_ID),
                 "description": "Observe HTTP admission, streaming timing and supervised cleanup.",
-                "module": "serving.multi_model",
                 "mode": "client",
                 "max_inflight": 1,
                 "warmup_requests_per_target": 0,

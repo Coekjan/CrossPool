@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, JsonValue, field_validator, model_validator
 
 from xkit.case import CaseId, Catalog
-from xkit.config import assemble_config
+from xkit.config import DeploymentConfig, assemble_config
 from xkit.deployment import resolve_deployment_path
+from xkit.requirements import ResourceRequirements
 from xkit.serving.sglang.graph import SglangGraphMode
 from xkit.serving.sglang.launch import ServingLaunch, SglangLaunchModel
 from xpool.config import XpoolConfig
@@ -94,9 +95,8 @@ class TraceArrivals(BenchValue):
 type ArrivalSource = Annotated[PoissonArrivals | TraceArrivals, Field(discriminator="kind")]
 
 
-class NativeSampling(BenchValue):
+class Sampling(BenchValue):
     temperature: FiniteFloat = Field(default=0.0, ge=0)
-    stream_interval: int = Field(default=1, gt=0)
     ignore_eos: bool | None = Field(
         default=None, description="None ignores EOS for random prompts and honors EOS for file-backed prompts."
     )
@@ -104,12 +104,11 @@ class NativeSampling(BenchValue):
 
 class BenchTarget(BenchValue):
     model_id: ModelId
-    api: Literal["sglang", "openai"] = "sglang"
     prompts: PromptSource
     output_tokens: OutputTokenCount | None = Field(
         default=None, description="Poisson request output limit; file traces supply max_new_tokens per request."
     )
-    sampling: NativeSampling = Field(default_factory=NativeSampling)
+    sampling: Sampling = Field(default_factory=Sampling)
 
     def ignores_eos(self) -> bool:
         return (
@@ -125,28 +124,43 @@ class OwnedTarget(BenchTarget):
 
 class ClientTarget(BenchTarget):
     base_url: str
-    model_metadata_path: Path | None = None
+    served_model_name: str | None = Field(default=None, min_length=1)
 
-    @model_validator(mode="after")
-    def validate_endpoint(self) -> Self:
-        url = urlsplit(self.base_url)
-        if url.scheme not in {"http", "https"} or not url.hostname or url.query or url.fragment:
-            raise ValueError("serving base_url must be an HTTP(S) URL without query or fragment")
+    @field_validator("base_url")
+    @classmethod
+    def validate_endpoint(cls, base_url: str) -> str:
+        url = urlsplit(base_url)
+        if (
+            url.scheme not in {"http", "https"}
+            or not url.hostname
+            or url.username is not None
+            or url.path not in {"", "/"}
+            or "?" in base_url
+            or "#" in base_url
+        ):
+            raise ValueError("serving base_url must be an HTTP(S) root without credentials, query or fragment")
         url.port  # Validate the external port syntax at the declaration boundary.
-        return self
+        return base_url
+
+
+class ServingEndpoint(BenchValue):
+    """Server URL and API model name for one benchmark target."""
+
+    base_url: str
+    served_model_name: str
 
 
 class CaseSettings(BenchValue):
     id: CaseId
     description: str = Field(min_length=1)
-    module: str = Field(min_length=1, description="Source module relative to the catalogue's sibling suites directory.")
+    targets: tuple[BenchTarget, ...]
     arrivals: ArrivalSource
     seed: int = 0
     max_inflight: int = Field(
         default=128, gt=0, description="Active HTTP request limit; excess arrivals queue in FIFO order."
     )
     startup_timeout_seconds: FiniteFloat = Field(
-        default=1800.0, gt=0, description="Complete owned startup budget, including daemon, Agents and serving health."
+        default=1800.0, gt=0, description="Complete managed serving startup budget in seconds."
     )
     request_timeout_seconds: FiniteFloat | None = Field(
         default=None,
@@ -156,17 +170,19 @@ class CaseSettings(BenchValue):
     warmup_requests_per_target: int = Field(default=1, ge=0)
     bucket_seconds: FiniteFloat = Field(default=1.0, gt=0)
 
-    def validate_targets(self, targets: tuple[BenchTarget, ...]) -> None:
-        ids = tuple(target.model_id for target in targets)
+    @model_validator(mode="after")
+    def validate_case(self) -> Self:
+        ids = tuple(target.model_id for target in self.targets)
         if not ids or len(ids) != len(set(ids)):
             raise ValueError("benchmark targets must be nonempty and have unique Model IDs")
         if isinstance(self.arrivals, PoissonArrivals):
             if set(self.arrivals.rates) != set(ids):
                 raise ValueError("Poisson rates must cover Model IDs exactly")
-            if any(target.output_tokens is None for target in targets):
+            if any(target.output_tokens is None for target in self.targets):
                 raise ValueError("Poisson targets require output_tokens")
-        elif any(target.output_tokens is not None for target in targets):
+        elif any(target.output_tokens is not None for target in self.targets):
             raise ValueError("file traces own each request's max_new_tokens; target output_tokens must be absent")
+        return self
 
 
 class OwnedBenchCase(CaseSettings):
@@ -175,89 +191,39 @@ class OwnedBenchCase(CaseSettings):
     runtime_config: Path | None = None
     targets: tuple[OwnedTarget, ...]
 
-    @model_validator(mode="after")
-    def validate_case(self) -> Self:
-        self.validate_targets(self.targets)
-        return self
-
 
 class ClientBenchCase(CaseSettings):
     mode: Literal["client"]
     targets: tuple[ClientTarget, ...]
-    serving_metadata_path: Path | None = None
-
-    @model_validator(mode="after")
-    def validate_case(self) -> Self:
-        self.validate_targets(self.targets)
-        for target in self.targets:
-            if (
-                isinstance(target.prompts, RandomPrompts) or isinstance(target.output_tokens, LogNormalTokens)
-            ) and target.model_metadata_path is None:
-                raise ValueError(f"{target.model_id}: generated token traffic requires local model_metadata_path")
-        return self
-
-    def load_serving_metadata(self) -> ServingMetadata | None:
-        """Validate explicit external conditions without contacting the server."""
-        if self.serving_metadata_path is None:
-            return None
-        contents = self.serving_metadata_path.read_bytes()
-        metadata = ServingMetadata.model_validate_json(contents)
-        if "schema_version" not in metadata.model_fields_set:
-            raise ValueError("external serving metadata requires schema_version=1")
-        if set(metadata.target_device_uuids or {}) - {target.model_id for target in self.targets}:
-            raise ValueError("serving metadata references an unknown benchmark target")
-        return metadata
 
 
-type BenchCase = Annotated[OwnedBenchCase | ClientBenchCase, Field(discriminator="mode")]
+class HostedBenchCase(CaseSettings):
+    mode: Literal["hosted"]
+    script: Path
+    launch_settings: dict[str, JsonValue] | None = None
 
 
-class ServingDevice(BenchValue):
-    uuid: str = Field(min_length=1)
-    name: str | None = None
-    total_memory_bytes: int | None = Field(default=None, gt=0)
-    pci_bus_id: str | None = None
-    cpu_affinity: str | None = None
-    numa_affinity: str | None = None
+class HostedRequirements(BenchValue):
+    """Resource count and model groups sharing individual HTTP listeners."""
+
+    device_count: int = Field(ge=0)
+    listeners: tuple[Annotated[tuple[ModelId, ...], Field(min_length=1)], ...] = Field(min_length=1)
+
+    def validate_targets(self, targets: tuple[BenchTarget, ...]) -> None:
+        expected = {target.model_id for target in targets}
+        listed = tuple(model_id for group in self.listeners for model_id in group)
+        if len(listed) != len(expected) or set(listed) != expected:
+            raise ValueError("hosted listeners must cover each target Model ID exactly once")
 
 
-class ServingDeviceLink(BenchValue):
-    source_uuid: str = Field(min_length=1)
-    destination_uuid: str = Field(min_length=1)
-    link: str = Field(min_length=1)
+class HostedLaunchDeclaration(BenchValue):
+    """A hosted script's digest and validated resource requirements."""
+
+    script_sha256: str
+    requirements: HostedRequirements
 
 
-class ServingMetadata(BenchValue):
-    """Serving conditions; provenance is supplied by the tool, not the input.
-
-    Missing fields remain unknown. Link tokens are topology observations, not
-    measured bandwidth. Client files may reference only their provided devices;
-    preparation additionally checks their target references against the case.
-    """
-
-    schema_version: int = Field(default=1, ge=1, le=1, strict=True, exclude=True)
-    devices: tuple[ServingDevice, ...] | None = None
-    links: tuple[ServingDeviceLink, ...] | None = None
-    target_device_uuids: dict[ModelId, tuple[str, ...]] | None = None
-    role_device_uuids: dict[Literal["atn", "ffn"], tuple[str, ...]] | None = None
-    packages: dict[str, str] | None = None
-    driver_version: str | None = None
-    cuda_build_version: str | None = None
-    cuda_build_source: str | None = None
-
-    @model_validator(mode="after")
-    def validate_device_references(self) -> Self:
-        uuids = {device.uuid for device in self.devices or ()}
-        if len(uuids) != len(self.devices or ()):
-            raise ValueError("serving metadata device UUIDs must be unique")
-        groups = (
-            *(self.target_device_uuids or {}).values(),
-            *(self.role_device_uuids or {}).values(),
-            *((link.source_uuid, link.destination_uuid) for link in self.links or ()),
-        )
-        if any(set(group) - uuids for group in groups):
-            raise ValueError("serving metadata references an unknown device UUID")
-        return self
+type BenchCase = Annotated[OwnedBenchCase | ClientBenchCase | HostedBenchCase, Field(discriminator="mode")]
 
 
 class CatalogDeclaration(BenchValue):
@@ -271,6 +237,12 @@ class ResolvedDeployment(BenchValue):
     cwd: Path
     effective: dict[str, JsonValue]
     sources: JsonValue
+
+
+def owned_requirements(case: OwnedBenchCase) -> ResourceRequirements:
+    model_ids = tuple(target.model_id for target in case.targets)
+    scene = DeploymentConfig.from_file(case.deployment, model_ids=model_ids)
+    return ResourceRequirements(len(scene.atn.devices) + len(scene.ffn.devices), True, model_ids)
 
 
 def resolve_deployment(case: OwnedBenchCase) -> XpoolConfig:
@@ -321,8 +293,6 @@ class BenchCatalog(Catalog):
                 updates: dict[str, object] = {}
                 if isinstance(target.prompts, JsonlPrompts):
                     updates["prompts"] = target.prompts.model_copy(update={"path": resolve(target.prompts.path)})
-                if isinstance(target, ClientTarget) and target.model_metadata_path is not None:
-                    updates["model_metadata_path"] = resolve(target.model_metadata_path)
                 targets.append(target.model_copy(update=updates))
             case_updates: dict[str, object] = {"targets": tuple(targets)}
             if isinstance(case.arrivals, TraceArrivals):
@@ -333,8 +303,8 @@ class BenchCatalog(Catalog):
                 )
                 if case.runtime_config is not None:
                     case_updates["runtime_config"] = resolve(case.runtime_config)
-            elif case.serving_metadata_path is not None:
-                case_updates["serving_metadata_path"] = resolve(case.serving_metadata_path)
+            elif isinstance(case, HostedBenchCase):
+                case_updates["script"] = resolve(case.script)
             cases.append(case.model_copy(update=case_updates))
         return cls(path=path, cases=tuple(cases))
 

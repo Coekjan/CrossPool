@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import os
-import shutil
 import signal
 import subprocess
 from collections.abc import Mapping
@@ -13,16 +11,17 @@ import psutil
 import pytest
 import tomli_w
 from matplotlib.figure import Figure
-from tests.suites.integration.xbench.support import FakeServingServer, client_case
+from tests.suites.integration.xbench.support import FakeServingServer, client_case, load_retained_series
 
 import xbench.cli
+import xbench.harness.serving.measure
 import xkit.config
-from xbench.harness.serving.case import BenchCase, JsonlPrompts, TraceArrivals
+from xbench.harness.serving.case import BenchCase, HostedLaunchDeclaration, JsonlPrompts, TraceArrivals
 from xbench.harness.serving.measure import BenchCaseManifest, BenchRunManifest, RepetitionManifest, RequestRecord
-from xbench.harness.serving.report import list_bench_artifacts, load_series, report_bench_runs
-from xbench.harness.serving.workload import read_jsonl
+from xbench.harness.serving.report import list_bench_artifacts, report_bench_runs
+from xbench.harness.serving.runner import BenchmarkRepetition, BenchmarkRunner
 from xkit.case import CaseId
-from xkit.results import write_json
+from xkit.results import iter_jsonl, write_json
 from xkit.supervisor import SupervisedTaskScope, TaskStartFailure
 from xtest.harness.support.config import TEST_CASE_ID, TEST_MODEL_ID, reset_development_config
 
@@ -47,9 +46,6 @@ def command(outside: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
 
 def catalog_file(tmp_path: Path, cases: tuple[BenchCase, ...]) -> Path:
     catalog = tmp_path / "benches.toml"
-    source = tmp_path / "suites/serving/multi_model.py"
-    source.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(REPOSITORY_ROOT / "benches/suites/serving/multi_model.py", source)
     catalog.write_text(
         tomli_w.dumps(
             {
@@ -72,11 +68,7 @@ def test_continue_reuses_successful_replay_and_preserves_reportable_failed_attem
         second = first.model_copy(
             update={
                 "id": CaseId.generate(),
-                "targets": (
-                    first.targets[0].model_copy(
-                        update={"base_url": failing.url.replace("http://", "http://bench:password@")}
-                    ),
-                ),
+                "targets": (first.targets[0].model_copy(update={"base_url": failing.url}),),
             }
         )
         catalog = catalog_file(tmp_path, (first, second))
@@ -85,15 +77,6 @@ def test_continue_reuses_successful_replay_and_preserves_reportable_failed_attem
         first_attempt = run / f"cases/{first.id}/repetition-0001.attempt-0001"
         old_attempt = run / f"cases/{second.id}/repetition-0001.attempt-0001"
         assert first_attempt.is_dir() and old_attempt.is_dir()
-        legacy = first_attempt.parent / "repetition-0001"
-        legacy.unlink()
-        first_attempt.rename(legacy)
-        first_attempt = legacy
-        first_manifest = BenchCaseManifest.model_validate_json((legacy.parent / "case.json").read_bytes())
-        write_json(
-            legacy.parent / "case.json",
-            first_manifest.model_copy(update={"repetitions": (legacy.name,)}).model_dump(mode="json"),
-        )
         original = {
             path: path.read_bytes()
             for attempt in (first_attempt, old_attempt)
@@ -105,6 +88,7 @@ def test_continue_reuses_successful_replay_and_preserves_reportable_failed_attem
         assert isinstance(first.targets[0].prompts, JsonlPrompts) and isinstance(first.arrivals, TraceArrivals)
         first.targets[0].prompts.path.unlink()
         first.arrivals.path.unlink()
+        catalog.unlink()
         manifest = BenchRunManifest.model_validate_json((run / "run.json").read_bytes())
         write_json(
             run / "run.json",
@@ -197,7 +181,7 @@ def test_continue_runs_unattempted_repetitions_without_retrying_interrupted_atte
         assert server.received == ["first", "second", "third"] * 3
 
 
-def test_continue_rejects_incomplete_preparation_and_changed_conditions_without_reopening(
+def test_continue_uses_the_saved_preparation_without_reopening_a_finished_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     with FakeServingServer() as server:
@@ -215,11 +199,39 @@ def test_continue_rejects_incomplete_preparation_and_changed_conditions_without_
         assert (run / "run.json").read_bytes() == before and (run / ".completed").exists()
         replay.write_bytes(contents)
         catalog_file(tmp_path, (case.model_copy(update={"max_inflight": case.max_inflight + 1}),))
+        monkeypatch.setattr(xbench.harness.serving.measure, "summarize", None)
         monkeypatch.setattr(xkit.config, "global_config", None)
-        assert xbench.cli.main(["run", "--all", "--continue", str(run)]) == 2
-        assert "experiment conditions changed" in capsys.readouterr().err
+        assert xbench.cli.main(["run", "--all", "--continue", str(run)]) == 0
+        assert "already complete" in capsys.readouterr().err
         assert (run / "run.json").read_bytes() == before and (run / ".completed").exists()
         assert len(server.received) == 3
+
+
+def test_cancelled_preparation_stops_before_preparing_the_next_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with FakeServingServer() as server:
+        first = client_case(tmp_path, server.url)
+        second = first.model_copy(update={"id": CaseId.generate()})
+        catalog = catalog_file(tmp_path, (first, second))
+        prepare = BenchmarkRunner.prepare_case
+
+        def prepare_and_cancel(
+            runner: BenchmarkRunner, case: BenchCase, launch: HostedLaunchDeclaration | None
+        ) -> BenchmarkRepetition:
+            task = prepare(runner, case, launch)
+            signal.raise_signal(signal.SIGTERM)
+            return task
+
+        monkeypatch.setattr(BenchmarkRunner, "prepare_case", prepare_and_cancel)
+        assert (
+            xbench.cli.main(["run", "--all", "--catalog", str(catalog), "--cache-root", str(tmp_path / "runs")]) == 143
+        )
+        run = Path(capsys.readouterr().out.strip())
+        manifest = BenchRunManifest.model_validate_json((run / "run.json").read_bytes())
+        assert manifest.case_directories == (f"cases/{first.id}",)
+        assert not (run / "cases" / str(second.id)).exists()
+        assert not server.received
 
 
 @pytest.mark.parametrize("override", ["--config", "--catalog", "--repetitions", "--cache-root"])
@@ -265,7 +277,10 @@ def test_verified_startup_failure_keeps_later_repetitions_unless_fast_fail(
     if fast_fail:
         arguments.append("--fast-fail")
     assert xbench.cli.main(arguments) == 2
-    run = Path(capsys.readouterr().out.strip())
+    output = capsys.readouterr()
+    assert f"case={TEST_CASE_ID} repetition=1 code=2" in output.err
+    assert "startup rollback confirmed empty" in output.err
+    run = Path(output.out.strip())
     first = run / f"cases/{TEST_CASE_ID}/repetition-0001"
     checkpoint = RepetitionManifest.from_directory(first.resolve())
     assert checkpoint.result_code == 2 and checkpoint.cleanup_verified
@@ -281,22 +296,17 @@ def test_development_cli_runs_client_repetitions_outside_checkout(tmp_path: Path
     outside = tmp_path / "outside"
     outside.mkdir()
     with FakeServingServer() as server:
-        metadata_path = tmp_path / "serving.json"
-        metadata_path.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "devices": [{"uuid": "GPU-remote", "name": "remote device"}],
-                    "target_device_uuids": {str(TEST_MODEL_ID): ["GPU-remote"]},
-                    "packages": {"sglang": "declared"},
-                }
-            ),
-            encoding="utf-8",
-        )
-        case = client_case(tmp_path, server.url).model_copy(
-            update={"warmup_requests_per_target": 1, "serving_metadata_path": metadata_path}
+        original = client_case(tmp_path, server.url)
+        case = original.model_copy(
+            update={
+                "warmup_requests_per_target": 1,
+                "targets": (original.targets[0].model_copy(update={"served_model_name": "baseline"}),),
+            }
         )
         catalog = catalog_file(tmp_path, (case,))
+        shadow = tmp_path / "suites/serving/multi_model.py"
+        shadow.parent.mkdir(parents=True)
+        shadow.write_text("raise RuntimeError('installed entry was shadowed')\n", encoding="utf-8")
         completed = command(
             outside,
             "run",
@@ -314,14 +324,12 @@ def test_development_cli_runs_client_repetitions_outside_checkout(tmp_path: Path
         assert manifest.finished and manifest.result_code == 0
         for number in (1, 2):
             repetition = run / f"cases/{TEST_CASE_ID}" / f"repetition-{number:04d}"
-            series = load_series(repetition, f"rep{number}")
+            series = load_retained_series(repetition, f"rep{number}")
             assert series.summary.cleanup_verified and series.summary.outcomes["success"] == 3
             assert not (repetition / "report").exists()
-        assert series.case_manifest.serving_metadata == case.load_serving_metadata()
         environment = series.environment
-        assert environment["serving_metadata_source"] == "declared"
-        assert environment["environment_source"] == "local_client"
-        assert environment["local_device_inventory"] is None
+        assert environment["mode"] == "client" and "serving" not in environment
+        assert server.models == ["baseline"] * 8
         software = environment["tool_software"]
         assert isinstance(software, dict) and software["source"] == "local_distribution_metadata"
         assert environment["cache_policy"] == {
@@ -380,17 +388,17 @@ def test_request_and_warmup_failures_preserve_active_case_outcomes(
         run = Path(capsys.readouterr().out.strip())
         manifest = BenchRunManifest.model_validate_json((run / "run.json").read_bytes())
         assert manifest.finished and manifest.result_code == 2
-        measured = load_series(run / f"cases/{first.id}/repetition-0001", "first")
+        measured = load_retained_series(run / f"cases/{first.id}/repetition-0001", "first")
         assert measured.repetition_manifest.result_code == 1
         assert measured.summary.cleanup_verified and measured.summary.execution_complete
         assert measured.summary.outcomes["failed"] == 3
         repetition = run / f"cases/{second.id}/repetition-0001"
-        warmup = load_series(repetition, "second")
+        warmup = load_retained_series(repetition, "second")
         assert warmup.repetition_manifest.result_code == 2
         assert warmup.summary.cleanup_verified and warmup.summary.window_end_seconds is None
         assert warmup.summary.outcomes["not_sent"] == 3
         assert not (repetition / "measurement.json").exists()
-        completed = load_series(run / f"cases/{third.id}/repetition-0001", "third")
+        completed = load_retained_series(run / f"cases/{third.id}/repetition-0001", "third")
         assert completed.repetition_manifest.result_code == 0
         assert completed.summary.cleanup_verified and completed.summary.execution_complete
         assert completed.summary.outcomes["success"] == 3
@@ -418,126 +426,10 @@ def test_empty_schedule_does_not_start_requests_or_invent_t0(
         catalog = catalog_file(tmp_path, (case,))
         assert xbench.cli.main(["run", "--all", "--catalog", str(catalog), "--cache-root", str(tmp_path / "runs")]) == 1
         repetition = Path(capsys.readouterr().out.strip()) / f"cases/{TEST_CASE_ID}/repetition-0001"
-        summary = load_series(repetition, "empty").summary
+        summary = load_retained_series(repetition, "empty").summary
         assert summary.execution_complete and not summary.measurement_available
         assert summary.window_end_seconds is None and not (repetition / "measurement.json").exists()
         assert server.received == []
-
-
-def test_source_collection_defers_body_and_worker_uses_external_roots_and_invocation_cwd(tmp_path: Path) -> None:
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    case = client_case(tmp_path, "http://127.0.0.1:1")
-    catalog = catalog_file(tmp_path, (case,))
-    (tmp_path / "local_resources.py").write_text(
-        "from xkit import ResourceRequirements\ndef resources(case):\n    return ResourceRequirements(0, False, ())\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "suites/serving/multi_model.py").write_text(
-        "import json\nfrom pathlib import Path\nimport xbench\nfrom local_resources import resources\n"
-        "@xbench.parameterize('case')\n@xbench.requirements(resources)\n"
-        "def bench_external(case, workdir):\n"
-        "    (workdir / 'invocation.json').write_text(json.dumps({'cwd': str(Path.cwd()), 'case': str(case.id)}))\n"
-        "    raise RuntimeError('intentional source failure')\n",
-        encoding="utf-8",
-    )
-    assert isinstance(case.targets[0].prompts, JsonlPrompts)
-    prompt_data = case.targets[0].prompts.path.read_bytes()
-    case.targets[0].prompts.path.unlink()
-    listed = command(outside, "list", "--catalog", str(catalog))
-    assert listed.returncode == 0 and "devices=0" in listed.stdout, listed.stderr
-    assert not tuple(tmp_path.rglob("invocation.json"))
-    case.targets[0].prompts.path.write_bytes(prompt_data)
-    root = tmp_path / "runs/bench-runs"
-    completed = command(outside, "run", "--all", "--catalog", str(catalog), "--cache-root", str(root.parent))
-    assert completed.returncode == 2, completed.stderr
-    run = Path(completed.stdout.strip())
-    repetition = run / f"cases/{TEST_CASE_ID}/repetition-0001"
-    assert json.loads((repetition / "invocation.json").read_bytes()) == {"cwd": str(outside), "case": str(TEST_CASE_ID)}
-    assert "intentional source failure" in (repetition / "logs/worker.log").read_text()
-    assert load_series(repetition, "failed").summary.cleanup_verified
-
-
-@pytest.mark.parametrize("checkpoint", [False, True])
-def test_client_source_requirements_fail_before_worker_execution(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], checkpoint: bool
-) -> None:
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    monkeypatch.chdir(outside)
-    catalog = catalog_file(tmp_path, (client_case(tmp_path, "http://127.0.0.1:1"),))
-    (tmp_path / "suites/serving/multi_model.py").write_text(
-        "import xbench\nfrom xpool.model import ModelId\n"
-        "@xbench.parameterize('case')\n"
-        + (
-            f"@xbench.requirements(requires_config=True, model_ids=(ModelId({str(TEST_MODEL_ID)!r}),))\n"
-            if checkpoint
-            else "@xbench.requirements(requires_config=True)\n"
-        )
-        + "def bench_required(case, workdir):\n"
-        "    (workdir / 'executed').touch()\n",
-        encoding="utf-8",
-    )
-    if checkpoint:
-        config = tmp_path / "runtime.toml"
-        config.write_text(
-            tomli_w.dumps(
-                {
-                    "vendor": {"model_base_uri": str(tmp_path / "missing-models")},
-                    "atn": {"devices": [0]},
-                    "ffn": {"devices": [1]},
-                    "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
-                    "models": [{"id": str(TEST_MODEL_ID)}],
-                }
-            ),
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("XPOOL_CONFIG", str(config))
-    else:
-        monkeypatch.delenv("XPOOL_CONFIG", raising=False)
-    monkeypatch.delenv("UV_ENV_FILE", raising=False)
-    assert (
-        xbench.cli.main(
-            ["run", "--all", "--catalog", str(catalog), "--cache-root", str(tmp_path / "runs"), "--repetitions", "2"]
-        )
-        == 2
-    )
-    repetition = Path(capsys.readouterr().out.strip()) / f"cases/{TEST_CASE_ID}/repetition-0001"
-    assert not (repetition / "executed").exists()
-    series = load_series(repetition, "missing requirement")
-    assert series.summary.infrastructure_error is not None
-    assert ("weight directory" if checkpoint else "set XPOOL_CONFIG") in series.summary.infrastructure_error
-    following = repetition.parent / "repetition-0002"
-    assert not (following / "executed").exists()
-    assert RepetitionManifest.from_directory(following.resolve()).result_code == 2
-
-
-@pytest.mark.parametrize(
-    "operation,source",
-    [
-        ("list", "def helper(): pass\n"),
-        (
-            "run",
-            "import xbench\n@xbench.parameterize('case')\ndef one(case, workdir): pass\n"
-            "@xbench.parameterize('case')\ndef two(case, workdir): pass\n",
-        ),
-    ],
-)
-def test_invalid_source_entries_fail_inventory_and_run_before_repetition_allocation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], operation: str, source: str
-) -> None:
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    monkeypatch.chdir(outside)
-    catalog = catalog_file(tmp_path, (client_case(tmp_path, "http://127.0.0.1:1"),))
-    (tmp_path / "suites/serving/multi_model.py").write_text(source, encoding="utf-8")
-    root = tmp_path / "runs/bench-runs"
-    arguments = [operation, "--catalog", str(catalog)]
-    if operation == "run":
-        arguments.extend(("--all", "--cache-root", str(root.parent)))
-    assert xbench.cli.main(arguments) == 2
-    assert "expected one catalogue-bound entry" in capsys.readouterr().err
-    assert not root.exists()
 
 
 def test_unsealed_invocation_preserves_measurements_but_is_not_reportable(
@@ -563,9 +455,14 @@ def test_unsealed_invocation_preserves_measurements_but_is_not_reportable(
     monkeypatch.setattr(xkit.config, "global_config", None)
     assert xbench.cli.main(["report", run.name, "--cache-root", str(root.parent)]) == 2
     assert not output.exists()
-    series = load_series(output.parent, run.name)
-    assert series.repetition_manifest.result_code == 0 and series.summary.outcomes["success"] == 3
-    assert series.summary.measurement_available and not series.summary.evidence_complete
+    attempt = output.parent.resolve()
+    case = BenchCaseManifest.model_validate_json((attempt.parent / "case.json").read_bytes())
+    checkpoint = RepetitionManifest.from_directory(attempt)
+    evidence = xbench.harness.serving.measure.load_measurement(
+        attempt, case.load_workload(attempt.parent), checkpoint=checkpoint
+    )
+    assert checkpoint.result_code == 0 and evidence.evidence_complete
+    assert sum(record.outcome == "success" for record in evidence.requests) == 3
     assert before == {
         path.relative_to(run): path.read_bytes()
         for path in run.rglob("*")
@@ -623,10 +520,10 @@ def test_interrupted_cli_retains_outcomes_and_leaves_external_server_alive(tmp_p
         manifest = BenchRunManifest.model_validate_json((run / "run.json").read_bytes())
         assert manifest.finished and manifest.result_code == (2 if worker_loss else 143)
         repetition = run / f"cases/{TEST_CASE_ID}/repetition-0001"
-        summary = load_series(repetition, "interrupted").summary
+        summary = load_retained_series(repetition, "interrupted").summary
         assert summary.cleanup_verified and not summary.execution_complete
         assert sum(summary.outcomes.values()) == 3
-        records = {record.request_id: record for record in read_jsonl(repetition / "requests.jsonl", RequestRecord)}
+        records = {record.request_id: record for record in iter_jsonl(repetition / "requests.jsonl", RequestRecord)}
         if worker_loss:
             assert all(record.error_kind == "evidence_missing" for record in records.values())
             assert not summary.evidence_complete
@@ -639,6 +536,8 @@ def test_interrupted_cli_retains_outcomes_and_leaves_external_server_alive(tmp_p
             assert summary.window_end_seconds is not None and summary.window_end_seconds < 1000.0
         # A benchmark owns its clients, not this independently launched server.
         server.gate.set()
-        response = httpx.post(server.url + "/generate", json={"rid": "after-benchmark"}, timeout=5)
+        response = httpx.post(
+            server.url + "/v1/completions", json={"model": str(TEST_MODEL_ID), "prompt": "after-benchmark"}, timeout=5
+        )
         assert response.status_code == 200 and b"[DONE]" in response.content
         assert server.received == ["first", "after-benchmark"]

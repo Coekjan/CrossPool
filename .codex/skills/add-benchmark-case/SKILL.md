@@ -16,17 +16,19 @@ model qualification belongs to `add-model-support`.
    [shared tooling](../../../docs/designs/tooling.md),
    [supported models](../../../docs/supported-models.md) and
    [qualification](../../../docs/designs/qualification.md) for the chosen scope.
-2. Confirm the requested models are supported, their local checkpoints resolve
-   through runtime configuration, and the proposed layout fits the available
-   device budget. Establish the baseline and keep other conditions fixed.
+2. For an owned case, confirm the requested models are supported, their local
+   checkpoints resolve through runtime configuration, and the layout fits the
+   device budget. For existing or externally launched baselines, follow the
+   [serving benchmark tutorial](../../../docs/tutorials/xbench.md#prepare-the-catalogue).
+   Establish the baseline and keep workload and sampling conditions fixed.
 3. Clone a suitable case with
    `uv run xbench case-gen --type serving --from CASE_PREFIX`. Edit the printed
    line range, including an English description. The new UUID is permanent;
    presentation changes retain it, while a distinct fixed experiment gets a new
    case. Preserve catalogue-relative inputs and deployment basename references.
-4. Reuse a matching portable deployment or add a complete one under the existing
-   Model ID directory convention. Match its descriptive basename to explicit
-   TP/DP and Lane values; the name does not supply configuration. For sampled
+4. For owned cases, reuse a matching portable deployment or add a complete
+   one under the Model ID directory convention. Match the descriptive basename
+   to the configured TP/DP and Lane values. For sampled
    lengths, inspect both legal intervals and the output/input ratio together
    with the per-model offered rates. Validate the edited declarations with
    `uv run xbench list`; inventory does not establish deployment feasibility.

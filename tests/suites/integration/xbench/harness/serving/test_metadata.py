@@ -7,10 +7,9 @@ import pytest
 from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
-from xbench.harness.serving.execution import capture_owned_metadata
+from xbench.harness.serving.environment import capture_serving_environment
 from xbench.harness.serving.workload import PromptValue, validate_prompt
 from xpool.integrations.sglang.devkit.requests import LocalModelMetadata, SglangRequestLimits
-from xpool.model import ModelId
 
 
 def test_offline_metadata_validates_actual_vocabulary_special_ids_and_text_limits(tmp_path: Path) -> None:
@@ -22,7 +21,7 @@ def test_offline_metadata_validates_actual_vocabulary_special_ids_and_text_limit
     )
     metadata = LocalModelMetadata.from_checkpoint(tmp_path, text_prompts={"p": "a b"})
     assert metadata.admissible_ids == (2, 3)
-    assert metadata.vocab_size == 4 and metadata.limits.context_length == 16
+    assert metadata.vocab_size == 4 and metadata.context_length == 16
     assert metadata.text_lengths == {"p": 2}
     validate_prompt(PromptValue(prompt_id="p", input_ids=(1, 2)), metadata)
     with pytest.raises(ValueError, match="vocabulary"):
@@ -72,10 +71,9 @@ def test_owned_hardware_capture_is_lease_scoped_and_failure_keeps_known_placemen
 
     monkeypatch.setattr(subprocess, "run", query)
     errors: list[str] = []
-    placements: dict[ModelId, tuple[str, ...]] = {ModelId("test/one"): ("GPU-c",), ModelId("test/two"): ("GPU-c",)}
     roles: dict[Literal["atn", "ffn"], tuple[str, ...]] = {"atn": ("GPU-c",), "ffn": ("GPU-b",)}
-    metadata = capture_owned_metadata(
-        ("GPU-c", "GPU-b"), target_device_uuids=placements, role_device_uuids=roles, errors=errors
+    metadata = capture_serving_environment(
+        {}, ("GPU-c", "GPU-b"), commands=None, role_device_uuids=roles, errors=errors
     )
     assert errors == [] and metadata.devices is not None and metadata.links is not None
     assert [device.uuid for device in metadata.devices] == ["GPU-c", "GPU-b"]
@@ -86,17 +84,15 @@ def test_owned_hardware_capture_is_lease_scoped_and_failure_keeps_known_placemen
         ("GPU-b", "GPU-c", "NV12"),
         ("GPU-c", "GPU-b", "NV12"),
     }
-    assert metadata.target_device_uuids == placements and metadata.role_device_uuids == roles
-    assert metadata.driver_version == "580.65" and metadata.cuda_build_version is None
+    assert metadata.role_device_uuids == roles
+    assert metadata.driver_version == "580.65"
 
     def unavailable(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(command, 10)
 
     monkeypatch.setattr(subprocess, "run", unavailable)
-    unknown = capture_owned_metadata(
-        ("GPU-c", "GPU-b"), target_device_uuids=placements, role_device_uuids=roles, errors=errors
-    )
+    unknown = capture_serving_environment({}, ("GPU-c", "GPU-b"), commands=None, role_device_uuids=roles, errors=errors)
     assert errors and unknown.devices is not None
     assert unknown.devices[0].uuid == "GPU-c" and unknown.devices[0].name is None
     assert unknown.links is None and unknown.driver_version is None
-    assert unknown.target_device_uuids == placements
+    assert unknown.role_device_uuids == roles

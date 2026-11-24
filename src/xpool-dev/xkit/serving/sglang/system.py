@@ -235,7 +235,7 @@ class XpoolServingSystem:
         evidence = system_evidence
         owners = [server.owner for server in self.servers]
         try:
-            with httpx.Client(base_url=daemon_url(cluster_launch)) as client:
+            with httpx.Client(base_url=daemon_url(cluster_launch), trust_env=False) as client:
                 while time.monotonic() < deadline:
                     self.check_startup_active()
                     self.check_alive()

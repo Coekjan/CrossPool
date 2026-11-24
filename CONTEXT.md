@@ -53,8 +53,7 @@ tokens prescribed by a Sampling Record. It fixes the continuation while each
 execution retains its arithmetic and scheduling behavior.
 
 **Benchmark Target**:
-One model-serving endpoint measured in a benchmark case, identified by its Model
-ID and corresponding to a configured Instance or an externally supplied endpoint.
+One model-serving endpoint measured in a benchmark case, identified by its Model ID.
 Each Model ID has one Target within a case; aggregate measurements are derived
 across Targets rather than another Target.
 _Avoid_: Benchmark Instance, aggregate target
@@ -76,9 +75,13 @@ its Model IDs, concrete test rows and executions.
 _Avoid_: Run ID, pytest node ID, Model ID
 
 **Case Family**:
-The scenario category shared by catalogue cases, such as serving or topology,
-distinct from a serving case's owned or client execution mode.
+The scenario category shared by catalogue cases, such as serving or topology.
 _Avoid_: Execution mode, test suite
+
+**Serving Benchmark Mode**:
+Who runs the servers during a Serving Benchmark Case. In `client` mode the
+caller runs them. In `hosted` mode xbench runs a script supplied by the caller.
+In `owned` mode xbench starts CrossPool.
 
 **Benchmark Measurement**:
 Client-observed timing, token progress and request outcomes from one benchmark

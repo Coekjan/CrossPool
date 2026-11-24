@@ -9,6 +9,7 @@ from xbench.harness.serving.case import (
     BenchCase,
     BenchCatalog,
     ClientBenchCase,
+    ClientTarget,
     JsonlPrompts,
     OutputTokenCount,
     TokenCount,
@@ -46,7 +47,6 @@ def test_catalog_resolves_owning_paths_and_preserves_selection_order(tmp_path: P
                     str(identity): {
                         "mode": "client",
                         "description": description,
-                        "module": "serving.multi_model",
                         "arrivals": {"kind": "jsonl", "path": "trace.jsonl"},
                         "targets": [
                             {
@@ -132,7 +132,6 @@ def test_case_rejects_mixed_modes_invalid_scalars_and_incomplete_maps(update: di
     case: dict[str, object] = {
         "id": str(TEST_CASE_ID),
         "description": "Serving declaration validation.",
-        "module": "serving.multi_model",
         "mode": "client",
         "arrivals": {"kind": "jsonl", "path": "trace.jsonl"},
         "targets": [
@@ -166,23 +165,21 @@ def test_initial_catalog_declares_portable_two_model_deployment() -> None:
     assert all(target.ignores_eos() for target in case.targets)
 
 
-def test_random_client_requires_local_model_metadata() -> None:
-    raw = {
-        "id": str(TEST_CASE_ID),
-        "description": "Random prompts require a local tokenizer.",
-        "module": "serving.multi_model",
-        "mode": "client",
-        "arrivals": {"kind": "jsonl", "path": "trace.jsonl"},
-        "targets": [
-            {
-                "model_id": str(TEST_MODEL_ID),
-                "base_url": "http://localhost:8000",
-                "prompts": {"kind": "random", "input_tokens": 8},
-            }
-        ],
-    }
-    with pytest.raises(ValueError, match="model_metadata_path"):
-        TypeAdapter(BenchCase).validate_json(json.dumps(raw))
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://bench:password@localhost:8000",
+        "http://localhost:8000/v1",
+        "http://localhost:8000?key=value",
+        "http://localhost:8000/#anchor",
+        "http://localhost:bad",
+    ],
+)
+def test_client_requires_an_unauthenticated_http_root(url: str) -> None:
+    with pytest.raises(ValueError, match=r"base_url|port"):
+        ClientTarget(
+            model_id=TEST_MODEL_ID, base_url=url, prompts=JsonlPrompts(kind="jsonl", path=Path("prompts.jsonl"))
+        )
 
 
 @pytest.mark.parametrize("mode", ["client", "owned"])
@@ -191,7 +188,6 @@ def test_case_requires_one_target_per_model(mode: str) -> None:
     raw: dict[str, object] = {
         "id": str(TEST_CASE_ID),
         "description": "One endpoint for each model.",
-        "module": "serving.multi_model",
         "mode": mode,
         "arrivals": {"kind": "jsonl", "path": "trace.jsonl"},
         "targets": [target],

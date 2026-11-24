@@ -5,39 +5,37 @@ from typing import Literal
 import pytest
 
 from xbench.harness.serving.measure import (
+    RepetitionManifest,
     RequestRecord,
     StreamEvent,
     distribution,
     summarize,
     token_intervals,
-    unavailable_summary,
+    validate_measurement,
 )
-from xbench.harness.serving.workload import PreparedWorkload, ResolvedPrompt, ScheduledRequest, content_digest
+from xbench.harness.serving.workload import PreparedWorkload, ResolvedPrompt, ScheduledRequest
 from xtest.harness.support.config import TEST_CASE_ID, TEST_MODEL_ID
 
 
 def test_first_coalesced_chunk_has_no_invented_intervals_and_two_ttft_origins() -> None:
     events = (data("r", 0, 0.1, 3), data("r", 1, 0.16, 6))
-    request = (
-        terminal("r", 0.18, 6)
-        .model_copy(
-            update={
-                "enqueued_at_seconds": 0.0,
-                "http_started_at_seconds": 0.02,
-                "first_token_at_seconds": 0.1,
-                "last_token_at_seconds": 0.16,
-                "first_completion_tokens": 3,
-            }
-        )
-        .measured(events)
+    request = terminal("r", 0.18, 6).model_copy(
+        update={
+            "enqueued_at_seconds": 0.0,
+            "http_started_at_seconds": 0.02,
+            "first_token_at_seconds": 0.1,
+            "last_token_at_seconds": 0.16,
+            "first_completion_tokens": 3,
+        }
     )
-    assert request.metrics.http_ttft_seconds == pytest.approx(0.08)
-    assert request.metrics.arrival_ttft_seconds == pytest.approx(0.1)
-    assert request.metrics.queue_wait_seconds == pytest.approx(0.02)
-    assert request.metrics.mean_itl_seconds == pytest.approx(0.02)
-    assert request.metrics.itl_sample_count == request.metrics.estimated_itl_sample_count == 3
-    assert request.metrics.tpot_seconds == pytest.approx(0.016)
-    assert request.metrics.itl_coverage == pytest.approx(3 / 5)
+    metrics = request.compute_metrics(token_intervals(events))
+    assert metrics.http_ttft_seconds == pytest.approx(0.08)
+    assert metrics.arrival_ttft_seconds == pytest.approx(0.1)
+    assert metrics.queue_wait_seconds == pytest.approx(0.02)
+    assert metrics.mean_itl_seconds == pytest.approx(0.02)
+    assert metrics.itl_sample_count == metrics.estimated_itl_sample_count == 3
+    assert metrics.tpot_seconds == pytest.approx(0.016)
+    assert metrics.itl_coverage == pytest.approx(3 / 5)
 
 
 def test_duplicate_and_empty_text_progress_preserve_positive_anchor_and_terminal_increment() -> None:
@@ -96,10 +94,10 @@ def test_buckets_keep_idle_horizon_final_edge_width_cached_input_and_failed_part
         *lifecycle(records[0], (data("success", 0, 0.8, 2), data("success", 1, 2.5, 6))),
         *lifecycle(records[1], (data("failure", 0, 1.0, 2),)),
     )
-    records = tuple(
-        record.measured(tuple(event for event in events if event.request_id == record.request_id)) for record in records
+    evidence = validate_measurement(workload, records, events, window_end_seconds=2.5, window_kind="complete")
+    summary = summarize(
+        workload, evidence, checkpoint=RepetitionManifest(repetition=1, window_end_seconds=2.5, window_kind="complete")
     )
-    summary = summarize(workload, records, events, window_end_seconds=2.5, window_kind="complete")
     buckets = tuple(bucket for bucket in summary.throughput if bucket.target_id == "aggregate")
     assert tuple(bucket.width_seconds for bucket in buckets) == (1.0, 1.0, 0.5)
     assert tuple(bucket.output_tokens for bucket in buckets) == (2, 0, 4)
@@ -115,18 +113,24 @@ def test_buckets_keep_idle_horizon_final_edge_width_cached_input_and_failed_part
 
 
 def test_zero_token_success_and_empty_schedule_do_not_invent_latency() -> None:
+    workload = prepared(("r",), horizon=1.0)
     request = terminal("r", 0.2, 0)
-    summary = summarize(
-        prepared(("r",), horizon=1.0),
+    evidence = validate_measurement(
+        workload,
         (request,),
         lifecycle(request, (data("r", 0, 0.1, 0),)),
         window_end_seconds=1.0,
         window_kind="complete",
     )
+    summary = summarize(
+        workload, evidence, checkpoint=RepetitionManifest(repetition=1, window_end_seconds=1.0, window_kind="complete")
+    )
     assert summary.measurement_available
     assert summary.targets["aggregate"].distributions["http_ttft_seconds"].sample_count == 0
     assert summary.targets["aggregate"].distributions["itl_combined"].mean is None
-    unavailable = unavailable_summary(prepared((), horizon=20), ())
+    empty = prepared((), horizon=20)
+    evidence = validate_measurement(empty, (), (), window_end_seconds=None, window_kind=None)
+    unavailable = summarize(empty, evidence, checkpoint=RepetitionManifest(repetition=1))
     assert unavailable.window_end_seconds is None
     assert unavailable.arrival_horizon_seconds == 20
     assert not unavailable.measurement_available
@@ -134,29 +138,37 @@ def test_zero_token_success_and_empty_schedule_do_not_invent_latency() -> None:
 
 @pytest.mark.parametrize("changed", [{"arrival_seconds": 0.1}, {"max_new_tokens": 19}])
 @pytest.mark.parametrize("timed", [True, False])
-def test_summary_rejects_request_policy_that_differs_from_prepared_workload(
+def test_measurement_rejects_request_policy_that_differs_from_prepared_workload(
     changed: dict[str, float | int], timed: bool
 ) -> None:
     workload = prepared(("r",), horizon=1.0)
     request = RequestRecord(**workload.requests[0].model_dump(), outcome="not_sent").model_copy(update=changed)
     with pytest.raises(ValueError, match="identity differs"):
-        if timed:
-            summarize(workload, (request,), (), window_end_seconds=1.0, window_kind="complete")
-        else:
-            unavailable_summary(workload, (request,))
+        validate_measurement(
+            workload,
+            (request,),
+            (),
+            window_end_seconds=1.0 if timed else None,
+            window_kind="complete" if timed else None,
+        )
 
 
-def test_summary_rejects_success_without_native_done_evidence() -> None:
+@pytest.mark.parametrize("missing", ["usage", "done"])
+def test_measurement_rejects_success_without_terminal_evidence(missing: str) -> None:
     request = terminal("r", 0.2, 0)
     events = lifecycle(request, (data("r", 0, 0.1, 0),))
-    with pytest.raises(ValueError, match=r"success.*DONE"):
-        summarize(
-            prepared(("r",), horizon=1.0), (request,), events[:-1], window_end_seconds=1.0, window_kind="complete"
+    if missing == "usage":
+        events = (*events[:-2], events[-1].model_copy(update={"sequence": events[-2].sequence}))
+    else:
+        events = events[:-1]
+    with pytest.raises(ValueError, match=r"DONE"):
+        validate_measurement(
+            prepared(("r",), horizon=1.0), (request,), events, window_end_seconds=1.0, window_kind="complete"
         )
 
 
 @pytest.mark.parametrize("damage", ["sequence", "chronology", "lifecycle", "past_window", "terminal_tail"])
-def test_summary_rejects_inconsistent_event_history(damage: str) -> None:
+def test_measurement_rejects_inconsistent_event_history(damage: str) -> None:
     request = terminal("r", 0.2, 0)
     events = list(lifecycle(request, (data("r", 0, 0.1, 0), data("r", 1, 0.15, 0))))
     if damage == "sequence":
@@ -170,7 +182,9 @@ def test_summary_rejects_inconsistent_event_history(damage: str) -> None:
     else:
         events.append(data("r", len(events), 0.3, 0))
     with pytest.raises(ValueError, match="stream event"):
-        summarize(prepared(("r",), horizon=1.0), (request,), events, window_end_seconds=1.0, window_kind="complete")
+        validate_measurement(
+            prepared(("r",), horizon=1.0), (request,), events, window_end_seconds=1.0, window_kind="complete"
+        )
 
 
 @pytest.mark.parametrize("outcome", ["not_sent", "failed"])
@@ -183,11 +197,24 @@ def test_unavailable_origin_rejects_claims_of_known_http_state(outcome: Literal[
         http_status=200,
     )
     with pytest.raises(ValueError, match="cannot claim HTTP state"):
-        unavailable_summary(workload, (request,))
+        validate_measurement(workload, (request,), (), window_end_seconds=None, window_kind=None)
 
 
 def lifecycle(request: RequestRecord, observations: tuple[StreamEvent, ...]) -> tuple[StreamEvent, ...]:
     assert request.ended_at_seconds is not None
+    final_usage = ()
+    if request.outcome == "success":
+        final_usage = (
+            StreamEvent(
+                request_id=request.request_id,
+                sequence=0,
+                observed_at_seconds=request.ended_at_seconds,
+                kind="usage",
+                prompt_tokens=request.prompt_tokens,
+                completion_tokens=request.completion_tokens,
+                cached_tokens=request.cached_tokens,
+            ),
+        )
     events = (
         StreamEvent(request_id=request.request_id, sequence=0, observed_at_seconds=0.0, kind="enqueue"),
         StreamEvent(request_id=request.request_id, sequence=1, observed_at_seconds=0.0, kind="http_start"),
@@ -195,10 +222,10 @@ def lifecycle(request: RequestRecord, observations: tuple[StreamEvent, ...]) -> 
         observations[-1].model_copy(
             update={
                 "prompt_tokens": request.prompt_tokens,
-                "cached_tokens": request.cached_tokens,
                 "finish_reason": request.finish_reason,
             }
         ),
+        *final_usage,
         StreamEvent(
             request_id=request.request_id,
             sequence=0,
@@ -250,8 +277,4 @@ def prepared(ids: tuple[str, ...], *, horizon: float) -> PreparedWorkload:
         warmup=(),
         arrival_horizon_seconds=horizon,
         bucket_seconds=1.0,
-        seeds={},
-        prompt_sha256=content_digest(prompts),
-        trace_sha256=content_digest(requests),
-        warmup_sha256=content_digest(()),
     )
