@@ -159,8 +159,6 @@ Router Algorithm and Precision selection for that family. The compiled Spec
 carries execution semantics rather than a source architecture name or runtime
 Adapter lookup.
 Shared [FFN execution](ffn-execution.md) owns Router computation and resource geometry.
-The resulting `FfnModelSpec.digest()` identifies the compiled FFN semantics; the
-source JSON bytes are not carried as a separate contract field.
 
 Outer graph mode is an attention-side concept. Eager, Decode Full, and combined
 Decode Full plus Prefill Breakable modes all invoke the same FFN data-plane
@@ -214,8 +212,9 @@ CUDA objects and process-local addresses after retaining the plan.
 
 `FfnModelSpec` is the compiled FFN contract. It contains ordered Dense or MoE
 layer semantics, intrinsic dimensions, activation and routing behavior,
-and checkpoint identities. Generation planning resolves placement and device
-state separately.
+and checkpoint identities. At registration the daemon compares the complete
+Specs from all FfnAgents. The daemon plans from those registered Specs, and
+each FfnAgent uses the Specs it registered to load its assigned layers.
 
 `InstanceFfnProfile` is the serving Instance declaration. It contains the
 runtime payload dtype, hidden size, ordered layer projection, and decode and

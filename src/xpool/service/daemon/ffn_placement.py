@@ -853,7 +853,6 @@ def solve_placement(
     try:
         model_plans = tuple(
             FfnModelPlan(
-                model_spec_digest=spec.digest(),
                 layers=tuple(
                     place_ffn_layer(
                         layer,

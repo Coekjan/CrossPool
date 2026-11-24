@@ -56,7 +56,6 @@ def fabric_plan() -> FabricPlan:
         scheduler=FifoSchedulerPolicy(),
         model_plans=(
             FfnModelPlan(
-                model_spec_digest="b" * 64,
                 layers=(DenseFfnLayerPlan(ffnagent_indices=(0, 1), local_intermediate_size=4),),
             ),
         ),

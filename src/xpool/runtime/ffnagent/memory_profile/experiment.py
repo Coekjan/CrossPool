@@ -40,7 +40,6 @@ class CalibrationModel:
 
         group = tuple(range(self.ffn_tp_size))
         return FfnModelPlan(
-            model_spec_digest=self.spec.digest(),
             layers=tuple(
                 place_ffn_layer(
                     layer,

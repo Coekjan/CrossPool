@@ -255,7 +255,6 @@ def test_estimator_counts_encoded_padded_storages_and_router_owner(packed_model:
     )
     plans = (
         FfnModelPlan(
-            model_spec_digest=packed_model.digest(),
             layers=(place_ffn_layer(layout.layer, (0, 1, 2, 3), local_intermediate_size=736),),
         ),
     )

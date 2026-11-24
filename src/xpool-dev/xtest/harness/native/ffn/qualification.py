@@ -213,10 +213,7 @@ def execution_fabric_plan(
         ),
         executor_lane_count=executor_lane_count,
         scheduler=FifoSchedulerPolicy(),
-        model_plans=tuple(
-            FfnModelPlan(model_spec_digest=model_spec.digest(), layers=(layer,) * layer_count)
-            for model_spec in model_specs
-        ),
+        model_plans=(FfnModelPlan(layers=(layer,) * layer_count),) * len(model_specs),
         instance_plans=tuple(
             FabricInstancePlan(
                 model_id=model_spec.model_id,

@@ -65,7 +65,6 @@ def estimator_and_plan() -> tuple[device_memory.DeviceMemoryEstimator, FabricPla
     )
     model_plans = (
         FfnModelPlan(
-            model_spec_digest=spec.digest(),
             layers=(place_ffn_layer(spec.layers[0], (0, 1), local_intermediate_size=4),),
         ),
     )

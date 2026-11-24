@@ -289,10 +289,6 @@ type FfnLayerPlan = Annotated[
 class FfnModelPlan(FabricModel):
     """Placed FFN realization paired with one Instance Plan."""
 
-    model_spec_digest: str = Field(
-        pattern=r"^[0-9a-f]{64}$",
-        description="SHA-256 identity of the generation-independent FFN Model Spec.",
-    )
     layers: tuple[FfnLayerPlan, ...] = Field(
         min_length=1,
         description="Ordered placed FFN layer realizations.",

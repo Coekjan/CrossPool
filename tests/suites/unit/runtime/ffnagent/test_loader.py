@@ -65,7 +65,6 @@ def test_plan_materialization_selects_only_local_layers(
         scheduler=FifoSchedulerPolicy(),
         model_plans=(
             FfnModelPlan(
-                model_spec_digest=spec.digest(),
                 layers=(DenseFfnLayerPlan(ffnagent_indices=(0,), local_intermediate_size=8),),
             ),
         ),

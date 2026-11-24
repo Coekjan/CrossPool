@@ -233,7 +233,6 @@ def test_experiment_projections_preserve_models_placement_and_complete_fleet(
             ]
         }
         for model, model_plan, instance in zip(experiment.models, plan.model_plans, plan.instance_plans, strict=True):
-            assert model_plan.model_spec_digest == model.spec.digest()
             assert all(layer.ffnagent_indices == tuple(range(model.ffn_tp_size)) for layer in model_plan.layers)
             assert instance.instance_rank_topology == model.topology
             assert instance.ffn_profile.payload_dtype is torch.bfloat16
