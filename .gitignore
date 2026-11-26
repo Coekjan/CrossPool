@@ -25,7 +25,8 @@ compile_commands.json
 .vscode/
 .idea/
 .claude/
-.agents/
+**/.agents/*
+!/.agents/skills.json
 
 .codex/self-evolve-last.txt
 

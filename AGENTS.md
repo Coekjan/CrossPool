@@ -1,11 +1,11 @@
-# Codex Instructions
+# Repository Instructions
 
 ## Scope
 
 This file owns repository development constraints and document routing.
 Reusable workflows belong in `.codex/skills/<name>/SKILL.md`; transient task
-status does not belong here. Keep skills self-contained, with skill-relative
-resource paths and the structure defined by `skill-creator`.
+status does not belong here. Follow the [Agent Skills format](https://agentskills.io/specification)
+and keep bundle resources skill-relative.
 
 ## Code Style
 
@@ -78,13 +78,13 @@ directly in [.pre-commit-config.yaml](.pre-commit-config.yaml).
   [optimize-performance](.codex/skills/optimize-performance/SKILL.md) for
   measured optimization of an existing runtime or tooling path.
 - Use [plan-commits](.codex/skills/plan-commits/SKILL.md) to plan a commit
-  series or branch split, and [git-commit](.codex/skills/git-commit/SKILL.md)
-  to carry out an authorized commit.
-- Use `.codex/skills/deep-review/SKILL.md` when the user requests delegated,
-  deep, or pre-commit review. Commit preparation does not invoke it automatically.
+  series or branch split. Carry out authorized commits through the active tool's
+  commit workflow.
+- Use [deep-review](.codex/skills/deep-review/SKILL.md) for an explicit request
+  for delegated, deep, or pre-commit review.
 - Use reviewer agents only when the user asks for delegation or an invoked
   skill requires it.
 - Do not apply or pop a stash unless explicitly requested.
 - Preserve unrelated work and ignored or machine-local files, including
-  `.venv/`, `.vscode/`, caches, and `.codex/self-evolve-last.txt`. Delete them
-  only when explicitly requested.
+  `.venv/`, `.vscode/`, caches, and agent state. Delete them only when explicitly
+  requested.

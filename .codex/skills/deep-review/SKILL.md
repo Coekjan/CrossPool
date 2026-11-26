@@ -11,10 +11,13 @@ persist memory, commit, or push.
 
 ## Workflow
 
-1. Inspect `git status --short` and honor the user's review scope. Default to
-   the staged diff when no scope is specified. A request to review the current
-   working tree includes relevant staged, unstaged, and untracked changes.
-   State the selected scope and inspect its diff and any new files.
+1. Inspect the [Git state](#git-inspection) and honor the user's review scope.
+   Default to the staged diff when no scope is specified. Working-tree review
+   includes relevant staged, unstaged, and untracked changes.
+   State the scope and read the matching source. For staged review, use
+   `git diff --cached` and `git show :<path>` for file contents. For a commit
+   comparison, inspect the selected revisions. For working-tree review, read
+   the on-disk files and inspect the in-scope untracked files.
 2. Identify the intended change, whether it is format-only, the relevant
    current documents under `docs/designs/`, and any applicable target delta
    under `docs/plans/`. Follow changed interfaces through their actual producers
@@ -23,17 +26,32 @@ persist memory, commit, or push.
    shipped producer or consumer.
 3. Group applicable axes by the evidence they inspect. Combine overlapping
    concerns and separate independent, substantial concerns; honor explicit
-   requests for six independent reviewers. Spawn `reviewer` subagents for those
-   assignments. Each prompt includes the scope, intended change, assigned axes,
-   and read-only constraints. State which axes each assignment covers.
+   requests for six independent reviewers. Assign each group as a read-only
+   task to a native subagent when the session can wait for and collect its report.
+   Prefer a configured reviewer profile when available. Include the scope,
+   intended change, assigned axes, and read-only constraints in each assignment.
+   State which axes each assignment covers.
 4. Wait for the assigned reports and consume their findings.
 5. Verify concrete findings in the main session before changing code or
    declaring the review clean. Subagent reports are candidate evidence, not
    final truth.
-6. If a reviewer subagent cannot be spawned because of quota, tool
-   unavailability, or agent infrastructure failure, do not silently skip the
-   review. Continue in the main session against all six axes for the selected
-   scope and record the fallback in the final report.
+6. If a reviewer fails to start or the session cannot wait for native reviewer
+   reports, apply all six axes in the main session and record the fallback.
+   Return the completed review with the evidence for the selected scope.
+
+## Git inspection
+
+Place pathspecs after `--` in `status` and `diff`. For a commit comparison, use
+the selected base and target revisions in place of `HEAD`. For `show`, pass the
+full file selector before `--`. Use `:path` for the index or `<revision>:path`
+for a committed tree.
+
+```bash
+git --no-optional-locks --no-pager status --short --
+git --no-optional-locks --no-pager diff --no-ext-diff --no-textconv --cached --
+git --no-optional-locks --no-pager diff --no-ext-diff --no-textconv HEAD --
+git --no-optional-locks --no-pager show --no-ext-diff --no-textconv :path --
+```
 
 ## Review Axes
 
@@ -62,10 +80,9 @@ and consequence.
 
 ## Subagent Constraints
 
-Every reviewer prompt must be bounded and read-only. It must forbid file edits,
-formatters, staging, commits, pushes, amends, git config changes, stash
-mutation, memory writes, network/browser/image tools, destructive commands, and
-spawning other agents.
+Keep reviewer assignments bounded and read-only. Reviewers preserve files,
+the Git index and history, configuration, stashes, and agent memory. The main
+session assigns reviewers and verifies their findings.
 
 For formatting-only changes, review semantic preservation, unintended scope,
 and build/formatting risk together. Six separate reviewers are not required

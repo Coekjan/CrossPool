@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "path": ".codex/skills",
+      "include_only": [
+        "add-benchmark-case",
+        "add-model-support",
+        "deep-review",
+        "explain-plan",
+        "find-simplifications",
+        "implement-plan",
+        "optimize-performance",
+        "plan-commits",
+        "write-design",
+        "write-plan"
+      ]
+    }
+  ]
+}

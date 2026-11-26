@@ -51,6 +51,6 @@ Present the proposal in this order:
    patch. State which patches were replayed and which revisions were tested.
 
 Keep unresolved review findings separate from changes already in the series.
-Stop at the proposal when the user asks to confirm it. For authorized
-execution, hand off to [git-commit](../git-commit/SKILL.md) with the agreed
-branch order, authorship and any limits on rebasing or pushing.
+Stop at the proposal when the user asks to confirm it. When execution is
+authorized, pass the agreed branch order, authorship, and limits on rebasing
+or pushing to the active tool's commit workflow.
