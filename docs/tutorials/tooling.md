@@ -16,6 +16,22 @@ settings such as catalogues, retention and report style. See the
 [configuration reference](../configuration.md#development-tools-and-shared-cache)
 for precedence and relative paths.
 
+## Delegate a review to Antigravity
+
+With `agy` installed and authenticated, open a Codex session in the checkout
+and enter this request.
+
+```text
+$agy-delegate $deep-review Review the working-tree changes in the shutdown path.
+```
+
+Confirm the checkout, outgoing prompt, and model.
+Use the suggested model or enter an ID from the list, such as
+`claude-opus-5-5-high` when it is available.
+Delegation requests Antigravity's `auto` mode. The shared review procedure
+keeps the task read-only. The main reviewer collects any subagent reports
+in the same turn and returns one review.
+
 ## Discover and select
 
 ```bash

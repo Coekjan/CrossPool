@@ -1,0 +1,6 @@
+interface:
+  display_name: "Delegate to Antigravity"
+  short_description: "Confirm and delegate a task to AGY"
+  default_prompt: "Use $agy-delegate $deep-review to review the current working tree."
+policy:
+  allow_implicit_invocation: false
