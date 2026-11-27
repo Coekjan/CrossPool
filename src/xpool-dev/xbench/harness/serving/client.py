@@ -40,22 +40,14 @@ class MeasurementRecorder:
             raise
         self.request_ids: set[str] = set()
         self.failed = False
-        self.window: RepetitionManifest | None = None
 
     def seal_window(self, end: float, kind: Literal["complete", "interrupted"]) -> None:
-        """Retain the stop before teardown; late terminal evidence can extend an interruption."""
+        """Persist the measurement owner's stop before teardown."""
 
-        if self.window is None:
-            self.window = RepetitionManifest.model_validate_json((self.directory / "repetition.json").read_bytes())
-        if self.window.window_kind == "complete":
-            return
-        previous = self.window.window_end_seconds
-        if previous is not None:
-            if previous >= end and self.window.window_kind == kind:
-                return
-            end = max(previous, end)
-        self.window = self.window.model_copy(update={"window_end_seconds": end, "window_kind": kind})
-        write_json(self.directory / "repetition.json", self.window.model_dump(mode="json"))
+        path = self.directory / "repetition.json"
+        manifest = RepetitionManifest.model_validate_json(path.read_bytes())
+        checkpoint = manifest.model_copy(update={"window_end_seconds": end, "window_kind": kind})
+        write_json(path, checkpoint.model_dump(mode="json"))
 
     def event(self, event: StreamEvent) -> None:
         try:
@@ -63,8 +55,6 @@ class MeasurementRecorder:
         except (OSError, ValueError):
             self.failed = True
             raise
-        if self.window is not None and self.window.window_kind == "interrupted":
-            self.seal_window(event.observed_at_seconds, "interrupted")
 
     def request(self, request: RequestRecord) -> None:
         if request.request_id in self.request_ids:
@@ -78,12 +68,6 @@ class MeasurementRecorder:
             raise
         self.request_ids.add(request.request_id)
         self.requests.append(request)
-        if (
-            self.window is not None
-            and self.window.window_kind == "interrupted"
-            and request.ended_at_seconds is not None
-        ):
-            self.seal_window(request.ended_at_seconds, "interrupted")
 
     def close(self) -> None:
         failures = []

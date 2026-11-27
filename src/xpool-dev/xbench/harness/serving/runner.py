@@ -9,6 +9,7 @@ import sys
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
+from itertools import chain
 from pathlib import Path
 from types import FrameType
 
@@ -129,17 +130,19 @@ def finalize_repetition(
     measured = origin.is_file()
     if measured or window is not None:
         MeasurementOrigin.model_validate_json(origin.read_bytes())
-        if window is None:
+        if window is None or window_kind == "interrupted":
             last = max(
-                (
-                    *(event.observed_at_seconds for event in events),
-                    *(request.ended_at_seconds for request in requests if request.ended_at_seconds is not None),
+                chain(
+                    (event.observed_at_seconds for event in events),
+                    (request.ended_at_seconds for request in requests if request.ended_at_seconds is not None),
                 ),
                 default=None,
             )
             if last is not None:
-                window = last
-                window_kind = "observed_prefix"
+                if window is None:
+                    window, window_kind = last, "observed_prefix"
+                else:
+                    window = max(window, last)
     evidence = validate_measurement(workload, requests, events, window_end_seconds=window, window_kind=window_kind)
     if workload.requests and window_kind != "complete":
         infrastructure_error = infrastructure_error or "benchmark measurement did not complete"
@@ -180,6 +183,7 @@ class BenchmarkRepetition:
     workload: PreparedWorkload
     case_directory: Path
     device_count: int
+    config: XpoolConfig | None
     number: int = 1
     attempt: int = 1
     following: tuple[int, ...] = ()
@@ -259,7 +263,7 @@ class BenchmarkRunner:
             }
         )
         write_json(self.run_entry.directory / "run.json", self.manifest.model_dump(mode="json"))
-        return BenchmarkRepetition(case, workload, directory, device_count if workload.requests else 0)
+        return BenchmarkRepetition(case, workload, directory, device_count if workload.requests else 0, config)
 
     def queue_repetition(self, task: BenchmarkRepetition, numbers: tuple[int, ...]) -> None:
         """Queue the next needed logical repetition at a fresh physical attempt path."""
@@ -297,11 +301,9 @@ class BenchmarkRunner:
             link.symlink_to(directory.name, target_is_directory=True)
         env = dict(os.environ)
         startup_error: str | None = None
-        if isinstance(task.case, OwnedBenchCase) and task.workload.requests and task.case.id not in self.preflighted:
+        config = task.config
+        if config is not None and task.workload.requests and task.case.id not in self.preflighted:
             try:
-                if manifest.deployment is None:
-                    raise ValueError("owned workload lacks its resolved configuration")
-                config = XpoolConfig.model_validate(manifest.deployment.effective)
                 for model in config.models:
                     resolve_model_weights(config, model.id)
                 self.preflighted.add(task.case.id)
@@ -462,11 +464,12 @@ def continue_benchmarks(directory: Path, *, rerun_failure: bool = False, fast_fa
             if case.id != case_id:
                 raise ValueError("retained case identity disagrees with its directory")
             device_count = 0
+            case_config = None
             if isinstance(case, OwnedBenchCase):
                 if case_manifest.deployment is None:
                     raise ValueError(f"{case_id}: owned case lacks its original deployment")
-                saved = XpoolConfig.model_validate(case_manifest.deployment.effective)
-                device_count = len(saved.atn.devices) + len(saved.ffn.devices)
+                case_config = XpoolConfig.model_validate(case_manifest.deployment.effective)
+                device_count = len(case_config.atn.devices) + len(case_config.ffn.devices)
             workload = case_manifest.load_workload(case_directory)
             attempts = case_manifest.effective_attempts(case_directory)
             if any(number > config.xbench.repetitions for number in attempts):
@@ -504,7 +507,9 @@ def continue_benchmarks(directory: Path, *, rerun_failure: bool = False, fast_fa
             if numbers:
                 pending.append(
                     (
-                        BenchmarkRepetition(case, workload, case_directory, device_count if workload.requests else 0),
+                        BenchmarkRepetition(
+                            case, workload, case_directory, device_count if workload.requests else 0, case_config
+                        ),
                         numbers,
                     )
                 )

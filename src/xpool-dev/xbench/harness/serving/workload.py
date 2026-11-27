@@ -99,7 +99,13 @@ class PreparedWorkload(BenchValue):
                 raise ValueError(f"workload input escapes its case: {inputs[field]}")
             metadata[field] = tuple(iter_jsonl(path, value_type))
         metadata.update(case_id=case.id, model_ids=tuple(target.model_id for target in case.targets))
-        return cls.model_validate(metadata)
+        workload = cls.model_validate(metadata)
+        if workload.bucket_seconds != case.bucket_seconds or (
+            case.arrivals.duration_seconds is not None
+            and workload.arrival_horizon_seconds != case.arrivals.duration_seconds
+        ):
+            raise ValueError("retained workload declarations disagree with the case")
+        return workload
 
     @model_validator(mode="after")
     def validate_replay(self) -> Self:

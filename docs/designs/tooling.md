@@ -164,10 +164,10 @@ process cleanup stop the command.
 
 xbench runs each `requirements` command in its own process group and confirms
 that the group has stopped before using the result or returning a cancellation.
-The runner uses the prepared deployment to count devices for owned cases. It
-saves one workload per case, starts the attempt workers and records their
-results after cleanup. Each worker reads the saved case and runs startup,
-warmup, measurement and shutdown. See the
+The runner uses the resolved owned deployment for both device counts and
+checkpoint checks. It saves one workload per case, starts the attempt workers
+and records their results after cleanup. Each worker reads the saved case and
+runs startup, warmup, measurement and shutdown. See the
 [serving execution design](benchmark.md#benchmark-cases-and-workload-execution).
 
 ## Shared deployment configuration

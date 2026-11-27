@@ -199,10 +199,10 @@ distinguishes three lifecycle facts:
 - `complete`: normal arrival and queue drain ended. The window ends at the later
   of the declared horizon and final request termination, including normally
   drained request failures.
-- `interrupted`: the measurement owner observed cancellation or a failure that
-  aborted measurement and retained its actual stop before HTTP and serving
-  teardown. Cancellation terminal observations fit within this end; neither
-  teardown nor the unelapsed planned horizon extends it.
+- `interrupted` records the measurement owner's stop once. After supervised
+  cleanup the runner extends that stop to the latest retained measurement
+  observation if needed. Serving shutdown and the unelapsed planned horizon
+  are outside the measurement window.
 - `observed_prefix`: owner loss left no retained stop. Parent recovery uses only
   the last timestamp supported by validated retained observations. The actual
   stop is unknown; reports label prefix-only rates and time-series explicitly.
@@ -253,7 +253,9 @@ cases/<case-id>/
   repetition-0001.attempt-0001/
     repetition.json, requests.jsonl, events.jsonl
     measurement.json          Common origin, only after timing starts
-    environment.json, warmup.json, launch/, logs/
+    environment.json, launch/, logs/
+    warmup/                    Created when warmup starts
+      requests.jsonl, events.jsonl
     report/                   Derived by offline reporting
       summary.json, report.md, cdf.csv, throughput.csv, render.json
       ttft-cdf.*, itl-cdf.*, throughput.*
@@ -269,10 +271,11 @@ and whether measurements and cleanup were verified. The supervisor verifies
 cleanup before xbench can mark the attempt complete. Reports and continuation
 read the current schemas for these files.
 
-xbench validates the normalized replay records against the case's digests. Attempt
-digests cover request and event records, and the timing origin whenever one
-was saved. A timed report requires a valid origin. When recording stops
-unexpectedly, xbench preserves the recorded prefix and marks unknown outcomes
+An attempt worker validates the prepared workload against its case.
+Continuation and report generation also verify the normalized replay records
+against the case's digests. Attempt digests cover request and event records and
+any saved timing origin. A timed report requires a valid origin. When recording
+stops unexpectedly, xbench preserves the recorded prefix and marks unknown outcomes
 as `evidence_missing`. It leaves their timing unknown. Reports label the
 remaining samples as incomplete. Startup details, logs, warmup diagnostics and
 reports are kept outside the required measurement digests.

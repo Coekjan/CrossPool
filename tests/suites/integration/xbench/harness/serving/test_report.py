@@ -208,7 +208,6 @@ def test_report_expands_repetitions_and_preserves_failed_source(
     run.complete()
     assert list_bench_artifacts(run.directory.parent) == (run.directory.name,)
     (repetition / "environment.json").unlink()
-    (repetition / "warmup.json").unlink()
     second = repetition.with_name("repetition-0002.attempt-0001")
     shutil.copytree(repetition, second)
     checkpoint = RepetitionManifest.model_validate_json((second / "repetition.json").read_bytes())
@@ -438,6 +437,26 @@ def test_owner_loss_reports_only_retained_observation_prefix(
     assert "actual stop time is unknown" in (output / "report.md").read_text()
 
 
+def test_finalization_preserves_interruption_with_later_retained_events(tmp_path: Path) -> None:
+    run, repetition = retained_run(tmp_path, horizon=1000.0)
+    case = BenchCaseManifest.model_validate_json((repetition.parent / "case.json").read_bytes()).case
+    workload = PreparedWorkload.load(repetition.parent, case=case)
+    checkpoint = RepetitionManifest(repetition=1, window_end_seconds=0.1, window_kind="interrupted")
+    write_json(repetition / "repetition.json", checkpoint.model_dump(mode="json"))
+    assert (
+        xbench.harness.serving.runner.finalize_repetition(
+            repetition, workload, cleanup_verified=True, worker_code=143, infrastructure_error=None
+        )
+        == 143
+    )
+    run.complete()
+    series = load_retained_series(repetition, "interrupted")
+    assert series.summary.window_kind == "interrupted"
+    assert series.summary.window_end_seconds == 0.18
+    assert not series.summary.execution_complete
+    assert series.summary.outcomes["success"] == 1
+
+
 def test_finalization_preserves_raw_evidence_and_reports_recording_failure(tmp_path: Path) -> None:
     run, repetition = retained_run(tmp_path)
     case = BenchCaseManifest.model_validate_json((repetition.parent / "case.json").read_bytes()).case
@@ -577,7 +596,6 @@ def retained_run(tmp_path: Path, *, failed: bool = False, horizon: float = 0.1) 
         repetition / "measurement.json",
         {"monotonic_origin_seconds": 1000.0, "wall_clock_origin_seconds": 1000000000.0},
     )
-    write_json(repetition / "warmup.json", {"requests": []})
     write_json(
         case_directory / "workload.json",
         {

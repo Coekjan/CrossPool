@@ -40,7 +40,7 @@ from xpool.model import ModelId
 
 async def run_serving(case_manifest: BenchCaseManifest, directory: Path) -> None:
     case = case_manifest.case
-    workload = case_manifest.load_workload(directory.parent)
+    workload = PreparedWorkload.load(directory.parent, case=case)
     task = asyncio.current_task()
     if task is None:
         raise RuntimeError("benchmark worker requires a running task")
@@ -80,7 +80,6 @@ async def run_serving(case_manifest: BenchCaseManifest, directory: Path) -> None
             },
         }
         write_environment(directory, environment)
-        write_json(directory / "warmup.json", {"requests": [], "phase": "not_started"})
         try:
             if workload.requests:
                 async with AsyncExitStack() as stack:
@@ -210,10 +209,4 @@ async def warmup(
                 group.create_task(dispatch())
                 group.create_task(observe_system(check_alive, stopped))
     finally:
-        try:
-            recorder.close()
-        finally:
-            write_json(
-                directory / "warmup.json",
-                {"requests": [record.model_dump(mode="json") for record in recorder.requests]},
-            )
+        recorder.close()

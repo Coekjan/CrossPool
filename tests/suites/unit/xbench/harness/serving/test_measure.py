@@ -112,6 +112,26 @@ def test_buckets_keep_idle_horizon_final_edge_width_cached_input_and_failed_part
     assert all(point.cumulative_probability <= 1 for point in summary.cdf)
 
 
+@pytest.mark.parametrize(("bucket_seconds", "horizon", "count"), [(0.3, 2.1, 7), (0.01, 0.07, 7), (0.3, 0.9, 3)])
+def test_throughput_buckets_cover_a_rounded_window_boundary(bucket_seconds: float, horizon: float, count: int) -> None:
+    workload = prepared(("request",), horizon=horizon).model_copy(update={"bucket_seconds": bucket_seconds})
+    record = terminal("request", horizon, 1).model_copy(
+        update={"first_token_at_seconds": horizon, "last_token_at_seconds": horizon, "first_completion_tokens": 1}
+    )
+    events = lifecycle(record, (data("request", 0, horizon, 1),))
+    evidence = validate_measurement(workload, (record,), events, window_end_seconds=horizon, window_kind="complete")
+    summary = summarize(
+        workload,
+        evidence,
+        checkpoint=RepetitionManifest(repetition=1, window_end_seconds=horizon, window_kind="complete"),
+    )
+    buckets = tuple(bucket for bucket in summary.throughput if bucket.target_id == "aggregate")
+    assert len(buckets) == count
+    assert all(bucket.width_seconds > 0 for bucket in buckets)
+    assert buckets[-1].end_seconds == horizon
+    assert buckets[-1].output_tokens == 1
+
+
 def test_zero_token_success_and_empty_schedule_do_not_invent_latency() -> None:
     workload = prepared(("r",), horizon=1.0)
     request = terminal("r", 0.2, 0)

@@ -82,7 +82,7 @@ class BenchCaseManifest(BenchValue):
         return attempts
 
     def load_workload(self, directory: Path) -> PreparedWorkload:
-        """Read the original replay and check its case-owned identities and timing."""
+        """Read the retained workload and verify its case-owned digests."""
         workload = PreparedWorkload.load(directory, case=self.case)
         for name, rows, expected in (
             ("prompt", workload.prompts, self.prompt_sha256),
@@ -91,11 +91,6 @@ class BenchCaseManifest(BenchValue):
         ):
             if content_digest(rows) != expected:
                 raise ValueError(f"retained {name} content digest does not match the case")
-        if workload.bucket_seconds != self.case.bucket_seconds or (
-            self.case.arrivals.duration_seconds is not None
-            and workload.arrival_horizon_seconds != self.case.arrivals.duration_seconds
-        ):
-            raise ValueError("retained workload declarations disagree with the case")
         return workload
 
 
@@ -669,13 +664,17 @@ def summarize(
         )
     samples: dict[str, dict[str, list[tuple[float, int]]]] = defaultdict(lambda: defaultdict(list))
     cdf: list[CdfPoint] = []
+    bucket_seconds = workload.bucket_seconds
+    bucket_count = max(1, math.ceil(window_end_seconds / bucket_seconds))
+    if (bucket_count - 1) * bucket_seconds >= window_end_seconds:
+        bucket_count -= 1
     buckets: dict[str, list[list[int]]] = {
-        id: [[0, 0, 0] for _ in range(math.ceil(window_end_seconds / workload.bucket_seconds))]
+        id: [[0, 0, 0] for _ in range(bucket_count)]
         for id in (*(str(model_id) for model_id in workload.model_ids), "aggregate")
     }
 
     def attribute(id: str, when: float, slot: int, tokens: int) -> None:
-        index = min(int(when / workload.bucket_seconds), len(buckets[id]) - 1)
+        index = min(int(when / bucket_seconds), len(buckets[id]) - 1)
         for key in (id, "aggregate"):
             buckets[key][index][slot] += tokens
 
@@ -708,8 +707,8 @@ def summarize(
     metric_names = tuple(name for name in metric_names if not name.endswith("sample_count"))
     for id, values in buckets.items():
         for index, (input_tokens, output_tokens, partial) in enumerate(values):
-            start = index * workload.bucket_seconds
-            end = min(start + workload.bucket_seconds, window_end_seconds)
+            start = index * bucket_seconds
+            end = window_end_seconds if index + 1 == bucket_count else (index + 1) * bucket_seconds
             width = end - start
             throughput.append(
                 ThroughputBucket(
