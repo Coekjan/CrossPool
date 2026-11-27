@@ -9,6 +9,8 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import TypeVar, cast
 
+from safetensors import SafetensorError
+
 from xpool import ffn, quantization
 from xpool.model import ModelId
 from xpool.runtime.ffnagent import checkpoint
@@ -172,6 +174,10 @@ def adapters_by_architecture() -> dict[str, type[FfnModelAdapter]]:
     return result
 
 
+class FfnModelSourceError(RuntimeError):
+    """A configured model source cannot be read or compiled."""
+
+
 def load(*, model_id: ModelId, model_path: pathlib.Path) -> ffn.FfnModelSpec:
     """Load and compile one model's intrinsic FFN semantics.
 
@@ -183,17 +189,18 @@ def load(*, model_id: ModelId, model_path: pathlib.Path) -> ffn.FfnModelSpec:
         Complete engine-neutral FFN Model Spec.
 
     Raises:
-        RuntimeError: If configuration, architecture discovery, compilation,
-            checkpoint authority, or exact FFN namespace coverage fails.
+        FfnModelSourceError: If model configuration or checkpoint data is unreadable or incompatible.
+        RuntimeError: If the adapter returns a spec for a different model.
     """
 
+    adapters = adapters_by_architecture()
     try:
         config_path = model_path / "config.json"
         config_bytes = config_path.read_bytes()
         model_config = FfnSourceConfig(checkpoint.parse_json_object(config_bytes, source=config_path))
         architecture_name = model_config.architecture_name
 
-        adapter = adapters_by_architecture().get(architecture_name)
+        adapter = adapters.get(architecture_name)
         if adapter is None:
             raise ValueError(f"unsupported FFN architecture {architecture_name!r}")
         key_view = checkpoint.read_checkpoint_key_view(model_path)
@@ -203,7 +210,7 @@ def load(*, model_id: ModelId, model_path: pathlib.Path) -> ffn.FfnModelSpec:
             checkpoint_keys=key_view.keys(),
         )
         if spec.model_id != model_id:
-            raise ValueError("FFN Architecture Adapter returned inconsistent model identity")
+            raise RuntimeError("FFN Architecture Adapter returned inconsistent model identity")
 
         checkpoint.validate_ffn_coverage(
             spec,
@@ -211,5 +218,5 @@ def load(*, model_id: ModelId, model_path: pathlib.Path) -> ffn.FfnModelSpec:
             prefixes_by_layer={layer.layer_id: adapter.checkpoint_prefixes(layer) for layer in spec.layers},
         )
         return spec
-    except Exception as error:
-        raise RuntimeError(f"failed to compile FFN model {model_id!r} at {model_path}: {error}") from error
+    except (OSError, OverflowError, SafetensorError, ValueError) as error:
+        raise FfnModelSourceError(f"failed to compile FFN model {model_id!r} at {model_path}: {error}") from error

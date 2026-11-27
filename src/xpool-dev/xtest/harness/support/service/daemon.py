@@ -23,6 +23,7 @@ from xpool.fabric import FabricDeploymentPlan, FabricGenerationId, FabricPartici
 from xpool.model import ModelId
 from xpool.native import ABI_VERSION
 from xpool.quantization import Unquantized
+from xpool.runtime.ffnagent import architecture
 from xpool.service.daemon.app import create_daemon
 from xpool.service.wire import ElasticContextStateControlChannelRef
 from xpool.utils.mps import MpsEndpoint, MpsProbeResult, MpsScope
@@ -85,6 +86,7 @@ def deterministic_daemon_dependencies(
         lambda self: MpsProbeResult(True, 100, "CPU route-test controller is online"),
     )
     monkeypatch.setattr(xpool.native.fabric, "create_uid", lambda: "ab" * 128)
+    monkeypatch.setattr(architecture, "load", lambda *, model_id, model_path: ffn_model_spec(model_id=str(model_id)))
 
     class FakeCapacityPolicy:
         def __init__(self, generation: FabricGenerationId) -> None:
@@ -119,7 +121,7 @@ def create_app(config: XpoolConfig) -> FastAPI:
         f"GPU-00000000-0000-0000-0000-{device:012x}" for device in range(max(config.devices) + 1)
     )
     control.mps_scope = MpsScope(MpsEndpoint(tuple(control.device_uuids[device] for device in config.atn.devices)))
-    app.state.control_plane.watchdog()
+    control.refresh_mps_status()
     return app
 
 
@@ -209,11 +211,11 @@ def ffnagent_registration(
         "device_free_memory_bytes": 12 * 1024**3,
         "device_properties": TEST_GEMM_DEVICE_PROPERTIES.model_dump(mode="json"),
         "device_total_memory_bytes": TEST_CALIBRATION_ENVIRONMENT.total_memory_bytes,
-        "model_specs": [ffn_model_spec(model_id=model_id) for model_id in model_ids],
+        "model_spec_digests": [ffn_model_spec(model_id=model_id).digest() for model_id in model_ids],
     }
 
 
-def ffn_model_spec(*, model_id: str = str(TEST_MODEL_ID), hidden_size: int = 4) -> dict[str, object]:
+def ffn_model_spec(*, model_id: str = str(TEST_MODEL_ID), hidden_size: int = 4) -> ffn.FfnModelSpec:
     """Return one valid generation-independent Dense FFN Model Spec."""
 
     return ffn.FfnModelSpec(
@@ -236,7 +238,7 @@ def ffn_model_spec(*, model_id: str = str(TEST_MODEL_ID), hidden_size: int = 4) 
                 ),
             ),
         ),
-    ).model_dump(mode="json")
+    )
 
 
 def ffn_profile(*, hidden_size: int = 4) -> dict[str, object]:
@@ -298,7 +300,7 @@ def register_fabric_world(
     ffnagent: Mapping[str, object] | None = None,
     instance: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object], dict[str, object], FabricDeploymentPlan]:
-    """Register one complete 1x1x1 generation and return its plan."""
+    """Register a complete generation and advance its Fabric control loop once."""
 
     instance_payload = dict(instance or instance_registration(model_id=str(TEST_MODEL_ID)))
     atnagent_payload = dict(atnagent or atnagent_registration(device=0))
@@ -307,6 +309,7 @@ def register_fabric_world(
     assert register(app, "/ffnagent/register", ffnagent_payload).status_code == HTTPStatus.NO_CONTENT
     response = register(app, "/instance/register", instance_payload)
     assert response.status_code == HTTPStatus.NO_CONTENT, response.text
+    app.state.control_plane.step_fabric_control()
     plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     return atnagent_payload, ffnagent_payload, instance_payload, plan
 

@@ -44,6 +44,7 @@ def test_daemon_quiesce_atnagent_transport_leases_blocks_new_acquires_and_report
     assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/instance/register", registration).status_code == HTTPStatus.NO_CONTENT
+    app.state.control_plane.step_fabric_control()
     plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
     assert (
@@ -141,6 +142,7 @@ def test_daemon_lease_quiesce_reports_all_live_owners() -> None:
         for model_id, (owner, owner_id) in zip(("test/a", "test/b"), owner_processes, strict=True):
             registration = instance_registration(model_id=model_id, pid=owner_id.pid)
             assert register(app, "/instance/register", registration).status_code == HTTPStatus.NO_CONTENT
+        app.state.control_plane.step_fabric_control()
         plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
         activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
 
@@ -190,6 +192,7 @@ def test_daemon_allows_stale_atnagent_to_quiesce_transport_leases(
     assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/instance/register", registration).status_code == HTTPStatus.NO_CONTENT
+    app.state.control_plane.step_fabric_control()
     plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
     assert (

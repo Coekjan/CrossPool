@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 import xpool.native
 from xpool.config import get_global_config
-from xpool.fabric import FabricGenerationPhase, FabricPlan, InstanceFfnProfile
+from xpool.fabric import FabricGenerationId, FabricGenerationPhase, InstanceFfnProfile
 from xpool.model import ModelId
 from xpool.native import ABI_VERSION
 from xpool.native.ffn import ResultCode
@@ -20,7 +20,6 @@ from xpool.service.wire import (
     InstanceRankInitializedPublication,
     InstanceRankRegistration,
     ProcessRef,
-    ServingListener,
 )
 from xpool.transport import TransportArenaHandle
 from xpool.utils.background import BackgroundThread
@@ -238,7 +237,7 @@ class InstanceRankRuntime:
         self.heartbeat_worker = None
         self.failure_monitor = None
         self.arena_handle = None
-        self.fabric_plan: FabricPlan | None = None
+        self.fabric_generation: FabricGenerationId | None = None
 
     @classmethod
     def start(
@@ -297,14 +296,7 @@ class InstanceRankRuntime:
         self.register_runtime(transport, ffn_profile, context_state_profile, atn_runtime_headroom_bytes)
         if was_registered:
             return
-        try:
-            self.start_heartbeat_worker()
-        except Exception:
-            try:
-                self.deregister_runtime()
-            except Exception as cleanup_exc:
-                logger.warning("failed to clean up instance registration: %s", cleanup_exc)
-            raise
+        self.start_heartbeat_worker()
 
     def register_runtime(
         self,
@@ -341,11 +333,11 @@ class InstanceRankRuntime:
         self.client.register_instance(registration)
         self.registration = registration
 
-    def wait_for_fabric_executable(self) -> FabricPlan:
+    def wait_for_fabric_executable(self) -> FabricGenerationId:
         """Wait until every Agent and FFN Executor is device-executable.
 
         Returns:
-            Immutable active fabric plan observed at the executable barrier.
+            Active Fabric generation observed at the executable barrier.
 
         Raises:
             InstanceRankError: If the barrier times out or the generation fails or drains.
@@ -356,11 +348,12 @@ class InstanceRankRuntime:
             readiness = self.client.readiness()
             match readiness.fabric_phase:
                 case FabricGenerationPhase.EXECUTABLE:
-                    plan = self.client.fabric_plan()
-                    if readiness.generation is None or plan.generation != readiness.generation:
-                        raise InstanceRankError("daemon returned inconsistent executable Fabric generation facts")
-                    self.fabric_plan = plan
-                    return plan
+                    if readiness.generation is None:
+                        raise InstanceRankError("daemon reported executable Fabric without a generation")
+                    self.fabric_generation = readiness.generation
+                    return readiness.generation
+                case None if readiness.fabric_control_failure is not None:
+                    raise InstanceRankError(f"fabric planning failed: {readiness.fabric_control_failure}")
                 case (
                     None
                     | FabricGenerationPhase.PREPARING_JOIN
@@ -383,56 +376,57 @@ class InstanceRankRuntime:
                     raise InstanceRankError(f"fabric entered {phase.value} during startup{detail}")
         raise InstanceRankError("timed out waiting for executable fabric generation")
 
-    def publish_initialized(self, serving_listener: ServingListener) -> None:
+    def publish_initialized(self) -> None:
         """Publish the completed Scheduler construction startup barrier.
 
-        Args:
-            serving_listener: Public HTTP listener shared by this Instance's ranks.
-
         Raises:
-            InstanceRankError: If this runtime did not observe an executable plan.
+            InstanceRankError: If this runtime did not observe an executable generation.
         """
 
-        plan = self.fabric_plan
-        if plan is None:
+        generation = self.fabric_generation
+        if generation is None:
             raise InstanceRankError("instance cannot publish initialized before the executable fabric barrier")
         self.client.publish_instance_initialized(
             self.model_id,
             rank=self.rank,
-            publication=InstanceRankInitializedPublication(
-                owner=self.process_ref,
-                generation=plan.generation,
-                serving_listener=serving_listener,
-            ),
+            publication=InstanceRankInitializedPublication(owner=self.process_ref, generation=generation),
         )
 
     def wait_for_ready(self) -> None:
-        """Wait for every configured SGLang rank to finish initialization.
+        """Wait for every configured SGLang rank in the retained Generation.
 
         Raises:
-            InstanceRankError: If the barrier times out or the generation fails or drains.
+            InstanceRankError: If the barrier times out or the Generation changes, fails, or drains.
         """
 
+        generation = self.fabric_generation
         deadline = time.monotonic() + INSTANCE_STARTUP_BARRIER_TIMEOUT_S
         while time.monotonic() < deadline:
             readiness = self.client.readiness()
-            if readiness.ready:
-                return
-            match readiness.fabric_phase:
-                case None | FabricGenerationPhase.JOINING | FabricGenerationPhase.EXECUTABLE:
-                    time.sleep(INSTANCE_TRANSPORT_ACQUIRE_INTERVAL_S)
-                case phase:
-                    failures = tuple(
-                        failure
-                        for failure in (
-                            readiness.fabric_invocation_failure,
-                            readiness.fabric_owner_failure,
-                            readiness.fabric_control_failure,
-                        )
-                        if failure is not None
-                    )
-                    detail = f": {failures}" if failures else ""
-                    raise InstanceRankError(f"fabric entered {phase.value} during initialization{detail}")
+            phase = readiness.fabric_phase
+            if readiness.generation == generation and phase is FabricGenerationPhase.EXECUTABLE:
+                if readiness.ready:
+                    return
+                time.sleep(INSTANCE_TRANSPORT_ACQUIRE_INTERVAL_S)
+                continue
+
+            failures = tuple(
+                failure
+                for failure in (
+                    readiness.fabric_invocation_failure,
+                    readiness.fabric_owner_failure,
+                    readiness.fabric_control_failure,
+                )
+                if failure is not None
+            )
+            detail = f": {failures}" if failures else ""
+            if readiness.generation != generation:
+                raise InstanceRankError(
+                    f"Fabric generation changed during initialization "
+                    f"(expected {generation}, observed {readiness.generation}){detail}"
+                )
+            state = phase.value if phase is not None else "no active generation"
+            raise InstanceRankError(f"Fabric entered {state} during initialization{detail}")
         raise InstanceRankError("timed out waiting for every instance rank to initialize")
 
     def deregister_runtime(self) -> None:
@@ -557,7 +551,5 @@ class InstanceRankRuntime:
 
         if self.registration is None:
             return
-        installed = self.registration.transport.model_dump(mode="json")
-        requested = transport.model_dump(mode="json")
-        if installed != requested:
+        if self.registration.transport != transport:
             raise InstanceRankError("xpool instance runtime already started with different transport attributes")

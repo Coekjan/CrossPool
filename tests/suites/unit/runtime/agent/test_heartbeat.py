@@ -31,7 +31,6 @@ class HeartbeatAgent:
 
 def heartbeat_response() -> HeartbeatResponse:
     return HeartbeatResponse(
-        warnings=[],
         generation=None,
         fabric_phase=None,
     )

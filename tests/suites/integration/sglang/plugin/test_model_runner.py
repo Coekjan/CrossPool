@@ -32,7 +32,7 @@ from xpool.integrations.sglang.worker import WorkerLifecycle
 from xpool.model import ModelId
 from xpool.native import RuntimeRole
 from xpool.runtime.transport import InstanceRankTransportProfile
-from xpool.service.wire import ElasticContextStateControlChannelRef, ServingListener
+from xpool.service.wire import ElasticContextStateControlChannelRef
 from xpool.utils.procs import ProcUniqId
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
 from xtest.harness.support.sglang.fakes import FakeModelConfig, FakeModelRunner
@@ -267,7 +267,6 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     registrations: list[tuple[ModelId, int, int]] = []
     profiles: list[object] = []
     capacity_attachments: list[dict[str, object]] = []
-    listeners: list[ServingListener] = []
     adapter = FakeAdapter(matches=True, events=events)
     runner = FakeModelRunner(model_config=FakeModelConfig(model_path=str(tmp_path / "fake-model")))
     runner.max_running_requests = max_running_requests
@@ -307,12 +306,13 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
             return ElasticContextStateControlChannelRef(generation=generation, name="/xpool-ecs-test")
 
     class FakeInstanceRuntime:
-        fabric_plan = None
+        fabric_generation: FabricGenerationId | None = None
         client = FakeClient()
 
-        def wait_for_fabric_executable(self) -> object:
+        def wait_for_fabric_executable(self) -> FabricGenerationId:
             events.append("wait_for_fabric_executable")
-            return SimpleNamespace(generation=generation)
+            self.fabric_generation = generation
+            return generation
 
         def attach_arena_from_daemon(self) -> None:
             events.append("attach_transport")
@@ -320,9 +320,8 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
         def start_failure_monitor(self) -> None:
             events.append("start_failure_monitor")
 
-        def publish_initialized(self, serving_listener: ServingListener) -> None:
+        def publish_initialized(self) -> None:
             events.append("publish_initialized")
-            listeners.append(serving_listener)
 
         def wait_for_ready(self) -> None:
             events.append("wait_for_ready")
@@ -420,7 +419,6 @@ def test_model_runner_hook_installs_transport_runtime_for_production_shim(
     assert installs == [(TEST_MODEL_ID, 0)]
     assert profiles == [profile]
     assert capacity_attachments[0]["slo"] == LatencySloConfig(ttft_ms=800, tbt_ms=40)
-    assert listeners == [ServingListener(host=runner.server_args.host, port=runner.server_args.port)]
 
 
 @pytest.mark.parametrize("failure", [None, "release", "synchronize"])
@@ -557,9 +555,9 @@ def test_model_runner_hook_cleans_up_when_post_executable_transport_attach_fails
     class FakeInstanceRuntime:
         client = FakeClient()
 
-        def wait_for_fabric_executable(self) -> object:
+        def wait_for_fabric_executable(self) -> FabricGenerationId:
             events.append("wait_for_fabric_executable")
-            return SimpleNamespace(generation=generation)
+            return generation
 
         def attach_arena_from_daemon(self) -> None:
             events.append("attach_transport")

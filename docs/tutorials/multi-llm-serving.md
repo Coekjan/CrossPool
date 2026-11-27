@@ -73,10 +73,9 @@ agents about the generation's device indices.
 
 ## Check both listeners
 
-In another terminal with `UV_ENV_FILE` set, wait for System Ready and both HTTP
-listeners. The daemon reports Serving Healthy only after both listeners pass
-their startup health checks, but check each public endpoint before sending a
-request:
+In another terminal with `UV_ENV_FILE` set, wait for System Ready with
+`xpool daemon check`, then check both public HTTP endpoints before sending a
+request.
 
 ```bash
 until uv run xpool daemon check; do sleep 1; done

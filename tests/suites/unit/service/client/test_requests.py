@@ -8,7 +8,10 @@ import pytest
 import xpool.service.client
 from xpool.fabric import FabricGenerationId, FabricRole
 from xpool.native import ABI_VERSION
-from xpool.service.client import ATNAGENT_TRANSPORT_LEASE_QUIESCE_TIMEOUT_S, XpoolClient
+from xpool.service.client import (
+    ATNAGENT_TRANSPORT_LEASE_QUIESCE_TIMEOUT_S,
+    XpoolClient,
+)
 from xpool.service.errors import XpoolClientError
 from xpool.service.wire import (
     AgentStartupAdmission,
@@ -142,6 +145,7 @@ def test_participant_registration_sends_declared_contract(
         ("GET", "/health", None),
         ("POST", expected_path, registration.model_dump(mode="json")),
     ]
+    assert probe.post_timeouts == [(expected_path, None)]
 
 
 def test_transport_publication_and_quiesce_preserve_owner_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:

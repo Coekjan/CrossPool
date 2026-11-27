@@ -28,7 +28,6 @@ from xpool.fabric import (
     InstanceFfnProfile,
     InstanceRankTopology,
 )
-from xpool.ffn import FfnModelSpec
 from xpool.memory import DeviceMemoryEstimate
 from xpool.model import ModelId
 from xpool.native import RuntimeRole
@@ -131,7 +130,7 @@ def test_agent_construction_initializes_role_and_devkit(
     monkeypatch.setattr(
         xpool.runtime.ffnagent.agent,
         "load",
-        lambda **kwargs: FfnModelSpec.model_validate(ffn_model_spec()),
+        lambda **kwargs: ffn_model_spec(),
     )
     if agent_type is FfnAgent:
         monkeypatch.setattr(

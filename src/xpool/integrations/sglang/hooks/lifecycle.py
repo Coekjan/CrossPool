@@ -19,7 +19,6 @@ from sglang.srt.runtime_context import (
     get_disagg,
     get_exec,
     get_schedule,
-    get_serving,
     pre_capture_activation_reserve_mb,
 )
 from sglang.srt.server_args import ServerArgs
@@ -43,7 +42,7 @@ from xpool.integrations.sglang.worker import WorkerLifecycle
 from xpool.native import RuntimeRole
 from xpool.runtime.instance import InstanceRankRuntime
 from xpool.runtime.transport import InstanceRankTransportProfile
-from xpool.service.wire import ElasticContextStatePartitionProfile, ServingListener
+from xpool.service.wire import ElasticContextStatePartitionProfile
 from xpool.utils.device import visible_uuids
 from xpool.utils.mps import MpsEndpoint
 
@@ -298,9 +297,9 @@ def after_model_runner_alloc_memory_pool[R](
             atn_runtime_headroom_bytes=atn_runtime_headroom_bytes,
             on_failure=WorkerLifecycle.current().fail,
         )
-        plan = runtime.instance_rank.wait_for_fabric_executable()
-        channel_ref = runtime.instance_rank.client.context_state_control_channel(plan.generation)
-        if channel_ref.generation != plan.generation:
+        generation = runtime.instance_rank.wait_for_fabric_executable()
+        channel_ref = runtime.instance_rank.client.context_state_control_channel(generation)
+        if channel_ref.generation != generation:
             raise RuntimeError(
                 "xpool daemon returned an elastic context state control channel for a different fabric generation"
             )
@@ -345,7 +344,7 @@ def after_scheduler_get_init_info[R](
         The original ``get_init_info`` return value unchanged.
 
     Raises:
-        RuntimeError: If startup did not retain the executable plan.
+        RuntimeError: If startup did not retain the executable generation.
 
     Side Effects:
         Publishes this rank's initialized barrier to the daemon and waits for
@@ -355,12 +354,7 @@ def after_scheduler_get_init_info[R](
     runtime = SglangInstanceRankRuntime.require(scheduler.tp_worker.model_runner)
     if runtime.instance_rank is None:
         raise RuntimeError("xpool Scheduler.get_init_info hook requires a started Instance-rank runtime")
-    runtime.instance_rank.publish_initialized(
-        ServingListener(
-            host=get_serving().host,
-            port=get_serving().port,
-        )
-    )
+    runtime.instance_rank.publish_initialized()
     runtime.instance_rank.wait_for_ready()
     binding = runtime.binding
     logger.info(
@@ -369,8 +363,8 @@ def after_scheduler_get_init_info[R](
         binding.worker_rank,
         binding.device,
         os.getpid(),
-        runtime.instance_rank.fabric_plan.generation.format()
-        if runtime.instance_rank.fabric_plan is not None
+        runtime.instance_rank.fabric_generation.format()
+        if runtime.instance_rank.fabric_generation is not None
         else "unknown",
     )
     return result

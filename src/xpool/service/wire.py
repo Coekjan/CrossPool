@@ -5,10 +5,8 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-import httpx
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from xpool import ffn
 from xpool.config import XpoolConfig
 from xpool.fabric import (
     FabricGenerationId,
@@ -107,22 +105,6 @@ class AtnAgentTransportArenaUpsertRequest(WireModel):
     )
 
 
-type ControlPlaneWarningKind = Literal[
-    "stale_atnagent",
-    "stale_ffnagent",
-    "stale_instance",
-    "quiescing_atnagent",
-]
-
-
-class ControlPlaneWarning(WireModel):
-    """Device-scoped warning returned during daemon heartbeat."""
-
-    kind: ControlPlaneWarningKind = Field(description="General control-plane warning kind.")
-    device: int = Field(ge=0, description="device whose local control-plane state produced this warning.")
-    message: str = Field(description="Human-readable warning detail.")
-
-
 class FabricInvocationFailure(WireModel):
     """Canonical failure of one distributed Fabric invocation."""
 
@@ -188,9 +170,8 @@ class FabricParticipantReport(WireModel):
 
 
 class HeartbeatResponse(WireModel):
-    """Heartbeat response carrying warnings and authoritative Fabric state."""
+    """Current Fabric generation and phase after a participant heartbeat."""
 
-    warnings: list[ControlPlaneWarning] = Field(description="Current device-scoped daemon warnings.")
     generation: FabricGenerationId | None = Field(default=None, description="Active Fabric generation, if one exists.")
     fabric_phase: FabricGenerationPhase | None = Field(
         default=None,
@@ -251,29 +232,26 @@ class FfnAgentView(ProcessRef):
     device: int = Field(ge=0, description="device index owned by the FfnAgent.")
     device_free_memory_bytes: int = Field(ge=1, description="Free bytes reported by the owned device.")
     device_total_memory_bytes: int = Field(ge=1, description="Total bytes reported by the owned device.")
-    model_specs: tuple[ffn.FfnModelSpec, ...] = Field(
-        min_length=1,
-        description="Generation-independent FFN Model Specs loaded by this FfnAgent.",
-    )
 
     @model_validator(mode="after")
-    def validate_memory_and_specs(self) -> FfnAgentView:
-        """Require one legal memory observation and unique ordered Model IDs."""
+    def validate_memory(self) -> FfnAgentView:
+        """Require a memory observation within the device's physical capacity."""
 
         if self.device_free_memory_bytes > self.device_total_memory_bytes:
             raise ValueError("FfnAgent free CUDA memory exceeds total CUDA memory")
-        model_ids = tuple(spec.model_id for spec in self.model_specs)
-        if len(set(model_ids)) != len(model_ids):
-            raise ValueError("FfnAgent Model Specs must have unique Model IDs")
         return self
 
 
 class FfnAgentRegistration(FfnAgentView):
-    """FfnAgent registration with execution resources and optional Profile facts."""
+    """Declare the FfnAgent's execution resources and ordered digests of its locally compiled Model Specs."""
 
     device_properties: GemmDeviceProperties = Field(description="Device properties for bundled GEMM scratch budgeting.")
     calibration_environment: MemoryCalibrationEnvironment | None = Field(
         description="Observed participant compatibility facts when Profile matching is requested."
+    )
+    model_spec_digests: tuple[str, ...] = Field(
+        min_length=1,
+        description="Canonical FFN Model Spec digests in the configured model order.",
     )
 
     @model_validator(mode="after")
@@ -320,32 +298,11 @@ class InstanceRankRegistration(InstanceRankRef):
     )
 
 
-class ServingListener(WireModel):
-    """Public HTTP listener declared by one Instance."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    host: str = Field(min_length=1, description="Host bound by the Instance serving process.")
-    port: int = Field(ge=1, le=65535, description="TCP port bound by the Instance serving process.")
-
-    @field_validator("host")
-    @classmethod
-    def validate_host(cls, value: str) -> str:
-        """Reject addresses that cannot be used for an HTTP health probe."""
-
-        try:
-            httpx.URL(scheme="http", host=value)
-        except httpx.InvalidURL as error:
-            raise ValueError(f"invalid serving listener host: {error}") from error
-        return value
-
-
 class InstanceRankInitializedPublication(WireModel):
     """Owner-bound publication that one Instance Rank completed scheduler construction."""
 
     owner: ProcessRef = Field(description="Process identity owning the instance-rank registration.")
     generation: FabricGenerationId = Field(description="Executable fabric generation observed by the rank.")
-    serving_listener: ServingListener = Field(description="Public HTTP listener shared by every rank in the Instance.")
 
 
 class ReadinessStatus(StrEnum):
@@ -404,7 +361,7 @@ class ReadinessSnapshot(WireModel):
         description="Daemon-observed owner failure, or null when absent."
     )
     fabric_control_failure: str | None = Field(
-        description="First control/lifecycle diagnostic, or null when absent.",
+        description="First Fabric planning or control diagnostic, or null when absent.",
     )
     transport_ready: bool = Field(description="Whether every configured Transport publication accepts leases.")
     instances_initialized: bool = Field(description="Whether every Instance rank completed initialization.")

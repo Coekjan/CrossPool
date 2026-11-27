@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+from pathlib import Path
 
 import pytest
 
+from xpool.config import VendorConfig
+from xpool.runtime.ffnagent import architecture
+from xpool.runtime.ffnagent.architecture import load
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
 from xtest.harness.support.service.daemon import (
     atnagent_registration,
@@ -13,6 +17,7 @@ from xtest.harness.support.service.daemon import (
     deterministic_daemon_dependencies,
     ffnagent_registration,
     instance_registration,
+    process_ref,
     register,
     request,
     start_sleeping_proc,
@@ -20,6 +25,74 @@ from xtest.harness.support.service.daemon import (
 )
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, deterministic_daemon_dependencies.__name__)
+
+
+def test_daemon_rejects_empty_ffn_spec_digests() -> None:
+    app = create_app(synthetic_config())
+    payload = ffnagent_registration() | {"model_spec_digests": []}
+    response = request(app, "POST", "/ffnagent/register", json=payload)
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    issue = response.json()["detail"][0]
+    assert issue["loc"] == ["body", "model_spec_digests"]
+
+
+def test_incompatible_ffn_spec_digests_fail_planning_after_registration() -> None:
+    app = create_app(synthetic_config())
+    atnagent = atnagent_registration(device=0)
+    ffnagent = ffnagent_registration(model_ids=("test/other",))
+    assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
+
+    app.state.control_plane.step_fabric_control()
+
+    heartbeat = request(app, "POST", "/ffnagent/1/heartbeat", json=process_ref(ffnagent))
+    assert heartbeat.status_code == HTTPStatus.OK
+    assert heartbeat.json() == {"fabric_phase": None, "generation": None}
+    plan = request(app, "GET", "/fabric/plan")
+    assert plan.status_code == HTTPStatus.CONFLICT
+    failure = plan.json()["detail"]["message"]
+    assert "device 1 disagrees with the compiled FFN model specs" in failure
+    assert request(app, "GET", "/ready").json()["fabric_control_failure"] == failure
+
+
+@pytest.mark.parametrize(
+    "reader_fault",
+    [None, TypeError, RuntimeError],
+    ids=["invalid-checkpoint", "reader-type-error", "reader-runtime-error"],
+)
+def test_fabric_planning_distinguishes_model_input_from_internal_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reader_fault: type[Exception] | None
+) -> None:
+    config = synthetic_config().model_copy(update={"vendor": VendorConfig(model_base_uri=tmp_path)})
+    model_path = config.model_path_of(TEST_MODEL_ID)
+    model_path.mkdir(parents=True)
+    (model_path / "config.json").write_bytes(b'{"architectures":["Qwen3ForCausalLM"]}')
+    (model_path / "model.safetensors").write_bytes(b"invalid")
+    monkeypatch.setattr(architecture, "load", load)
+
+    app = create_app(config)
+    assert register(app, "/atnagent/register", atnagent_registration(device=0)).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/ffnagent/register", ffnagent_registration()).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
+
+    if reader_fault is not None:
+
+        def fail_checkpoint_read(model_path: Path) -> dict[str, Path]:
+            raise reader_fault("injected checkpoint reader fault")
+
+        monkeypatch.setattr(architecture.checkpoint, "read_checkpoint_key_view", fail_checkpoint_read)
+        with pytest.raises(reader_fault, match="injected checkpoint reader fault"):
+            app.state.control_plane.step_fabric_control()
+        return
+
+    app.state.control_plane.step_fabric_control()
+    response = request(app, "GET", "/fabric/plan")
+    assert response.status_code == HTTPStatus.CONFLICT
+    message = response.json()["detail"]["message"]
+    assert "failed to compile FFN model" in message
+    assert str(model_path) in message
+    assert request(app, "GET", "/ready").json()["fabric_control_failure"] == message
 
 
 @pytest.mark.parametrize("physical_order", [(0, 2), (1, 0)], ids=["different-device", "reversed-order"])
@@ -86,7 +159,9 @@ def test_daemon_registration_flow() -> None:
 
     for endpoint, payload in (("/atnagents", atnagent0), ("/ffnagents", ffnagent0)):
         expected = {
-            key: value for key, value in payload.items() if key not in {"calibration_environment", "device_properties"}
+            key: value
+            for key, value in payload.items()
+            if key not in {"calibration_environment", "device_properties", "model_spec_digests"}
         }
         assert request(app, "GET", endpoint).json() == [expected]
 
@@ -94,6 +169,7 @@ def test_daemon_registration_flow() -> None:
     response = register(app, "/instance/register", registration)
     assert response.status_code == HTTPStatus.NO_CONTENT
     assert response.content == b""
+    app.state.control_plane.step_fabric_control()
     assert (
         request(
             app,

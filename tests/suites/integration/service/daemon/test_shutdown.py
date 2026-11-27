@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from multiprocessing.connection import Connection
 from pathlib import Path
+from threading import Event
 
 import httpx
 import pytest
@@ -28,12 +29,23 @@ from xpool.utils.mps import MpsEndpoint, MpsProbeResult, MpsScope
 from xpool.utils.procs import ProcUniqId
 from xtest.harness.support.config import (
     TEST_CALIBRATION_ENVIRONMENT,
+    TEST_MODEL_ID,
     install_test_config,
     reset_global_config,
     synthetic_config,
     write_minimal_config,
 )
-from xtest.harness.support.service.daemon import atnagent_registration, instance_registration
+from xtest.harness.support.service.daemon import (
+    atnagent_registration,
+    create_app,
+    deterministic_daemon_dependencies,
+    instance_registration,
+    process_ref,
+    register,
+    request,
+    start_sleeping_proc,
+    stop_proc,
+)
 
 
 @pytest.mark.usefixtures(reset_global_config.__name__)
@@ -79,6 +91,71 @@ def test_admitted_agent_can_publish_pre_join_retirement_boundary_after_close_beg
                 agent.wait(timeout=5)
             if agent.stdout is not None:
                 agent.stdout.close()
+
+
+def test_daemon_waits_for_fabric_formation_before_closing_the_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    control = ControlPlane()
+    scope = MpsScope(MpsEndpoint(("GPU-00000000-0000-0000-0000-000000000001",)))
+    control.mps_scope = scope
+    forming = Event()
+    waiting_to_close = Event()
+    release = Event()
+
+    def finish_formation() -> None:
+        forming.set()
+        assert release.wait(timeout=5)
+
+    def wait_for_formation(seconds: float) -> None:
+        waiting_to_close.set()
+        assert release.wait(timeout=5)
+
+    monkeypatch.setattr(control, "form_fabric_plan", finish_formation)
+    monkeypatch.setattr(xpool.service.daemon.control, "sleep", wait_for_formation)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        formation = executor.submit(control.step_fabric_control)
+        try:
+            assert forming.wait(timeout=5)
+            cleanup = executor.submit(control.close)
+            assert waiting_to_close.wait(timeout=5)
+            assert not scope.closed
+        finally:
+            release.set()
+        formation.result(timeout=5)
+        cleanup.result(timeout=5)
+    assert control.closed and scope.closed
+
+
+@pytest.mark.usefixtures(deterministic_daemon_dependencies.__name__)
+def test_close_waits_for_a_deregistered_pre_plan_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = create_app(synthetic_config())
+    control = app.state.control_plane
+    waiting, exited = Event(), Event()
+
+    def wait_for_instance_exit(seconds: float) -> None:
+        waiting.set()
+        assert exited.wait(timeout=5)
+
+    monkeypatch.setattr(xpool.service.daemon.control, "sleep", wait_for_instance_exit)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        process, owner = start_sleeping_proc()
+        try:
+            instance = instance_registration(pid=owner.pid)
+            assert register(app, "/instance/register", instance).status_code == HTTPStatus.NO_CONTENT
+            control.begin_close()
+            assert (
+                request(
+                    app, "POST", f"/instance/{TEST_MODEL_ID}/deregister?rank=0", json=process_ref(instance)
+                ).status_code
+                == HTTPStatus.NO_CONTENT
+            )
+            closing = executor.submit(control.close)
+            assert waiting.wait(timeout=5)
+            assert not control.mps_scope.closed
+        finally:
+            stop_proc(process)
+            exited.set()
+        closing.result(timeout=5)
+    assert control.closed and control.mps_scope.closed
 
 
 @dataclass(frozen=True, slots=True)

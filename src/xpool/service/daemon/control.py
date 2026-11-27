@@ -9,14 +9,12 @@ import secrets
 import signal
 import subprocess
 import threading
-from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic, sleep
 
 import psutil
 
 import xpool.native
-from xpool import ffn
 from xpool.config import FfnSchedulingPolicy, get_global_config
 from xpool.fabric import (
     FabricDeploymentPlan,
@@ -31,10 +29,11 @@ from xpool.fabric import (
 from xpool.memory import load_memory_calibration_profile
 from xpool.model import ModelId
 from xpool.native import ABI_VERSION
+from xpool.runtime.ffnagent import architecture
 from xpool.service.daemon import ecs
-from xpool.service.daemon.fabric import FabricController, FabricGenerationState, FabricMembership
+from xpool.service.daemon.fabric import FabricController, FabricGenerationState, FabricMembership, FabricPlanningFailure
 from xpool.service.daemon.ffn_placement import place_ffn_models
-from xpool.service.daemon.readiness import ControlPlaneProjection
+from xpool.service.daemon.readiness import capture_readiness
 from xpool.service.daemon.registration import (
     AtnAgentRegistrationState,
     FfnAgentRegistrationState,
@@ -54,7 +53,6 @@ from xpool.service.wire import (
     AtnAgentTransportLeaseQuiesceResponse,
     AtnAgentView,
     ConfigCheckRequest,
-    ControlPlaneWarning,
     ElasticContextStateControlChannelRef,
     FabricInstanceRankOwnerFailure,
     FabricOwnerFailureReason,
@@ -70,7 +68,6 @@ from xpool.service.wire import (
     ProcessRef,
     ReadinessSnapshot,
     ReadinessStatus,
-    ServingListener,
 )
 from xpool.transport import TransportArenaHandle
 from xpool.utils.device import normalize_environment, visible_uuids
@@ -85,26 +82,7 @@ FABRIC_PHASE_TIMEOUT_S = {
     FabricGenerationPhase.FINALIZING: 60.0,
 }
 INSTANCE_STARTUP_TIMEOUT_S = 600.0
-GLOBAL_WARNING_CACHE_S = 1.0
-MPS_READINESS_CACHE_S = 1.0
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class ServingStartupState:
-    """Generation-scoped Instance listeners and serving-health confirmation."""
-
-    generation: FabricGenerationId | None = None
-    listeners: dict[ModelId, ServingListener] = field(default_factory=dict)
-    confirmed: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class ServingHealthTargets:
-    """Immutable ordered listener snapshot for one Fabric generation."""
-
-    generation: FabricGenerationId
-    listeners: tuple[tuple[ModelId, ServingListener], ...]
 
 
 class ControlPlane:
@@ -113,16 +91,12 @@ class ControlPlane:
     Attributes:
         registrations: Process identities and declared registration contracts.
         transport_broker: Transport publications and Instance-rank leases.
-        fabric_controller: Installed Fabric generation state.
-        serving_startup: Generation-scoped Instance listeners and one-time
-            serving-health confirmation.
-        fabric_plan_formation_lock: Serializes expensive generation formation
-            without blocking ordinary domain reads and writes.
+        fabric_controller: Installed Fabric generation or retained planning failure.
+        retiring_instance_owners: Pre-Plan Instance owners retained after deregistration until exit.
+        fabric_plan_formation_lock: Fences in-flight plan formation during retirement.
         lock: Reentrant domain lock protecting every mutable control-plane
             record and cross-module invariant.
-        warning_cache_at: Monotonic timestamp of the cached warning snapshot.
-        warning_cache: Warning snapshot reused for one cache interval to avoid
-            repeated process probes on every heartbeat.
+        warning_keys: Device-scoped warning conditions active at the last watchdog tick.
     """
 
     def __init__(self) -> None:
@@ -131,15 +105,14 @@ class ControlPlane:
         self.lock = threading.RLock()
         self.fabric_plan_formation_lock = threading.Lock()
         self.registrations = RegistrationBook()
+        self.retiring_instance_owners: set[ProcUniqId] = set()
         self.transport_broker = TransportBroker()
         self.fabric_controller = FabricController()
         self.context_state_capacity_policy: ecs.CapacityPolicy | None = None
-        self.serving_startup = ServingStartupState()
         self.membership_revision = 0
-        self.warning_cache_at = float("-inf")
-        self.warning_cache: tuple[ControlPlaneWarning, ...] = ()
-        self.mps_cache_at = float("-inf")
-        self.mps_cache_result: MpsProbeResult | None = None
+        self.last_planning_revision: int | None = None
+        self.warning_keys: set[tuple[str, int]] = set()
+        self.mps_status: MpsProbeResult | None = None
         self.mps_scope: MpsScope | None = None
         self.device_uuids: tuple[str, ...] | None = None
         self.admission_closed = False
@@ -206,6 +179,8 @@ class ControlPlane:
             OSError: Ownership-critical process observation fails.
         """
 
+        self.retire_terminal_fabric()
+        key = (request.role, request.device)
         with self.lock:
             scope = self.mps_scope
             visibility = self.device_uuids
@@ -217,6 +192,11 @@ class ControlPlane:
                 raise XpoolDaemonError("conflict", "Agent startup ABI version does not match daemon ABI")
             if request.device not in devices:
                 raise XpoolDaemonError("conflict", "Agent startup role placement does not match daemon")
+            if self.fabric_controller.planning_failure is not None:
+                existing = self.registrations.agent_startups.get(key)
+                if existing is None or (existing.pid, existing.create_time) != (request.pid, request.create_time):
+                    existing = None
+                self.fabric_controller.require_planning_owner(existing)
             fabric = self.fabric_controller.generation
             if fabric is not None and not any(
                 placement.role is request.role
@@ -243,11 +223,13 @@ class ControlPlane:
         with self.lock:
             if self.admission_closed or self.mps_scope is not scope or self.fabric_controller.generation is not fabric:
                 raise XpoolDaemonError("not_ready", "Agent startup admission changed during validation")
-            key = (request.role, request.device)
             existing = self.registrations.agent_startups.get(key)
-            if existing is not None and existing != identity and existing.is_alive():
-                raise XpoolDaemonError("conflict", "Agent startup device is owned by another live process")
-            self.registrations.agent_startups[key] = identity
+            self.fabric_controller.require_planning_owner(existing if existing == identity else None)
+            if existing != identity:
+                if existing is not None and existing.is_alive():
+                    raise XpoolDaemonError("conflict", "Agent startup device is owned by another live process")
+                self.registrations.agent_startups[key] = identity
+                self.membership_revision += 1
 
     def terminate_serving_client(self, request: MpsClientTermination) -> None:
         """Terminate contexts of an exact client of the retained MPS scope.
@@ -285,13 +267,12 @@ class ControlPlane:
         except (OSError, RuntimeError, subprocess.TimeoutExpired, psutil.Error) as error:
             raise XpoolDaemonError("not_ready", f"owned MPS client termination is unconfirmed: {error}") from error
 
-    def refresh_mps_status(self, now: float) -> None:
-        """Refresh MPS readiness outside the domain lock when its cache is stale."""
+    def refresh_mps_status(self) -> None:
+        """Observe the retained MPS scope without holding the domain lock."""
 
         with self.lock:
-            if self.mps_cache_result is not None and now - self.mps_cache_at < MPS_READINESS_CACHE_S:
+            if self.closed:
                 return
-            previous = self.mps_cache_result
             scope = self.mps_scope
         try:
             result = (
@@ -299,13 +280,13 @@ class ControlPlane:
             )
         except subprocess.TimeoutExpired as error:
             result = MpsProbeResult(False, None, f"MPS management command exceeded {error.timeout}s")
-        except TimeoutError:
-            if scope is None or scope.cleanup_deadline is None or monotonic() < scope.cleanup_deadline:
-                raise
-            result = MpsProbeResult(None, None, "MPS observation unavailable after cleanup deadline")
+        except TimeoutError as error:
+            result = MpsProbeResult(None, None, f"MPS observation unavailable: {error}")
         with self.lock:
-            self.mps_cache_at = now
-            self.mps_cache_result = result
+            if self.closed or self.mps_scope is not scope:
+                return
+            previous = self.mps_status
+            self.mps_status = result
         if previous is None or previous.online != result.online:
             log = logger.warning if result.online is False else logger.info
             status = "unavailable" if result.online is None else "online" if result.online else "offline"
@@ -343,9 +324,8 @@ class ControlPlane:
                         f"{path}[{index}]",
                     )
                 return
-            if client_value is not missing and daemon_value is not missing:
-                if type(client_value) is type(daemon_value) and client_value == daemon_value:
-                    return
+            if client_value is not missing and daemon_value is not missing and client_value == daemon_value:
+                return
             differences.append(f"- {path}: client={display(client_value)}, daemon={display(daemon_value)}")
 
         compare(
@@ -378,55 +358,58 @@ class ControlPlane:
         with self.lock:
             return self.registrations.instance_views()
 
-    def global_warnings(self, now: float) -> list[ControlPlaneWarning]:
-        """Return daemon-owned warnings and log device-scoped state edges.
+    def log_warning_transitions(self, now: float) -> None:
+        """Log the first entry and final clearance of each device-scoped warning."""
 
-        Returned warning details remain per contributor. Logging aggregates
-        them so the first warning for a ``(kind, device)`` condition emits its
-        entry edge and removal of the final matching warning emits its clear
-        edge.
-        """
-
+        config = get_global_config()
+        current: set[tuple[str, int]] = set()
         with self.lock:
-            if now - self.warning_cache_at < GLOBAL_WARNING_CACHE_S:
-                return list(self.warning_cache)
-            projection = ControlPlaneProjection.capture(
-                config=get_global_config(),
-                now=now,
-                mps_online=None if self.mps_cache_result is None else self.mps_cache_result.online,
-                registrations=self.registrations,
-                transport=self.transport_broker,
-                fabric=self.fabric_controller,
-            )
-            previous_warnings = self.warning_cache
-            self.warning_cache_at = now
-            self.warning_cache = projection.warnings
-            warnings = projection.warnings
-        previous_by_key = {(warning.kind, warning.device) for warning in previous_warnings}
-        current_by_key = {(warning.kind, warning.device) for warning in warnings}
-        for kind, device in sorted(current_by_key - previous_by_key):
+            for device in config.atn.devices:
+                atnagent = self.registrations.atnagents.query(device)
+                if atnagent is None or atnagent.readiness_status(now) is not ReadinessStatus.ONLINE:
+                    current.add(("stale_atnagent", device))
+                elif self.transport_broker.is_quiescing(device):
+                    current.add(("quiescing_atnagent", device))
+            for device in config.ffn.devices:
+                ffnagent = self.registrations.ffnagents.query(device)
+                if ffnagent is None or ffnagent.readiness_status(now) is not ReadinessStatus.ONLINE:
+                    current.add(("stale_ffnagent", device))
+            for instance in config.instances:
+                for rank, device in enumerate(config.atn.devices):
+                    worker = self.registrations.instances.query(InstanceRankId(model_id=instance.model_id, rank=rank))
+                    if worker is None or worker.readiness_status(now) is not ReadinessStatus.ONLINE:
+                        current.add(("stale_instance", device))
+            previous = self.warning_keys
+            self.warning_keys = current
+        for kind, device in sorted(current - previous):
             logger.warning("global warning entered kind=%s device=%s", kind, device)
-        for kind, device in sorted(previous_by_key - current_by_key):
+        for kind, device in sorted(previous - current):
             logger.info("global warning cleared kind=%s device=%s", kind, device)
-        return list(warnings)
 
-    def retire_terminal_generation(self) -> None:
-        """Retire terminal generation state after every old owner has exited."""
+    def retire_terminal_fabric(self) -> None:
+        """Retire a stopped generation or planning failure after its owners exit."""
 
         with self.lock:
             fabric = self.fabric_controller.generation
-            if fabric is None or fabric.phase is not FabricGenerationPhase.STOPPED:
+            failure = self.fabric_controller.planning_failure
+            if failure is not None:
+                owners = failure.owners
+            elif fabric is not None and fabric.phase is FabricGenerationPhase.STOPPED:
+                owners = frozenset((*fabric.agent_owners.values(), *fabric.instance_owners.values()))
+            else:
                 return
-            owners = tuple({*fabric.agent_owners.values(), *fabric.instance_owners.values()})
-        any_alive = any(owner.is_alive() for owner in owners)
+        if any(owner.is_alive() for owner in owners):
+            return
         with self.lock:
-            if self.fabric_controller.generation is fabric and not any_alive:
+            if failure is not None:
+                if self.fabric_controller.planning_failure is failure:
+                    self.fabric_controller.planning_failure = None
+            elif self.fabric_controller.generation is fabric:
                 policy = self.context_state_capacity_policy
                 if policy is not None:
                     policy.close()
                     self.context_state_capacity_policy = None
                 self.fabric_controller.generation = None
-                self.serving_startup = ServingStartupState()
 
     def register_atnagent(self, registration: AtnAgentRegistrationState) -> None:
         """Install an AtnAgent registration after its prior arena users retire.
@@ -440,7 +423,7 @@ class ControlPlane:
 
         """
 
-        self.retire_terminal_generation()
+        self.retire_terminal_fabric()
         if registration.device not in get_global_config().atnagent_by_device:
             raise XpoolDaemonError("not_found", "unknown AtnAgent")
         if registration.abi_version != ABI_VERSION:
@@ -451,24 +434,8 @@ class ControlPlane:
                     raise XpoolDaemonError("not_ready", "participant admission is closed")
                 raise XpoolDaemonError("conflict", "AtnAgent registration requires its admitted startup identity")
             existing = self.registrations.atnagents.query(registration.device)
-            fabric = self.fabric_controller.generation
-            if fabric is not None:
-                pe = next(
-                    pe
-                    for pe, item in enumerate(fabric.plan.pe_placements)
-                    if item.role is FabricRole.ATNAGENT and item.device == registration.device
-                )
-                if fabric.agent_owners[pe] != registration.proc:
-                    fabric.record_owner_failure(
-                        FabricPeOwnerFailure(
-                            role="atnagent",
-                            pe=pe,
-                            reason=FabricOwnerFailureReason.REPLACED,
-                        )
-                    )
-                    self.fabric_controller.abort(now=monotonic())
-                    raise XpoolDaemonError("conflict", "retained Fabric generation forbids AtnAgent replacement")
         existing_alive = False if existing is None else existing.proc.is_alive()
+        has_live_arena_users = False
         if existing is not None and existing.proc != registration.proc and not existing_alive:
             with self.lock:
                 leased_instances = self.transport_broker.leased_instances(registration.device, existing.proc)
@@ -477,23 +444,26 @@ class ControlPlane:
                     for instance in leased_instances
                     if (owner := self.registrations.instances.query(instance)) is not None
                 ]
-            if any(owner.proc.is_alive() for owner in owners):
-                raise XpoolDaemonError("not_ready", "previous AtnAgent still has live arena users")
-            with self.lock:
-                if self.registrations.atnagents.query(registration.device) is not existing:
-                    raise XpoolDaemonError("not_ready", "atnagent registration changed during generation cleanup")
+            has_live_arena_users = any(owner.proc.is_alive() for owner in owners)
         with self.lock:
             if self.registrations.agent_startups.get((FabricRole.ATNAGENT, registration.device)) != registration.proc:
                 raise XpoolDaemonError("conflict", "AtnAgent startup ownership changed during registration")
+            if self.registrations.atnagents.query(registration.device) is not existing:
+                raise XpoolDaemonError("not_ready", "atnagent registration changed during validation")
+            self.fabric_controller.require_planning_owner(
+                registration.proc if existing is not None and existing.proc == registration.proc else None
+            )
+            self.fabric_controller.require_agent_registration_owner(
+                FabricRole.ATNAGENT, registration.device, registration.proc, now=monotonic()
+            )
+            if has_live_arena_users:
+                raise XpoolDaemonError("not_ready", "previous AtnAgent still has live arena users")
             changed = self.registrations.atnagents.install_snapshot(
                 registration,
                 existing,
                 existing_alive=existing_alive,
             )
-            installed = self.registrations.atnagents.query(registration.device)
-            if installed is None:
-                raise RuntimeError("AtnAgent registration disappeared during installation")
-            self.transport_broker.install_atnagent(registration.device, installed.proc)
+            self.transport_broker.install_atnagent(registration.device, registration.proc)
             if changed:
                 self.membership_revision += 1
                 logger.info(
@@ -501,25 +471,19 @@ class ControlPlane:
                     registration.device,
                     registration.proc.pid,
                 )
-        self.ensure_fabric_plan()
 
-    def register_ffnagent(
-        self,
-        registration: FfnAgentRegistrationState,
-        model_specs: tuple[ffn.FfnModelSpec, ...],
-    ) -> None:
+    def register_ffnagent(self, registration: FfnAgentRegistrationState) -> None:
         """Install a configured FfnAgent process registration.
 
         Args:
             registration: Candidate FfnAgent process registration.
-            model_specs: Complete ordered Model Specs declared by the process.
 
         Raises:
             XpoolDaemonError: If placement or ABI is invalid or a different
                 live process owns the configured device.
         """
 
-        self.retire_terminal_generation()
+        self.retire_terminal_fabric()
         if registration.device not in get_global_config().ffnagent_by_device:
             raise XpoolDaemonError("not_found", "unknown FfnAgent")
         if registration.abi_version != ABI_VERSION:
@@ -530,37 +494,23 @@ class ControlPlane:
                     raise XpoolDaemonError("not_ready", "participant admission is closed")
                 raise XpoolDaemonError("conflict", "FfnAgent registration requires its admitted startup identity")
             existing = self.registrations.ffnagents.query(registration.device)
-            fabric = self.fabric_controller.generation
-            if fabric is not None:
-                pe = next(
-                    pe
-                    for pe, item in enumerate(fabric.plan.pe_placements)
-                    if item.role is FabricRole.FFNAGENT and item.device == registration.device
-                )
-                if fabric.agent_owners[pe] != registration.proc:
-                    fabric.record_owner_failure(
-                        FabricPeOwnerFailure(
-                            role="ffnagent",
-                            pe=pe,
-                            reason=FabricOwnerFailureReason.REPLACED,
-                        )
-                    )
-                    self.fabric_controller.abort(now=monotonic())
-                    raise XpoolDaemonError("conflict", "retained Fabric generation forbids FfnAgent replacement")
         existing_alive = False if existing is None else existing.proc.is_alive()
         with self.lock:
             if self.registrations.agent_startups.get((FabricRole.FFNAGENT, registration.device)) != registration.proc:
                 raise XpoolDaemonError("conflict", "FfnAgent startup ownership changed during registration")
-            canonical_specs = self.registrations.ffn_model_specs
-            if canonical_specs is not None and model_specs != canonical_specs:
-                raise XpoolDaemonError("conflict", "FfnAgent Model Specs disagree with the canonical declaration")
+            if self.registrations.ffnagents.query(registration.device) is not existing:
+                raise XpoolDaemonError("not_ready", "ffnagent registration changed during validation")
+            self.fabric_controller.require_planning_owner(
+                registration.proc if existing is not None and existing.proc == registration.proc else None
+            )
+            self.fabric_controller.require_agent_registration_owner(
+                FabricRole.FFNAGENT, registration.device, registration.proc, now=monotonic()
+            )
             changed = self.registrations.ffnagents.install_snapshot(
                 registration,
                 existing,
                 existing_alive=existing_alive,
             )
-            if canonical_specs is None:
-                self.registrations.ffn_model_specs = model_specs
             if changed:
                 self.membership_revision += 1
                 logger.info(
@@ -568,7 +518,6 @@ class ControlPlane:
                     registration.device,
                     registration.proc.pid,
                 )
-        self.ensure_fabric_plan()
 
     def register_instance(self, registration: InstanceRankRegistrationState) -> None:
         """Install a live Instance worker with matching topology and contracts.
@@ -576,7 +525,7 @@ class ControlPlane:
         Registration commit shares the domain lock with closing participant admission.
         """
 
-        self.retire_terminal_generation()
+        self.retire_terminal_fabric()
         model_id = registration.instance.model_id
         rank = registration.instance.rank
         if registration.abi_version != ABI_VERSION:
@@ -599,6 +548,15 @@ class ControlPlane:
             if self.admission_closed:
                 raise XpoolDaemonError("not_ready", "participant admission is closed")
             existing = self.registrations.instances.query(registration.instance)
+        existing_alive = False if existing is None else existing.proc.is_alive()
+        with self.lock:
+            if self.admission_closed:
+                raise XpoolDaemonError("not_ready", "participant admission is closed")
+            if self.registrations.instances.query(registration.instance) is not existing:
+                raise XpoolDaemonError("not_ready", "instance registration changed during validation")
+            self.fabric_controller.require_planning_owner(
+                registration.proc if existing is not None and existing.proc == registration.proc else None
+            )
             fabric = self.fabric_controller.generation
             if fabric is not None:
                 expected_owner = fabric.instance_owners.get(registration.instance)
@@ -612,12 +570,6 @@ class ControlPlane:
                     )
                     self.fabric_controller.quiesce(now=monotonic())
                     raise XpoolDaemonError("conflict", "retained Fabric generation forbids Instance-rank replacement")
-        existing_alive = False if existing is None else existing.proc.is_alive()
-        with self.lock:
-            if self.admission_closed:
-                raise XpoolDaemonError("not_ready", "participant admission is closed")
-            if self.registrations.instances.query(registration.instance) is not existing:
-                raise XpoolDaemonError("not_ready", "instance registration changed during validation")
             if self.mps_scope is None:
                 raise XpoolDaemonError("not_ready", "owned attention MPS scope is unavailable")
             for peer in self.registrations.instances.values():
@@ -654,7 +606,6 @@ class ControlPlane:
                     registration.proc.pid,
                     get_global_config().atn.devices[registration.instance.rank],
                 )
-        self.ensure_fabric_plan()
 
     def deregister_instance(self, model_id: ModelId, rank: int, owner: ProcessRef) -> None:
         """Remove an instance-rank registration when the owner process requests it."""
@@ -668,6 +619,8 @@ class ControlPlane:
         registration.validate_process_ref(owner, context="deregister")
         with self.lock:
             self.registrations.instances.remove_snapshot(instance, registration)
+            if self.fabric_controller.generation is None:
+                self.retiring_instance_owners.add(registration.proc)
             lease = self.transport_broker.remove_instance(instance)
             self.membership_revision += 1
             self.fabric_controller.instance_departed(
@@ -687,99 +640,111 @@ class ControlPlane:
             registration.proc.pid,
         )
 
-    def ensure_fabric_plan(self) -> FabricDeploymentPlan | None:
+    def form_fabric_plan(self) -> None:
         """Create a Fabric plan from one complete membership snapshot.
 
-        Native UID creation runs outside the domain lock. The candidate is
-        committed only if its membership revision still matches.
+        The control loop holds the formation lock through publication or disposal.
         """
 
-        with self.fabric_plan_formation_lock:
-            config = get_global_config()
-            # Capture: freeze complete membership while the registration revision
-            # and current-generation check are protected by the domain lock.
-            with self.lock:
-                if self.fabric_controller.generation is not None:
-                    return self.fabric_controller.generation.plan
-                if self.admission_closed:
-                    return None
-                membership = FabricMembership.capture(config, self.registrations, self.membership_revision)
+        config = get_global_config()
+        with self.lock:
+            revision = self.membership_revision
+            if (
+                self.admission_closed
+                or self.fabric_controller.generation is not None
+                or self.fabric_controller.planning_failure is not None
+                or self.last_planning_revision == revision
+            ):
+                return
+            self.last_planning_revision = revision
+            membership = FabricMembership.capture(config, self.registrations, revision)
 
-            # Validate: reject incomplete or dead membership without holding the
-            # domain lock or creating generation resources.
-            if membership is None or not all(owner.is_alive() for owner in membership.owners()):
-                return None
+        if membership is None or not all(owner.is_alive() for owner in membership.owners()):
+            return
 
-            # Plan: materialize the scheduler and immutable plan without
-            # holding the domain lock.
-            plan_started_at = monotonic()
-            if config.scheduler.ffn_policy is FfnSchedulingPolicy.FIFO:
-                scheduler = FifoSchedulerPolicy()
-            else:
-                seed = config.scheduler.ffn_random_seed
-                while seed is None or seed == 0:
-                    seed = secrets.randbits(64)
-                scheduler = RandomSchedulerPolicy(seed=seed)
-            try:
-                profile = load_memory_calibration_profile(path=config.ffn.device_memory_calibration)
-                if profile is not None:
-                    profile.require_compatible(
-                        context=membership.memory_context, executor_lane_count=config.scheduler.ffn_concurrency
-                    )
-            except RuntimeError as error:
-                raise XpoolDaemonError("conflict", str(error)) from error
-            coefficients = None if profile is None else profile.ffn.coefficients
-            placement = place_ffn_models(
-                model_specs=membership.model_specs,
-                instance_plans=membership.instance_plans,
-                ffnagent_free_memory_bytes=membership.ffnagent_free_memory_bytes,
-                ffnagent_device_properties=membership.ffnagent_device_properties,
-                coefficients=coefficients,
+        plan_started_at = monotonic()
+        try:
+            model_specs = tuple(
+                architecture.load(model_id=model.id, model_path=config.model_path_of(model.id))
+                for model in config.models
             )
-            if not all(owner.is_alive() for owner in membership.owners()):
-                return None
-            plan = FabricDeploymentPlan(
-                generation=FabricGenerationId.create(),
-                uid=FabricUid(value=xpool.native.fabric.create_uid()),
-                ffn_memory_estimates=placement.memory_estimates,
-                pe_placements=membership.pe_placements,
-                executor_lane_count=config.scheduler.ffn_concurrency,
-                scheduler=scheduler,
-                model_plans=placement.model_plans,
-                instance_plans=membership.instance_plans,
-            )
-            policy = ecs.CapacityPolicy.create(config, plan.generation)
-            # Commit: install only if no generation appeared and the captured
-            # membership revision still describes the authoritative registration set.
-            with self.lock:
-                if self.fabric_controller.generation is not None:
-                    policy.close()
-                    return self.fabric_controller.generation.plan
-                if self.admission_closed or self.membership_revision != membership.revision:
-                    policy.close()
-                    return None
-                installed_plan = self.fabric_controller.install(
-                    FabricGenerationState(
-                        plan=plan,
-                        phase=FabricGenerationPhase.PREPARING_JOIN,
-                        phase_started_at=monotonic(),
-                        invocation_failure=None,
-                        owner_failure=None,
-                        control_failure=None,
-                        agent_owners=dict(membership.agent_owners),
-                        instance_owners=dict(membership.instance_owners),
-                    )
+        except architecture.FfnModelSourceError as error:
+            raise XpoolDaemonError("conflict", str(error)) from error
+        model_spec_digests = tuple(spec.digest() for spec in model_specs)
+        for device, declared_digests in zip(config.ffn.devices, membership.ffnagent_model_spec_digests, strict=True):
+            if declared_digests != model_spec_digests:
+                raise XpoolDaemonError(
+                    "conflict", f"ffnagent on device {device} disagrees with the compiled FFN model specs"
                 )
-                self.context_state_capacity_policy = policy
-                self.serving_startup = ServingStartupState(generation=installed_plan.generation)
-            logger.info(
-                "fabric plan installed generation=%s model_count=%s pe_count=%s elapsed=%.3fs",
-                installed_plan.generation.format(),
-                len(installed_plan.model_plans),
-                len(installed_plan.pe_placements),
-                monotonic() - plan_started_at,
+        logger.info(
+            "ffn model specs compiled model_count=%s elapsed=%.3fs", len(model_specs), monotonic() - plan_started_at
+        )
+
+        with self.lock:
+            if self.admission_closed or self.membership_revision != membership.revision:
+                return
+
+        if config.scheduler.ffn_policy is FfnSchedulingPolicy.FIFO:
+            scheduler = FifoSchedulerPolicy()
+        else:
+            seed = config.scheduler.ffn_random_seed
+            while seed is None or seed == 0:
+                seed = secrets.randbits(64)
+            scheduler = RandomSchedulerPolicy(seed=seed)
+        try:
+            profile = load_memory_calibration_profile(path=config.ffn.device_memory_calibration)
+            if profile is not None:
+                profile.require_compatible(
+                    context=membership.memory_context, executor_lane_count=config.scheduler.ffn_concurrency
+                )
+        except RuntimeError as error:
+            raise XpoolDaemonError("conflict", str(error)) from error
+        coefficients = None if profile is None else profile.ffn.coefficients
+        placement_started_at = monotonic()
+        placement = place_ffn_models(
+            model_specs=model_specs,
+            instance_plans=membership.instance_plans,
+            ffnagent_free_memory_bytes=membership.ffnagent_free_memory_bytes,
+            ffnagent_device_properties=membership.ffnagent_device_properties,
+            coefficients=coefficients,
+        )
+        placement_seconds = monotonic() - placement_started_at
+        if not all(owner.is_alive() for owner in membership.owners()):
+            return
+        plan = FabricDeploymentPlan(
+            generation=FabricGenerationId.create(),
+            uid=FabricUid(value=xpool.native.fabric.create_uid()),
+            ffn_memory_estimates=placement.memory_estimates,
+            pe_placements=membership.pe_placements,
+            executor_lane_count=config.scheduler.ffn_concurrency,
+            scheduler=scheduler,
+            model_plans=placement.model_plans,
+            instance_plans=membership.instance_plans,
+        )
+        policy = ecs.CapacityPolicy.create(config, plan.generation)
+        with self.lock:
+            if self.admission_closed or self.membership_revision != membership.revision:
+                policy.close()
+                return
+            self.fabric_controller.generation = FabricGenerationState(
+                plan=plan,
+                phase=FabricGenerationPhase.PREPARING_JOIN,
+                phase_started_at=monotonic(),
+                invocation_failure=None,
+                owner_failure=None,
+                control_failure=None,
+                agent_owners=dict(membership.agent_owners),
+                instance_owners=dict(membership.instance_owners),
             )
-            return installed_plan
+            self.context_state_capacity_policy = policy
+        logger.info(
+            "fabric plan installed generation=%s model_count=%s pe_count=%s placement_seconds=%.3f elapsed=%.3fs",
+            plan.generation.format(),
+            len(plan.model_plans),
+            len(plan.pe_placements),
+            placement_seconds,
+            monotonic() - plan_started_at,
+        )
 
     def require_fabric_plan(self) -> FabricDeploymentPlan:
         """Return the installed immutable Fabric plan without forming one."""
@@ -797,22 +762,37 @@ class ControlPlane:
                 raise XpoolDaemonError("not_found", "elastic context state control channel generation is not retained")
             return policy.channel_ref
 
-    def step_context_state_capacity(self) -> None:
-        """Advance one Generation-scoped KV policy transition."""
+    def step_fabric_control(self) -> None:
+        """Form a generation or advance its elastic context state policy."""
 
         with self.lock:
             fabric = self.fabric_controller.generation
-            policy = self.context_state_capacity_policy
-            if fabric is None or policy is None:
+            if fabric is not None:
+                policy = self.context_state_capacity_policy
+                if policy is not None and fabric.phase is FabricGenerationPhase.EXECUTABLE:
+                    try:
+                        policy.step(self.registrations, fabric)
+                    except Exception as error:
+                        fabric.record_control_failure(f"elastic context state capacity policy failed: {error}")
+                        self.fabric_controller.abort(now=monotonic())
+                        raise
                 return
-            if fabric.phase is not FabricGenerationPhase.EXECUTABLE:
-                return
+        with self.fabric_plan_formation_lock:
             try:
-                policy.step(self.registrations, fabric)
+                self.form_fabric_plan()
             except Exception as error:
-                fabric.record_control_failure(f"elastic context state capacity policy failed: {error}")
-                self.fabric_controller.abort(now=monotonic())
-                raise
+                message = str(error)
+                with self.lock:
+                    retain = not self.admission_closed and self.membership_revision == self.last_planning_revision
+                    if retain:
+                        self.fabric_controller.planning_failure = FabricPlanningFailure(
+                            message=message,
+                            owners=frozenset(registration.proc for registration in self.registrations.all_values()),
+                        )
+                if not isinstance(error, XpoolDaemonError):
+                    raise
+                if retain:
+                    logger.error("fabric planning failed detail=%s", message)
 
     def begin_close(self, *, deadline: float | None = None) -> float:
         """Seal admission and retain the first retirement trigger's deadline.
@@ -879,16 +859,20 @@ class ControlPlane:
                 try:
                     with self.lock:
                         fabric = self.fabric_controller.generation
+                        planning_failure = self.fabric_controller.planning_failure
                         owners = tuple(
                             {
                                 *(registration.proc for registration in self.registrations.all_values()),
                                 *self.registrations.agent_startups.values(),
+                                *self.retiring_instance_owners,
                                 *(() if fabric is None else fabric.agent_owners.values()),
                                 *(() if fabric is None else fabric.instance_owners.values()),
+                                *(() if planning_failure is None else planning_failure.owners),
                             }
                         )
                         scope = self.mps_scope
                         instance_owners = {
+                            *self.retiring_instance_owners,
                             *(registration.proc for registration in self.registrations.instances.values()),
                             *(() if fabric is None else fabric.instance_owners.values()),
                         }
@@ -909,7 +893,11 @@ class ControlPlane:
                         with self.lock:
                             if fabric is not None and self.fabric_controller.generation is fabric and now < deadline:
                                 self.fabric_controller.quiesce(now=now)
-                        if not any(owner.is_alive() for owner in owners):
+                        # Sealed admission leaves only an existing formation to finish before release.
+                        if (
+                            not any(owner.is_alive() for owner in owners)
+                            and not self.fabric_plan_formation_lock.locked()
+                        ):
                             # After expiry, only a controller already exited can
                             # complete housekeeping; no new command gets a budget.
                             if scope is not None:
@@ -961,27 +949,36 @@ class ControlPlane:
         self,
         report: FabricParticipantReport,
     ) -> None:
-        """Commit one owner-validated participant report."""
+        """Validate the process outside the domain lock and commit its current report."""
 
         with self.lock:
-            now = monotonic()
             fabric = self.fabric_controller.generation
             if fabric is None:
                 raise XpoolDaemonError("conflict", "participant reported a retired Fabric generation")
-            if report.pe < 0 or report.pe >= len(fabric.plan.pe_placements):
-                self.fabric_controller.reject_report("participant reported an unknown Fabric PE", now=now)
+            if report.pe >= len(fabric.plan.pe_placements):
+                self.fabric_controller.reject_report("participant reported an unknown Fabric PE", now=monotonic())
             placement = fabric.plan.pe_placements[report.pe]
-            registration = (
-                self.registrations.atnagents.query(placement.device)
-                if placement.role is FabricRole.ATNAGENT
-                else self.registrations.ffnagents.query(placement.device)
+            table = (
+                self.registrations.atnagents if placement.role is FabricRole.ATNAGENT else self.registrations.ffnagents
             )
-            try:
-                if registration is None or registration.proc != fabric.agent_owners[report.pe]:
-                    raise XpoolDaemonError("conflict", "Fabric participant registration does not match its plan owner")
-                registration.validate_process_ref(report.owner, context="Fabric participant report")
-            except XpoolDaemonError:
-                self.fabric_controller.reject_report("Fabric participant report owner does not match its PE", now=now)
+            registration = table.query(placement.device)
+            if registration is None or registration.proc != fabric.agent_owners[report.pe]:
+                self.fabric_controller.reject_report(
+                    "Fabric participant registration does not match its plan owner", now=monotonic()
+                )
+
+        failure: XpoolDaemonError | None = None
+        try:
+            registration.validate_process_ref(report.owner, context="Fabric participant report")
+        except XpoolDaemonError as error:
+            failure = error
+
+        with self.lock:
+            if self.fabric_controller.generation is not fabric or table.query(placement.device) is not registration:
+                raise XpoolDaemonError("not_ready", "Fabric or participant registration changed during report")
+            now = monotonic()
+            if failure is not None:
+                self.fabric_controller.reject_report(str(failure), now=now)
             self.fabric_controller.record_participant(report, now=now)
 
     def publish_instance_initialized(
@@ -991,7 +988,7 @@ class ControlPlane:
         rank: int,
         publication: InstanceRankInitializedPublication,
     ) -> None:
-        """Record one Instance Rank's scheduler construction and listener."""
+        """Record that one Instance Rank completed scheduler construction."""
 
         self.validate_instance_rank(model_id, rank)
         instance = InstanceRankId(model_id=model_id, rank=rank)
@@ -1001,35 +998,25 @@ class ControlPlane:
             raise XpoolDaemonError("not_ready", "instance rank must register before initialization barrier")
         registration.validate_process_ref(publication.owner, context="instance initialized")
         with self.lock:
-            if self.fabric_controller.generation is None:
-                raise XpoolDaemonError("not_ready", "fabric generation retired during initialization")
             if self.registrations.instances.query(instance) is not registration:
                 raise XpoolDaemonError("not_ready", "instance registration changed during initialization")
-            listener = self.serving_startup.listeners.get(model_id)
-            if listener is not None and listener != publication.serving_listener:
-                raise XpoolDaemonError("conflict", "serving listener disagrees across instance ranks")
             self.fabric_controller.record_initialized(
                 registration.instance,
                 registration.proc,
                 generation=publication.generation,
             )
-            self.serving_startup.listeners.setdefault(model_id, publication.serving_listener)
 
-    def heartbeat_response(self, now: float) -> HeartbeatResponse:
-        """Build the unified heartbeat response from authoritative state."""
+    def heartbeat_response(self) -> HeartbeatResponse:
+        """Capture desired Fabric state while the caller holds the domain lock."""
 
-        with self.lock:
-            fabric = self.fabric_controller.generation
-            generation = None if fabric is None else fabric.plan.generation
-            fabric_phase = None if fabric is None else fabric.phase
+        fabric = self.fabric_controller.generation
         return HeartbeatResponse(
-            warnings=self.global_warnings(now),
-            generation=generation,
-            fabric_phase=fabric_phase,
+            generation=None if fabric is None else fabric.plan.generation,
+            fabric_phase=None if fabric is None else fabric.phase,
         )
 
     def heartbeat_atnagent(self, device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
-        """Refresh a atnagent heartbeat and return global daemon warnings."""
+        """Refresh an AtnAgent heartbeat and return current Fabric state."""
 
         now = monotonic()
         with self.lock:
@@ -1039,10 +1026,10 @@ class ControlPlane:
         registration.validate_process_ref(heartbeat, context="heartbeat")
         with self.lock:
             self.registrations.atnagents.commit_heartbeat(device, registration, now=now)
-        return self.heartbeat_response(now)
+            return self.heartbeat_response()
 
     def heartbeat_ffnagent(self, device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
-        """Refresh an FfnAgent heartbeat and return global daemon warnings."""
+        """Refresh an FfnAgent heartbeat and return current Fabric state."""
 
         now = monotonic()
         with self.lock:
@@ -1052,10 +1039,10 @@ class ControlPlane:
         registration.validate_process_ref(heartbeat, context="heartbeat")
         with self.lock:
             self.registrations.ffnagents.commit_heartbeat(device, registration, now=now)
-        return self.heartbeat_response(now)
+            return self.heartbeat_response()
 
     def heartbeat_instance(self, model_id: ModelId, rank: int, heartbeat: ProcessRef) -> HeartbeatResponse:
-        """Refresh an instance-rank heartbeat and return global daemon warnings."""
+        """Refresh an Instance-rank heartbeat and return current Fabric state."""
 
         now = monotonic()
         instance = InstanceRankId(model_id=model_id, rank=rank)
@@ -1066,31 +1053,33 @@ class ControlPlane:
         registration.validate_process_ref(heartbeat, context="heartbeat")
         with self.lock:
             self.registrations.instances.commit_heartbeat(instance, registration, now=now)
-        return self.heartbeat_response(now)
+            return self.heartbeat_response()
 
     def watchdog(self) -> None:
         """Detect owner loss, enforce barriers, and retry fail-stop cleanup."""
 
         now = monotonic()
-        self.refresh_mps_status(now)
 
         # Snapshot identities under the lock, but perform process-liveness I/O
         # outside it so a slow kernel/process query cannot block daemon control.
         with self.lock:
             registrations = tuple(self.registrations.all_values())
             fabric_snapshot = self.fabric_controller.generation
-            generation_owners = (
-                ()
-                if fabric_snapshot is None
-                else tuple({*fabric_snapshot.agent_owners.values(), *fabric_snapshot.instance_owners.values()})
-            )
-        liveness = {registration.proc: registration.proc.is_alive() for registration in registrations}
-        owner_liveness = {
-            owner: liveness[owner] if owner in liveness else owner.is_alive() for owner in generation_owners
-        }
+            owners = self.retiring_instance_owners.copy()
+            owners.update(registration.proc for registration in registrations)
+            if fabric_snapshot is not None:
+                owners.update(fabric_snapshot.agent_owners.values())
+                owners.update(fabric_snapshot.instance_owners.values())
+        liveness = {owner: owner.is_alive() for owner in owners}
         with self.lock:
             for registration in registrations:
                 registration.alive = liveness[registration.proc]
+            self.retiring_instance_owners.difference_update(owner for owner, alive in liveness.items() if not alive)
+        self.log_warning_transitions(now)
+
+        if fabric_snapshot is None:
+            self.retire_terminal_fabric()
+            return
 
         # Reconcile only the generation captured above. A replacement makes
         # this watchdog iteration stale and therefore harmless.
@@ -1109,7 +1098,7 @@ class ControlPlane:
                     else self.registrations.ffnagents.query(placement.device)
                 )
                 reason = None
-                if registration is None or not owner_liveness[owner]:
+                if registration is None or not liveness[owner]:
                     reason = FabricOwnerFailureReason.EXITED
                 elif registration.proc != owner:
                     reason = FabricOwnerFailureReason.REPLACED
@@ -1135,7 +1124,7 @@ class ControlPlane:
                 for instance, owner in fabric.instance_owners.items():
                     registration = self.registrations.instances.query(instance)
                     reason = None
-                    if registration is None or not owner_liveness[owner]:
+                    if registration is None or not liveness[owner]:
                         reason = FabricOwnerFailureReason.EXITED
                     elif registration.proc != owner:
                         reason = FabricOwnerFailureReason.REPLACED
@@ -1159,10 +1148,9 @@ class ControlPlane:
                         self.fabric_controller.quiesce(now=now)
                         break
 
-            expected_initialized = len(get_global_config().instances) * get_global_config().atn_world_size
             if (
                 fabric.phase is FabricGenerationPhase.EXECUTABLE
-                and len(fabric.initialized_instances) < expected_initialized
+                and len(fabric.initialized_instances) < len(fabric.instance_owners)
                 and now - fabric.phase_started_at > INSTANCE_STARTUP_TIMEOUT_S
             ):
                 fabric.record_control_failure("SGLang initialization barrier timed out")
@@ -1175,9 +1163,9 @@ class ControlPlane:
                 self.fabric_controller.abort(now=now)
 
             if fabric.phase is FabricGenerationPhase.ABORTING:
-                instances_retired = not any(owner_liveness[owner] for owner in fabric.instance_owners.values())
+                instances_retired = not any(liveness[owner] for owner in fabric.instance_owners.values())
                 agents_drained = all(
-                    not owner_liveness[owner]
+                    not liveness[owner]
                     or (
                         (report := fabric.participants.get(pe)) is not None
                         and report.phase in {FabricParticipantPhase.DRAINED, FabricParticipantPhase.FINALIZED}
@@ -1187,7 +1175,7 @@ class ControlPlane:
                 if instances_retired and agents_drained:
                     # STOPPED permits failed owner exit, not generation reclamation.
                     fabric.transition(FabricGenerationPhase.STOPPED, now=now)
-        self.retire_terminal_generation()
+        self.retire_terminal_fabric()
 
     def upsert_atnagent_transport_arenas(
         self,
@@ -1305,68 +1293,14 @@ class ControlPlane:
 
         now = monotonic()
         with self.lock:
-            return ControlPlaneProjection.capture(
+            return capture_readiness(
                 config=get_global_config(),
                 now=now,
-                mps_online=None if self.mps_cache_result is None else self.mps_cache_result.online,
+                mps_online=None if self.mps_status is None else self.mps_status.online,
                 registrations=self.registrations,
                 transport=self.transport_broker,
                 fabric=self.fabric_controller,
-            ).readiness
-
-    def capture_serving_health_targets(self) -> ServingHealthTargets | None:
-        """Return current ordered Instance listeners once System Ready is true."""
-
-        config = get_global_config()
-        now = monotonic()
-        with self.lock:
-            fabric = self.fabric_controller.generation
-            startup = self.serving_startup
-            if (
-                fabric is None
-                or startup.generation != fabric.plan.generation
-                or startup.confirmed
-                or not ControlPlaneProjection.capture(
-                    config=config,
-                    now=now,
-                    mps_online=None if self.mps_cache_result is None else self.mps_cache_result.online,
-                    registrations=self.registrations,
-                    transport=self.transport_broker,
-                    fabric=self.fabric_controller,
-                ).readiness.ready
-            ):
-                return None
-            model_ids = tuple(instance.model_id for instance in config.instances)
-            if set(startup.listeners) != set(model_ids):
-                return None
-            return ServingHealthTargets(
-                generation=fabric.plan.generation,
-                listeners=tuple((model_id, startup.listeners[model_id]) for model_id in model_ids),
             )
-
-    def confirm_serving_health(self, targets: ServingHealthTargets) -> bool:
-        """Confirm the first successful probe of the unchanged current targets."""
-
-        config = get_global_config()
-        with self.lock:
-            fabric = self.fabric_controller.generation
-            startup = self.serving_startup
-            if (
-                fabric is None
-                or fabric.phase is not FabricGenerationPhase.EXECUTABLE
-                or fabric.plan.generation != targets.generation
-                or startup.generation != targets.generation
-                or startup.confirmed
-            ):
-                return False
-            model_ids = tuple(instance.model_id for instance in config.instances)
-            if set(startup.listeners) != set(model_ids):
-                return False
-            listeners = tuple((model_id, startup.listeners[model_id]) for model_id in model_ids)
-            if listeners != targets.listeners:
-                return False
-            startup.confirmed = True
-            return True
 
     def acquire_instance_transport_arena(
         self,

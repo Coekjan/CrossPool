@@ -21,6 +21,20 @@ from xtest.harness.support.service.client import (
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, initialize_client_config.__name__)
 
 
+def test_client_rejects_invalid_instance_list_item(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_scripted_http_client(
+        monkeypatch,
+        [response(HTTPStatus.OK, None), response(HTTPStatus.OK, [{"pid": 123}])],
+    )
+    client = XpoolClient()
+    try:
+        with pytest.raises(XpoolClientError, match="invalid instance list response") as error:
+            client.list_instances()
+    finally:
+        client.close()
+    assert error.value.kind == "protocol"
+
+
 def test_client_constructor_retries_and_rejects_unhealthy_daemon(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -37,6 +51,17 @@ def test_client_constructor_retries_and_rejects_unhealthy_daemon(
 
     assert probe.calls == [("GET", "/health", None)] * DAEMON_HEALTH_RETRY_ATTEMPTS
     assert probe.close_count == 1
+
+
+def test_client_rejects_redirect_from_health(monkeypatch: pytest.MonkeyPatch) -> None:
+    redirect = httpx.Response(HTTPStatus.TEMPORARY_REDIRECT, headers={"Location": "/health"})
+    install_scripted_http_client(monkeypatch, [redirect])
+
+    with pytest.raises(XpoolClientError, match="xpool daemon returned HTTP 307") as error:
+        XpoolClient()
+
+    assert error.value.kind == "status"
+    assert error.value.status_code == HTTPStatus.TEMPORARY_REDIRECT
 
 
 def test_client_reports_config_conflict(

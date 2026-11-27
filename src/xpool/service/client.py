@@ -44,6 +44,7 @@ DAEMON_HTTP_TIMEOUT_S = 5.0
 ATNAGENT_TRANSPORT_LEASE_QUIESCE_TIMEOUT_S = 20.0
 DAEMON_HEALTH_RETRY_ATTEMPTS = 3
 DAEMON_HEALTH_RETRY_DELAY_S = 0.5
+INSTANCE_REGISTRATION_LIST = TypeAdapter(list[InstanceRankRegistration])
 logger = logging.getLogger(__name__)
 
 
@@ -150,7 +151,7 @@ class XpoolClient:
                 response = self.http_client.request(method, path, params=params, json=json, timeout=timeout_s)
         except httpx.HTTPError as exc:
             raise XpoolClientError("transport", f"xpool daemon request failed: {exc}") from exc
-        if response.is_error:
+        if not response.is_success:
             raise self.error_from_response(response)
         return response
 
@@ -300,13 +301,13 @@ class XpoolClient:
         self.request("POST", "/ffnagent/register", json=registration.model_dump(mode="json"))
 
     def heartbeat_ffnagent(self, device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
-        """Refresh one FfnAgent heartbeat and return daemon warnings."""
+        """Refresh one FfnAgent heartbeat and return the current Fabric state."""
 
         response = self.request("POST", f"/ffnagent/{device}/heartbeat", json=heartbeat.model_dump(mode="json"))
         return self.decode_model(response, HeartbeatResponse, "ffnagent heartbeat")
 
     def heartbeat_atnagent(self, device: int, heartbeat: ProcessRef) -> HeartbeatResponse:
-        """Refresh one AtnAgent heartbeat and return daemon warnings.
+        """Refresh one AtnAgent heartbeat and return the current Fabric state.
 
         Args:
             device: device owned by the registered AtnAgent.
@@ -396,12 +397,9 @@ class XpoolClient:
         """Return instance-rank registrations from the daemon."""
 
         response = self.request("GET", "/instances")
-        payload = self.decode_json(response, "instance list")
-        if not isinstance(payload, list):
-            raise XpoolClientError("protocol", "xpool daemon returned invalid instance list response")
         try:
-            return [InstanceRankRegistration.model_validate(item) for item in payload]
-        except (TypeError, ValidationError) as exc:
+            return INSTANCE_REGISTRATION_LIST.validate_python(self.decode_json(response, "instance list"))
+        except ValidationError as exc:
             raise XpoolClientError("protocol", "xpool daemon returned invalid instance list response") from exc
 
     def register_instance(self, registration: InstanceRankRegistration) -> None:
@@ -451,7 +449,7 @@ class XpoolClient:
         )
 
     def heartbeat_instance(self, model_id: ModelId, *, rank: int, heartbeat: ProcessRef) -> HeartbeatResponse:
-        """Refresh one instance-rank heartbeat and return daemon warnings."""
+        """Refresh one Instance-rank heartbeat and return the current Fabric state."""
 
         response = self.request(
             "POST",

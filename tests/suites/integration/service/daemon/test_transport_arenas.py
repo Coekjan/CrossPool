@@ -100,6 +100,7 @@ def test_daemon_rejects_transport_lease_when_fabric_quiesces_during_acquisition(
         register(app, "/instance/register", instance_registration(model_id=str(TEST_MODEL_ID))).status_code
         == HTTPStatus.NO_CONTENT
     )
+    app.state.control_plane.step_fabric_control()
     assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.OK
     assert (
         request(
@@ -283,6 +284,7 @@ def test_daemon_returns_rank_local_attention_atnagent_transport_arena_for_instan
             ).status_code
             == HTTPStatus.NO_CONTENT
         )
+    app.state.control_plane.step_fabric_control()
     plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagents[0], 0), (atnagents[1], 1), (ffnagent, 2))
     for rank in (0, 1):

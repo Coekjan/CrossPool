@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from http import HTTPStatus
 
 import pytest
 
 import xpool.service.daemon.control
 import xpool.service.daemon.registration
+from xpool.config import XpoolConfig
 from xpool.fabric import FabricDeploymentPlan
 from xpool.utils.mps import MpsProbeResult, MpsScope
 from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
@@ -99,10 +101,44 @@ def test_daemon_ready_marks_stale_live_registrations_stale_without_pruning(
     ]
 
 
+def test_watchdog_logs_first_missing_heartbeat_and_final_recovery(
+    deterministic_daemon_dependencies: FakeMonotonicClock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    models = (str(TEST_MODEL_ID), "test/peer")
+    config = XpoolConfig.from_mapping(
+        {
+            "atn": {"devices": [0]},
+            "ffn": {"devices": [1]},
+            "scheduler": {"slo": {"ttft_ms": 1000, "tbt_ms": 50}},
+            "vendor": {"model_base_uri": "/models"},
+            "models": [{"id": model} for model in models],
+        }
+    )
+    app = create_app(config)
+    ranks = [instance_registration(model_id=model) for model in models]
+    for rank in ranks:
+        assert register(app, "/instance/register", rank).status_code == HTTPStatus.NO_CONTENT
+    run_watchdog(app)
+
+    with caplog.at_level(logging.INFO, logger="xpool.service.daemon.control"):
+        deterministic_daemon_dependencies.advance(xpool.service.daemon.registration.HEARTBEAT_WARNING_WATERMARK_S + 1)
+        run_watchdog(app)
+        for index, (model, rank) in enumerate(zip(models, ranks, strict=True)):
+            response = request(app, "POST", f"/instance/{model}/heartbeat?rank=0", json=process_ref(rank))
+            assert response.status_code == HTTPStatus.OK
+            run_watchdog(app)
+            expected = [(logging.WARNING, "global warning entered kind=stale_instance device=0")]
+            if index == len(models) - 1:
+                expected.append((logging.INFO, "global warning cleared kind=stale_instance device=0"))
+            assert [
+                (record.levelno, record.message) for record in caplog.records if "kind=stale_instance" in record.message
+            ] == expected
+
+
 @pytest.mark.parametrize("initial_online", [False, None])
 def test_mps_status_recovers_without_daemon_restart_while_fabric_is_initializing(
     monkeypatch: pytest.MonkeyPatch,
-    deterministic_daemon_dependencies: FakeMonotonicClock,
     initial_online: bool | None,
 ) -> None:
     config = synthetic_config()
@@ -117,6 +153,7 @@ def test_mps_status_recovers_without_daemon_restart_while_fabric_is_initializing
     assert register(app, "/atnagent/register", atnagent0).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/instance/register", registration).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/ffnagent/register", ffnagent_registration()).status_code == HTTPStatus.NO_CONTENT
+    app.state.control_plane.step_fabric_control()
     assert (
         request(
             app,
@@ -138,8 +175,7 @@ def test_mps_status_recovers_without_daemon_restart_while_fabric_is_initializing
     assert all(entry["status"] == "online" for entry in offline["instances"])
     assert request(app, "GET", "/health").status_code == HTTPStatus.OK
 
-    deterministic_daemon_dependencies.advance(xpool.service.daemon.control.MPS_READINESS_CACHE_S + 1.0)
-    run_watchdog(app)
+    app.state.control_plane.refresh_mps_status()
     recovered = request(app, "GET", "/ready").json()
 
     assert recovered["ready"] is False
@@ -164,6 +200,7 @@ def test_daemon_preserves_stale_registration_but_blocks_stale_transport_arenas()
         )
         assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
         assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
+        app.state.control_plane.step_fabric_control()
         plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
         activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
         assert (

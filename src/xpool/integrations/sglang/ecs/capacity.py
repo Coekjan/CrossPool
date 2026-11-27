@@ -171,11 +171,11 @@ class CapacityReconciler:
     def check_generation(self) -> None:
         """Use the retained failure owner while startup waits for peer publications."""
 
-        plan = self.instance_rank.fabric_plan
-        if plan is None:
+        generation = self.instance_rank.fabric_generation
+        if generation is None:
             raise InstanceRankError("elastic context state capacity requires an executable fabric generation")
         readiness = self.instance_rank.client.readiness()
-        if readiness.generation != plan.generation or readiness.fabric_phase is not FabricGenerationPhase.EXECUTABLE:
+        if readiness.generation != generation or readiness.fabric_phase is not FabricGenerationPhase.EXECUTABLE:
             raise InstanceRankError(
                 "fabric generation became unavailable during elastic context state capacity reconciliation"
             )

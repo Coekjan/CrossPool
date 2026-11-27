@@ -107,7 +107,7 @@ class RunLoopAgent(Agent):
     def send_heartbeat(self) -> HeartbeatResponse:
         """Return an empty heartbeat snapshot when called unexpectedly."""
 
-        return HeartbeatResponse(warnings=[], generation=None, fabric_phase=None)
+        return HeartbeatResponse(generation=None, fabric_phase=None)
 
     def prepare_fabric_join(self) -> bool:
         """Complete join preparation and optionally request shutdown within it."""
@@ -407,7 +407,7 @@ def test_agent_shutdown_reconciles_control_outage_before_native_retirement(
                 if report.phase is FabricParticipantPhase.DRAINED
                 else FabricGenerationPhase.ABORTING
             )
-        return HeartbeatResponse(warnings=[], generation=generation, fabric_phase=phase)
+        return HeartbeatResponse(generation=generation, fabric_phase=phase)
 
     def exit_process(code: int) -> None:
         raise SystemExit(code)
@@ -503,7 +503,6 @@ def test_failed_agent_reports_drain_and_waits_for_authoritative_stop(
         report = agent.participant_report
         assert report is not None
         return HeartbeatResponse(
-            warnings=[],
             generation=report.generation,
             fabric_phase=(
                 FabricGenerationPhase.STOPPED

@@ -28,7 +28,7 @@ from xpool.native import ABI_VERSION, RuntimeRole
 from xpool.ops import ffn_shim
 from xpool.runtime.instance import InstanceRankRuntime
 from xpool.service.client import XpoolClient
-from xpool.service.wire import MpsClientTermination, ServingListener
+from xpool.service.wire import MpsClientTermination
 from xpool.transport import FfnRequestMetadata
 from xpool.utils.cuda import is_terminal_device_error
 from xpool.utils.device import normalize_environment, visible_uuids
@@ -333,7 +333,10 @@ def run_ffn_instance(connection: Connection, spec: FfnInstanceSpec) -> None:
             atn_runtime_headroom_bytes=0,
             on_failure=report,
         )
-        plan = runtime.wait_for_fabric_executable()
+        generation = runtime.wait_for_fabric_executable()
+        plan = runtime.client.fabric_plan()
+        if plan.generation != generation:
+            raise RuntimeError("qualification received a Fabric Plan for a different generation")
         model_plan = plan.model_plans[runtime.instance_index]
         if model_plan.tp_size != spec.ffn_tp_size:
             raise RuntimeError(
@@ -341,7 +344,7 @@ def run_ffn_instance(connection: Connection, spec: FfnInstanceSpec) -> None:
             )
         runtime.attach_arena_from_daemon()
         runtime.start_failure_monitor()
-        runtime.publish_initialized(ServingListener(host="127.0.0.1", port=1))
+        runtime.publish_initialized()
         runtime.wait_for_ready()
         publish(
             FfnInstanceReady(

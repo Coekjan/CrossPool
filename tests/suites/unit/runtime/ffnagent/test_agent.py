@@ -21,6 +21,7 @@ from xtest.harness.support.config import (
     reset_global_config,
     synthetic_config,
 )
+from xtest.harness.support.service.daemon import ffn_model_spec
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__)
 
@@ -69,7 +70,8 @@ def test_ffnagent_records_baseline_after_loading_and_cache_trim(monkeypatch: pyt
         lambda device: pytest.fail("unprofiled execution must omit compatibility-only observation"),
     )
     monkeypatch.setattr(xpool.runtime.ffnagent.agent.Agent, "__init__", bootstrap_agent)
-    monkeypatch.setattr(xpool.runtime.ffnagent.agent, "load", lambda **kwargs: SimpleNamespace(layers=()))
+    spec = ffn_model_spec()
+    monkeypatch.setattr(xpool.runtime.ffnagent.agent, "load", lambda **kwargs: spec)
     monkeypatch.setattr(
         xpool.runtime.ffnagent.agent, "FfnAgentRegistration", lambda **kwargs: SimpleNamespace(**kwargs)
     )
@@ -77,6 +79,7 @@ def test_ffnagent_records_baseline_after_loading_and_cache_trim(monkeypatch: pyt
 
     agent = FfnAgent(device=1)
 
+    assert agent.registration.model_spec_digests == (spec.digest(),)
     assert agent.registration.calibration_environment is None
     assert agent.registration.device_properties == TEST_GEMM_DEVICE_PROPERTIES
     assert events == ["bootstrap", "trim", "baseline"]
@@ -122,8 +125,8 @@ def test_ffnagent_retains_registry_through_materialization(monkeypatch: pytest.M
             ffn_memory_estimates=(DeviceMemoryEstimate(retained_bytes=1, peak_bytes=10),),
         ),
     )
+    agent.model_specs = (ffn_model_spec(),)
     agent.registration = SimpleNamespace(
-        model_specs=("spec",),
         device_properties=TEST_GEMM_DEVICE_PROPERTIES,
         calibration_environment=TEST_CALIBRATION_ENVIRONMENT,
     )
@@ -209,7 +212,6 @@ def test_ffnagent_rejects_prejoin_memory_shortfall(monkeypatch: pytest.MonkeyPat
         ),
     )
     agent.registration = SimpleNamespace(
-        model_specs=("spec",),
         calibration_environment=TEST_CALIBRATION_ENVIRONMENT,
     )
     agent.runtime_role = RuntimeRole.FFNAGENT

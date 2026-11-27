@@ -13,7 +13,6 @@ from importlib.metadata import version
 from time import monotonic
 from typing import Annotated
 
-import httpx
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -49,13 +48,12 @@ from xpool.service.wire import (
     MpsClientTermination,
     ProcessRef,
     ReadinessSnapshot,
-    ServingListener,
     XpoolDaemonErrorDetail,
 )
 from xpool.transport import TransportArenaHandle
 
 logger = logging.getLogger(__name__)
-CONTEXT_STATE_CAPACITY_POLICY_INTERVAL_S = 0.01
+FABRIC_CONTROL_INTERVAL_S = 0.01
 
 
 @dataclass(slots=True)
@@ -79,18 +77,6 @@ class DaemonFailure:
             self.exception = exception
 
 
-async def probe_serving_listener(client: httpx.AsyncClient, listener: ServingListener) -> bool:
-    """Return whether one Instance listener answers its HTTP health check."""
-
-    host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(listener.host, listener.host)
-    url = httpx.URL(scheme="http", host=host, port=listener.port, path="/health")
-    try:
-        response = await client.get(url)
-    except httpx.RequestError:
-        return False
-    return response.is_success
-
-
 def model_id_from_path(model_id: str) -> ModelId:
     """Parse one route identity, retaining the unknown-Instance response."""
 
@@ -108,9 +94,8 @@ def create_daemon() -> FastAPI:
 
     Side Effects:
         Initializes the process-wide native daemon role. The application
-        lifespan owns the attention MPS controller, daemon watchdog and
-        serving-health monitor, and records
-        unrecoverable startup or background failures.
+        lifespan owns the attention MPS controller, readiness observation,
+        watchdog, and Fabric control loop. It records unrecoverable failures.
     """
 
     bootstrap.init(None, RuntimeRole.DAEMON)
@@ -130,62 +115,26 @@ def create_daemon() -> FastAPI:
                 logger.exception("daemon watchdog failed")
                 daemon_failure.record(exception)
 
-        async def monitor_serving_health() -> None:
-            observed_targets = None
-            healthy_model_ids: set[ModelId] = set()
-            try:
-                async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
-                    while True:
-                        targets = await asyncio.to_thread(control_plane.capture_serving_health_targets)
-                        if targets is None:
-                            observed_targets = None
-                            healthy_model_ids.clear()
-                        else:
-                            if targets != observed_targets:
-                                observed_targets = targets
-                                healthy_model_ids.clear()
-                            pending = tuple(
-                                (model_id, listener)
-                                for model_id, listener in targets.listeners
-                                if model_id not in healthy_model_ids
-                            )
-                            results = await asyncio.gather(
-                                *(probe_serving_listener(client, listener) for _, listener in pending)
-                            )
-                            healthy_model_ids.update(
-                                model_id for (model_id, _), healthy in zip(pending, results, strict=True) if healthy
-                            )
-                            if len(healthy_model_ids) == len(targets.listeners) and await asyncio.to_thread(
-                                control_plane.confirm_serving_health,
-                                targets,
-                            ):
-                                logger.info(
-                                    "serving healthy instance_count=%s",
-                                    len(targets.listeners),
-                                )
-                                for model_id, listener in targets.listeners:
-                                    logger.info(
-                                        "serving listener instance=%s host=%s port=%s",
-                                        model_id,
-                                        listener.host,
-                                        listener.port,
-                                    )
-                        await asyncio.sleep(1.0)
-            except asyncio.CancelledError:
-                raise
-            except BaseException as exception:
-                logger.exception("serving health monitor failed")
-                daemon_failure.record(exception)
-
-        async def run_context_state_capacity_policy() -> None:
+        async def observe_mps() -> None:
             try:
                 while True:
-                    await asyncio.to_thread(control_plane.step_context_state_capacity)
-                    await asyncio.sleep(CONTEXT_STATE_CAPACITY_POLICY_INTERVAL_S)
+                    await asyncio.to_thread(control_plane.refresh_mps_status)
+                    await asyncio.sleep(1.0)
             except asyncio.CancelledError:
                 raise
             except BaseException as exception:
-                logger.exception("elastic context state capacity policy failed")
+                logger.exception("mps readiness observation failed")
+                daemon_failure.record(exception)
+
+        async def run_fabric_control() -> None:
+            try:
+                while True:
+                    await asyncio.to_thread(control_plane.step_fabric_control)
+                    await asyncio.sleep(FABRIC_CONTROL_INTERVAL_S)
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exception:
+                logger.exception("fabric control failed")
                 daemon_failure.record(exception)
 
         config = get_global_config()
@@ -195,8 +144,8 @@ def create_daemon() -> FastAPI:
             control_plane.start()
             tasks = (
                 asyncio.create_task(run_watchdog(), name="xpool-daemon-watchdog"),
-                asyncio.create_task(monitor_serving_health(), name="xpool-serving-health"),
-                asyncio.create_task(run_context_state_capacity_policy(), name="xpool-context-state-capacity-policy"),
+                asyncio.create_task(observe_mps(), name="xpool-mps-readiness"),
+                asyncio.create_task(run_fabric_control(), name="xpool-fabric-control"),
             )
             yield
         except BaseException as error:
@@ -252,6 +201,7 @@ def create_daemon() -> FastAPI:
         """Return the retained Fabric plan once a complete generation exists.
 
         Raises:
+            409: Fabric planning failed for the retained startup owners.
             503: No complete Fabric generation has been planned.
         """
 
@@ -364,8 +314,8 @@ def create_daemon() -> FastAPI:
 
         return await asyncio.to_thread(control_plane.list_ffnagents)
 
-    @app.post("/atnagent/register")
-    async def register_atnagent(request: AtnAgentRegistration) -> Response:
+    @app.post("/atnagent/register", status_code=HTTPStatus.NO_CONTENT)
+    def register_atnagent(request: AtnAgentRegistration) -> Response:
         """Register one live AtnAgent as the owner of a configured device.
 
         Returns:
@@ -377,8 +327,7 @@ def create_daemon() -> FastAPI:
             503: Participant admission, owned MPS, or registration is unavailable.
         """
 
-        await asyncio.to_thread(
-            control_plane.register_atnagent,
+        control_plane.register_atnagent(
             AtnAgentRegistrationState(
                 device=request.device,
                 calibration_environment=request.calibration_environment,
@@ -400,8 +349,8 @@ def create_daemon() -> FastAPI:
 
         return await asyncio.to_thread(control_plane.heartbeat_atnagent, device, request)
 
-    @app.post("/ffnagent/register")
-    async def register_ffnagent(request: FfnAgentRegistration) -> Response:
+    @app.post("/ffnagent/register", status_code=HTTPStatus.NO_CONTENT)
+    def register_ffnagent(request: FfnAgentRegistration) -> Response:
         """Register one live FfnAgent as the owner of a configured device.
 
         Returns:
@@ -409,23 +358,23 @@ def create_daemon() -> FastAPI:
 
         Raises:
             404: The device is not configured for an FfnAgent.
-            409: ABI, startup ownership, Model Specs, or execution contracts conflict.
+            409: ABI, startup ownership, or the retained registration conflicts.
+            422: The request does not contain a valid FfnAgent registration as JSON.
             503: Participant admission or registration is unavailable.
         """
 
-        await asyncio.to_thread(
-            control_plane.register_ffnagent,
+        control_plane.register_ffnagent(
             FfnAgentRegistrationState(
                 device=request.device,
                 calibration_environment=request.calibration_environment,
                 device_free_memory_bytes=request.device_free_memory_bytes,
                 device_properties=request.device_properties,
                 device_total_memory_bytes=request.device_total_memory_bytes,
+                model_spec_digests=request.model_spec_digests,
                 abi_version=request.abi_version,
                 pid=request.pid,
                 now=monotonic(),
-            ),
-            request.model_specs,
+            )
         )
         return Response(status_code=HTTPStatus.NO_CONTENT)
 
@@ -479,8 +428,8 @@ def create_daemon() -> FastAPI:
 
         return await asyncio.to_thread(control_plane.quiesce_atnagent_transport_leases, device, request)
 
-    @app.post("/instance/register")
-    async def register_instance(request: InstanceRankRegistration) -> Response:
+    @app.post("/instance/register", status_code=HTTPStatus.NO_CONTENT)
+    def register_instance(request: InstanceRankRegistration) -> Response:
         """Register one live Instance rank and its Transport and FFN profile contracts.
 
         Returns:
@@ -492,8 +441,7 @@ def create_daemon() -> FastAPI:
             503: Participant admission, owned MPS, or registration is unavailable.
         """
 
-        await asyncio.to_thread(
-            control_plane.register_instance,
+        control_plane.register_instance(
             InstanceRankRegistrationState(
                 instance=InstanceRankId(model_id=request.model_id, rank=request.rank),
                 abi_version=request.abi_version,

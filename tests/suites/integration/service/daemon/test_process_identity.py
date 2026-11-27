@@ -144,6 +144,7 @@ def test_daemon_preserves_atnagent_transport_arenas_after_same_process_reregiste
     assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
     assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
+    app.state.control_plane.step_fabric_control()
     plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
     assert (

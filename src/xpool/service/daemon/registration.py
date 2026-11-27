@@ -8,7 +8,6 @@ from dataclasses import dataclass
 
 import psutil
 
-from xpool import ffn
 from xpool.fabric import FabricRole, InstanceFfnProfile
 from xpool.memory import GemmDeviceProperties, MemoryCalibrationEnvironment
 from xpool.model import ModelId
@@ -84,8 +83,6 @@ class CommonRegistration(ABC):
     def conflicts_with(self, candidate: CommonRegistration) -> bool:
         """Return whether two live registrations have different owners."""
 
-        if type(candidate) is not type(self):
-            raise TypeError(f"expected {type(self).__name__}, got {type(candidate).__name__}")
         return self.proc != candidate.proc
 
 
@@ -212,6 +209,7 @@ class FfnAgentRegistrationState(CommonRegistration):
         "device_free_memory_bytes",
         "device_properties",
         "device_total_memory_bytes",
+        "model_spec_digests",
     )
 
     abi_version: int
@@ -220,6 +218,7 @@ class FfnAgentRegistrationState(CommonRegistration):
     device_free_memory_bytes: int
     device_properties: GemmDeviceProperties
     device_total_memory_bytes: int
+    model_spec_digests: tuple[str, ...]
 
     def __init__(
         self,
@@ -229,6 +228,7 @@ class FfnAgentRegistrationState(CommonRegistration):
         device_free_memory_bytes: int,
         device_properties: GemmDeviceProperties,
         device_total_memory_bytes: int,
+        model_spec_digests: tuple[str, ...],
         abi_version: int,
         pid: int,
         now: float,
@@ -242,6 +242,7 @@ class FfnAgentRegistrationState(CommonRegistration):
         self.device_free_memory_bytes = device_free_memory_bytes
         self.device_properties = device_properties
         self.device_total_memory_bytes = device_total_memory_bytes
+        self.model_spec_digests = model_spec_digests
 
     def key(self) -> int:
         """Return the owned device."""
@@ -261,6 +262,7 @@ class FfnAgentRegistrationState(CommonRegistration):
             or self.device_free_memory_bytes != candidate.device_free_memory_bytes
             or self.device_properties != candidate.device_properties
             or self.device_total_memory_bytes != candidate.device_total_memory_bytes
+            or self.model_spec_digests != candidate.model_spec_digests
         )
 
 
@@ -280,15 +282,13 @@ class RegistrationTable[R: CommonRegistration]:
         return self.registrations.get(key)
 
     def install_snapshot(self, registration: R, existing: R | None, *, existing_alive: bool) -> bool:
-        """Commit a candidate after its prior owner's liveness was probed.
+        """Commit a candidate after the caller revalidates its snapshot under the domain lock.
 
         Returns:
             Whether the process identity installed for the key changed.
         """
 
         key = registration.key()
-        if self.registrations.get(key) is not existing:
-            raise XpoolDaemonError("not_ready", "registration changed during liveness validation")
         if existing is None or not existing_alive:
             self.registrations[key] = registration
             return existing is None or existing.proc != registration.proc
@@ -320,7 +320,7 @@ class RegistrationTable[R: CommonRegistration]:
 class RegistrationBook:
     """Caller-synchronized process registrations composed by ``ControlPlane``."""
 
-    __slots__ = ("agent_startups", "atnagents", "ffn_model_specs", "ffnagents", "instances")
+    __slots__ = ("agent_startups", "atnagents", "ffnagents", "instances")
 
     def __init__(self) -> None:
         """Create empty role-specific registration tables."""
@@ -328,7 +328,6 @@ class RegistrationBook:
         self.instances = RegistrationTable[InstanceRankRegistrationState]()
         self.atnagents = RegistrationTable[AtnAgentRegistrationState]()
         self.ffnagents = RegistrationTable[FfnAgentRegistrationState]()
-        self.ffn_model_specs: tuple[ffn.FfnModelSpec, ...] | None = None
         self.agent_startups: dict[tuple[FabricRole, int], ProcUniqId] = {}
 
     def all_values(self) -> list[CommonRegistration]:
@@ -368,16 +367,12 @@ class RegistrationBook:
     def ffnagent_views(self) -> list[FfnAgentView]:
         """Project FfnAgent records to wire views."""
 
-        model_specs = self.ffn_model_specs
-        if model_specs is None and self.ffnagents.values():
-            raise RuntimeError("FfnAgent registrations exist without canonical Model Specs")
         return [
             FfnAgentView(
                 pid=registration.proc.pid,
                 device=registration.device,
                 device_free_memory_bytes=registration.device_free_memory_bytes,
                 device_total_memory_bytes=registration.device_total_memory_bytes,
-                model_specs=() if model_specs is None else model_specs,
                 abi_version=registration.abi_version,
             )
             for registration in self.ffnagents.values()

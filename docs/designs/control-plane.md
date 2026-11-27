@@ -165,24 +165,21 @@ Decode Full plus Prefill Breakable modes all invoke the same FFN data-plane
 protocol.
 FfnAgent execution is always graph-backed; SGLang owns the outer graph mode.
 
-Fabric Executable is the earlier data-plane barrier that permits Instance
-Ranks to attach Transport while their serving schedulers are still starting.
-An Instance Rank publishes initialization from SGLang's scheduler handshake
-after scheduler construction completes. That publication includes an immutable
-Serving Listener shared by every rank of the Instance; a conflicting rank
-publication is rejected atomically. Daemon System Ready requires every expected
-publication in addition to executable Fabric, healthy processes, Transport,
-MPS, and failure-free generation state.
+Fabric Executable permits Instance Ranks to attach Transport while their
+serving schedulers are still starting. Each rank uses the Fabric Generation ID
+from `/ready` to attach its Elastic Context State channel. Agents fetch the
+complete Plan for their assigned resources. After SGLang constructs its
+scheduler, the rank publishes initialization with its process identity and the
+Generation ID. The daemon validates each publication against the generation's
+owner for that rank and uses the same owner map to determine which ranks must
+report. System Ready requires all these publications, executable Fabric,
+healthy processes, usable Transport, available MPS, and a failure-free
+generation.
 
-After System Ready, the daemon concurrently probes the public HTTP `/health`
-endpoint of every configured Instance. Successful listeners remain satisfied
-while their peers finish starting. The daemon confirms and logs Serving Healthy
-once only when the generation and complete ordered listener snapshot still
-match. Wildcard bind hosts are normalized to loopback only for local probes;
-published and logged listener values remain unchanged. Serving Healthy is a
-one-time startup observation rather than a readiness phase or continuous
-availability monitor. The integration supports this boundary for plain HTTP
-serving and rejects gRPC-only and TLS serving modes.
+The serving launcher checks each public HTTP `/health` endpoint before sending
+inference requests. For manual startup, see the
+[Multi-LLM Serving tutorial](../tutorials/multi-llm-serving.md#check-both-listeners).
+The public SGLang serving endpoint requires plain HTTP.
 
 ## Operational logging
 
@@ -194,14 +191,15 @@ Uvicorn, or SGLang logging policy. CLI result data remains on stdout.
 Runtime logs describe low-frequency lifecycle transitions, completed slow
 startup phases, and recoverable communication state edges. Observer records
 remain authoritative for per-request, protocol, routing, and Graph evidence.
-The layer that terminates an operation owns its failure log. The daemon logs the
-first entry and final clearance of each global warning aggregated by
-`(kind, device)`; heartbeat clients do not duplicate unchanged warning state.
+The layer that terminates an operation owns its failure log. The daemon
+watchdog logs the first entry and final clearance of each warning grouped by
+`(kind, device)`, even when no heartbeats arrive. Heartbeat replies carry the
+Fabric phase and Generation ID. Use `/ready` for the full readiness snapshot.
 Daemon startup records identify the Fabric Generation through the transition
-into `executable`. Later serving, capacity, quiesce, drain, finalize, and stop
-records omit that established context. Instance and Agent startup records name
-completed arena attachment, GraphTemplate capture, and native installation
-phases at their owning layer.
+into `executable`. Capacity, quiesce, drain, finalize, and stop records omit
+that established context. Instance and Agent startup records name completed
+arena attachment, GraphTemplate capture, and native installation phases at
+their owning layer.
 
 ## Generation planning
 
@@ -212,9 +210,13 @@ CUDA objects and process-local addresses after retaining the plan.
 
 `FfnModelSpec` is the compiled FFN contract. It contains ordered Dense or MoE
 layer semantics, intrinsic dimensions, activation and routing behavior,
-and checkpoint identities. At registration the daemon compares the complete
-Specs from all FfnAgents. The daemon plans from those registered Specs, and
-each FfnAgent uses the Specs it registered to load its assigned layers.
+and checkpoint identities. FfnAgents register device observations and Spec
+digests in configuration order. For each formation attempt, the daemon
+compiles the configured checkpoint metadata once and compares the ordered
+digests from every FfnAgent before placement. The daemon plans from its local
+Specs. Each FfnAgent uses its own compiled Specs to load its assigned layers.
+`/ffnagents` exposes process and device information and observed device
+memory.
 
 `InstanceFfnProfile` is the serving Instance declaration. It contains the
 runtime payload dtype, hidden size, ordered layer projection, and decode and
@@ -367,7 +369,9 @@ Startup is monotonic:
    launch commands with normalized visibility and the attention MPS endpoint;
    the plugin checks configuration before installing its hooks. Participants
    initialize their devices and register their runtime capabilities;
-3. the daemon admits and retains the Fabric Plan;
+3. participants begin heartbeats after the daemon confirms their registrations.
+   The Fabric control loop compiles, places, and publishes a Plan for the
+   complete membership;
 4. during `PREPARING_JOIN`, AtnAgents publish Transport arenas while FfnAgents
    perform memory admission and materialize selected weight shards;
 5. participants join the admitted Fabric generation collectively;
@@ -382,8 +386,32 @@ before retaining a Fabric Plan. Registration loss after Plan acquisition is
 terminal because participants cannot recover into a retained Generation.
 At the daemon boundary, an identical repeated registration from the same
 admitted live owner is idempotent, including while a Plan is retained, and
-preserves its Transport resources. Replacement admission waits for actual
-retirement of the old generation owners.
+preserves its Transport resources. Registration checks the current owner and
+any installed generation under the same lock used to commit the registration.
+Replacement admission waits for actual retirement of the old generation
+owners.
+
+The daemon acknowledges registration when it retains the owner and validates
+its declaration. A changed Agent startup identity or registration advances
+the membership revision. The Fabric control loop captures complete membership
+and plans once per revision. Compilation and placement run outside the
+registration lock. The loop checks admission and the captured revision before
+starting placement and again before publishing the Plan.
+
+For a Fabric participant report, the daemon checks process identity outside
+the domain lock. If the captured registration or Generation changes during
+that check, the report receives `503`. An invalid owner for a still-current
+snapshot triggers Generation abort.
+
+After installation, the loop advances Elastic Context State capacity. If
+planning rejects the model inputs, Spec digests, or placement for the current
+membership, `/fabric/plan` returns `409` and
+`/ready` carries the same cause in `fabric_control_failure`. The daemon retains
+that failure until the captured process identities exit, even if an Instance
+deregisters first. Startup admission and registration return `503` for new
+owners while the failed attempt retires. Current owners may still retransmit
+their registrations and send heartbeats. A pending `/fabric/plan` returns `503`.
+Unexpected compiler errors follow the daemon's own failure path.
 
 An Instance rank may retry temporary daemon transport failures within its
 existing bounded deadline, but a daemon response that its registration is
@@ -392,6 +420,10 @@ Instance heartbeat and sticky-failure monitors deliver the original error to
 their integration-owned callback. Terminal `ABORTING` or `STOPPED` responses
 request retirement; they are not ignored while inference continues. Agents
 retain their first failure and request retirement at their own control boundary.
+
+After publishing initialization, each Instance rank waits for System Ready
+from the same executable Generation. A missing, replaced, or retiring
+Generation fails startup and triggers the Instance's ordered rollback.
 
 Readiness never derives from process existence alone. It requires live
 registrations, MPS availability, a retained admitted plan, usable Transport
@@ -409,7 +441,12 @@ The value remains independent of configuration and controller ownership.
 `MpsScope` composes that endpoint and owns one foreground
 `nvidia-cuda-mps-control -f` process, its exact identity, observed server identities,
 logs and private endpoint. The daemon retains that scope before starting it.
-Server creation may be lazy; startup requires the controller, not a server PID.
+The server may start when the first client connects. Startup requires the
+controller. A separate lifespan task observes MPS availability for `/ready`.
+The Fabric watchdog checks participant liveness and deadlines independently
+of that observation. If a passive probe exhausts its budget while waiting to
+issue the command, availability is unknown. A command that runs past its
+timeout marks MPS offline. Admission and retirement use their own MPS checks.
 The foreground mode is provided by the
 [NVIDIA control interface](https://docs.nvidia.com/deploy/mps/595/appendix-tools-and-interface-reference.html#nvidia-cuda-mps-control).
 
@@ -493,12 +530,15 @@ retire their clients before stopping the daemon, with new client launch sealed
 throughout retirement.
 
 The daemon closes participant admission and keeps control listeners and MPS
-available. Normal shutdown waits for known Instance identities from registrations
-and retained Fabric owners before requesting Agent/Fabric quiesce. Existing
-owner-loss and failure paths retain their generation-failure behavior. Heartbeat
-expiry or deregistration does not prove physical exit of retained generation
-owners. Controller stop follows confirmed participant exit and actual MPS client
-absence. Ordinary daemon SIGTERM/SIGINT does not signal serving processes.
+available. If a Plan is installed, it waits for registered Instance owners and
+Instance owners retained by the generation before requesting Fabric quiesce.
+Before Plan publication, it retains deregistered Instance identities through
+process exit. Heartbeat expiry and deregistration leave physical exit
+unconfirmed for owners of a retained generation or planning failure.
+Controller stop follows the completion of any in-flight Plan formation,
+confirmed participant exit, and actual MPS client absence. The serving owner
+remains responsible for stopping serving processes during ordinary daemon
+SIGTERM/SIGINT.
 
 An empty MPS client snapshot proves current attachment absence, not a fence
 against future connections. Serving owners enforce launch/retirement ordering;

@@ -131,10 +131,11 @@ def test_instance_failure_stops_later_invocations_and_retains_the_owner(
     failure = RuntimeError("background invocation failed")
     runtime = SimpleNamespace(
         instance_index=0,
-        wait_for_fabric_executable=lambda: plan,
+        wait_for_fabric_executable=lambda: plan.generation,
+        client=SimpleNamespace(fabric_plan=lambda: plan),
         attach_arena_from_daemon=lambda: None,
         start_failure_monitor=lambda: None,
-        publish_initialized=lambda listener: None,
+        publish_initialized=lambda: None,
         wait_for_ready=lambda: None,
         close=lambda: pytest.fail("failed Instance started normal cleanup"),
     )

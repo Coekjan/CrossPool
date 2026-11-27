@@ -112,6 +112,7 @@ def capacity_policy_world(
             registration["context_state_profile"] = profile.model_dump(mode="json")
             assert register(app, "/instance/register", registration).is_success
     control = app.state.control_plane
+    control.step_fabric_control()
     fabric = control.fabric_controller.generation
     assert fabric is not None
     return control, fabric

@@ -49,9 +49,10 @@ class FfnAgent(Agent):
             if config.ffn.device_memory_calibration is not None
             else None
         )
-        model_specs = tuple(
+        self.model_specs = tuple(
             load(model_id=model.id, model_path=config.model_path_of(model.id)) for model in config.models
         )
+        model_spec_digests = tuple(spec.digest() for spec in self.model_specs)
         device_properties = observe_gemm_device_properties(self.device)
         torch.cuda.synchronize(self.device)
         torch.cuda.empty_cache()
@@ -62,7 +63,7 @@ class FfnAgent(Agent):
             calibration_environment=calibration_environment,
             device_free_memory_bytes=device_free_memory_bytes,
             device_total_memory_bytes=device_total_memory_bytes,
-            model_specs=model_specs,
+            model_spec_digests=model_spec_digests,
             abi_version=ABI_VERSION,
             pid=self.proc_id.pid,
         )
@@ -72,8 +73,8 @@ class FfnAgent(Agent):
         logger.info(
             "initialized device=%s model_count=%s layer_count=%s",
             device,
-            len(model_specs),
-            sum(len(spec.layers) for spec in model_specs),
+            len(self.model_specs),
+            sum(len(spec.layers) for spec in self.model_specs),
         )
 
     def activate_fabric(self) -> None:
@@ -137,7 +138,7 @@ class FfnAgent(Agent):
         weights_started_at = monotonic()
         self.layer_weights = materialize_layer_weights(
             fabric_plan=plan,
-            model_specs=self.registration.model_specs,
+            model_specs=self.model_specs,
             ffnagent_index=ffnagent_index,
         )
         logger.info(
@@ -162,7 +163,7 @@ class FfnAgent(Agent):
         self.layer_weights = None
         self.execution_registry.materialize(
             fabric_plan=self.fabric_plan,
-            model_specs=self.registration.model_specs,
+            model_specs=self.model_specs,
             ffnagent_index=self.fabric_pe() - atnagent_count,
             device_properties=self.registration.device_properties,
         )

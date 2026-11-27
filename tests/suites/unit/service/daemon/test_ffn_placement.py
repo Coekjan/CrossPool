@@ -5,7 +5,6 @@ import pytest
 import xpool.service.daemon.ffn_placement
 from xpool.config import XpoolConfig
 from xpool.fabric import FabricInstancePlan, InstanceFfnProfile, InstanceRankTopology
-from xpool.ffn import FfnModelSpec
 from xpool.memory import MIB, FfnMemoryCalibrationCoefficients
 from xpool.model import ModelId
 from xpool.runtime.ffnagent import device_memory
@@ -56,7 +55,7 @@ def instance_plan(model_id: ModelId = TEST_MODEL_ID) -> FabricInstancePlan:
 
 def test_placement_publishes_calibrated_budgets_for_idle_ffnagents() -> None:
     tp_size = 1
-    spec = FfnModelSpec.model_validate(ffn_model_spec(model_id=str(TEST_MODEL_ID)))
+    spec = ffn_model_spec(model_id=str(TEST_MODEL_ID))
     install_test_config(config(tp_size=tp_size))
     coefficients = FfnMemoryCalibrationCoefficients(
         base_bytes=10,
@@ -97,7 +96,7 @@ def test_placement_publishes_calibrated_budgets_for_idle_ffnagents() -> None:
 
 def test_placement_charges_segment_for_largest_workspace() -> None:
     install_test_config(config())
-    spec = FfnModelSpec.model_validate(ffn_model_spec())
+    spec = ffn_model_spec()
     layer = spec.layers[0].model_copy(update={"intermediate_size": 4096})
     spec = spec.model_copy(update={"layers": (layer,)})
     instance = instance_plan()
@@ -140,9 +139,7 @@ def test_equal_optimum_placement_uses_lowest_index_groups() -> None:
     )
     plans = place_ffn_models(
         coefficients=None,
-        model_specs=tuple(
-            FfnModelSpec.model_validate(ffn_model_spec(model_id=model_id)) for model_id in ("test/wide", "test/narrow")
-        ),
+        model_specs=tuple(ffn_model_spec(model_id=model_id) for model_id in ("test/wide", "test/narrow")),
         instance_plans=(instance_plan(ModelId("test/wide")), instance_plan(ModelId("test/narrow"))),
         ffnagent_free_memory_bytes=(1 << 40,) * 4,
         ffnagent_device_properties=(TEST_GEMM_DEVICE_PROPERTIES,) * 4,
@@ -155,7 +152,7 @@ def test_equal_optimum_placement_uses_lowest_index_groups() -> None:
 
 
 def test_structural_placement_rejects_tp_wider_than_fleet() -> None:
-    spec = FfnModelSpec.model_validate(ffn_model_spec(model_id=str(TEST_MODEL_ID)))
+    spec = ffn_model_spec(model_id=str(TEST_MODEL_ID))
     install_test_config(config(tp_size=3))
 
     with pytest.raises(XpoolDaemonError, match="exceeds the FfnAgent Fleet"):
@@ -169,7 +166,7 @@ def test_structural_placement_rejects_tp_wider_than_fleet() -> None:
 
 
 def test_placement_rejects_insufficient_memory_without_fallback() -> None:
-    spec = FfnModelSpec.model_validate(ffn_model_spec(model_id=str(TEST_MODEL_ID)))
+    spec = ffn_model_spec(model_id=str(TEST_MODEL_ID))
     install_test_config(config())
 
     with pytest.raises(XpoolDaemonError, match="INFEASIBLE"):
@@ -183,7 +180,7 @@ def test_placement_rejects_insufficient_memory_without_fallback() -> None:
 
 
 def test_placement_accounts_for_fabric_observer_memory(monkeypatch: pytest.MonkeyPatch) -> None:
-    spec = FfnModelSpec.model_validate(ffn_model_spec(model_id=str(TEST_MODEL_ID)))
+    spec = ffn_model_spec(model_id=str(TEST_MODEL_ID))
     install_test_config(config())
     install_native_allocation_sizing(monkeypatch, fabric_observer_bytes=1 << 30)
 
@@ -198,7 +195,7 @@ def test_placement_accounts_for_fabric_observer_memory(monkeypatch: pytest.Monke
 
 
 def test_placement_uses_one_deadline_before_solver_work(monkeypatch: pytest.MonkeyPatch) -> None:
-    spec = FfnModelSpec.model_validate(ffn_model_spec(model_id=str(TEST_MODEL_ID)))
+    spec = ffn_model_spec(model_id=str(TEST_MODEL_ID))
     install_test_config(config())
     times = iter((0.0, 61.0))
     monkeypatch.setattr(xpool.service.daemon.ffn_placement, "monotonic", lambda: next(times))

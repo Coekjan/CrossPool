@@ -21,7 +21,6 @@ from xpool.fabric import (
     InstanceRankTopology,
     place_ffn_layer,
 )
-from xpool.ffn import FfnModelSpec
 from xpool.memory import MIB, DeviceMemoryFeatures, FfnMemoryCalibrationCoefficients
 from xpool.runtime.ffnagent import device_memory, execution, preparation
 from xpool.runtime.ffnagent.memory_profile import corpus
@@ -56,7 +55,7 @@ def estimator_and_plan() -> tuple[device_memory.DeviceMemoryEstimator, FabricPla
         }
     )
     install_test_config(config)
-    spec = FfnModelSpec.model_validate(ffn_model_spec(model_id=str(TEST_MODEL_ID)))
+    spec = ffn_model_spec(model_id=str(TEST_MODEL_ID))
     profile = InstanceFfnProfile.model_validate(ffn_profile())
     instance_plan = FabricInstancePlan(
         model_id=TEST_MODEL_ID,

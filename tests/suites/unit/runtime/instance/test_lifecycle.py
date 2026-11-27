@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 import xpool.runtime.instance
@@ -223,9 +221,60 @@ def test_instance_waits_through_every_fabric_startup_phase(monkeypatch: pytest.M
             instances=[],
         )
 
-    plan = SimpleNamespace(generation=generation)
     monkeypatch.setattr(instance.client, "readiness", readiness, raising=False)
-    monkeypatch.setattr(instance.client, "fabric_plan", lambda: plan, raising=False)
     monkeypatch.setattr(xpool.runtime.instance.time, "sleep", lambda _: None)
 
-    assert instance.wait_for_fabric_executable() is plan
+    assert instance.wait_for_fabric_executable() == generation
+    assert instance.fabric_generation == generation
+
+
+def test_instance_reports_planning_failure_before_a_generation_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    instance = runtime_instance(runtime_config(), monkeypatch)
+    readiness = ReadinessSnapshot(
+        ready=False,
+        generation=None,
+        fabric_phase=None,
+        fabric_invocation_failure=None,
+        fabric_owner_failure=None,
+        fabric_control_failure="FFN Placement deadline expired",
+        transport_ready=False,
+        instances_initialized=False,
+        mps_status=ReadinessStatus.ONLINE,
+        devices=(0, 1),
+        atnagents=[],
+        ffnagents=[],
+        instances=[],
+    )
+    snapshots = iter((readiness,))
+    monkeypatch.setattr(instance.client, "readiness", lambda: next(snapshots), raising=False)
+
+    with pytest.raises(InstanceRankError, match="FFN Placement deadline expired"):
+        instance.wait_for_fabric_executable()
+
+
+@pytest.mark.parametrize("replacement", (False, True))
+def test_instance_rejects_readiness_after_its_generation_is_lost(
+    monkeypatch: pytest.MonkeyPatch, replacement: bool
+) -> None:
+    instance = runtime_instance(runtime_config(), monkeypatch)
+    instance.fabric_generation = FabricGenerationId.create()
+    readiness = ReadinessSnapshot(
+        ready=replacement,
+        generation=FabricGenerationId.create() if replacement else None,
+        fabric_phase=FabricGenerationPhase.EXECUTABLE if replacement else None,
+        fabric_invocation_failure=None,
+        fabric_owner_failure=None,
+        fabric_control_failure=None if replacement else "generation retired",
+        transport_ready=replacement,
+        instances_initialized=replacement,
+        mps_status=ReadinessStatus.ONLINE,
+        devices=(0, 1),
+        atnagents=[],
+        ffnagents=[],
+        instances=[],
+    )
+    snapshots = iter((readiness,))
+    monkeypatch.setattr(instance.client, "readiness", lambda: next(snapshots), raising=False)
+    expected = "Fabric generation changed" if replacement else "generation retired"
+    with pytest.raises(InstanceRankError, match=expected):
+        instance.wait_for_ready()

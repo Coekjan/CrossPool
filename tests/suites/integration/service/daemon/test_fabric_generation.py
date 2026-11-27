@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from dataclasses import asdict, replace
 from http import HTTPStatus
+from threading import Event
+from typing import Literal
 
+import httpx
 import pytest
 
 import xpool.service.daemon.control
@@ -17,8 +23,13 @@ from xpool.fabric import (
     RandomSchedulerPolicy,
 )
 from xpool.native import ABI_VERSION
-from xpool.service.wire import AgentStartupAdmission, ServingListener
-from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
+from xpool.service.daemon.ffn_placement import FfnPlacementResult
+from xpool.service.daemon.registration import AtnAgentRegistrationState
+from xpool.service.errors import XpoolDaemonError
+from xpool.service.wire import AgentStartupAdmission, ProcessRef
+from xpool.utils.mps import MpsProbeResult
+from xpool.utils.procs import ProcUniqId
+from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config, synthetic_config
 from xtest.harness.support.ecs import context_state_profile
 from xtest.harness.support.service.daemon import (
     FakeMonotonicClock,
@@ -89,19 +100,20 @@ def test_registration_and_reports_form_executable_ready_generation() -> None:
     )
 
     heartbeat = request(app, "POST", "/atnagent/0/heartbeat", json=process_ref(atnagent)).json()
-    assert heartbeat["fabric_phase"] == FabricGenerationPhase.PREPARING_JOIN
+    assert heartbeat == {
+        "generation": plan.model_dump(mode="json")["generation"],
+        "fabric_phase": FabricGenerationPhase.PREPARING_JOIN,
+    }
     activate_fabric_world(app, plan, (atnagent, 0), (ffnagent, 1))
 
     executable = request(app, "GET", "/ready").json()
     assert executable["ready"] is False
     assert executable["fabric_phase"] == FabricGenerationPhase.EXECUTABLE
     assert executable["instances_initialized"] is False
-    assert app.state.control_plane.capture_serving_health_targets() is None
 
     initialized = {
         "owner": process_ref(instance),
         "generation": plan.model_dump(mode="json")["generation"],
-        "serving_listener": {"host": "127.0.0.1", "port": 30000},
     }
     assert (
         request(app, "POST", f"/instance/{TEST_MODEL_ID}/initialized?rank=0", json=initialized).status_code
@@ -116,24 +128,8 @@ def test_registration_and_reports_form_executable_ready_generation() -> None:
     assert readiness["fabric_owner_failure"] is None
     assert readiness["fabric_control_failure"] is None
 
-    targets = app.state.control_plane.capture_serving_health_targets()
-    assert targets is not None
-    assert targets.generation == plan.generation
-    assert targets.listeners == ((TEST_MODEL_ID, ServingListener(host="127.0.0.1", port=30000)),)
-    stale_generation = FabricGenerationId.create()
-    while stale_generation == targets.generation:
-        stale_generation = FabricGenerationId.create()
-    stale_targets = xpool.service.daemon.control.ServingHealthTargets(
-        generation=stale_generation,
-        listeners=targets.listeners,
-    )
-    assert not app.state.control_plane.confirm_serving_health(stale_targets)
-    assert app.state.control_plane.confirm_serving_health(targets)
-    assert not app.state.control_plane.confirm_serving_health(targets)
-    assert app.state.control_plane.capture_serving_health_targets() is None
 
-
-def test_instance_initialized_listener_mismatch_is_atomic() -> None:
+def test_instance_initialization_requires_each_rank_to_report_current_generation() -> None:
     config = make_config(
         {
             "atn": {"devices": [0, 1]},
@@ -155,13 +151,13 @@ def test_instance_initialized_listener_mismatch_is_atomic() -> None:
         (rank1, "/instance/register"),
     ):
         assert register(app, path, payload).status_code == HTTPStatus.NO_CONTENT
+    app.state.control_plane.step_fabric_control()
     plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
     activate_fabric_world(app, plan, (atnagent0, 0), (atnagent1, 1), (ffnagent, 2))
     generation = plan.model_dump(mode="json")["generation"]
     rank0_initialized = {
         "owner": process_ref(rank0),
         "generation": generation,
-        "serving_listener": {"host": "127.0.0.1", "port": 30000},
     }
     assert (
         request(app, "POST", f"/instance/{TEST_MODEL_ID}/initialized?rank=0", json=rank0_initialized).status_code
@@ -178,8 +174,7 @@ def test_instance_initialized_listener_mismatch_is_atomic() -> None:
         f"/instance/{TEST_MODEL_ID}/initialized?rank=1",
         json={
             "owner": process_ref(rank1),
-            "generation": generation,
-            "serving_listener": {"host": "127.0.0.1", "port": 30001},
+            "generation": asdict(FabricGenerationId.create()),
         },
     )
 
@@ -231,16 +226,278 @@ def test_plan_waits_for_every_model_while_transport_publication_is_incremental()
         ).status_code
         == HTTPStatus.NO_CONTENT
     )
+    app.state.control_plane.step_fabric_control()
     assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
 
     assert (
         register(app, "/instance/register", instance_registration(model_id="test/b")).status_code
         == HTTPStatus.NO_CONTENT
     )
+    app.state.control_plane.step_fabric_control()
     plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
 
     assert [instance.ffn_profile.hidden_size for instance in plan.instance_plans] == [4, 4]
     assert request(app, "GET", "/ready").json()["transport_ready"] is False
+
+
+@pytest.mark.parametrize("outcome", ["publish", "retire", "failure"])
+def test_registered_owners_heartbeat_during_planning(
+    deterministic_daemon_dependencies: FakeMonotonicClock,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: Literal["publish", "retire", "failure"],
+) -> None:
+    app = create_app(synthetic_config())
+    control = app.state.control_plane
+    entered = Event()
+    release = Event()
+    place = xpool.service.daemon.control.place_ffn_models
+    failure_message = "injected placement failure"
+
+    def delayed_placement(**kwargs) -> FfnPlacementResult:
+        assert outcome != "retire", "a retired candidate must skip placement"
+        entered.set()
+        assert release.wait(timeout=5)
+        if outcome == "failure":
+            raise RuntimeError(failure_message)
+        return place(**kwargs)
+
+    monkeypatch.setattr(xpool.service.daemon.control, "place_ffn_models", delayed_placement)
+    if outcome == "retire":
+        load = xpool.service.daemon.control.architecture.load
+
+        def delayed_compilation(**kwargs):
+            entered.set()
+            assert release.wait(timeout=5)
+            return load(**kwargs)
+
+        monkeypatch.setattr(xpool.service.daemon.control.architecture, "load", delayed_compilation)
+    atnagent = atnagent_registration(device=0)
+    ffnagent = ffnagent_registration()
+    instance = instance_registration()
+    assert register(app, "/atnagent/register", atnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/ffnagent/register", ffnagent).status_code == HTTPStatus.NO_CONTENT
+    assert register(app, "/instance/register", instance).status_code == HTTPStatus.NO_CONTENT
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        planning = executor.submit(control.step_fabric_control)
+        try:
+            assert entered.wait(timeout=5)
+            assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
+            for _ in range(4):
+                deterministic_daemon_dependencies.advance(5)
+                for path, owner in (
+                    ("/atnagent/0/heartbeat", atnagent),
+                    ("/ffnagent/1/heartbeat", ffnagent),
+                    (f"/instance/{TEST_MODEL_ID}/heartbeat?rank=0", instance),
+                ):
+                    assert request(app, "POST", path, json=process_ref(owner)).status_code == HTTPStatus.OK
+            if outcome == "retire":
+                control.begin_close()
+        finally:
+            release.set()
+        if outcome == "failure":
+            with pytest.raises(RuntimeError, match=failure_message):
+                planning.result(timeout=5)
+        else:
+            planning.result(timeout=5)
+
+    control.watchdog()
+    match outcome:
+        case "retire":
+            assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
+        case "publish":
+            assert request(app, "GET", "/ready").json()["fabric_phase"] == FabricGenerationPhase.PREPARING_JOIN
+        case "failure":
+            assert request(app, "GET", "/ready").json()["fabric_control_failure"] == failure_message
+            response = request(app, "GET", "/fabric/plan")
+            assert response.status_code == HTTPStatus.CONFLICT
+            assert response.json()["detail"]["message"] == failure_message
+
+
+def test_registration_rejects_replacement_if_a_plan_is_published_during_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(synthetic_config())
+    control = app.state.control_plane
+    process, owner = start_sleeping_proc()
+    forming = Event()
+    validating = Event()
+    publish = Event()
+    commit = Event()
+    create_policy = xpool.service.daemon.control.ecs.CapacityPolicy.create
+    is_alive = ProcUniqId.is_alive
+
+    def hold_plan_before_publication(config: XpoolConfig, generation: FabricGenerationId):
+        forming.set()
+        assert publish.wait(timeout=5)
+        return create_policy(config, generation)
+
+    def hold_replacement_probe(identity: ProcUniqId) -> bool:
+        if identity == owner and forming.is_set():
+            validating.set()
+            assert commit.wait(timeout=5)
+        return is_alive(identity)
+
+    monkeypatch.setattr(
+        xpool.service.daemon.control.ecs.CapacityPolicy, "create", staticmethod(hold_plan_before_publication)
+    )
+    monkeypatch.setattr(ProcUniqId, "is_alive", hold_replacement_probe)
+    try:
+        for path, payload in (
+            ("/atnagent/register", atnagent_registration(device=0)),
+            ("/ffnagent/register", ffnagent_registration()),
+            ("/instance/register", instance_registration(pid=owner.pid)),
+        ):
+            assert register(app, path, payload).status_code == HTTPStatus.NO_CONTENT
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            plan = executor.submit(control.step_fabric_control)
+            try:
+                assert forming.wait(timeout=5)
+                stop_proc(process)
+                replacement = executor.submit(request, app, "POST", "/instance/register", json=instance_registration())
+                assert validating.wait(timeout=5)
+                publish.set()
+                plan.result(timeout=5)
+                assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.OK
+            finally:
+                publish.set()
+                commit.set()
+            assert replacement.result(timeout=5).status_code == HTTPStatus.CONFLICT
+    finally:
+        stop_proc(process)
+
+    readiness = request(app, "GET", "/ready").json()
+    assert readiness["instances"][0]["pid"] == owner.pid
+    assert readiness["fabric_phase"] == FabricGenerationPhase.ABORTING
+
+
+def test_participant_owner_failure_from_retired_generation_is_discarded(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = create_app(synthetic_config())
+    control = app.state.control_plane
+    atnagent, _, _, plan = register_fabric_world(app)
+    generation = control.fabric_controller.generation
+    replacement = replace(
+        generation,
+        plan=plan.model_copy(
+            update={"generation": FabricGenerationId(high=plan.generation.high ^ 1, low=plan.generation.low)}
+        ),
+        participants={},
+    )
+    validating, release = Event(), Event()
+
+    def fail_owner_check(registration: AtnAgentRegistrationState, owner: ProcessRef, *, context: str) -> None:
+        validating.set()
+        assert release.wait(timeout=5)
+        raise XpoolDaemonError("conflict", "former owner exited while validation was in flight")
+
+    monkeypatch.setattr(AtnAgentRegistrationState, "validate_process_ref", fail_owner_check)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        report = executor.submit(
+            report_fabric_phase, app, atnagent, plan, pe=0, phase=FabricParticipantPhase.JOIN_READY
+        )
+        try:
+            assert validating.wait(timeout=5)
+            with control.lock:
+                control.fabric_controller.generation = replacement
+        finally:
+            release.set()
+        assert report.result(timeout=5) == HTTPStatus.SERVICE_UNAVAILABLE
+
+    assert replacement.phase is FabricGenerationPhase.PREPARING_JOIN
+    assert replacement.control_failure is None
+    assert not replacement.participants
+
+
+def test_agent_startup_invalidates_in_flight_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = create_app(synthetic_config())
+    control = app.state.control_plane
+    previous, owner = start_sleeping_proc()
+    forming, release = Event(), Event()
+    create_policy = xpool.service.daemon.control.ecs.CapacityPolicy.create
+
+    def hold_policy(config: XpoolConfig, generation: FabricGenerationId):
+        forming.set()
+        assert release.wait(timeout=5)
+        return create_policy(config, generation)
+
+    monkeypatch.setattr(xpool.service.daemon.control.ecs.CapacityPolicy, "create", staticmethod(hold_policy))
+    try:
+        assert register(app, "/atnagent/register", atnagent_registration(device=0)).status_code == HTTPStatus.NO_CONTENT
+        assert (
+            register(app, "/ffnagent/register", ffnagent_registration(pid=owner.pid)).status_code
+            == HTTPStatus.NO_CONTENT
+        )
+        assert register(app, "/instance/register", instance_registration()).status_code == HTTPStatus.NO_CONTENT
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(control.step_fabric_control)
+            try:
+                assert forming.wait(timeout=5)
+                stop_proc(previous)
+                replacement = ProcUniqId.current()
+                admission = AgentStartupAdmission(
+                    role=FabricRole.FFNAGENT,
+                    device=1,
+                    abi_version=ABI_VERSION,
+                    pid=replacement.pid,
+                    create_time=replacement.create_time,
+                )
+                assert (
+                    request(app, "POST", "/startup/agent", json=admission.model_dump(mode="json")).status_code
+                    == HTTPStatus.NO_CONTENT
+                )
+            finally:
+                release.set()
+            pending.result(timeout=5)
+        assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
+        assert (
+            request(app, "POST", "/ffnagent/register", json=ffnagent_registration(pid=replacement.pid)).status_code
+            == HTTPStatus.NO_CONTENT
+        )
+        control.step_fabric_control()
+        assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.OK
+    finally:
+        stop_proc(previous)
+
+
+def test_mps_observation_does_not_delay_fabric_owner_loss(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = create_app(synthetic_config())
+    control = app.state.control_plane
+    process, owner = start_sleeping_proc()
+    probing = Event()
+    release = Event()
+
+    def hold_probe() -> MpsProbeResult:
+        probing.set()
+        assert release.wait(timeout=5)
+        return MpsProbeResult(False, None, "controller unavailable")
+
+    monkeypatch.setattr(control.mps_scope, "probe", hold_probe)
+    monkeypatch.setattr(control, "close", lambda: None)
+
+    async def observe() -> None:
+        async with app.router.lifespan_context(app):
+            try:
+                assert await asyncio.to_thread(probing.wait, 5)
+                await asyncio.to_thread(stop_proc, process)
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://daemon"
+                ) as client:
+                    async with asyncio.timeout(3):
+                        while True:
+                            readiness = (await client.get("/ready")).json()
+                            if readiness["fabric_phase"] == FabricGenerationPhase.ABORTING:
+                                break
+                            await asyncio.sleep(0.01)
+                    assert readiness["mps_status"] == "online"
+                    assert readiness["fabric_owner_failure"]["reason"] == "exited"
+            finally:
+                release.set()
+
+    try:
+        register_fabric_world(app, atnagent=atnagent_registration(device=0, pid=owner.pid))
+        asyncio.run(observe())
+    finally:
+        stop_proc(process)
 
 
 def test_random_scheduler_seed_is_generated_once_and_persisted_in_plan(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -330,6 +587,7 @@ def test_attention_byte_bounds_may_differ_between_ranks(atn_dp_size: int) -> Non
     )
     assert register(app, "/instance/register", first).status_code == 204
     assert register(app, "/instance/register", second).status_code == 204
+    app.state.control_plane.step_fabric_control()
     assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.OK
 
 
@@ -752,7 +1010,6 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
             stop_proc(process)
         app.state.control_plane.watchdog()
         assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
-        assert app.state.control_plane.capture_serving_health_targets() is None
 
         for role, identity, device, path, registration in (
             (FabricRole.ATNAGENT, new_atnagent_id, 0, "/atnagent/register", new_atnagent),
@@ -773,6 +1030,7 @@ def test_replacement_waits_for_retirement_then_forms_wholly_new_generation(
             assert request(app, "GET", "/fabric/plan").status_code == HTTPStatus.SERVICE_UNAVAILABLE
         assert request(app, "POST", "/instance/register", json=new_instance).status_code == HTTPStatus.NO_CONTENT
 
+        app.state.control_plane.step_fabric_control()
         new_plan = FabricDeploymentPlan.model_validate(request(app, "GET", "/fabric/plan").json())
         assert new_plan.generation != old_plan.generation
 

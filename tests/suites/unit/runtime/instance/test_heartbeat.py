@@ -5,6 +5,7 @@ import threading
 from http import HTTPStatus
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 import xpool.runtime.instance
@@ -13,12 +14,14 @@ from xpool.fabric import FabricGenerationPhase
 from xpool.model import ModelId
 from xpool.native import ABI_VERSION
 from xpool.runtime.instance import InstanceRankError, InstanceRankRuntime
+from xpool.service.client import XpoolClient
+from xpool.service.errors import XpoolClientError
 from xpool.service.wire import (
     HeartbeatResponse,
     InstanceRankRegistration,
     ProcessRef,
 )
-from xtest.harness.support.config import TEST_MODEL_ID, reset_global_config
+from xtest.harness.support.config import TEST_MODEL_ID, install_test_config, reset_global_config
 from xtest.harness.support.ecs import context_state_profile
 from xtest.harness.support.runtime.instance import (
     ffn_profile,
@@ -31,6 +34,7 @@ from xtest.harness.support.runtime.instance import (
     transport_arena,
     transport_attributes,
 )
+from xtest.harness.support.service.client import install_scripted_http_client, response
 
 pytestmark = pytest.mark.usefixtures(reset_global_config.__name__, install_offline_instance_client.__name__)
 
@@ -103,29 +107,49 @@ def test_instance_start_registers_heartbeat_without_attaching_transport(monkeypa
     assert events == ["register", "heartbeat"]
 
 
-def test_instance_start_deregisters_when_heartbeat_start_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = runtime_config()
-    events: list[str] = []
+@pytest.mark.parametrize("response_lost", [False, True], ids=["acknowledged", "response-lost"])
+def test_instance_start_deregisters_when_heartbeat_start_fails(
+    monkeypatch: pytest.MonkeyPatch, response_lost: bool
+) -> None:
+    install_test_config(runtime_config())
+    monkeypatch.setattr(xpool.runtime.instance, "XpoolClient", XpoolClient)
+    responses: list[httpx.Response | httpx.HTTPError] = [
+        response(HTTPStatus.OK, None),
+        response(HTTPStatus.NO_CONTENT, None),
+    ]
+    if response_lost:
+        responses.extend(
+            [
+                httpx.ReadTimeout("deregistration response lost"),
+                response(HTTPStatus.NOT_FOUND, None),
+            ]
+        )
+    else:
+        responses.append(response(HTTPStatus.NO_CONTENT, None))
+    probe = install_scripted_http_client(monkeypatch, responses)
+    heartbeat_error = RuntimeError("heartbeat failed")
+    reported: list[BaseException] = []
 
     def fail_heartbeat(self: InstanceRankRuntime) -> None:
-        events.append("heartbeat")
-        raise RuntimeError("heartbeat failed")
+        raise heartbeat_error
 
-    monkeypatch.setattr(
-        InstanceRankRuntime,
-        "register_runtime",
-        lambda self, transport, resolved, context_state_profile, headroom: events.append("register"),
-    )
     monkeypatch.setattr(InstanceRankRuntime, "start_heartbeat_worker", fail_heartbeat)
-    monkeypatch.setattr(InstanceRankRuntime, "attach_arena_from_daemon", lambda self: events.append("attach"))
-    monkeypatch.setattr(InstanceRankRuntime, "start_failure_monitor", lambda self: events.append("monitor"))
-    monkeypatch.setattr(InstanceRankRuntime, "deregister_runtime", lambda self: events.append("deregister"))
 
-    with pytest.raises(RuntimeError, match="heartbeat failed"):
-        instance = runtime_instance(config, monkeypatch)
-        instance.start_runtime(transport_attributes(), ffn_profile(), context_state_profile(), 0)
+    failure_type = XpoolClientError if response_lost else RuntimeError
+    message = "deregistration response lost" if response_lost else "heartbeat failed"
+    with pytest.raises(failure_type, match=message):
+        InstanceRankRuntime.start(
+            model_id=TEST_MODEL_ID,
+            rank=0,
+            transport=transport_attributes(),
+            ffn_profile=ffn_profile(),
+            context_state_profile=context_state_profile(),
+            atn_runtime_headroom_bytes=0,
+            on_failure=reported.append,
+        )
 
-    assert events == ["register", "heartbeat", "deregister"]
+    assert reported == [heartbeat_error]
+    assert [path.rsplit("/", 1)[-1] for _, path, _ in probe.calls] == ["health", "register", "deregister"]
 
 
 @pytest.mark.parametrize("failure_kind", ["status", "transport"])
@@ -166,7 +190,7 @@ def test_instance_heartbeat_keeps_client_on_recoverable_failure_and_closes_on_st
         monkeypatch,
         heartbeat_results=[
             xpool.runtime.instance.XpoolClientError("transport", "daemon unavailable"),
-            HeartbeatResponse(warnings=[]),
+            HeartbeatResponse(),
         ],
     )
     heartbeat = runtime_heartbeat(config, monkeypatch)
@@ -234,9 +258,7 @@ def test_terminal_heartbeat_notifies_lifecycle_without_main_thread_polling(
     monkeypatch: pytest.MonkeyPatch,
     phase: FabricGenerationPhase,
 ) -> None:
-    install_scripted_instance_client(
-        monkeypatch, heartbeat_results=[HeartbeatResponse(warnings=[], fabric_phase=phase)]
-    )
+    install_scripted_instance_client(monkeypatch, heartbeat_results=[HeartbeatResponse(fabric_phase=phase)])
     notified = threading.Event()
     failures: list[BaseException] = []
 
