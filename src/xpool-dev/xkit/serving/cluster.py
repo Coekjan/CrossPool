@@ -145,7 +145,7 @@ class XpoolCluster:
                     ) from error
             if isinstance(error, (KeyboardInterrupt, SystemExit)):
                 raise
-            if not daemon_healthy:
+            if not daemon_healthy and endpoint.listener is None:
                 try:
                     endpoint.reacquire()
                 except OSError as endpoint_error:

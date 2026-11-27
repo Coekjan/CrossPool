@@ -280,9 +280,13 @@ def create_qualified_tcp_listener(address: tuple[str, int], *, deadline: float |
                 # Keep TIME_WAIT on the client's ephemeral port.
                 client.close()
         listener.settimeout(None)
-    except OSError as error:
+    except BaseException as error:
         listener.close()
+        if not isinstance(error, OSError):
+            raise
         if deadline is not None and time.monotonic() >= deadline:
+            if isinstance(error, TimeoutError):
+                raise
             raise TimeoutError("TCP endpoint allocation exceeded the startup deadline") from error
         raise TcpEndpointUnreachable(address) from error
     return listener

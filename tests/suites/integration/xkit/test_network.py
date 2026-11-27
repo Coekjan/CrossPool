@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import socket
+from asyncio import CancelledError
 
 import pytest
 
@@ -61,6 +62,19 @@ def test_unreachable_endpoint_closes_owned_listener(monkeypatch: pytest.MonkeyPa
         assert listener.fileno() == -1
     finally:
         listener.close()
+
+
+def test_cancelled_endpoint_probe_closes_owned_listener(monkeypatch: pytest.MonkeyPatch) -> None:
+    def cancel_connection(client: socket.socket, address: tuple[str, int]) -> None:
+        raise CancelledError
+
+    with xkit.network.create_tcp_listener(("0.0.0.0", 0)) as listener:
+        address = ("0.0.0.0", listener.getsockname()[1])
+        monkeypatch.setattr(xkit.network, "create_tcp_listener", lambda address: listener)
+        monkeypatch.setattr(socket.socket, "connect", cancel_connection)
+        with pytest.raises(CancelledError):
+            xkit.network.create_qualified_tcp_listener(address)
+        assert listener.fileno() == -1
 
 
 def test_exact_endpoint_reservation_releases_owned_listener() -> None:
