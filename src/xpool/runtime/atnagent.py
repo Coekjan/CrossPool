@@ -455,7 +455,7 @@ class AtnAgent(Agent):
     def close_role(self) -> None:
         """Release every local transport arena."""
 
-        if self.registered and self.transport.published:
+        if self.registered and self.transport.published and not self.fabric_stopped:
             self.transport.quiesce_leases()
         self.transport.close()
         if self.control_channel is not None:

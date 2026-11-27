@@ -273,13 +273,12 @@ public:
 private:
   friend class Runtime;
 
-  /// Allocate an arena from tables materialized by a validated Runtime join.
-  /// \pre layout and every span were produced together from the joined Projection.
-  static Arena create(const ArenaLayout &layout, std::span<const InstanceEntry> instances,
-                      std::span<const LayerEntry> layers, std::span<const int> atnagent_pes,
-                      std::span<const int> ffnagent_pes);
-
-  Arena(std::uint8_t *base, ArenaLayout layout) : base_(base), layout_(std::move(layout)) {}
+  /// Acquire symmetric storage in this owner before writing local tables.
+  /// \pre The Runtime is empty and the layout and spans describe one Projection.
+  /// \throws c10::Error on allocation or local initialization failure.
+  void initialize(const ArenaLayout &layout, std::span<const InstanceEntry> instances,
+                  std::span<const LayerEntry> layers, std::span<const int> atnagent_pes,
+                  std::span<const int> ffnagent_pes);
 
   std::uint8_t *base_ = nullptr;
   ArenaLayout layout_{};

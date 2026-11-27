@@ -5,7 +5,6 @@
 #include <mutex>
 #include <optional>
 #include <span>
-#include <utility>
 #include <vector>
 
 #include <c10/cuda/CUDAException.h>
@@ -130,10 +129,12 @@ void Runtime::join(c10::DeviceIndex device, const ArenaProjection &projection, i
 
     // Phase: Establish Participant Resources - Module registration precedes
     // symmetric Arena creation and remains live through resident drain.
-    auto module_registration = ModuleRegistration::create();
-    auto arena = Arena::create(layout, std::span<const InstanceEntry>{instance_entries},
-                               std::span<const LayerEntry>{layer_entries}, std::span<const int>{atnagent_pes},
-                               std::span<const int>{ffnagent_pes});
+    // Local initialization can fail while peers proceed to the join barrier.
+    // Retain symmetric storage with the Runtime until collective retirement.
+    module_registration_ = ModuleRegistration::create();
+    arena_.initialize(layout, std::span<const InstanceEntry>{instance_entries},
+                      std::span<const LayerEntry>{layer_entries}, std::span<const int>{atnagent_pes},
+                      std::span<const int>{ffnagent_pes});
     // No participant publishes Joined until every PE initialized the same
     // symmetric layout and reached this collective boundary.
     nvshmem_barrier_all();
@@ -143,8 +144,6 @@ void Runtime::join(c10::DeviceIndex device, const ArenaProjection &projection, i
     device_ = device;
     projection_ = projection;
     pe_ = pe;
-    arena_ = std::move(arena);
-    module_registration_ = std::move(module_registration);
     phase_ = Phase::Joined;
     xpool::hooks::FabricJoinPostEvent::hooks(
         {.device = device, .pe = pe, .layout = arena_.layout(), .projection = *projection_});

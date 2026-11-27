@@ -50,6 +50,7 @@ from xtest.harness.support.runtime.atnagent import (
     create_atnagent,
     reset_agent_runtime,
     reset_atnagent_runtime,
+    transport_entry,
 )
 from xtest.harness.support.service.daemon import ffn_model_spec
 
@@ -210,6 +211,29 @@ def test_transport_preparation_projects_local_instance_ranks(monkeypatch: pytest
     monkeypatch.setattr(agent.transport, "prepare", lambda epoch, ranks: prepared.append((epoch, ranks)) or True)
     assert agent.prepare_fabric_join()
     assert prepared == [(agent.registration_epoch, {TEST_MODEL_ID: 0})]
+
+
+@pytest.mark.parametrize("fabric_stopped", (False, True))
+def test_atnagent_retirement_quiesces_published_leases_once(
+    monkeypatch: pytest.MonkeyPatch,
+    fabric_stopped: bool,
+) -> None:
+    agent = create_atnagent(synthetic_config(), device=0)
+    agent.registered = True
+    entry = transport_entry(model_id=TEST_MODEL_ID, rank=0, handle_rank=1)
+    entry.published_epoch = agent.registration_epoch
+    agent.transport.entries[TEST_MODEL_ID] = entry
+    events: list[str] = []
+    monkeypatch.setattr(agent.transport, "quiesce_leases", lambda: events.append("quiesce"))
+    monkeypatch.setattr(agent.transport, "drain", lambda: None)
+    monkeypatch.setattr(agent.transport, "close", lambda: events.append("close"))
+
+    if fabric_stopped:
+        agent.transport.quiesce()
+        agent.fabric_stopped = True
+    agent.close_role()
+
+    assert events == ["quiesce", "close"]
 
 
 def test_participant_report_commits_only_after_daemon_acknowledgement(monkeypatch: pytest.MonkeyPatch) -> None:

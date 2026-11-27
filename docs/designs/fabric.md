@@ -14,6 +14,12 @@ Dynamic publications, Lane payloads, completion state, failure, and shutdown
 state occupy separate typed regions. Traces are process-local Devkit evidence
 and are not Fabric arena regions.
 
+Each Runtime owns its module registration and symmetric allocation before
+initializing local tables. A local initialization failure reaches the Agent's
+report while the Runtime retains both resources. A peer can still be waiting
+in the join barrier. [Failed Generation retirement](control-plane.md#ordered-retirement)
+retains unconfirmed owners.
+
 Lane payloads use one contiguous native-owned storage region. Each Executor
 Lane has exactly two fixed-capacity buffers in buffer-major order; the number of
 Lanes is the generation's `ffn_concurrency`. Native layout code alone owns

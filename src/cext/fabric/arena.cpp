@@ -14,30 +14,25 @@
 
 namespace xpool::fabric {
 
-Arena Arena::create(const ArenaLayout &layout, std::span<const InstanceEntry> instances,
-                    std::span<const LayerEntry> layers, std::span<const int> atnagent_pes,
-                    std::span<const int> ffnagent_pes) {
+void Arena::initialize(const ArenaLayout &layout, std::span<const InstanceEntry> instances,
+                       std::span<const LayerEntry> layers, std::span<const int> atnagent_pes,
+                       std::span<const int> ffnagent_pes) {
   const auto total_bytes = layout.header.total_bytes;
-  auto *allocation = static_cast<std::uint8_t *>(nvshmem_align(xpool::arena::kAllocationAlignment, total_bytes));
-  TORCH_CHECK(allocation != nullptr, "xpool failed to allocate the symmetric Fabric arena");
-  TORCH_CHECK(reinterpret_cast<std::uintptr_t>(allocation) % xpool::arena::kAllocationAlignment == 0,
+  base_ = static_cast<std::uint8_t *>(nvshmem_align(xpool::arena::kAllocationAlignment, total_bytes));
+  TORCH_CHECK(base_ != nullptr, "xpool failed to allocate the symmetric Fabric arena");
+  layout_ = layout;
+  TORCH_CHECK(reinterpret_cast<std::uintptr_t>(base_) % xpool::arena::kAllocationAlignment == 0,
               "xpool NVSHMEM Fabric arena does not satisfy its required alignment");
-  try {
-    C10_CUDA_CHECK(cudaMemset(allocation, 0, total_bytes));
-    C10_CUDA_CHECK(cudaMemcpy(allocation, &layout, sizeof(layout), cudaMemcpyHostToDevice));
-    C10_CUDA_CHECK(cudaMemcpy(allocation + layout.instance_entries_offset_bytes, instances.data(),
-                              instances.size_bytes(), cudaMemcpyHostToDevice));
-    C10_CUDA_CHECK(cudaMemcpy(allocation + layout.layer_entries_offset_bytes, layers.data(), layers.size_bytes(),
-                              cudaMemcpyHostToDevice));
-    C10_CUDA_CHECK(cudaMemcpy(allocation + layout.atnagent_pes_offset_bytes, atnagent_pes.data(),
-                              atnagent_pes.size_bytes(), cudaMemcpyHostToDevice));
-    C10_CUDA_CHECK(cudaMemcpy(allocation + layout.ffnagent_pes_offset_bytes, ffnagent_pes.data(),
-                              ffnagent_pes.size_bytes(), cudaMemcpyHostToDevice));
-  } catch (...) {
-    nvshmem_free(allocation);
-    throw;
-  }
-  return Arena{allocation, layout};
+  C10_CUDA_CHECK(cudaMemset(base_, 0, total_bytes));
+  C10_CUDA_CHECK(cudaMemcpy(base_, &layout, sizeof(layout), cudaMemcpyHostToDevice));
+  C10_CUDA_CHECK(cudaMemcpy(base_ + layout.instance_entries_offset_bytes, instances.data(), instances.size_bytes(),
+                            cudaMemcpyHostToDevice));
+  C10_CUDA_CHECK(cudaMemcpy(base_ + layout.layer_entries_offset_bytes, layers.data(), layers.size_bytes(),
+                            cudaMemcpyHostToDevice));
+  C10_CUDA_CHECK(cudaMemcpy(base_ + layout.atnagent_pes_offset_bytes, atnagent_pes.data(), atnagent_pes.size_bytes(),
+                            cudaMemcpyHostToDevice));
+  C10_CUDA_CHECK(cudaMemcpy(base_ + layout.ffnagent_pes_offset_bytes, ffnagent_pes.data(), ffnagent_pes.size_bytes(),
+                            cudaMemcpyHostToDevice));
 }
 
 ArenaState Arena::state() const {

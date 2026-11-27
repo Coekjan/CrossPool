@@ -90,9 +90,7 @@ void AtnAgentRuntime::Resident::request_drain() {
     return;
   }
   const auto device_guard = c10::cuda::CUDAGuard{device_};
-  auto *drain_requested = reinterpret_cast<std::uint32_t *>(reinterpret_cast<std::uint8_t *>(state_) +
-                                                            offsetof(ResidentState, drain_requested));
-  control_stream_.write_value(drain_requested, 1);
+  control_stream_.write_value(&state_->drain_requested, 1);
   host_drain_requested_ = true;
 }
 
