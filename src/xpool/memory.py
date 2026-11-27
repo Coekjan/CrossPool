@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from xpool.utils import align_up
 from xpool.utils.files import atomic_write_text
@@ -163,7 +163,7 @@ class FabricMemoryContext(BaseModel):
     participants: tuple[MemoryCalibrationEnvironment, ...] | None = Field(
         min_length=2, strict=False, description="Complete compatibility facts in PE order, or no observation."
     )
-    ffnagent_count: StrictInt = Field(ge=1, description="Complete FfnAgent count, including idle participants.")
+    ffnagent_count: int = Field(ge=1, description="Complete FfnAgent count, including idle participants.")
 
     @model_validator(mode="after")
     def validate_roles(self) -> FabricMemoryContext:

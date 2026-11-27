@@ -238,7 +238,6 @@ def write_world_config(path: Path, source: XpoolConfig, experiment: CalibrationE
         and (value := get_nested(values, setting.path)[1]) is not None
     }
     payload = snapshot.to_config_mapping()
-    XpoolConfig.from_mapping(payload, env=config_environment)
     path.write_text(tomli_w.dumps(payload), encoding="utf-8")
     return config_environment
 

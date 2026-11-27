@@ -47,24 +47,26 @@ def query_uuids_mapping() -> dict[int, str]:
     return mapping
 
 
+@cache
+def visible_inventory() -> dict[int, str]:
+    """Retain physical inventory for visibility resolution in this process."""
+
+    return query_uuids_mapping()
+
+
 def visible_uuids() -> tuple[str, ...]:
     """Return selected physical UUIDs in deployment order without changing env.
 
     Numeric selectors are nvidia-smi indices. Unset visibility selects all
     devices by ascending index; empty visibility selects none. Unknown selectors
-    and duplicate physical selections raise ValueError. Successful resolutions
-    are cached by the raw environment value, assuming stable physical inventory
-    throughout the process lifetime.
+    and duplicate physical selections raise ValueError. Resolution uses the
+    current selection and the process's retained physical inventory.
     """
 
-    return resolve_visible_uuids(os.environ.get("CUDA_VISIBLE_DEVICES"))
-
-
-@cache
-def resolve_visible_uuids(selection: str | None) -> tuple[str, ...]:
+    selection = os.environ.get("CUDA_VISIBLE_DEVICES")
     if selection is not None and not selection.strip():
         return ()
-    mapping = query_uuids_mapping()
+    mapping = visible_inventory()
     if selection is None:
         return tuple(mapping[index] for index in sorted(mapping))
     identities = set(mapping.values())

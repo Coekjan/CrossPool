@@ -177,8 +177,6 @@ def prepare_ffn_layer(
     operation/encoding combinations fail before loading or capture.
     """
 
-    if any(isinstance(value, bool) or not isinstance(value, int) for value in (layer_ordinal, tp_size, tp_rank)):
-        raise ValueError("FFN preparation coordinates must be integers")
     if not 0 <= layer_ordinal < len(model_spec.layers) or tp_size <= 0 or not 0 <= tp_rank < tp_size:
         raise ValueError("FFN preparation coordinate is outside the model or TP domain")
     if payload_dtype not in (torch.bfloat16, torch.float16):

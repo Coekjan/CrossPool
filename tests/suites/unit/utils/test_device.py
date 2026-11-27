@@ -15,10 +15,10 @@ def inventory(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[int, str]]:
         4: "GPU-00000000-0000-0000-0000-000000000004",
         2: "GPU-00000000-0000-0000-0000-000000000002",
     }
-    device.resolve_visible_uuids.cache_clear()
+    device.visible_inventory.cache_clear()
     monkeypatch.setattr(device, "query_uuids_mapping", lambda: mapping)
     yield mapping
-    device.resolve_visible_uuids.cache_clear()
+    device.visible_inventory.cache_clear()
 
 
 def test_visibility_follows_selection_and_environment_changes(
@@ -31,6 +31,11 @@ def test_visibility_follows_selection_and_environment_changes(
     assert device.visible_uuids() == (inventory[4], inventory[2])
     assert os.environ["CUDA_VISIBLE_DEVICES"] == "4,2"
     device.normalize_environment()
+
+    def query_again() -> dict[int, str]:
+        pytest.fail("normalizing UUIDs must reuse the retained physical inventory")
+
+    monkeypatch.setattr(device, "query_uuids_mapping", query_again)
     assert os.environ["CUDA_VISIBLE_DEVICES"] == f"{inventory[4]},{inventory[2]}"
     assert device.visible_uuids() == (inventory[4], inventory[2])
     assert os.environ["CUDA_MPS_PIPE_DIRECTORY"] == "/external/controller"

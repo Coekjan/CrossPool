@@ -11,7 +11,6 @@ namespace xpool::instance {
 
 void ffn_shim(const at::Tensor &hidden_states, const std::optional<at::Tensor> &dp_rank_payload_rows,
               const at::Tensor &output, const xpool::transport::RequestMetadata &request_metadata) {
-  TORCH_CHECK(request_metadata.valid(), "xpool FFN shim received invalid request metadata");
   TORCH_CHECK(hidden_states.is_cuda(), "xpool FFN shim expects a CUDA tensor");
   TORCH_CHECK(hidden_states.dim() == 2, "xpool FFN shim expects a 2D tensor");
   TORCH_CHECK(hidden_states.is_contiguous(), "xpool FFN shim expects a contiguous tensor");

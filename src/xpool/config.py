@@ -1159,7 +1159,7 @@ def init_global_config(
     global global_config
     with global_config_lock:
         if global_config is not None:
-            if global_config.model_dump(mode="json") != resolved.model_dump(mode="json"):
+            if global_config.model_dump() != resolved.model_dump():
                 raise ConfigError("xpool global config is already initialized with different values")
             return global_config
         global_config = resolved

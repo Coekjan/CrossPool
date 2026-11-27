@@ -468,10 +468,9 @@ returned `nvidia-smi` indices; explicit selection order is preserved. Unset
 visibility selects all physical devices in ascending inventory-index order;
 an explicitly empty value selects none. Full physical UUIDs are accepted;
 unknown selectors, duplicate physical selections and MIG selectors are rejected.
-The read-only visibility accessor caches successful resolutions by the raw
-environment value, assuming stable inventory during one process lifetime.
-Changing the selection chooses a different entry. Physical inventory and actual
-MPS availability or membership observations remain uncached.
+The visibility accessor resolves the current environment selection against
+physical inventory retained for the process lifetime. Explicit physical
+inventory queries and MPS availability or membership observations remain live.
 
 The daemon, both Agent entries and `xpool exec` normalize the complete ordered
 Deployment Device View into `CUDA_VISIBLE_DEVICES`. Full UUIDs avoid

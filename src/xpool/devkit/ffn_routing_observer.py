@@ -33,24 +33,10 @@ def write_routing_snapshot(
     outdir = get_global_config().debug.ffn_routing_observer.outdir
     if outdir is None:
         raise RuntimeError("xpool FFN Routing Observer requires debug.ffn_routing_observer.outdir")
-    if snapshot.dropped > snapshot.sequence or len(snapshot.records) != snapshot.sequence - snapshot.dropped:
-        raise RuntimeError("xpool FFN Routing Observer snapshot counters are inconsistent")
 
     tensors: dict[str, torch.Tensor] = {}
     records: list[dict[str, int]] = []
     for index, record in enumerate(snapshot.records):
-        if (
-            record.topk_ids.device.type != "cpu"
-            or record.topk_ids.dtype is not torch.int32
-            or record.topk_weights.device.type != "cpu"
-            or record.topk_weights.dtype is not torch.float32
-            or record.topk_ids.ndim != 2
-            or record.topk_ids.shape != record.topk_weights.shape
-            or not record.topk_ids.is_contiguous()
-            or not record.topk_weights.is_contiguous()
-            or any(size <= 0 for size in record.topk_ids.shape)
-        ):
-            raise RuntimeError("xpool FFN Routing Observer record tensors are invalid")
         records.append(
             {
                 "instance_index": record.key.instance_index,

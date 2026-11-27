@@ -300,10 +300,10 @@ class XpoolDevConfig(ConfigModel):
             runtime_config_path=self._runtime_config_path,
         )
 
-    @classmethod
-    def from_record(cls, record: ToolConfigRecord) -> Self:
+    @staticmethod
+    def from_record(record: ToolConfigRecord) -> XpoolDevConfig:
         """Restore the validated parent snapshot without file or environment reads."""
-        config = cls.model_validate(record.settings.model_dump())
+        config = record.settings.model_copy(deep=True)
         config._sources = record.sources
         config._cache_root = record.cache_root
         config._cache_source = record.cache_source
@@ -375,10 +375,7 @@ def init_global_config(
     global global_config
     with global_config_lock:
         if global_config is not None:
-            if (
-                global_config.model_dump(mode="json") != resolved.model_dump(mode="json")
-                or global_config.cache_root != resolved.cache_root
-            ):
+            if global_config.model_dump() != resolved.model_dump() or global_config.cache_root != resolved.cache_root:
                 raise ConfigError("development global config is already initialized with different values")
             return global_config
         global_config = resolved
