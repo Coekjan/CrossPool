@@ -12,23 +12,26 @@ from xtest.harness.support.config import TEST_MODEL_ID
 
 
 def test_plan_round_trips_strict_unversioned_json(tmp_path: Path) -> None:
-    plan = xtest.harness.runner.plan.TestPlan((e2e_case("eager"), e2e_case("full")))
+    plan = xtest.harness.runner.plan.TestPlan((e2e_case("eager"), e2e_case("full")), ())
     path = tmp_path / "plan.json"
 
     plan.write(path)
 
     assert xtest.harness.runner.plan.TestPlan.read(path) == plan
-    assert set(json.loads(path.read_text(encoding="utf-8"))) == {"cases", "selected_suites"}
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert set(document) == {"cases", "selected_suites"}
+    assert document["cases"][0]["requirements"]["model_ids"] == [str(TEST_MODEL_ID)]
     assert not tuple(tmp_path.glob(".*.tmp"))
 
 
 def test_plan_rejects_unknown_case_fields(tmp_path: Path) -> None:
-    case = unit_case().raw()
-    case["unknown"] = True
     path = tmp_path / "plan.json"
-    path.write_text(json.dumps({"cases": [case], "selected_suites": []}), encoding="utf-8")
+    xtest.harness.runner.plan.TestPlan((unit_case(),), ()).write(path)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["cases"][0]["unknown"] = True
+    path.write_text(json.dumps(document), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exactly"):
+    with pytest.raises(ValueError, match="unknown"):
         xtest.harness.runner.plan.TestPlan.read(path)
 
 
@@ -41,6 +44,7 @@ def test_collected_case_rejects_stage_and_resource_drift() -> None:
             requirements=ResourceRequirements(0, False, ()),
             estimated_duration_seconds=None,
             timeout_seconds=10,
+            inspection=None,
         )
     with pytest.raises(ValueError, match="unit tests cannot require devices"):
         xtest.harness.runner.plan.CollectedTestCase(
@@ -50,6 +54,7 @@ def test_collected_case_rejects_stage_and_resource_drift() -> None:
             requirements=ResourceRequirements(1, False, ()),
             estimated_duration_seconds=None,
             timeout_seconds=10,
+            inspection=None,
         )
 
 
@@ -59,21 +64,22 @@ def test_collected_case_rejects_stage_and_resource_drift() -> None:
 )
 def test_collection_rejects_nonfinite_times(field: str, value: float, tmp_path: Path) -> None:
     case = unit_case()
-    with pytest.raises(ValueError, match="finite and positive"):
+    with pytest.raises(ValueError, match="finite"):
         replace(case, **{field: value})
-    raw = case.raw()
-    raw[field] = value
     path = tmp_path / "plan.json"
-    path.write_text(json.dumps({"cases": [raw], "selected_suites": []}), encoding="utf-8")
+    xtest.harness.runner.plan.TestPlan((case,), ()).write(path)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["cases"][0][field] = value
+    path.write_text(json.dumps(document), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="finite and positive"):
+    with pytest.raises(ValueError, match="finite"):
         xtest.harness.runner.plan.TestPlan.read(path)
 
 
 def test_plan_rejects_duplicate_nodes() -> None:
     case = unit_case()
     with pytest.raises(ValueError, match="nodeids must be unique"):
-        xtest.harness.runner.plan.TestPlan((case, case))
+        xtest.harness.runner.plan.TestPlan((case, case), ())
 
 
 def unit_case() -> xtest.harness.runner.plan.CollectedTestCase:
@@ -84,6 +90,7 @@ def unit_case() -> xtest.harness.runner.plan.CollectedTestCase:
         requirements=ResourceRequirements(0, False, ()),
         estimated_duration_seconds=None,
         timeout_seconds=10,
+        inspection=None,
     )
 
 
@@ -96,4 +103,5 @@ def e2e_case(mode: str) -> xtest.harness.runner.plan.CollectedTestCase:
         requirements=ResourceRequirements(2, True, (TEST_MODEL_ID,)),
         estimated_duration_seconds=60,
         timeout_seconds=120,
+        inspection=None,
     )

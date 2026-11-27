@@ -57,7 +57,8 @@ def test_compiler_builds_stage_tasks_with_exact_gpu_batching() -> None:
                 requirements=gpu_two,
                 estimate=50,
             ),
-        )
+        ),
+        (),
     )
 
     tasks = xtest.harness.runner.task.compile_execution_tasks(plan)
@@ -98,7 +99,8 @@ def test_compiler_uses_timeout_when_estimate_is_absent_and_merges_cpu_requiremen
                 timeout=18,
                 estimate=3,
             ),
-        )
+        ),
+        (),
     )
 
     (task,) = xtest.harness.runner.task.compile_execution_tasks(plan)
@@ -107,20 +109,6 @@ def test_compiler_uses_timeout_when_estimate_is_absent_and_merges_cpu_requiremen
     assert task.estimated_duration_seconds == 15
     assert task.timeout_seconds == 30
     assert task.requirements.model_ids == (ModelId("org/alpha"), ModelId("org/beta"))
-
-
-def test_execution_task_rejects_requirement_drift() -> None:
-    collected = case("tests/suites/integration/test_gpu.py", "test_gpu", requirements=requirements(device_count=1))
-
-    with pytest.raises(ValueError, match="requirements"):
-        xtest.harness.runner.task.ExecutionTask(
-            key="invalid",
-            stage=xtest.harness.runner.plan.TestStage.INTEGRATION,
-            cases=(collected,),
-            requirements=requirements(device_count=2),
-            estimated_duration_seconds=10,
-            timeout_seconds=10,
-        )
 
 
 def test_pytest_task_report_matches_exact_parametrized_nodeids(tmp_path: Path) -> None:
@@ -327,10 +315,11 @@ def test_suite_runner_stops_after_failed_unit_gate(
         (
             case("tests/suites/unit/test_alpha.py", "test_alpha", requirements=requirements()),
             case("tests/suites/integration/test_beta.py", "test_beta", requirements=requirements()),
-        )
+        ),
+        (),
     )
     runner = xtest.harness.runner.suite.SuiteRunner(
-        plan,
+        xtest.harness.runner.task.compile_execution_tasks(plan),
         repository_root=tmp_path,
         catalogue_path=tmp_path / "tests/tests.toml",
         tool_config_path=tmp_path / "tool-config.json",
@@ -385,10 +374,11 @@ def test_suite_runner_preserves_e2e_failure_during_completion_or_stop(
         (
             case("tests/suites/e2e/test_e2e_alpha.py", "test_alpha", requirements=requirements()),
             case("tests/suites/e2e/test_e2e_beta.py", "test_beta", requirements=requirements()),
-        )
+        ),
+        (),
     )
     runner = xtest.harness.runner.suite.SuiteRunner(
-        plan,
+        xtest.harness.runner.task.compile_execution_tasks(plan),
         repository_root=tmp_path,
         catalogue_path=tmp_path / "tests/tests.toml",
         tool_config_path=tmp_path / "tool-config.json",
@@ -444,10 +434,11 @@ def test_infrastructure_failure_drains_active_tasks_and_starts_no_later_stage(
                 "test_model",
                 requirements=requirements(device_count=1),
             ),
-        )
+        ),
+        (),
     )
     runner = xtest.harness.runner.suite.SuiteRunner(
-        plan,
+        xtest.harness.runner.task.compile_execution_tasks(plan),
         repository_root=tmp_path,
         catalogue_path=tmp_path / "tests/tests.toml",
         tool_config_path=tmp_path / "tool-config.json",
@@ -521,10 +512,11 @@ def test_suite_runner_backfills_device_pool_and_builds_exact_pytest_commands(
                 requirements=requirements(device_count=1),
                 estimate=80,
             ),
-        )
+        ),
+        (),
     )
     runner = xtest.harness.runner.suite.SuiteRunner(
-        plan,
+        xtest.harness.runner.task.compile_execution_tasks(plan),
         repository_root=tmp_path,
         catalogue_path=tmp_path / "tests/tests.toml",
         tool_config_path=tmp_path / "tool-config.json",
@@ -594,10 +586,11 @@ def test_suite_runner_classifies_gpu_lease_after_start_failure(
                 "test_gpu",
                 requirements=requirements(device_count=1),
             ),
-        )
+        ),
+        (),
     )
     runner = xtest.harness.runner.suite.SuiteRunner(
-        plan,
+        xtest.harness.runner.task.compile_execution_tasks(plan),
         repository_root=tmp_path,
         catalogue_path=tmp_path / "tests/tests.toml",
         tool_config_path=tmp_path / "tool-config.json",
@@ -632,10 +625,11 @@ def test_suite_runner_prepares_directory_before_gpu_lease(
                 "test_gpu",
                 requirements=requirements(device_count=1),
             ),
-        )
+        ),
+        (),
     )
     runner = xtest.harness.runner.suite.SuiteRunner(
-        plan,
+        xtest.harness.runner.task.compile_execution_tasks(plan),
         repository_root=tmp_path,
         catalogue_path=tmp_path / "tests/tests.toml",
         tool_config_path=tmp_path / "tool-config.json",
@@ -721,6 +715,7 @@ def case(
         requirements=requirements,
         estimated_duration_seconds=estimate,
         timeout_seconds=timeout,
+        inspection=None,
     )
 
 

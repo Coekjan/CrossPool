@@ -25,13 +25,8 @@ def test_declarations_preserve_the_callable_and_defer_dynamic_resources() -> Non
     assert observed == []
 
 
-def test_resource_record_retains_canonical_model_spelling() -> None:
-    resources = ResourceRequirements(2, True, (TEST_MODEL_ID,))
-    assert ResourceRequirements.from_raw(resources.raw()) == resources
-
-
 def test_resource_record_rejects_noninteger_device_count() -> None:
-    with pytest.raises(ValueError, match="nonnegative integer"):
+    with pytest.raises(ValueError, match="valid integer"):
         ResourceRequirements(1.5, False, ())  # ty: ignore[invalid-argument-type]
 
 

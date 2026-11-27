@@ -19,7 +19,7 @@ def test_collection_worker_runs_isolated_pytest_and_reads_plan(
     repository_root = tmp_path / "repo"
     repository_root.mkdir()
     run_directory = tmp_path / "run"
-    expected = xtest.harness.runner.plan.TestPlan((unit_case(),))
+    expected = xtest.harness.runner.plan.TestPlan((unit_case(),), ())
     observed_command: list[str] = []
     observed_cwd: list[Path] = []
     observed_environment: dict[str, str] = {}
@@ -110,4 +110,5 @@ def unit_case() -> xtest.harness.runner.plan.CollectedTestCase:
         requirements=ResourceRequirements(0, False, ()),
         estimated_duration_seconds=None,
         timeout_seconds=10,
+        inspection=None,
     )

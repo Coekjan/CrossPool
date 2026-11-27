@@ -14,9 +14,9 @@ from xkit.device import DevicePool
 from xkit.scheduler import ActiveTask, TaskScheduler
 from xkit.supervisor import TaskCompletion, TaskCompletionKind
 from xtest.harness.report import TaskReportRecord, TestResultWriter
-from xtest.harness.runner.plan import TestPlan, TestStage
+from xtest.harness.runner.plan import TestStage
 from xtest.harness.runner.pytest_report import PytestTaskReport
-from xtest.harness.runner.task import ExecutionTask, compile_execution_tasks
+from xtest.harness.runner.task import ExecutionTask
 
 logger = logging.getLogger("xtest.runner")
 
@@ -57,7 +57,7 @@ class SuiteRunner:
 
     def __init__(
         self,
-        plan: TestPlan,
+        tasks: tuple[ExecutionTask, ...],
         *,
         repository_root: Path,
         run_directory: Path,
@@ -67,9 +67,8 @@ class SuiteRunner:
         device_pool: DevicePool | None = None,
         result_writer: TestResultWriter | None = None,
     ) -> None:
-        self.plan = plan
         self.result_writer = result_writer
-        self.tasks = compile_execution_tasks(plan)
+        self.tasks = tasks
         self.repository_root = repository_root
         self.run_directory = run_directory
         self.strict_requirements = strict_requirements
@@ -148,7 +147,7 @@ class SuiteRunner:
 
         pending = sorted(
             (task for task in self.tasks if task.stage is stage),
-            key=lambda task: (-task.requirements.device_count, -task.estimated_duration_seconds, task.key),
+            key=lambda task: (-task.requirements.device_count, -task.estimated_duration_seconds),
         )
         if not pending:
             return 0

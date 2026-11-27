@@ -116,28 +116,22 @@ def execute_test_run(
         if result_writer is not None:
             result_writer.selection(selected_suites)
 
-    needs_device_pool = "cext" in selected_suites or (
-        plan is not None and any(case.requirements.device_count for case in plan.cases)
-    )
     device_pool: DevicePool | None = None
     runner: SuiteRunner | None = None
     device_resources_releasable = True
     try:
+        tasks = compile_execution_tasks(plan) if plan is not None else ()
         if result_writer is not None:
             native_cases = CtestSuite(Path.cwd()).inventory() if "cext" in selected_suites else ()
-            tasks = (
-                {task.key: tuple(case.nodeid for case in task.cases) for task in compile_execution_tasks(plan)}
-                if plan is not None
-                else {}
-            )
+            task_inventory = {task.key: tuple(case.nodeid for case in task.cases) for task in tasks}
             if "cext" in selected_suites:
-                tasks["cext"] = native_cases
+                task_inventory["cext"] = native_cases
             result_writer.inventory(
                 python_cases=tuple(case.nodeid for case in plan.cases) if plan is not None else (),
                 native_cases=native_cases,
-                tasks=tasks,
+                tasks=task_inventory,
             )
-        if needs_device_pool:
+        if "cext" in selected_suites or any(task.requirements.device_count for task in tasks):
             device_pool = DevicePool.from_environment()
         if "cext" in selected_suites:
             assert device_pool is not None
@@ -166,10 +160,10 @@ def execute_test_run(
             print(f"STAGE cext: code={stage_result}; log={ctest_result.log_path} junit={ctest_result.junit_path}")
             if stage_result:
                 return stage_result
-        if plan is None:
+        if not tasks:
             return 0
         runner = SuiteRunner(
-            plan,
+            tasks,
             repository_root=repository_root,
             run_directory=run_directory,
             strict_requirements=strict_requirements,

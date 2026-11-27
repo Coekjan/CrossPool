@@ -308,11 +308,12 @@ def run_model_case(
 def assert_sampler_replay(result: SglangServerResult, directory: Path, *, tp_size: int) -> None:
     """Require actual selection coverage on every rank of the routed TP group."""
 
+    adapter = TypeAdapter(SamplerReplayEvidence)
     evidence = [
         item
         for path in directory.glob("xkit.sampler-replay.*.jsonl")
         for line in path.read_bytes().splitlines()
-        for item in (TypeAdapter(SamplerReplayEvidence).validate_json(line),)
+        for item in (adapter.validate_json(line),)
         if item.model_id == result.model_id and item.request_id == result.request_id and item.prescribed_id is not None
     ]
     ranks = {item.rank for item in evidence}

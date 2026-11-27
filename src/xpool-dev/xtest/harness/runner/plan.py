@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import math
-from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Self, TypeGuard
+from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic.dataclasses import dataclass
 
 from xkit import ResourceRequirements
 from xkit.case import CaseId
@@ -18,13 +16,7 @@ from xkit.results import write_json
 from xkit.serving.sglang.graph import SglangGraphMode
 from xpool.model import ModelId
 
-type JsonObject = dict[str, object]
-
-
-def is_json_object(value: object) -> TypeGuard[JsonObject]:
-    """Return whether a decoded value is a string-keyed JSON object."""
-
-    return isinstance(value, dict) and all(isinstance(key, str) for key in value)
+type PositiveSeconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 
 class TestStage(StrEnum):
@@ -59,7 +51,7 @@ class CaseInspection(BaseModel):
     graph_modes: tuple[SglangGraphMode, ...]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(config=ConfigDict(extra="forbid", strict=True), frozen=True, slots=True)
 class CollectedTestCase:
     """One concrete pytest item and its complete scheduling metadata."""
 
@@ -67,9 +59,9 @@ class CollectedTestCase:
     nodeid: str
     stage: TestStage
     requirements: ResourceRequirements
-    estimated_duration_seconds: float | None
-    timeout_seconds: float
-    inspection: CaseInspection | None = None
+    estimated_duration_seconds: PositiveSeconds | None
+    timeout_seconds: PositiveSeconds
+    inspection: CaseInspection | None
 
     def __post_init__(self) -> None:
         parsed_path = PurePosixPath(self.path)
@@ -81,112 +73,34 @@ class CollectedTestCase:
             raise ValueError(f"collected test nodeid does not belong to path: {self.nodeid!r}")
         if self.stage is TestStage.UNIT and self.requirements.device_count != 0:
             raise ValueError("unit tests cannot require devices")
-        if self.estimated_duration_seconds is not None and (
-            not math.isfinite(self.estimated_duration_seconds) or self.estimated_duration_seconds <= 0
-        ):
-            raise ValueError("estimated test duration must be finite and positive")
-        if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
-            raise ValueError("test timeout must be finite and positive")
-
-    @classmethod
-    def from_raw(cls, raw: object) -> Self:
-        """Strictly parse one collected-case JSON object."""
-
-        expected = {
-            "path",
-            "nodeid",
-            "stage",
-            "requirements",
-            "estimated_duration_seconds",
-            "timeout_seconds",
-            "inspection",
-        }
-        if not is_json_object(raw) or set(raw) != expected:
-            raise ValueError(f"collected test case must contain exactly {sorted(expected)}")
-        path = raw["path"]
-        nodeid = raw["nodeid"]
-        stage = raw["stage"]
-        estimate = raw["estimated_duration_seconds"]
-        timeout = raw["timeout_seconds"]
-        if not isinstance(path, str) or not isinstance(nodeid, str) or not isinstance(stage, str):
-            raise ValueError("collected test path, nodeid, and stage must be strings")
-        if estimate is not None and (not isinstance(estimate, int | float) or isinstance(estimate, bool)):
-            raise ValueError("estimated test duration must be numeric or null")
-        if not isinstance(timeout, int | float) or isinstance(timeout, bool):
-            raise ValueError("test timeout must be numeric")
-        return cls(
-            path=path,
-            nodeid=nodeid,
-            stage=TestStage(stage),
-            requirements=ResourceRequirements.from_raw(raw["requirements"]),
-            estimated_duration_seconds=float(estimate) if estimate is not None else None,
-            timeout_seconds=float(timeout),
-            inspection=CaseInspection.model_validate_json(json.dumps(raw["inspection"]))
-            if raw["inspection"] is not None
-            else None,
-        )
-
-    def raw(self) -> dict[str, JsonValue]:
-        """Project this collected case to its JSON representation."""
-
-        return {
-            "path": self.path,
-            "nodeid": self.nodeid,
-            "stage": self.stage.value,
-            "requirements": self.requirements.raw(),
-            "estimated_duration_seconds": self.estimated_duration_seconds,
-            "timeout_seconds": self.timeout_seconds,
-            "inspection": self.inspection.model_dump(mode="json") if self.inspection is not None else None,
-        }
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(config=ConfigDict(extra="forbid", strict=True), frozen=True, slots=True)
 class TestPlan:
     """Strict ordered result of one isolated pytest collection worker."""
 
-    cases: tuple[CollectedTestCase, ...]
-    selected_suites: tuple[str, ...] = ()
+    cases: Annotated[tuple[CollectedTestCase, ...], Field(min_length=1)]
+    selected_suites: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        if not self.cases:
-            raise ValueError("test plan must contain at least one case")
         nodeids = tuple(case.nodeid for case in self.cases)
         if len(nodeids) != len(set(nodeids)):
             raise ValueError("test plan nodeids must be unique")
 
-    @classmethod
-    def from_raw(cls, raw: object) -> Self:
-        """Strictly parse one complete Test Plan JSON object."""
-
-        if not is_json_object(raw) or set(raw) != {"cases", "selected_suites"} or not isinstance(raw["cases"], list):
-            raise ValueError("test plan must contain cases and selected_suites arrays")
-        suites = raw["selected_suites"]
-        if not isinstance(suites, list):
-            raise ValueError("selected_suites must contain strings")
-        selected_suites = []
-        for suite in suites:
-            if not isinstance(suite, str):
-                raise ValueError("selected_suites must contain strings")
-            selected_suites.append(suite)
-        return cls(tuple(CollectedTestCase.from_raw(case) for case in raw["cases"]), tuple(selected_suites))
-
-    @classmethod
-    def read(cls, path: Path) -> Self:
+    @staticmethod
+    def read(path: Path) -> TestPlan:
         """Read one complete Test Plan from an isolated collection worker."""
 
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
+            return TEST_PLAN_CODEC.validate_json(path.read_bytes())
+        except (OSError, ValidationError) as error:
             raise ValueError(f"failed to read Test Plan {path}: {error}") from error
-        return cls.from_raw(raw)
 
     def write(self, path: Path) -> None:
         """Atomically publish this complete Test Plan."""
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        write_json(path, self.raw())
+        write_json(path, TEST_PLAN_CODEC.dump_python(self, mode="json"))
 
-    def raw(self) -> dict[str, JsonValue]:
-        """Project this Test Plan to its JSON representation."""
 
-        return {"cases": [case.raw() for case in self.cases], "selected_suites": list(self.selected_suites)}
+TEST_PLAN_CODEC = TypeAdapter(TestPlan)

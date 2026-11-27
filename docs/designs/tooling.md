@@ -538,11 +538,13 @@ and declared requirements. Engine filtering precedes imports. Native inventory
 comes from the configured CTest manifest. Listing runs no test bodies or fixtures
 and acquires no device/MPS resources; native collection prerequisites still apply.
 
-`xtest run` compiles the typed collection plan, performs required resource
-preflight and executes CTest, Unit, Integration, E2E and explicitly selected
-Models in canonical order. Device tasks are ordered by resource count and estimated
-duration and backfilled over idle leases. Test strictness and JUnit classification
-remain test-owned; grouped numerical cases evaluate their own verdicts.
+`xtest run` validates the collection plan and compiles one task list for the
+inventory, resource preflight, and scheduler. It executes CTest, Unit,
+Integration, E2E and explicitly selected Models in canonical order. Device
+tasks are ordered by resource count and estimated duration, with compilation
+order breaking ties. The scheduler backfills over idle leases. xtest owns
+strictness and JUnit classification. Grouped numerical cases evaluate their own
+verdicts.
 
 Native skip handling under `--strict-requirements` follows
 [Test Architecture](../../tests/README.md#requirements).

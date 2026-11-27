@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from collections import defaultdict
-from collections.abc import Iterable
 from dataclasses import dataclass
 
 from xkit import ResourceRequirements
@@ -34,8 +31,6 @@ class ExecutionTask:
             raise ValueError("execution task must contain at least one collected case")
         if any(case.stage is not self.stage for case in self.cases):
             raise ValueError("execution task cases must belong to its stage")
-        if self.requirements != merge_requirements(self.cases):
-            raise ValueError("execution task requirements must equal its merged case requirements")
         if self.estimated_duration_seconds <= 0:
             raise ValueError("execution task estimate must be positive")
         if self.timeout_seconds <= 0:
@@ -59,58 +54,37 @@ def compile_execution_tasks(plan: TestPlan) -> tuple[ExecutionTask, ...]:
     for case in integration_cases:
         if case.requirements.device_count:
             integration_device_groups[(case.path, case.requirements)].append(case)
-    for (path, requirements), cases in sorted(
-        integration_device_groups.items(), key=lambda item: (item[0][0], requirements_identity(item[0][1]))
-    ):
-        identity = f"{path}\0{requirements_identity(requirements)}"
-        tasks.append(build_task(task_key("integration-device", path, identity), tuple(cases)))
+    for group in sorted(integration_device_groups, key=lambda group: group[0]):
+        key = task_key("integration-device", group[0], len(tasks) + 1)
+        tasks.append(build_task(key, tuple(integration_device_groups[group])))
 
     for case in plan.cases:
         if case.stage in {TestStage.E2E, TestStage.MODELS}:
-            tasks.append(build_task(task_key(case.stage.value, case.nodeid, case.nodeid), (case,)))
-
-    keys = tuple(task.key for task in tasks)
-    if len(keys) != len(set(keys)):
-        raise ValueError("compiled execution task keys must be unique")
+            key = task_key(case.stage.value, case.nodeid, len(tasks) + 1)
+            tasks.append(build_task(key, (case,)))
     return tuple(tasks)
 
 
 def build_task(key: str, cases: tuple[CollectedTestCase, ...]) -> ExecutionTask:
     """Build one task using the accepted member aggregation rules."""
 
+    model_ids = tuple(dict.fromkeys(model_id for case in cases for model_id in case.requirements.model_ids))
     return ExecutionTask(
         key=key,
         stage=cases[0].stage,
         cases=cases,
-        requirements=merge_requirements(cases),
+        requirements=ResourceRequirements(
+            device_count=max(case.requirements.device_count for case in cases),
+            requires_config=any(case.requirements.requires_config for case in cases),
+            model_ids=model_ids,
+        ),
         estimated_duration_seconds=sum(case.estimated_duration_seconds or case.timeout_seconds for case in cases),
         timeout_seconds=sum(case.timeout_seconds for case in cases),
     )
 
 
-def merge_requirements(cases: Iterable[CollectedTestCase]) -> ResourceRequirements:
-    """Merge item requirements for one pytest process without losing model order."""
-
-    materialized = tuple(cases)
-    if not materialized:
-        raise ValueError("cannot merge requirements for an empty case set")
-    model_ids = tuple(dict.fromkeys(model_id for case in materialized for model_id in case.requirements.model_ids))
-    return ResourceRequirements(
-        device_count=max(case.requirements.device_count for case in materialized),
-        requires_config=any(case.requirements.requires_config for case in materialized),
-        model_ids=model_ids,
-    )
-
-
-def task_key(category: str, label: str, identity: str) -> str:
-    """Derive one readable collision-resistant filesystem key."""
+def task_key(category: str, label: str, ordinal: int) -> str:
+    """Derive a readable filesystem key unique within this run."""
 
     readable = TASK_KEY_CHARACTER_PATTERN.sub("-", label).strip("-._")[:TASK_KEY_PREFIX_LENGTH]
-    digest = hashlib.sha256(identity.encode()).hexdigest()[:12]
-    return f"{category}-{readable or 'task'}-{digest}"
-
-
-def requirements_identity(requirements: ResourceRequirements) -> str:
-    """Return a stable grouping identity for one exact resource signature."""
-
-    return json.dumps(requirements.raw(), sort_keys=True, separators=(",", ":"))
+    return f"{category}-{readable or 'task'}-{ordinal:04d}"

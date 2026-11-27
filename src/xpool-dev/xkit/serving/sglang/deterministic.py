@@ -96,15 +96,15 @@ class SamplingRecord:
         The launch owner has already created the file.
         """
 
-        payload = TypeAdapter(SamplingRecord).dump_json(self) + b"\n"
+        payload = SAMPLING_RECORD_ADAPTER.dump_json(self) + b"\n"
         with path.open("r+b") as output:
             fcntl.flock(output.fileno(), fcntl.LOCK_EX)
             output.seek(0, os.SEEK_END)
             output.write(payload)
             output.flush()
 
-    @classmethod
-    def read(cls, path: Path) -> Iterator[SamplingRecord]:
+    @staticmethod
+    def read(path: Path) -> Iterator[SamplingRecord]:
         """Read validated complete records, rejecting duplicate request keys."""
 
         keys: set[tuple[ModelId, str]] = set()
@@ -112,12 +112,15 @@ class SamplingRecord:
             for line in source:
                 if not line.endswith(b"\n"):
                     raise ValueError(f"incomplete sampling record in {path}")
-                record = TypeAdapter(cls).validate_json(line)
+                record = SAMPLING_RECORD_ADAPTER.validate_json(line)
                 key = record.model_id, record.request_id
                 if key in keys:
                     raise ValueError(f"duplicate sampling record: {record.model_id}/{record.request_id}")
                 keys.add(key)
                 yield record
+
+
+SAMPLING_RECORD_ADAPTER = TypeAdapter(SamplingRecord)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,7 +182,6 @@ def install() -> None:
     from sglang.srt.model_executor.model_runner import ModelRunner
     from sglang.srt.plugins.hook_registry import HookRegistry, HookType
     from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
-    from sglang.srt.utils.json_response import dumps_json
 
     path = cast(Path, settings.path)
     records = (
@@ -189,9 +191,15 @@ def install() -> None:
     )
     selections: ContextVar[tuple[SamplingSelection, ...]] = ContextVar("xkit_sampler_selections", default=())
 
+    json_object_adapter = TypeAdapter(dict[str, JsonValue])
+    response_meta_adapter = TypeAdapter(dict[str, object])
+    output_ids_adapter = TypeAdapter(tuple[Annotated[int, Field(ge=0, strict=True)], ...])
+    prompt_tokens_adapter = TypeAdapter(int)
+    replay_evidence_adapter = TypeAdapter(SamplerReplayEvidence)
+
     def public_request(obj: GenerateReqInput) -> dict[str, JsonValue]:
         key = "text" if obj.text is not None else "input_ids"
-        return TypeAdapter(dict[str, JsonValue]).validate_python(
+        return json_object_adapter.validate_python(
             {key: obj.text if obj.text is not None else obj.input_ids, "sampling_params": obj.sampling_params or {}}
         )
 
@@ -232,15 +240,13 @@ def install() -> None:
             or is_health_check_generate_req(obj)
         )
         async for response in original(manager, obj, state, request):
-            response_meta = TypeAdapter(dict[str, object]).validate_python(response["meta_info"], strict=True)
+            response_meta = response_meta_adapter.validate_python(response["meta_info"], strict=True)
             if not ignored and response_meta["finish_reason"] is not None:
-                reason = TypeAdapter(dict[str, JsonValue]).validate_python(response_meta["finish_reason"])
+                reason = json_object_adapter.validate_python(response_meta["finish_reason"])
                 if reason["type"] != "abort":
                     model_id = get_global_config().model_id_of_path(manager.model_config.model_path)
-                    output_ids = TypeAdapter(tuple[Annotated[int, Field(ge=0, strict=True)], ...]).validate_python(
-                        response["output_ids"]
-                    )
-                    prompt_tokens = TypeAdapter(int).validate_python(response_meta["prompt_tokens"], strict=True)
+                    output_ids = output_ids_adapter.validate_python(response["output_ids"])
+                    prompt_tokens = prompt_tokens_adapter.validate_python(response_meta["prompt_tokens"], strict=True)
                     if settings.mode == "replay":
                         reference = records[model_id, cast(str, obj.rid)]
                         if output_ids != reference.output_ids or prompt_tokens != reference.prompt_tokens:
@@ -333,7 +339,7 @@ def install() -> None:
             target = cast(Path, observer.outdir) / f"xkit.sampler-replay.{os.getpid()}.jsonl"
             with target.open("ab") as output:
                 for value in evidence:
-                    output.write(dumps_json(TypeAdapter(SamplerReplayEvidence).dump_python(value, mode="json")) + b"\n")
+                    output.write(replay_evidence_adapter.dump_json(value) + b"\n")
 
     def around_fa3_mla_decode[**P, R](
         original: Callable[Concatenate[FlashAttentionBackend, P], R],

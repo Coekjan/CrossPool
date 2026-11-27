@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Self, cast
+from typing import Annotated
 
-from pydantic import JsonValue
+from pydantic import ConfigDict, Field
+from pydantic.dataclasses import dataclass
 
 from xpool.model import ModelId
 
 __all__ = ["ResourceRequirements"]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(config=ConfigDict(extra="forbid", strict=True), frozen=True, slots=True)
 class ResourceRequirements:
     """External resources required by one concrete tooling parameter row.
 
@@ -22,47 +22,12 @@ class ResourceRequirements:
     controller rather than declaring an externally running controller.
     """
 
-    device_count: int
+    device_count: Annotated[int, Field(ge=0)]
     requires_config: bool
     model_ids: tuple[ModelId, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.device_count, int) or isinstance(self.device_count, bool) or self.device_count < 0:
-            raise ValueError("resource requirement device_count must be a nonnegative integer")
         if self.model_ids and not self.requires_config:
             raise ValueError("model-weight resource requirements must also require config")
-        if any(not isinstance(model_id, ModelId) for model_id in self.model_ids):
-            raise ValueError("resource requirement model IDs must be ModelId values")
         if len(self.model_ids) != len(set(self.model_ids)):
             raise ValueError("resource requirement model IDs must be unique")
-
-    @classmethod
-    def from_raw(cls, raw: object) -> Self:
-        """Strictly parse one requirements JSON object."""
-
-        expected = {"device_count", "requires_config", "model_ids"}
-        if not isinstance(raw, dict) or set(raw) != expected:
-            raise ValueError(f"resource requirements must contain exactly {sorted(expected)}")
-        record = cast(dict[str, object], raw)
-        device_count = record["device_count"]
-        requires_config = record["requires_config"]
-        model_ids = record["model_ids"]
-        if not isinstance(device_count, int) or isinstance(device_count, bool):
-            raise ValueError("resource requirement device_count must be an integer")
-        if not isinstance(requires_config, bool):
-            raise ValueError("resource requirement requires_config must be a boolean")
-        if not isinstance(model_ids, list):
-            raise ValueError("resource requirement model_ids must be a string array")
-        parsed_model_ids: list[ModelId] = []
-        for model_id in model_ids:
-            parsed_model_ids.append(ModelId.model_validate(model_id))
-        return cls(device_count, requires_config, tuple(parsed_model_ids))
-
-    def raw(self) -> dict[str, JsonValue]:
-        """Project these requirements to their JSON representation."""
-
-        return {
-            "device_count": self.device_count,
-            "requires_config": self.requires_config,
-            "model_ids": [str(model_id) for model_id in self.model_ids],
-        }

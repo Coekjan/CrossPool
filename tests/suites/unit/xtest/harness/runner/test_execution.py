@@ -17,6 +17,7 @@ from xkit.supervisor import TaskCompletion, TaskCompletionKind
 from xtest.harness.report import TestResultWriter, TestRunManifest
 from xtest.harness.runner.ctest import CtestRunResult, CtestSuite
 from xtest.harness.runner.pytest_report import PytestCaseStatus
+from xtest.harness.runner.task import ExecutionTask
 from xtest.harness.support.config import reset_development_config
 
 
@@ -85,6 +86,7 @@ def test_execution_uses_collection_scope_and_parent_configuration(
         requirements=ResourceRequirements(0, False, ()),
         estimated_duration_seconds=1,
         timeout_seconds=10,
+        inspection=None,
     )
 
     class FakeCollectionWorker:
@@ -109,8 +111,9 @@ def test_execution_uses_collection_scope_and_parent_configuration(
     class FakeSuiteRunner:
         resources_releasable = True
 
-        def __init__(self, plan: xtest.harness.runner.plan.TestPlan, **kwargs: object) -> None:
-            assert plan.cases == (collected,)
+        def __init__(self, tasks: tuple[ExecutionTask, ...], **kwargs: object) -> None:
+            (task,) = tasks
+            assert task.cases == (collected,)
 
         def request_stop(self, signal_number: int, frame: object) -> None:
             del signal_number, frame
